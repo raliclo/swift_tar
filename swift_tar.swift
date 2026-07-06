@@ -1653,7 +1653,13 @@ struct SwiftTarMain {
         let inflightN: Int = {
             let cores = max(1, ProcessInfo.processInfo.activeProcessorCount)
             var n = cores * 2
-            if let v = optValue("-n").flatMap(Int.init) { n = v }
+            if let raw = optValue("-n") {          // reject non-integer, same as lzfse2 CLI / 非整數報錯，同 lzfse2 CLI
+                guard let v = Int(raw) else {
+                    eprint("Error: -n expects an integer. / 錯誤：-n 需要整數。")
+                    exit(1)
+                }
+                n = v
+            }
             return min(max(1, n), cores * 4)
         }()
 

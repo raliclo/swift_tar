@@ -1,0 +1,6 @@
+[submodule "lzfse2"]
+	path = lzfse2
+	url = git@github.com:raliclo/lzfse2.git
+[submodule "libarchive"]
+	path = libarchive
+	url = https://github.com/libarchive/libarchive.git

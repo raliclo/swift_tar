@@ -41,3 +41,7 @@ swiftc -O "$TEMP_CLI" swift_tar.swift -o release/swift_tar \
     -lz -lbz2 -L"$BREW_LIB" -llz4 -llzma -lzstd
 
 echo "Built ./release/swift_tar / 已建置 ./release/swift_tar"
+
+mkdir -p /opt/homebrew/bin
+cp ./release/swift_tar /opt/homebrew/bin/swift_tar
+echo "Installed to /opt/homebrew/bin/swift_tar / 已安裝至 /opt/homebrew/bin/swift_tar"

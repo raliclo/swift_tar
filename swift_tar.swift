@@ -1605,7 +1605,25 @@ private func printTarUsage() {
 struct SwiftTarMain {
     static func main() {
         signal(SIGPIPE, SIG_IGN)
-        let args = CommandLine.arguments
+        // 展開 combined short flags，相容標準 tar 用法的兩種形式：
+        //   帶 dash：-czf → -c -z -f
+        //   傳統形式（第一個位置參數全是字母，無 dash）：czf → -c -z -f
+        // Expand combined short flags for standard tar compatibility:
+        //   dash form: -czf → -c -z -f
+        //   traditional POSIX form (first operand, all letters, no dash): czf → -c -z -f
+        let args: [String] = {
+            var out: [String] = [CommandLine.arguments[0]]
+            for (idx, a) in CommandLine.arguments.dropFirst().enumerated() {
+                if a.hasPrefix("-") && !a.hasPrefix("--") && a.count > 2 {
+                    for ch in a.dropFirst() { out.append("-\(ch)") }
+                } else if idx == 0 && !a.hasPrefix("-") && a.count > 1 && a.allSatisfy({ $0.isLetter }) {
+                    for ch in a { out.append("-\(ch)") }
+                } else {
+                    out.append(a)
+                }
+            }
+            return out
+        }()
         if args.contains("-h") || args.count < 2 {
             printTarUsage()
             exit(args.count < 2 ? 1 : 0)

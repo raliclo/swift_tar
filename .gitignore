@@ -22,3 +22,5 @@ next-env.d.ts
 # others
 ~$*.*
 .claude
+swift_tar-build*
+tmp_review_codecs

@@ -43,7 +43,20 @@
 // =====================================================================
 
 import Foundation
+#if os(Windows)
+import WinSDK
+#else
 import zlib
+#endif
+
+// On Windows there is no bundled zlib/libbz2/liblzma/libzstd/liblz4 to link
+// against, so the non-LZFSE codecs shell out to the same CLI tools
+// encode-win.bat/decode-win.bat already rely on (gzip/bzip2/xz/zstd/lz4/lzip
+// via scoop). The C-library silgen declarations below are macOS/Linux-only.
+// Windows 沒有可連結的 zlib/libbz2/liblzma/libzstd/liblz4，非 LZFSE 引擎改為
+// 呼叫外部 CLI 工具（同 encode-win.bat/decode-win.bat 用的 scoop 版本）。
+// 以下 C 庫 silgen 宣告僅用於 macOS/Linux。
+#if !os(Windows)
 
 // =================================================================
 // MARK: - liblz4 frame API (silgen; standard LZ4 frame format)
@@ -198,6 +211,109 @@ private func ZSTD_decompressStream(_ zds: OpaquePointer?,
                                    _ output: UnsafeMutableRawPointer,
                                    _ input: UnsafeMutableRawPointer) -> Int
 
+#endif // !os(Windows)
+
+// =================================================================
+// MARK: - Windows process-based codec backend
+// MARK: - Windows 版：外部程序壓縮引擎
+// =================================================================
+// No C-library linking on Windows; every non-LZFSE codec pipes through the
+// matching CLI tool (gzip/bzip2/xz/zstd/lz4/lzip, all available via scoop —
+// same tools encode-win.bat/decode-win.bat already shell out to for lz4/zstd).
+// Windows 不連結任何 C 庫；非 LZFSE 引擎全部透過對應 CLI 工具（scoop 安裝的
+// gzip/bzip2/xz/zstd/lz4/lzip）以 pipe 呼叫，與 encode-win.bat/decode-win.bat
+// 既有的 lz4/zstd 呼叫方式相同。
+#if os(Windows)
+
+/// Resolve an executable's full path by searching PATH (Process on Windows
+/// needs a resolved path, not a bare command name).
+/// 在 PATH 中搜尋執行檔完整路徑（Windows 上 Process 需要完整路徑，不能只給命令名稱）。
+private func resolveExecutable(_ name: String) -> String? {
+    let env = ProcessInfo.processInfo.environment
+    let pathVar = env["Path"] ?? env["PATH"] ?? env["path"] ?? ""
+    for dir in pathVar.split(separator: ";") {
+        let candidate = "\(dir)\\\(name).exe"
+        if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+    }
+    return nil
+}
+
+/// Run an external compressor: write all of `input` to stdin, collect stdout.
+/// 呼叫外部壓縮工具：把 input 全部寫入 stdin，收集 stdout。
+private func winRunCompress(exe: String, args: [String], input: Data) -> Data? {
+    guard let path = resolveExecutable(exe) else {
+        eprint("swift_tar: '\(exe)' not found in PATH / 在 PATH 中找不到 '\(exe)'")
+        return nil
+    }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: path)
+    process.arguments = args
+    let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
+    process.standardInput = inPipe
+    process.standardOutput = outPipe
+    process.standardError = errPipe
+    guard (try? process.run()) != nil else { return nil }
+    let writeHandle = inPipe.fileHandleForWriting
+    let writer = Thread {
+        try? writeHandle.write(contentsOf: input)
+        try? writeHandle.close()
+    }
+    writer.start()
+    let output = outPipe.fileHandleForReading.readDataToEndOfFile()
+    let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        let msg = String(decoding: errData, as: UTF8.self)
+        eprint("swift_tar: '\(exe)' exited \(process.terminationStatus): \(msg)")
+        return nil
+    }
+    return output
+}
+
+/// Run an external decompressor: stream `prefix` + the rest of `input` to
+/// stdin, stream stdout straight into `output`. Handles concatenated
+/// members/streams the same way the stock CLI tools already do.
+/// 呼叫外部解壓工具：把 prefix + input 剩餘部分串流進 stdin，stdout 直接串流進
+/// output；串接的多成員/多串流沿用各工具原生行為處理。
+private func winRunDecompress(exe: String, args: [String], input: FileHandle,
+                              prefix: Data, output: FileHandle) -> Bool {
+    guard let path = resolveExecutable(exe) else {
+        eprint("swift_tar: '\(exe)' not found in PATH / 在 PATH 中找不到 '\(exe)'")
+        return false
+    }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: path)
+    process.arguments = args
+    let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
+    process.standardInput = inPipe
+    process.standardOutput = outPipe
+    process.standardError = errPipe
+    guard (try? process.run()) != nil else { return false }
+    let writeHandle = inPipe.fileHandleForWriting
+    let writer = Thread {
+        if !prefix.isEmpty { try? writeHandle.write(contentsOf: prefix) }
+        while let part = try? input.read(upToCount: 1 << 20), !part.isEmpty {
+            try? writeHandle.write(contentsOf: part)
+        }
+        try? writeHandle.close()
+    }
+    writer.start()
+    let readHandle = outPipe.fileHandleForReading
+    while let part = try? readHandle.read(upToCount: 1 << 20), !part.isEmpty {
+        if (try? output.write(contentsOf: part)) == nil { return false }
+    }
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        let msg = String(decoding: errData, as: UTF8.self)
+        eprint("swift_tar: '\(exe)' exited \(process.terminationStatus): \(msg)")
+        return false
+    }
+    return true
+}
+
+#endif // os(Windows)
+
 // =================================================================
 // MARK: - Codec selection (write side) / 壓縮引擎選擇（寫入端）
 // =================================================================
@@ -251,6 +367,9 @@ enum TarCodec {
 /// One complete gzip member per chunk (zlib windowBits=31 emits the container).
 /// 每分塊一個完整 gzip 成員（windowBits=31 由 zlib 直接輸出 gzip 容器）。
 func gzipCompressMember(_ input: Data, level: Int32 = 6) -> Data? {
+#if os(Windows)
+    return winRunCompress(exe: "gzip", args: ["-\(level)", "-c"], input: input)
+#else
     var strm = z_stream()
     guard deflateInit2_(&strm, level, Z_DEFLATED, 31, 8, Z_DEFAULT_STRATEGY,
                         ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
@@ -270,11 +389,15 @@ func gzipCompressMember(_ input: Data, level: Int32 = 6) -> Data? {
     }
     guard ok else { return nil }
     return out.prefix(written)
+#endif
 }
 
 /// One complete bzip2 stream per chunk (pbzip2-style concatenation).
 /// 每分塊一個完整 bzip2 串流（pbzip2 式串接）。
 func bzip2CompressStream(_ input: Data, blockSize100k: Int32 = 9) -> Data? {
+#if os(Windows)
+    return winRunCompress(exe: "bzip2", args: ["-\(blockSize100k)", "-c"], input: input)
+#else
     var destLen = UInt32(input.count + input.count / 100 + 600)
     var out = Data(count: Int(destLen))
     var src = input   // BZ2 API wants a mutable source pointer / BZ2 API 需要可變來源指標
@@ -287,11 +410,15 @@ func bzip2CompressStream(_ input: Data, blockSize100k: Int32 = 9) -> Data? {
     }
     guard rc == BZ_OK else { return nil }
     return out.prefix(Int(destLen))
+#endif
 }
 
 /// One complete xz stream per chunk (xz multi-stream concatenation).
 /// 每分塊一個完整 xz 串流（xz 多串流串接）。
 func xzCompressStream(_ input: Data, preset: UInt32 = 6) -> Data? {
+#if os(Windows)
+    return winRunCompress(exe: "xz", args: ["-\(preset)", "-c"], input: input)
+#else
     let bound = lzma_stream_buffer_bound(input.count)
     var out = Data(count: bound)
     var outPos = 0
@@ -304,11 +431,15 @@ func xzCompressStream(_ input: Data, preset: UInt32 = 6) -> Data? {
     }
     guard rc == LZMA_OK else { return nil }
     return out.prefix(outPos)
+#endif
 }
 
 /// One complete zstd frame per chunk (frames concatenate per spec).
 /// 每分塊一個完整 zstd frame（依規格可串接）。
 func zstdCompressFrame(_ input: Data, level: Int32 = 3) -> Data? {
+#if os(Windows)
+    return winRunCompress(exe: "zstd", args: ["-\(level)", "-q", "-c", "-"], input: input)
+#else
     let bound = ZSTD_compressBound(input.count)
     var out = Data(count: bound)
     let n: Int = input.withUnsafeBytes { s in
@@ -318,11 +449,15 @@ func zstdCompressFrame(_ input: Data, level: Int32 = 3) -> Data? {
     }
     guard ZSTD_isError(n) == 0 else { return nil }
     return out.prefix(n)
+#endif
 }
 
 /// One standard LZ4 frame per chunk (magic 0x184D2204).
 /// 每分塊一個標準 LZ4 frame（magic 0x184D2204）。
 func lz4CompressFrame(_ input: Data) -> Data? {
+#if os(Windows)
+    return winRunCompress(exe: "lz4", args: ["-9", "-q", "-c", "-"], input: input)
+#else
     let bound = LZ4F_compressFrameBound(input.count, nil)
     var out = Data(count: bound)
     let n: Int = input.withUnsafeBytes { src in
@@ -332,6 +467,7 @@ func lz4CompressFrame(_ input: Data) -> Data? {
     }
     guard LZ4F_isError(n) == 0 else { return nil }
     return out.prefix(n)
+#endif
 }
 
 // =================================================================
@@ -415,6 +551,9 @@ final class ByteReader {
 
 /// Sequential multi-member gzip decode. / 循序解多成員 gzip。
 func gzipDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bool {
+#if os(Windows)
+    return winRunDecompress(exe: "gzip", args: ["-dc"], input: input, prefix: prefix, output: output)
+#else
     var strm = z_stream()
     guard inflateInit2_(&strm, 15 + 32, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK
     else { return false }
@@ -454,11 +593,15 @@ func gzipDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
         if !ok { return false }
     }
     return atBoundary
+#endif
 }
 
 /// Sequential multi-stream bzip2 decode (pbzip2-style concatenation).
 /// 循序解多串流 bzip2（pbzip2 式串接）。
 func bzip2DecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bool {
+#if os(Windows)
+    return winRunDecompress(exe: "bzip2", args: ["-dc"], input: input, prefix: prefix, output: output)
+#else
     var strm = BZStream()
     guard withUnsafeMutablePointer(to: &strm, { BZ2_bzDecompressInit($0, 0, 0) }) == BZ_OK
     else { return false }
@@ -508,12 +651,20 @@ func bzip2DecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> B
         if !ok { return false }
     }
     return atBoundary
+#endif
 }
 
 /// liblzma-family decode: .xz / .lzma (alone) / .lz (lzip).
 /// liblzma 家族解碼：.xz／.lzma（alone）／.lz（lzip）。
 enum LZMAKind { case xz, alone, lzip }
 func lzmaDecodeStream(kind: LZMAKind, input: FileHandle, prefix: Data, output: FileHandle) -> Bool {
+#if os(Windows)
+    switch kind {
+    case .xz:    return winRunDecompress(exe: "xz", args: ["-dc"], input: input, prefix: prefix, output: output)
+    case .alone: return winRunDecompress(exe: "xz", args: ["-dc", "--format=lzma"], input: input, prefix: prefix, output: output)
+    case .lzip:  return winRunDecompress(exe: "lzip", args: ["-dc"], input: input, prefix: prefix, output: output)
+    }
+#else
     var strm = LZMAStream()
     let initRC: Int32 = withUnsafeMutablePointer(to: &strm) { sp in
         switch kind {
@@ -564,11 +715,15 @@ func lzmaDecodeStream(kind: LZMAKind, input: FileHandle, prefix: Data, output: F
     // .alone has no CONCATENATED mode; reaching clean EOF is acceptable.
     // .alone 無 CONCATENATED 模式；讀至 EOF 即視為結束。
     return ended || kind == .alone
+#endif
 }
 
 /// zstd streaming decode (handles back-to-back frames).
 /// zstd 串流解碼（自動處理背靠背 frame）。
 func zstdDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bool {
+#if os(Windows)
+    return winRunDecompress(exe: "zstd", args: ["-dc", "-q"], input: input, prefix: prefix, output: output)
+#else
     guard let zds = ZSTD_createDStream() else { return false }
     defer { _ = ZSTD_freeDStream(zds) }
     var outBuf = [UInt8](repeating: 0, count: 1 << 20)
@@ -602,10 +757,14 @@ func zstdDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
         if !ok { return false }
     }
     return lastRet == 0   // 0 ⟺ frame boundary at EOF / EOF 落在 frame 邊界
+#endif
 }
 
 /// Sequential decode of concatenated LZ4 frames. / 循序解串接 LZ4 frame。
 func lz4DecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bool {
+#if os(Windows)
+    return winRunDecompress(exe: "lz4", args: ["-dc", "-q"], input: input, prefix: prefix, output: output)
+#else
     var ctx: OpaquePointer? = nil
     guard LZ4F_isError(LZ4F_createDecompressionContext(&ctx, LZ4F_VERSION)) == 0 else { return false }
     defer { _ = LZ4F_freeDecompressionContext(ctx) }
@@ -635,6 +794,7 @@ func lz4DecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Boo
         if !ok { return false }
     }
     return lastHint == 0
+#endif
 }
 
 /// compress/LZW (.Z) decoder — pure-Swift port of libarchive's
@@ -888,20 +1048,21 @@ func resolveFilterChain(input: FileHandle, prefix: Data, filePath: String?,
     }
     let pipe = Pipe()
     let w = pipe.fileHandleForWriting
+    let capturedHead = head
     group.enter()
     DispatchQueue.global(qos: .userInitiated).async {
         let ok: Bool
         switch filter {
-        case .gzip:        ok = gzipDecodeStream(input: input, prefix: head, output: w)
-        case .bzip2:       ok = bzip2DecodeStream(input: input, prefix: head, output: w)
-        case .xz:          ok = lzmaDecodeStream(kind: .xz, input: input, prefix: head, output: w)
-        case .lzmaAlone:   ok = lzmaDecodeStream(kind: .alone, input: input, prefix: head, output: w)
-        case .lzip:        ok = lzmaDecodeStream(kind: .lzip, input: input, prefix: head, output: w)
-        case .lz4:         ok = lz4DecodeStream(input: input, prefix: head, output: w)
-        case .zstd:        ok = zstdDecodeStream(input: input, prefix: head, output: w)
-        case .compressLZW: ok = lzwDecodeStream(input: input, prefix: head, output: w)
-        case .uu:          ok = uuDecodeStream(input: input, prefix: head, output: w)
-        case .rpm:         ok = rpmUnwrapStream(input: input, prefix: head, output: w)
+        case .gzip:        ok = gzipDecodeStream(input: input, prefix: capturedHead, output: w)
+        case .bzip2:       ok = bzip2DecodeStream(input: input, prefix: capturedHead, output: w)
+        case .xz:          ok = lzmaDecodeStream(kind: .xz, input: input, prefix: capturedHead, output: w)
+        case .lzmaAlone:   ok = lzmaDecodeStream(kind: .alone, input: input, prefix: capturedHead, output: w)
+        case .lzip:        ok = lzmaDecodeStream(kind: .lzip, input: input, prefix: capturedHead, output: w)
+        case .lz4:         ok = lz4DecodeStream(input: input, prefix: capturedHead, output: w)
+        case .zstd:        ok = zstdDecodeStream(input: input, prefix: capturedHead, output: w)
+        case .compressLZW: ok = lzwDecodeStream(input: input, prefix: capturedHead, output: w)
+        case .uu:          ok = uuDecodeStream(input: input, prefix: capturedHead, output: w)
+        case .rpm:         ok = rpmUnwrapStream(input: input, prefix: capturedHead, output: w)
         case .lzfse:
             // Top layer + real file → multi-core chunk-parallel file decoder.
             // 最外層且輸入為檔案 → 多核心分塊平行檔案解碼。
@@ -910,11 +1071,11 @@ func resolveFilterChain(input: FileHandle, prefix: Data, filePath: String?,
                                                     inflight: inflight, output: w) {
                 case .ok:       ok = true
                 case .error:    ok = false
-                case .fallback: ok = wholeBufferLZFSEDecode(input: input, head: head,
+                case .fallback: ok = wholeBufferLZFSEDecode(input: input, head: capturedHead,
                                                             filePath: p, inflight: inflight, output: w)
                 }
             } else {
-                ok = wholeBufferLZFSEDecode(input: input, head: head, filePath: nil,
+                ok = wholeBufferLZFSEDecode(input: input, head: capturedHead, filePath: nil,
                                             inflight: inflight, output: w)
             }
         case .lzop:
@@ -1095,6 +1256,121 @@ private func parseTarNumber(_ field: ArraySlice<UInt8>) -> UInt64 {
 }
 
 // =================================================================
+// MARK: - Windows file identity (stat/lstat/symlink/link replacement)
+// MARK: - Windows 版檔案識別（取代 stat/lstat/symlink/link）
+// =================================================================
+// Windows has no POSIX stat()/lstat()/S_IFLNK/symlink()/link()/chmod(). File
+// type comes from GetFileAttributesW (reparse point ⟺ symlink), identity for
+// hardlink dedup comes from GetFileInformationByHandle (volume serial +
+// file index stand in for dev/ino), and there is no Unix permission bit to
+// preserve — directories/files get conventional 0o755/0o644 on archive, and
+// chmod is a no-op on extract.
+// Windows 沒有 POSIX stat()/lstat()/S_IFLNK/symlink()/link()/chmod()。檔案型別
+// 由 GetFileAttributesW 判斷（reparse point ⟺ symlink），硬連結去重用
+// GetFileInformationByHandle 的 volume serial + file index 取代 dev/ino；
+// 沒有 Unix 權限位元可保留，打包時目錄/檔案一律給慣例值 0o755/0o644，解壓時
+// chmod 為 no-op。
+#if os(Windows)
+
+private struct WinStat {
+    var isDir: Bool
+    var isSymlink: Bool
+    var size: UInt64
+    var mtime: UInt64
+    var nlink: UInt32
+    var volumeSerial: DWORD
+    var fileIndex: UInt64
+}
+
+private func winFiletimeToUnix(_ ft: FILETIME) -> UInt64 {
+    let ticks = (UInt64(ft.dwHighDateTime) << 32) | UInt64(ft.dwLowDateTime)
+    let epochDelta: UInt64 = 116_444_736_000_000_000   // 1601 → 1970, 100ns units
+    guard ticks > epochDelta else { return 0 }
+    return (ticks - epochDelta) / 10_000_000
+}
+
+/// lstat()-equivalent: does NOT follow the final reparse point, so a symlink
+/// reports itself (matching lstat's S_IFLNK) even when it targets a directory.
+/// 等同 lstat()：不追隨最後一層 reparse point，symlink 一律回報自身
+/// （對應 lstat 的 S_IFLNK），即使目標是目錄。
+private func winStat(_ path: String) -> WinStat? {
+    let attrs = path.withCString(encodedAs: UTF16.self) { GetFileAttributesW($0) }
+    guard attrs != INVALID_FILE_ATTRIBUTES else { return nil }
+    let isReparse = (attrs & DWORD(FILE_ATTRIBUTE_REPARSE_POINT)) != 0
+    let isDirAttr = (attrs & DWORD(FILE_ATTRIBUTE_DIRECTORY)) != 0
+
+    var flags: DWORD = DWORD(FILE_FLAG_BACKUP_SEMANTICS)
+    if isReparse { flags |= DWORD(FILE_FLAG_OPEN_REPARSE_POINT) }
+    // GENERIC_READ 直接寫成 DWORD 常值（0x80000000），繞開 WinSDK Swift 綁定
+    // 對 GENERIC_READ 型別（Int32 / UInt32 視情境而定）不一致造成的多載歧義，
+    // 同 lzfse-ui-win.swift 的既有作法。
+    // GENERIC_READ written as a literal DWORD (0x80000000) to sidestep the
+    // WinSDK Swift overlay's inconsistent typing, same workaround already
+    // used in lzfse-ui-win.swift.
+    let handle = path.withCString(encodedAs: UTF16.self) {
+        CreateFileW($0, DWORD(0x80000000), DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE),
+                    nil, DWORD(OPEN_EXISTING), flags, nil)
+    }
+    guard let h = handle, h != INVALID_HANDLE_VALUE else { return nil }
+    defer { CloseHandle(h) }
+
+    var info = BY_HANDLE_FILE_INFORMATION()
+    guard GetFileInformationByHandle(h, &info) else { return nil }
+
+    let size = (UInt64(info.nFileSizeHigh) << 32) | UInt64(info.nFileSizeLow)
+    let fileIndex = (UInt64(info.nFileIndexHigh) << 32) | UInt64(info.nFileIndexLow)
+    return WinStat(isDir: isDirAttr && !isReparse, isSymlink: isReparse,
+                   size: size, mtime: winFiletimeToUnix(info.ftLastWriteTime),
+                   nlink: info.nNumberOfLinks, volumeSerial: info.dwVolumeSerialNumber,
+                   fileIndex: fileIndex)
+}
+
+/// Best-effort symlink creation; Windows requires admin rights or Developer
+/// Mode (SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE, Windows 10 1703+).
+/// On failure this only warns and skips the entry, per project decision —
+/// archive extraction should not hard-fail just because symlinks are
+/// unavailable in the current environment.
+/// 盡力嘗試建立 symlink；Windows 需要系統管理員權限或開發者模式
+/// （SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE，Windows 10 1703+）。
+/// 失敗時僅警告並略過該項目，不中止整個解壓——避免因環境缺乏 symlink 權限而
+/// 讓整個 extract 失敗。
+private func winCreateSymlink(dest: String, target: String) {
+    let parent = (dest as NSString).deletingLastPathComponent
+    let resolvedTarget = target.hasPrefix("/") || target.hasPrefix("\\") || target.contains(":")
+        ? target : (parent.isEmpty ? target : parent + "/" + target)
+    var isDirTarget: ObjCBool = false
+    let targetIsDir = FileManager.default.fileExists(atPath: resolvedTarget, isDirectory: &isDirTarget) && isDirTarget.boolValue
+
+    var flags: DWORD = 0x2   // SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+    if targetIsDir { flags |= 0x1 }   // SYMBOLIC_LINK_FLAG_DIRECTORY
+    let ok = dest.withCString(encodedAs: UTF16.self) { d in
+        target.withCString(encodedAs: UTF16.self) { t in
+            CreateSymbolicLinkW(d, t, flags) != 0
+        }
+    }
+    if !ok {
+        eprint("swift_tar: warning: failed to create symlink '\(dest)' -> '\(target)' (needs admin rights or Developer Mode), skipping / 警告：無法建立符號連結 '\(dest)' -> '\(target)'（需要系統管理員權限或開發者模式），已略過")
+    }
+}
+
+/// Best-effort hardlink creation via CreateHardLinkW; warns and skips on
+/// failure, same policy as winCreateSymlink.
+/// 透過 CreateHardLinkW 盡力嘗試建立硬連結；失敗時警告並略過，政策同
+/// winCreateSymlink。
+private func winCreateHardlink(dest: String, target: String) {
+    let ok = dest.withCString(encodedAs: UTF16.self) { d in
+        target.withCString(encodedAs: UTF16.self) { t in
+            CreateHardLinkW(d, t, nil)
+        }
+    }
+    if !ok {
+        eprint("swift_tar: warning: failed to create hardlink '\(dest)' -> '\(target)', skipping / 警告：無法建立硬連結 '\(dest)' -> '\(target)'，已略過")
+    }
+}
+
+#endif // os(Windows)
+
+// =================================================================
 // MARK: - Tar writer (ustar + pax) / Tar 寫入端（ustar + pax）
 // =================================================================
 
@@ -1242,11 +1518,70 @@ final class TarWriter {
     }
 
     func add(path: String) throws {
+        let name = TarWriter.archiveName(path)
+#if os(Windows)
+        guard let st = winStat(path) else {
+            throw TarError.io("cannot stat '\(path)' / 無法讀取 '\(path)' 的檔案資訊")
+        }
+        // No Unix permission bits on Windows; use conventional defaults.
+        // Windows 沒有 Unix 權限位元，使用慣例預設值。
+        let mode: UInt32 = st.isDir ? 0o755 : 0o644
+        let uid: UInt32 = 0, gid: UInt32 = 0
+        let mtime = st.mtime
+
+        if st.isSymlink {
+            if verbose { eprint("a \(name)") }
+            let dest = (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) ?? ""
+            try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
+                                 size: 0, mtime: mtime, typeflag: UInt8(ascii: "2"), linkname: dest)
+            return
+        }
+        if st.isDir {
+            if verbose { eprint("a \(name)/") }
+            try writeEntryHeader(name: name + "/", mode: mode, uid: uid, gid: gid,
+                                 size: 0, mtime: mtime, typeflag: UInt8(ascii: "5"), linkname: "")
+            let children = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
+            for child in children.sorted() {
+                try add(path: path + "/" + child)
+            }
+            return
+        }
+        // Regular file. Hardlink dedup, same behavior as bsdtar (volume serial
+        // + file index stand in for dev/ino).
+        // 一般檔案。硬連結去重，行為同 bsdtar（volume serial + file index 取代 dev/ino）。
+        let key = "\(st.volumeSerial)/\(st.fileIndex)"
+        if st.nlink > 1, let first = seenInodes[key] {
+            if verbose { eprint("a \(name) link to \(first)") }
+            try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
+                                 size: 0, mtime: mtime, typeflag: UInt8(ascii: "1"),
+                                 linkname: first)
+            return
+        }
+        if st.nlink > 1 { seenInodes[key] = name }
+        if verbose { eprint("a \(name)") }
+        let size = st.size
+        try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
+                             size: size, mtime: mtime, typeflag: UInt8(ascii: "0"), linkname: "")
+        guard let fh = FileHandle(forReadingAtPath: path) else {
+            throw TarError.io("cannot open '\(path)' / 無法開啟 '\(path)'")
+        }
+        defer { try? fh.close() }
+        var remaining = size
+        while remaining > 0 {
+            let want = Int(min(remaining, UInt64(LZFSEv1.parallelChunkSize)))
+            guard let part = try fh.read(upToCount: want), !part.isEmpty else {
+                throw TarError.io("short read on '\(path)' / 讀取 '\(path)' 時提前結束")
+            }
+            try sink.write(part)
+            remaining -= UInt64(part.count)
+        }
+        let rem = Int(size % UInt64(TAR_BLOCK))
+        if rem != 0 { try sink.write(Data(count: TAR_BLOCK - rem)) }
+#else
         var st = stat()
         guard lstat(path, &st) == 0 else {
             throw TarError.io("cannot stat '\(path)' / 無法讀取 '\(path)' 的檔案資訊")
         }
-        let name = TarWriter.archiveName(path)
         let mode = UInt32(st.st_mode & 0o7777)
         let uid = UInt32(st.st_uid), gid = UInt32(st.st_gid)
         let mtime = UInt64(max(0, st.st_mtimespec.tv_sec))
@@ -1298,6 +1633,7 @@ final class TarWriter {
         default:
             eprint("swift_tar: skipping special file '\(path)' / 略過特殊檔案 '\(path)'")
         }
+#endif
     }
 
     /// Two zero blocks terminate the archive, then flush the sink.
@@ -1478,26 +1814,36 @@ final class TarReader {
             switch typeflag {
             case UInt8(ascii: "5"):
                 try? fm.createDirectory(atPath: dest, withIntermediateDirectories: true)
+#if !os(Windows)
                 chmod(dest, mode_t(mode))
+#endif
                 dirTimes.append((dest, mtime))
             case UInt8(ascii: "2"):
                 try? fm.removeItem(atPath: dest)
+#if os(Windows)
+                winCreateSymlink(dest: dest, target: linkname)
+#else
                 if symlink(linkname, dest) != 0 {
                     throw TarError.io("symlink failed for '\(dest)' / 建立符號連結失敗")
                 }
+#endif
             case UInt8(ascii: "1"):
                 let target = options.destDir.isEmpty ? linkname : options.destDir + "/" + linkname
                 try? fm.removeItem(atPath: dest)
+#if os(Windows)
+                winCreateHardlink(dest: dest, target: target)
+#else
                 if link(target, dest) != 0 {
                     throw TarError.io("hardlink failed for '\(dest)' / 建立硬連結失敗")
                 }
+#endif
             case UInt8(ascii: "0"), 0, UInt8(ascii: "7"):
                 if isDir {   // some writers mark dirs with '0' + trailing "/" / 某些工具以 '0'+尾斜線表目錄
                     try? fm.createDirectory(atPath: dest, withIntermediateDirectories: true)
                     dirTimes.append((dest, mtime))
                     continue
                 }
-                fm.createFile(atPath: dest, contents: nil)
+                _ = fm.createFile(atPath: dest, contents: nil)
                 guard let out = FileHandle(forWritingAtPath: dest) else {
                     throw TarError.io("cannot create '\(dest)' / 無法建立 '\(dest)'")
                 }
@@ -1513,7 +1859,9 @@ final class TarReader {
                 try? out.close()
                 let rem = Int(size % UInt64(TAR_BLOCK))
                 if rem != 0 { _ = readExactly(TAR_BLOCK - rem) }
+#if !os(Windows)
                 chmod(dest, mode_t(mode))
+#endif
                 try? fm.setAttributes([.modificationDate:
                     Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
             default:
@@ -1604,7 +1952,9 @@ private func printTarUsage() {
 @main
 struct SwiftTarMain {
     static func main() {
-        signal(SIGPIPE, SIG_IGN)
+#if !os(Windows)
+        signal(SIGPIPE, SIG_IGN)   // no SIGPIPE on Windows / Windows 無 SIGPIPE
+#endif
         // 展開 combined short flags，相容標準 tar 用法的兩種形式：
         //   帶 dash：-czf → -c -z -f
         //   傳統形式（第一個位置參數全是字母，無 dash）：czf → -c -z -f
@@ -1718,7 +2068,7 @@ struct SwiftTarMain {
         if archivePath == "-" {
             output = .standardOutput
         } else {
-            FileManager.default.createFile(atPath: archivePath, contents: nil)
+            _ = FileManager.default.createFile(atPath: archivePath, contents: nil)
             guard let fh = FileHandle(forWritingAtPath: archivePath) else {
                 throw TarError.io("cannot create '\(archivePath)' / 無法建立 '\(archivePath)'")
             }

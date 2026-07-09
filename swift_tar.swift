@@ -211,6 +211,60 @@ private func ZSTD_decompressStream(_ zds: OpaquePointer?,
 
 #endif // !os(Windows)
 
+#if !os(Windows)
+
+/// Resolve a CLI helper on POSIX platforms. Homebrew paths are included so a
+/// non-login shell still finds tools such as lzip.
+/// 在 POSIX 平台尋找外部 CLI helper；包含 Homebrew 路徑，讓非 login shell 也
+/// 能找到 lzip 這類工具。
+private func posixResolveExecutable(_ name: String) -> String? {
+    if name.contains("/") {
+        return FileManager.default.isExecutableFile(atPath: name) ? name : nil
+    }
+    let envPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    let searchDirs = envPath.split(separator: ":").map(String.init)
+        + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+    for dir in searchDirs {
+        let candidate = "\(dir)/\(name)"
+        if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+    }
+    return nil
+}
+
+/// Run an external POSIX compressor: write `input` to stdin, collect stdout.
+/// 呼叫 POSIX 外部壓縮工具：把 input 寫入 stdin，收集 stdout。
+private func posixRunCompress(exe: String, args: [String], input: Data) -> Data? {
+    guard let path = posixResolveExecutable(exe) else {
+        eprint("swift_tar: '\(exe)' not found in PATH / 在 PATH 中找不到 '\(exe)'")
+        return nil
+    }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: path)
+    process.arguments = args
+    let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
+    process.standardInput = inPipe
+    process.standardOutput = outPipe
+    process.standardError = errPipe
+    guard (try? process.run()) != nil else { return nil }
+    let writeHandle = inPipe.fileHandleForWriting
+    let writer = Thread {
+        try? writeHandle.write(contentsOf: input)
+        try? writeHandle.close()
+    }
+    writer.start()
+    let output = outPipe.fileHandleForReading.readDataToEndOfFile()
+    let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        let msg = String(decoding: errData, as: UTF8.self)
+        eprint("swift_tar: '\(exe)' exited \(process.terminationStatus): \(msg)")
+        return nil
+    }
+    return output
+}
+
+#endif // !os(Windows)
+
 // =================================================================
 // MARK: - Windows process-based codec backend
 // MARK: - Windows 版：外部程序壓縮引擎
@@ -323,6 +377,7 @@ enum TarCodec {
     case gzip                       // zlib, gzip members / gzip 成員
     case bzip2                      // libbz2 streams / bzip2 串流
     case xz                         // liblzma xz streams / xz 串流
+    case lzip                       // lzip streams via CLI / 透過 CLI 產生 lzip 串流
     case zstd                       // libzstd frames / zstd frame
     case lz4                        // liblz4 standard frames / 標準 LZ4 frame
 
@@ -347,6 +402,8 @@ enum TarCodec {
             return bzip2CompressStream(chunk)
         case .xz:
             return xzCompressStream(chunk)
+        case .lzip:
+            return lzipCompressStream(chunk)
         case .zstd:
             return zstdCompressFrame(chunk)
         case .lz4:
@@ -429,6 +486,18 @@ func xzCompressStream(_ input: Data, preset: UInt32 = 6) -> Data? {
     }
     guard rc == LZMA_OK else { return nil }
     return out.prefix(outPos)
+#endif
+}
+
+/// One complete lzip stream per chunk. liblzma decodes lzip but does not
+/// expose a lzip encoder here, so creation shells out to the lzip CLI.
+/// 每分塊一個完整 lzip 串流。liblzma 可解 lzip，但此處未提供 lzip encoder，
+/// 因此建立端呼叫 lzip CLI。
+func lzipCompressStream(_ input: Data, level: Int32 = 6) -> Data? {
+#if os(Windows)
+    return winRunCompress(exe: "lzip", args: ["-\(level)", "-c"], input: input)
+#else
+    return posixRunCompress(exe: "lzip", args: ["-\(level)", "-c"], input: input)
 #endif
 }
 
@@ -1922,6 +1991,8 @@ private func printTarUsage() {
                          每分塊一個 bzip2 串流（pbzip2 式標準 .tar.bz2）
       --xz, -J         : liblzma, one xz stream per chunk (xz multi-stream)
                          每分塊一個 xz 串流（標準 xz 多串流）
+      --lzip           : lzip CLI, one lzip stream per chunk
+                         每分塊一個 lzip 串流（需 lzip CLI）
       --zstd           : libzstd, one frame per chunk / 每分塊一個 zstd frame
       --lz4            : liblz4 standard frames / 標準 LZ4 frame
       (none)           : Plain uncompressed tar / 不壓縮的純 tar
@@ -2081,6 +2152,14 @@ func runTarProcess(_ exePath: String, _ args: [String], cwd: String? = nil) -> B
     process.executableURL = URL(fileURLWithPath: exePath)
     process.arguments = args
     if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+    var env = ProcessInfo.processInfo.environment
+    // macOS /usr/bin/tar can emit AppleDouble "._*" metadata entries unless
+    // COPYFILE_DISABLE is set, which makes self-test compare tar semantics
+    // instead of platform metadata side effects.
+    // macOS /usr/bin/tar 未設定 COPYFILE_DISABLE 時可能輸出 AppleDouble
+    // "._*" metadata 項目；self-test 應比較 tar 語意，而非平台 metadata 副作用。
+    env["COPYFILE_DISABLE"] = "1"
+    process.environment = env
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
     guard (try? process.run()) != nil else { return false }
@@ -2217,6 +2296,7 @@ struct SwiftTarMain {
         if args.contains("--gzip") || args.contains("-z")  { codec = .gzip;  codecCount += 1 }
         if args.contains("--bzip2") || args.contains("-j") { codec = .bzip2; codecCount += 1 }
         if args.contains("--xz") || args.contains("-J")    { codec = .xz;    codecCount += 1 }
+        if args.contains("--lzip")           { codec = .lzip;                  codecCount += 1 }
         if args.contains("--zstd")           { codec = .zstd;                  codecCount += 1 }
         if args.contains("--lz4")            { codec = .lz4;                   codecCount += 1 }
         guard codecCount <= 1 else {

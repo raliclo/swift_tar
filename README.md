@@ -79,12 +79,13 @@ Reading always auto-detects, so codec flags apply to `-c` only.
 | `--gzip`, `-z`     | zlib                             | one gzip member per chunk (pigz-style `.tar.gz`) |
 | `--bzip2`, `-j`    | libbz2                           | one stream per chunk (pbzip2-style `.tar.bz2`) |
 | `--xz`, `-J`       | liblzma                          | one xz stream per chunk (xz multi-stream) |
+| `--lzip`           | lzip CLI                         | one lzip stream per chunk |
 | `--zstd`           | libzstd                          | one zstd frame per chunk |
 | `--lz4`            | liblz4                           | standard LZ4 frames |
 | *(none)*           | —                                | plain uncompressed tar |
 
 All standard codecs emit concatenatable streams, so `gunzip`, `bunzip2`,
-`xz`, `zstd`, `lz4` and `bsdtar` decode swift_tar's output directly.
+`xz`, `lzip`, `zstd`, `lz4` and `bsdtar` decode swift_tar's output directly.
 
 ## Read filters (auto-detected, stackable)
 

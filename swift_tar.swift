@@ -43,9 +43,7 @@
 // =====================================================================
 
 import Foundation
-#if os(Windows)
-import WinSDK
-#else
+#if !os(Windows)
 import zlib
 #endif
 
@@ -1259,15 +1257,30 @@ private func parseTarNumber(_ field: ArraySlice<UInt8>) -> UInt64 {
 // MARK: - Windows file identity (stat/lstat/symlink/link replacement)
 // MARK: - Windows 版檔案識別（取代 stat/lstat/symlink/link）
 // =================================================================
-// Windows has no POSIX stat()/lstat()/S_IFLNK/symlink()/link()/chmod(). File
-// type comes from GetFileAttributesW (reparse point ⟺ symlink), identity for
-// hardlink dedup comes from GetFileInformationByHandle (volume serial +
-// file index stand in for dev/ino), and there is no Unix permission bit to
-// preserve — directories/files get conventional 0o755/0o644 on archive, and
-// chmod is a no-op on extract.
-// Windows 沒有 POSIX stat()/lstat()/S_IFLNK/symlink()/link()/chmod()。檔案型別
-// 由 GetFileAttributesW 判斷（reparse point ⟺ symlink），硬連結去重用
-// GetFileInformationByHandle 的 volume serial + file index 取代 dev/ino；
+// Windows has no POSIX stat()/lstat()/S_IFLNK/symlink()/link()/chmod(), but
+// no raw WinSDK calls are needed either: swift-corelibs-foundation's Windows
+// port already exposes everything through portable FileManager APIs —
+// attributesOfItem's .type/.systemFileNumber/.systemNumber/.referenceCount
+// map to lstat's S_IFLNK/dev/ino/nlink, and createSymbolicLink(atPath:
+// withDestinationPath:) already passes the modern unprivileged-creation flag
+// (verified: succeeds under Developer Mode without admin, same as our old
+// manual CreateSymbolicLinkW call). The one gap is hardlinks: Foundation's
+// linkItem(atPath:toPath:) silently creates a *symlink* on Windows instead of
+// a true hardlink (verified empirically), which would be a correctness
+// regression for tar's hardlink-dedup entries — so hardlink creation shells
+// out to `fsutil hardlink create` instead (no admin required, verified).
+// There is no Unix permission bit to preserve — directories/files get
+// conventional 0o755/0o644 on archive, and chmod is a no-op on extract.
+// Windows 沒有 POSIX stat()/lstat()/S_IFLNK/symlink()/link()/chmod()，但也不
+// 需要原始 WinSDK 呼叫：swift-corelibs-foundation 的 Windows 版本已經透過
+// 可攜的 FileManager API 全部曝露——attributesOfItem 的
+// .type/.systemFileNumber/.systemNumber/.referenceCount 對應 lstat 的
+// S_IFLNK/dev/ino/nlink；createSymbolicLink(atPath:withDestinationPath:) 本身
+// 已經帶了現代版「免權限建立」旗標（實測：在開發者模式下不需系統管理員權限
+// 就能成功，跟舊版手動呼叫 CreateSymbolicLinkW 效果相同）。唯一的缺口是硬連
+// 結：Foundation 的 linkItem(atPath:toPath:) 在 Windows 上實測會靜默建立
+// symlink 而非真正的硬連結，對 tar 的硬連結去重項目來說是正確性倒退——因此
+// 硬連結改為呼叫外部 `fsutil hardlink create`（不需系統管理員權限，已實測）。
 // 沒有 Unix 權限位元可保留，打包時目錄/檔案一律給慣例值 0o755/0o644，解壓時
 // chmod 為 no-op。
 #if os(Windows)
@@ -1278,92 +1291,78 @@ private struct WinStat {
     var size: UInt64
     var mtime: UInt64
     var nlink: UInt32
-    var volumeSerial: DWORD
+    var volumeSerial: UInt64
     var fileIndex: UInt64
 }
 
-private func winFiletimeToUnix(_ ft: FILETIME) -> UInt64 {
-    let ticks = (UInt64(ft.dwHighDateTime) << 32) | UInt64(ft.dwLowDateTime)
-    let epochDelta: UInt64 = 116_444_736_000_000_000   // 1601 → 1970, 100ns units
-    guard ticks > epochDelta else { return 0 }
-    return (ticks - epochDelta) / 10_000_000
-}
-
-/// lstat()-equivalent: does NOT follow the final reparse point, so a symlink
-/// reports itself (matching lstat's S_IFLNK) even when it targets a directory.
-/// 等同 lstat()：不追隨最後一層 reparse point，symlink 一律回報自身
-/// （對應 lstat 的 S_IFLNK），即使目標是目錄。
+/// lstat()-equivalent via FileManager.attributesOfItem, which (verified) does
+/// NOT follow the final reparse point, so a symlink reports itself (matching
+/// lstat's S_IFLNK) even when it targets a directory.
+/// 等同 lstat()：透過 FileManager.attributesOfItem（實測不會追隨最後一層
+/// reparse point），symlink 一律回報自身（對應 lstat 的 S_IFLNK），即使目標
+/// 是目錄。
 private func winStat(_ path: String) -> WinStat? {
-    let attrs = path.withCString(encodedAs: UTF16.self) { GetFileAttributesW($0) }
-    guard attrs != INVALID_FILE_ATTRIBUTES else { return nil }
-    let isReparse = (attrs & DWORD(FILE_ATTRIBUTE_REPARSE_POINT)) != 0
-    let isDirAttr = (attrs & DWORD(FILE_ATTRIBUTE_DIRECTORY)) != 0
-
-    var flags: DWORD = DWORD(FILE_FLAG_BACKUP_SEMANTICS)
-    if isReparse { flags |= DWORD(FILE_FLAG_OPEN_REPARSE_POINT) }
-    // GENERIC_READ 直接寫成 DWORD 常值（0x80000000），繞開 WinSDK Swift 綁定
-    // 對 GENERIC_READ 型別（Int32 / UInt32 視情境而定）不一致造成的多載歧義，
-    // 同 lzfse-ui-win.swift 的既有作法。
-    // GENERIC_READ written as a literal DWORD (0x80000000) to sidestep the
-    // WinSDK Swift overlay's inconsistent typing, same workaround already
-    // used in lzfse-ui-win.swift.
-    let handle = path.withCString(encodedAs: UTF16.self) {
-        CreateFileW($0, DWORD(0x80000000), DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE),
-                    nil, DWORD(OPEN_EXISTING), flags, nil)
+    guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else { return nil }
+    let type = attrs[.type] as? FileAttributeType
+    let size = (attrs[.size] as? UInt64) ?? 0
+    let mtime: UInt64
+    if let date = attrs[.modificationDate] as? Date {
+        mtime = UInt64(max(0, date.timeIntervalSince1970))
+    } else {
+        mtime = 0
     }
-    guard let h = handle, h != INVALID_HANDLE_VALUE else { return nil }
-    defer { CloseHandle(h) }
-
-    var info = BY_HANDLE_FILE_INFORMATION()
-    guard GetFileInformationByHandle(h, &info) else { return nil }
-
-    let size = (UInt64(info.nFileSizeHigh) << 32) | UInt64(info.nFileSizeLow)
-    let fileIndex = (UInt64(info.nFileIndexHigh) << 32) | UInt64(info.nFileIndexLow)
-    return WinStat(isDir: isDirAttr && !isReparse, isSymlink: isReparse,
-                   size: size, mtime: winFiletimeToUnix(info.ftLastWriteTime),
-                   nlink: info.nNumberOfLinks, volumeSerial: info.dwVolumeSerialNumber,
-                   fileIndex: fileIndex)
+    let nlink = UInt32((attrs[.referenceCount] as? UInt64) ?? 1)
+    let volumeSerial = (attrs[.systemNumber] as? UInt64) ?? 0
+    let fileIndex = (attrs[.systemFileNumber] as? UInt64) ?? 0
+    return WinStat(isDir: type == .typeDirectory, isSymlink: type == .typeSymbolicLink,
+                   size: size, mtime: mtime, nlink: nlink,
+                   volumeSerial: volumeSerial, fileIndex: fileIndex)
 }
 
 /// Best-effort symlink creation; Windows requires admin rights or Developer
-/// Mode (SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE, Windows 10 1703+).
-/// On failure this only warns and skips the entry, per project decision —
-/// archive extraction should not hard-fail just because symlinks are
-/// unavailable in the current environment.
-/// 盡力嘗試建立 symlink；Windows 需要系統管理員權限或開發者模式
-/// （SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE，Windows 10 1703+）。
-/// 失敗時僅警告並略過該項目，不中止整個解壓——避免因環境缺乏 symlink 權限而
-/// 讓整個 extract 失敗。
+/// Mode for FileManager.createSymbolicLink to succeed. On failure this only
+/// warns and skips the entry, per project decision — archive extraction
+/// should not hard-fail just because symlinks are unavailable in the current
+/// environment.
+/// 盡力嘗試建立 symlink；FileManager.createSymbolicLink 在 Windows 上需要系統
+/// 管理員權限或開發者模式才會成功。失敗時僅警告並略過該項目，不中止整個
+/// 解壓——避免因環境缺乏 symlink 權限而讓整個 extract 失敗。
 private func winCreateSymlink(dest: String, target: String) {
-    let parent = (dest as NSString).deletingLastPathComponent
-    let resolvedTarget = target.hasPrefix("/") || target.hasPrefix("\\") || target.contains(":")
-        ? target : (parent.isEmpty ? target : parent + "/" + target)
-    var isDirTarget: ObjCBool = false
-    let targetIsDir = FileManager.default.fileExists(atPath: resolvedTarget, isDirectory: &isDirTarget) && isDirTarget.boolValue
-
-    var flags: DWORD = 0x2   // SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
-    if targetIsDir { flags |= 0x1 }   // SYMBOLIC_LINK_FLAG_DIRECTORY
-    let ok = dest.withCString(encodedAs: UTF16.self) { d in
-        target.withCString(encodedAs: UTF16.self) { t in
-            CreateSymbolicLinkW(d, t, flags) != 0
-        }
-    }
-    if !ok {
+    do {
+        try FileManager.default.createSymbolicLink(atPath: dest, withDestinationPath: target)
+    } catch {
         eprint("swift_tar: warning: failed to create symlink '\(dest)' -> '\(target)' (needs admin rights or Developer Mode), skipping / 警告：無法建立符號連結 '\(dest)' -> '\(target)'（需要系統管理員權限或開發者模式），已略過")
     }
 }
 
-/// Best-effort hardlink creation via CreateHardLinkW; warns and skips on
-/// failure, same policy as winCreateSymlink.
-/// 透過 CreateHardLinkW 盡力嘗試建立硬連結；失敗時警告並略過，政策同
-/// winCreateSymlink。
+/// Best-effort hardlink creation via `fsutil hardlink create` (no admin
+/// required, verified); warns and skips on failure, same policy as
+/// winCreateSymlink. Not FileManager.linkItem: verified to silently create a
+/// symlink instead of a true hardlink on Windows, which would defeat tar's
+/// hardlink-dedup semantics.
+/// 透過 `fsutil hardlink create` 盡力嘗試建立硬連結（不需系統管理員權限，已
+/// 實測）；失敗時警告並略過，政策同 winCreateSymlink。不用
+/// FileManager.linkItem：實測在 Windows 上會靜默建立 symlink 而非真正的硬連
+/// 結，會破壞 tar 硬連結去重的語意。
 private func winCreateHardlink(dest: String, target: String) {
-    let ok = dest.withCString(encodedAs: UTF16.self) { d in
-        target.withCString(encodedAs: UTF16.self) { t in
-            CreateHardLinkW(d, t, nil)
-        }
+    guard let fsutil = resolveExecutable("fsutil") ?? {
+        let sysPath = "\(ProcessInfo.processInfo.environment["SystemRoot"] ?? "C:\\Windows")\\System32\\fsutil.exe"
+        return FileManager.default.isExecutableFile(atPath: sysPath) ? sysPath : nil
+    }() else {
+        eprint("swift_tar: warning: fsutil not found, cannot create hardlink '\(dest)' -> '\(target)', skipping / 警告：找不到 fsutil，無法建立硬連結 '\(dest)' -> '\(target)'，已略過")
+        return
     }
-    if !ok {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: fsutil)
+    process.arguments = ["hardlink", "create", dest, target]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    guard (try? process.run()) != nil else {
+        eprint("swift_tar: warning: failed to launch fsutil for hardlink '\(dest)' -> '\(target)', skipping / 警告：無法啟動 fsutil 建立硬連結 '\(dest)' -> '\(target)'，已略過")
+        return
+    }
+    process.waitUntilExit()
+    if process.terminationStatus != 0 {
         eprint("swift_tar: warning: failed to create hardlink '\(dest)' -> '\(target)', skipping / 警告：無法建立硬連結 '\(dest)' -> '\(target)'，已略過")
     }
 }
@@ -1508,10 +1507,18 @@ final class TarWriter {
 
     // ---- entry walkers / 項目走訪 ----
 
-    /// Archive-internal name: strip leading "/" and "./".
-    /// 檔內名稱：去除開頭的 "/" 與 "./"。
+    /// Archive-internal name: normalize "\" to "/", strip a Windows drive
+    /// letter (e.g. "C:"), then strip leading "/" and "./" -- keeps entries
+    /// portable POSIX-relative paths regardless of platform, matching
+    /// bsdtar's own behavior when given an absolute Windows path.
+    /// 檔內名稱：把 "\" 正規化成 "/"、去除 Windows 磁碟機代號（例如 "C:"），
+    /// 再去除開頭的 "/" 與 "./"——不論平台，項目一律維持可攜的 POSIX 相對
+    /// 路徑，與 bsdtar 收到 Windows 絕對路徑時的行為一致。
     private static func archiveName(_ path: String) -> String {
-        var p = path
+        var p = path.replacingOccurrences(of: "\\", with: "/")
+        if p.count >= 2, p[p.startIndex].isLetter, p[p.index(after: p.startIndex)] == ":" {
+            p.removeFirst(2)
+        }
         while p.hasPrefix("/") { p.removeFirst() }
         while p.hasPrefix("./") && p.count > 2 { p.removeFirst(2) }
         return p
@@ -1935,6 +1942,14 @@ private func printTarUsage() {
                         平行在途分塊數（預設 2×核心數）
       -v              : Verbose / 顯示處理中的項目
       -h              : Show this help / 顯示說明
+      -test           : Self test: round-trip plain tar and .tar.gz against the
+                        platform's standard tar (create with one, extract with
+                        the other, both directions), then exit
+                        自我測試：與平台標準 tar 做雙向 round-trip（純 tar 與
+                        .tar.gz，兩邊互建互解），完成後結束
+      -debug          : With -test, print which standard-tar candidates were
+                        found/skipped while searching / 搭配 -test 使用，印出
+                        搜尋標準 tar 過程中找到／略過的候選項目
 
     Notes / 注意:
       - Multi-core model is identical to lzfse2's runParallelEncode: 4MiB chunks
@@ -1949,12 +1964,216 @@ private func printTarUsage() {
     """)
 }
 
+// =================================================================
+// MARK: - Self test (-test): round-trip vs. the platform's standard tar
+// MARK: - 自我測試（-test）：與平台標準 tar 的 round-trip
+// =================================================================
+// Goal: prove swift_tar's plain-tar and .tar.gz output is byte-for-byte
+// interchangeable with the platform's real tar (bsdtar on macOS/Windows 10+,
+// GNU tar on Linux) -- not swift_tar tested against itself.
+// 目標：證明 swift_tar 的純 tar 與 .tar.gz 輸出跟平台的真實 tar（macOS/
+// Windows 10+ 為 bsdtar，Linux 為 GNU tar）位元組級互通——不是拿 swift_tar
+// 跟自己比。
+
+/// Search PATH for the platform's standard tar ("tar" / "tar.exe"), skipping
+/// any candidate whose file size matches this running swift_tar binary --
+/// guards against comparing against a PATH shim that points back at
+/// swift_tar itself (e.g. run_round.bat's -swift_tar shim, which is a real
+/// file copy named tar.exe, not a symlink a naive "which tar" could see
+/// through).
+/// 在 PATH 中搜尋平台的標準 tar（"tar" / "tar.exe"），跳過檔案大小與目前執行
+/// 中的 swift_tar 本身相符的候選——防止比對到指回 swift_tar 自己的 PATH shim
+/// （例如 run_round.bat 的 -swift_tar shim，是真正的檔案複本、檔名 tar.exe，
+/// 不是符號連結，單純的 "which tar" 看不穿）。
+func findStandardTar(debug: Bool = false) -> String? {
+    // -debug prints go to stdout, not stderr: stderr writes via
+    // FileHandle.standardError were observed to go missing when this binary
+    // is spawned through Bash/MSYS or piped through PowerShell's `2>&1` in
+    // this environment (print() to stdout was reliable in both).
+    // -debug 訊息走 stdout、不走 stderr：實測發現這個環境下，透過 Bash/MSYS
+    // 執行或用 PowerShell 的 `2>&1` 時，FileHandle.standardError 寫入的內容
+    // 會遺失；print() 走 stdout 在兩種呼叫方式下都可靠。
+    func dprint(_ msg: String) { if debug { print("[debug] \(msg)") } }
+
+    dprint("findStandardTar: argv0=\(CommandLine.arguments[0])")
+    let ownSize = (try? FileManager.default.attributesOfItem(atPath: CommandLine.arguments[0])[.size] as? Int) ?? nil
+    dprint("findStandardTar: ownSize=\(String(describing: ownSize))")
+#if os(Windows)
+    // Windows 10 1803+ ships a genuine bsdtar at System32\tar.exe -- prefer
+    // it explicitly over whatever a dev-tool PATH turns up first (e.g. Git's
+    // bundled MSYS tar.exe, which has its own POSIX-path-translation
+    // semantics for "/..."-style paths and isn't representative of "the
+    // standard tar on Windows" for a typical user).
+    // Windows 10 1803+ 內建 System32\tar.exe 是貨真價實的 bsdtar——明確優先
+    // 用它，而非開發工具 PATH 上先找到的其他版本（例如 Git 內附的 MSYS
+    // tar.exe，對 "/..."-style 路徑有自己的一套 POSIX 路徑轉換語意，不能代表
+    // 一般使用者認知的「Windows 標準 tar」）。
+    let systemRoot = ProcessInfo.processInfo.environment["SystemRoot"] ?? "C:\\Windows"
+    let system32Tar = "\(systemRoot)\\System32\\tar.exe"
+    dprint("findStandardTar: system32Tar=\(system32Tar) isExec=\(FileManager.default.isExecutableFile(atPath: system32Tar))")
+    if FileManager.default.isExecutableFile(atPath: system32Tar) {
+        let candSize = (try? FileManager.default.attributesOfItem(atPath: system32Tar)[.size] as? Int) ?? nil
+        dprint("findStandardTar: candSize=\(String(describing: candSize)) ownSize=\(String(describing: ownSize))")
+        if !(ownSize != nil && candSize == ownSize) {
+            dprint("findStandardTar: returning system32Tar")
+            return system32Tar
+        }
+        dprint("findStandardTar: NOT returning system32Tar (size matched own)")
+    }
+#endif
+    dprint("findStandardTar: fell through to PATH search")
+    let env = ProcessInfo.processInfo.environment
+    let pathVar = env["Path"] ?? env["PATH"] ?? env["path"] ?? ""
+    let sep: Character = pathVar.contains(";") ? ";" : ":"
+    for dir in pathVar.split(separator: sep) {
+        for name in ["tar.exe", "tar"] {
+            let candidate = "\(dir)/\(name)"
+            guard FileManager.default.isExecutableFile(atPath: candidate) else { continue }
+            let candSize = (try? FileManager.default.attributesOfItem(atPath: candidate)[.size] as? Int) ?? nil
+            dprint("findStandardTar: candidate=\(candidate) size=\(String(describing: candSize))")
+            if let ownSize, let candSize, candSize == ownSize { continue }   // looks like a copy of ourselves
+            return candidate
+        }
+    }
+    return nil
+}
+
+/// Recursively compare two directory trees for identical relative paths and
+/// file contents (symlinks compared by target, not followed).
+/// 遞迴比較兩個目錄樹的相對路徑與檔案內容是否一致（symlink 比對目標本身，不
+/// 追隨）。
+func compareTrees(_ a: String, _ b: String) -> Bool {
+    let fm = FileManager.default
+    guard let aItems = try? fm.subpathsOfDirectory(atPath: a) else { return false }
+    guard let bItems = try? fm.subpathsOfDirectory(atPath: b) else { return false }
+    guard Set(aItems) == Set(bItems) else { return false }
+    for rel in aItems {
+        let pa = "\(a)/\(rel)", pb = "\(b)/\(rel)"
+        let ta = (try? fm.attributesOfItem(atPath: pa)[.type] as? FileAttributeType) ?? nil
+        let tb = (try? fm.attributesOfItem(atPath: pb)[.type] as? FileAttributeType) ?? nil
+        guard ta == tb else { return false }
+        switch ta {
+        case .typeDirectory:
+            continue
+        case .typeSymbolicLink:
+            guard let da = try? fm.destinationOfSymbolicLink(atPath: pa),
+                  let db = try? fm.destinationOfSymbolicLink(atPath: pb), da == db else { return false }
+        default:
+            guard let da = fm.contents(atPath: pa), let db = fm.contents(atPath: pb), da == db else { return false }
+        }
+    }
+    return true
+}
+
+/// Run a tar binary (self or the standard tar) as a subprocess and wait for
+/// exit; returns true on exit code 0. `cwd`, when given, matches "-C dir"
+/// for create so both sides always archive the same relative "src/..."
+/// entry names -- an absolute Windows path (with a drive letter and
+/// backslashes) is not a portable tar member name, so the create side never
+/// passes one.
+/// 以子行程執行一個 tar 執行檔（自己或標準 tar），等待結束；exit code 0 回傳
+/// true。給了 `cwd` 時等同 "-C dir"，讓兩邊建檔時都用同樣的相對路徑
+/// "src/..." 當項目名稱——Windows 絕對路徑（含磁碟機代號與反斜線）不是可攜的
+/// tar 項目名稱，所以建檔這一側絕不傳絕對路徑進去。
+@discardableResult
+func runTarProcess(_ exePath: String, _ args: [String], cwd: String? = nil) -> Bool {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: exePath)
+    process.arguments = args
+    if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    guard (try? process.run()) != nil else { return false }
+    process.waitUntilExit()
+    return process.terminationStatus == 0
+}
+
+func runSelfTest(debug: Bool = false) {
+    let selfExe = CommandLine.arguments[0]
+    var allOK = true
+    func check(_ label: String, _ ok: Bool) {
+        print("       \(label): \(ok ? "✓" : "✗ 失敗 / FAILED")")
+        if !ok { allOK = false }
+    }
+
+    guard let stdTar = findStandardTar(debug: debug) else {
+        print("[swift_tar -test] standard tar not found on PATH, skipping cross-compat round-trip / 在 PATH 中找不到標準 tar，略過互通性測試")
+        exit(0)
+    }
+    print("[swift_tar -test] standard tar (which tar): \(stdTar)")
+
+    let tmp = NSTemporaryDirectory() + "swift_tar_selftest_\(ProcessInfo.processInfo.processIdentifier)"
+    let fm = FileManager.default
+    try? fm.removeItem(atPath: tmp)
+    defer { try? fm.removeItem(atPath: tmp) }
+
+    let srcDir = "\(tmp)/src"
+    try? fm.createDirectory(atPath: "\(srcDir)/sub", withIntermediateDirectories: true)
+    fm.createFile(atPath: "\(srcDir)/root.txt", contents: Data("swift_tar self-test root file\n".utf8))
+    fm.createFile(atPath: "\(srcDir)/sub/nested.txt",
+                  contents: Data(String(repeating: "nested content line\n", count: 200).utf8))
+
+    // Both create sides run with cwd=tmp and archive the relative name
+    // "src", so extraction on either side always lands at "<out>/src".
+    // 兩邊建檔都以 cwd=tmp、封存相對名稱 "src"，解壓後統一落在 "<out>/src"。
+
+    // ---- plain tar ----
+    let plainA = "\(tmp)/plain_by_swift_tar.tar"
+    let plainB = "\(tmp)/plain_by_std_tar.tar"
+    if runTarProcess(selfExe, ["-c", "-f", plainA, "src"], cwd: tmp) {
+        let out = "\(tmp)/plain_out_std"
+        try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
+        let extracted = runTarProcess(stdTar, ["-x", "-f", plainA, "-C", out])
+        check("plain tar: swift_tar create → std tar extract", extracted && compareTrees(srcDir, "\(out)/src"))
+    } else {
+        check("plain tar: swift_tar create → std tar extract", false)
+    }
+    if runTarProcess(stdTar, ["-c", "-f", plainB, "-C", tmp, "src"]) {
+        let out = "\(tmp)/plain_out_swift"
+        try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
+        let extracted = runTarProcess(selfExe, ["-x", "-f", plainB, "-C", out])
+        check("plain tar: std tar create → swift_tar extract", extracted && compareTrees(srcDir, "\(out)/src"))
+    } else {
+        check("plain tar: std tar create → swift_tar extract", false)
+    }
+
+    // ---- .tar.gz ----
+    let gzA = "\(tmp)/gz_by_swift_tar.tar.gz"
+    let gzB = "\(tmp)/gz_by_std_tar.tar.gz"
+    if runTarProcess(selfExe, ["-c", "--gzip", "-f", gzA, "src"], cwd: tmp) {
+        let out = "\(tmp)/gz_out_std"
+        try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
+        let extracted = runTarProcess(stdTar, ["-x", "-z", "-f", gzA, "-C", out])
+        check(".tar.gz: swift_tar create → std tar extract", extracted && compareTrees(srcDir, "\(out)/src"))
+    } else {
+        check(".tar.gz: swift_tar create → std tar extract", false)
+    }
+    if runTarProcess(stdTar, ["-c", "-z", "-f", gzB, "-C", tmp, "src"]) {
+        let out = "\(tmp)/gz_out_swift"
+        try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
+        let extracted = runTarProcess(selfExe, ["-x", "-f", gzB, "-C", out])
+        check(".tar.gz: std tar create → swift_tar extract", extracted && compareTrees(srcDir, "\(out)/src"))
+    } else {
+        check(".tar.gz: std tar create → swift_tar extract", false)
+    }
+
+    exit(allOK ? 0 : 1)
+}
+
 @main
 struct SwiftTarMain {
     static func main() {
 #if !os(Windows)
         signal(SIGPIPE, SIG_IGN)   // no SIGPIPE on Windows / Windows 無 SIGPIPE
 #endif
+        // -test 要在 combined short flag 展開之前攔截：展開邏輯會把它拆成
+        // -t -e -s -t（長度 5、以 "-" 開頭、非 "--"）。
+        // -test must be caught before combined-short-flag expansion below,
+        // which would otherwise split it into -t -e -s -t (length 5, starts
+        // with "-", not "--").
+        if CommandLine.arguments.contains("-test") {
+            runSelfTest(debug: CommandLine.arguments.contains("-debug"))
+        }
         // 展開 combined short flags，相容標準 tar 用法的兩種形式：
         //   帶 dash：-czf → -c -z -f
         //   傳統形式（第一個位置參數全是字母，無 dash）：czf → -c -z -f

@@ -75,12 +75,13 @@ release/swift_tar --cat -f package.rpm > payload.cpio          # 剝除 RPM 外�
 | `--gzip`, `-z`     | zlib                             | 每分塊一個 gzip 成員（pigz 式 `.tar.gz`） |
 | `--bzip2`, `-j`    | libbz2                           | 每分塊一個 bzip2 串流（pbzip2 式 `.tar.bz2`） |
 | `--xz`, `-J`       | liblzma                          | 每分塊一個 xz 串流（標準 xz 多串流） |
+| `--lzip`           | lzip CLI                         | 每分塊一個 lzip 串流 |
 | `--zstd`           | libzstd                          | 每分塊一個 zstd frame |
 | `--lz4`            | liblz4                           | 標準 LZ4 frame |
 | *（無）*           | —                                | 不壓縮的純 tar |
 
-所有標準引擎輸出皆為可串接串流，故 `gunzip`、`bunzip2`、`xz`、`zstd`、
-`lz4` 與 `bsdtar` 可直接解開 swift_tar 的輸出。
+所有標準引擎輸出皆為可串接串流，故 `gunzip`、`bunzip2`、`xz`、`lzip`、
+`zstd`、`lz4` 與 `bsdtar` 可直接解開 swift_tar 的輸出。
 
 ## 讀取端 filter（自動偵測、可疊層）
 

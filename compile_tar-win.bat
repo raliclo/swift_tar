@@ -38,7 +38,20 @@ if not "%_rc%"=="0" (
     exit /b 1
 )
 
-move /Y "%_build_exe%" release\swift_tar.exe > nul
+:: Retry with backoff: release\swift_tar.exe can be transiently locked (AV
+:: real-time scan, a previous test run's process still releasing its handle)
+:: causing a plain "move /Y" to fail with "Access is denied" -- silently,
+:: since move's own exit code was never checked here before, leaving the OLD
+:: exe in place while this script still printed [OK]. Same fix already used
+:: by run_round.bat for lzfse.exe.
+:: (Comments in this file stay English-only -- see the file header: non-ASCII
+:: bytes on a comment line were found to corrupt cmd.exe's parsing here.)
+powershell -NoProfile -Command "$src='%_build_exe%'; $dst='release\swift_tar.exe'; for ($i=1; $i -le 10; $i++) { try { if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Force }; Move-Item -LiteralPath $src -Destination $dst -Force; exit 0 } catch { Write-Output ('install retry '+$i+': '+$_.Exception.Message); Start-Sleep -Milliseconds 500 } }; exit 1"
+if errorlevel 1 (
+    echo [FAIL] could not install release\swift_tar.exe after retries / 重試多次後仍無法安裝 release\swift_tar.exe
+    pause
+    exit /b 1
+)
 del /Q "%_build_exe:.exe=.lib%" "%_build_exe:.exe=.exp%" > nul 2>&1
 
 echo [OK] Built release\swift_tar.exe / 已建置 release\swift_tar.exe

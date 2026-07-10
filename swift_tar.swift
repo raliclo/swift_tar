@@ -46,6 +46,22 @@ import Foundation
 #if !os(Windows)
 import zlib
 #endif
+#if os(Windows)
+// CRT-level file I/O for the -write_ucrt extraction backend (one open per
+// file, mtime set on the open fd via _futime64 — same syscall profile as
+// bsdtar). This is the C runtime module, NOT WinSDK (removed in R44-Win).
+// -write_ucrt 解壓後端所需的 CRT 層檔案 I/O（每檔僅開檔一次，mtime 以
+// _futime64 直接設定在已開啟的 fd 上——syscall 輪廓同 bsdtar）。這是 C
+// runtime module，並非 R44-Win 已移除的 WinSDK。
+import ucrt
+#endif
+
+/// Streaming chunk size for the decompression/extraction paths (decoder
+/// loops, pipe pumps, tar-layer reads and file writes). Raised from 1 MiB
+/// to 4 MiB to cut per-chunk call overhead on large archives.
+/// 解壓／解出路徑的串流分塊大小（解碼迴圈、pipe 泵送、tar 層讀取與寫檔）。
+/// 由 1 MiB 調升為 4 MiB，降低大型封存檔的每塊呼叫成本。
+let DECODE_CHUNK = 1 << 22
 
 // On Windows there is no bundled zlib/libbz2/liblzma/libzstd/liblz4 to link
 // against, so the non-LZFSE codecs shell out to the same CLI tools
@@ -344,14 +360,14 @@ private func winRunDecompress(exe: String, args: [String], input: FileHandle,
     let writeHandle = inPipe.fileHandleForWriting
     let writer = Thread {
         if !prefix.isEmpty { try? writeHandle.write(contentsOf: prefix) }
-        while let part = try? input.read(upToCount: 1 << 20), !part.isEmpty {
+        while let part = try? input.read(upToCount: DECODE_CHUNK), !part.isEmpty {
             try? writeHandle.write(contentsOf: part)
         }
         try? writeHandle.close()
     }
     writer.start()
     let readHandle = outPipe.fileHandleForReading
-    while let part = try? readHandle.read(upToCount: 1 << 20), !part.isEmpty {
+    while let part = try? readHandle.read(upToCount: DECODE_CHUNK), !part.isEmpty {
         if (try? output.write(contentsOf: part)) == nil { return false }
     }
     process.waitUntilExit()
@@ -625,10 +641,10 @@ func gzipDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
     guard inflateInit2_(&strm, 15 + 32, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK
     else { return false }
     defer { inflateEnd(&strm) }
-    var outBuf = [UInt8](repeating: 0, count: 1 << 20)
+    var outBuf = [UInt8](repeating: 0, count: DECODE_CHUNK)
     var atBoundary = true
     let reader = ByteReader(input, prefix: prefix)
-    while var inBuf = reader.readSome(1 << 20).map({ [UInt8]($0) }) {
+    while var inBuf = reader.readSome(DECODE_CHUNK).map({ [UInt8]($0) }) {
         var consumed = 0
         let ok: Bool = inBuf.withUnsafeMutableBufferPointer { ib in
             while consumed < ib.count {
@@ -674,10 +690,10 @@ func bzip2DecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> B
     else { return false }
     var open = true
     defer { if open { _ = withUnsafeMutablePointer(to: &strm) { BZ2_bzDecompressEnd($0) } } }
-    var outBuf = [UInt8](repeating: 0, count: 1 << 20)
+    var outBuf = [UInt8](repeating: 0, count: DECODE_CHUNK)
     var atBoundary = true
     let reader = ByteReader(input, prefix: prefix)
-    while var inBuf = reader.readSome(1 << 20).map({ [UInt8]($0) }) {
+    while var inBuf = reader.readSome(DECODE_CHUNK).map({ [UInt8]($0) }) {
         var consumed = 0
         let ok: Bool = inBuf.withUnsafeMutableBufferPointer { ib in
             while consumed < ib.count {
@@ -742,12 +758,12 @@ func lzmaDecodeStream(kind: LZMAKind, input: FileHandle, prefix: Data, output: F
     }
     guard initRC == LZMA_OK else { return false }
     defer { withUnsafeMutablePointer(to: &strm) { lzma_end($0) } }
-    var outBuf = [UInt8](repeating: 0, count: 1 << 20)
+    var outBuf = [UInt8](repeating: 0, count: DECODE_CHUNK)
     var ended = false
     let reader = ByteReader(input, prefix: prefix)
-    var pending: [UInt8]? = reader.readSome(1 << 20).map { [UInt8]($0) }
+    var pending: [UInt8]? = reader.readSome(DECODE_CHUNK).map { [UInt8]($0) }
     while let inBuf = pending {
-        let next = reader.readSome(1 << 20).map { [UInt8]($0) }
+        let next = reader.readSome(DECODE_CHUNK).map { [UInt8]($0) }
         let action: Int32 = next == nil ? LZMA_FINISH : LZMA_RUN
         var consumed = 0
         let ok: Bool = inBuf.withUnsafeBufferPointer { ib in
@@ -793,10 +809,10 @@ func zstdDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
 #else
     guard let zds = ZSTD_createDStream() else { return false }
     defer { _ = ZSTD_freeDStream(zds) }
-    var outBuf = [UInt8](repeating: 0, count: 1 << 20)
+    var outBuf = [UInt8](repeating: 0, count: DECODE_CHUNK)
     var lastRet = 0
     let reader = ByteReader(input, prefix: prefix)
-    while let chunk = reader.readSome(1 << 20).map({ [UInt8]($0) }) {
+    while let chunk = reader.readSome(DECODE_CHUNK).map({ [UInt8]($0) }) {
         let ok: Bool = chunk.withUnsafeBufferPointer { ib in
             var inB = ZSTDInBuffer(src: UnsafeRawPointer(ib.baseAddress), size: ib.count, pos: 0)
             while inB.pos < inB.size {
@@ -835,10 +851,10 @@ func lz4DecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Boo
     var ctx: OpaquePointer? = nil
     guard LZ4F_isError(LZ4F_createDecompressionContext(&ctx, LZ4F_VERSION)) == 0 else { return false }
     defer { _ = LZ4F_freeDecompressionContext(ctx) }
-    var outBuf = [UInt8](repeating: 0, count: 1 << 20)
+    var outBuf = [UInt8](repeating: 0, count: DECODE_CHUNK)
     var lastHint = 0
     let reader = ByteReader(input, prefix: prefix)
-    while let chunk = reader.readSome(1 << 20).map({ [UInt8]($0) }) {
+    while let chunk = reader.readSome(DECODE_CHUNK).map({ [UInt8]($0) }) {
         var srcPos = 0
         let ok: Bool = chunk.withUnsafeBufferPointer { ib in
             while srcPos < ib.count {
@@ -892,7 +908,7 @@ func lzwDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Boo
     for c in 0..<256 { suffixTab[c] = UInt8(c) }
     var stack = [UInt8]()
     stack.reserveCapacity(65536)
-    var outBuf = Data(); outBuf.reserveCapacity(1 << 20)
+    var outBuf = Data(); outBuf.reserveCapacity(DECODE_CHUNK)
 
     func getbits(_ n: Int) -> Int? {
         while bitsAvail < n {
@@ -917,7 +933,7 @@ func lzwDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Boo
         // emit pending stack / 先倒出堆疊中的展開結果
         while let b = stack.popLast() {
             outBuf.append(b)
-            if outBuf.count >= (1 << 20) { if !flushOut() { return false } }
+            if outBuf.count >= (DECODE_CHUNK) { if !flushOut() { return false } }
         }
         guard var code = getbits(bits) else { break }   // EOF = normal end / EOF 即正常結束
         let newCode = code
@@ -1026,7 +1042,7 @@ func rpmUnwrapStream(input: FileHandle, prefix: Data, output: FileHandle) -> Boo
         while let b = reader.peek(1), b[0] == 0 { _ = reader.skip(1) }
     }
     guard seenHeader else { return false }
-    while let part = reader.readSome(1 << 20) {
+    while let part = reader.readSome(DECODE_CHUNK) {
         if (try? output.write(contentsOf: part)) == nil { return false }
     }
     return true
@@ -1167,12 +1183,12 @@ func wholeBufferLZFSEDecode(input: FileHandle, head: Data, filePath: String?,
         src = []
         if let attrs = try? FileManager.default.attributesOfItem(atPath: p),
            let size = (attrs[.size] as? NSNumber)?.intValue { src.reserveCapacity(size) }
-        while let part = try? fh.read(upToCount: 1 << 20), !part.isEmpty {
+        while let part = try? fh.read(upToCount: DECODE_CHUNK), !part.isEmpty {
             src.append(contentsOf: part)
         }
     } else {
         src = [UInt8](head)
-        while let part = try? input.read(upToCount: 1 << 20), !part.isEmpty {
+        while let part = try? input.read(upToCount: DECODE_CHUNK), !part.isEmpty {
             src.append(contentsOf: part)
         }
     }
@@ -1436,7 +1452,154 @@ private func winCreateHardlink(dest: String, target: String) {
     }
 }
 
+/// Cached process cwd for building absolute paths in the ucrt backend
+/// (swift_tar never chdirs during extraction; lazy global init is
+/// thread-safe).
+/// 供 ucrt 後端組絕對路徑用的 cwd 快取（解壓過程不會 chdir；Swift 全域
+/// lazy 初始化為執行緒安全）。
+private let winProcessCwd = FileManager.default.currentDirectoryPath
+
+/// CRT calls receive the path verbatim — unlike Foundation they do not handle
+/// long paths automatically — so: normalize to backslashes, make absolute,
+/// and past MAX_PATH resolve "."/".." lexically and add the \\?\ prefix
+/// (which disables normalization and requires a fully resolved path).
+/// CRT 呼叫拿到的路徑不做任何加工——不像 Foundation 會自動處理長路徑——因此：
+/// 統一反斜線、轉絕對路徑；超過 MAX_PATH 時詞法解析 "."/".." 並加 \\?\ 前綴
+/// （該前綴會停用正規化，路徑必須已完全解析）。
+private func winUcrtPath(_ path: String) -> String {
+    var p = path.replacingOccurrences(of: "/", with: "\\")
+    let u = Array(p.utf16)
+    let hasDrive = u.count >= 2 && u[1] == UInt16(UInt8(ascii: ":"))
+    if !hasDrive && !p.hasPrefix("\\\\") {
+        p = winProcessCwd + "\\" + p
+    }
+    if p.utf16.count >= 260 && !p.hasPrefix("\\\\?\\") {
+        var comps: [Substring] = []
+        for c in p.split(separator: "\\", omittingEmptySubsequences: false) {
+            if c == "." { continue }
+            if c == ".." { if comps.count > 1 { comps.removeLast() }; continue }
+            comps.append(c)
+        }
+        p = "\\\\?\\" + comps.joined(separator: "\\")
+    }
+    return p
+}
+
+/// Write one extracted regular file with the selected backend; returns an
+/// error message on failure, nil on success. Called from FileWriterPool
+/// workers (distinct paths only, no shared state).
+/// 以選定後端寫出一個解壓檔案；失敗回傳錯誤訊息，成功回傳 nil。由
+/// FileWriterPool 的 worker 呼叫（路徑各自獨立，無共享狀態）。
+private func winWriteFile(dest: String, data: Data, mtime: UInt64,
+                          backend: WriteBackend) -> String? {
+    switch backend {
+    case .foundation:
+        // Single-call create+write+close (ONE open), then mtime via
+        // setAttributes (second open). Current inline path costs three opens.
+        // 一次呼叫完成建檔＋寫入＋關檔（單次開檔），再以 setAttributes 設
+        // mtime（第二次開檔）。原 inline 路徑每檔要開三次。
+        do {
+            try data.write(to: URL(fileURLWithPath: dest), options: [])
+        } catch {
+            return "cannot write '\(dest)': \(error) / 無法寫入 '\(dest)'"
+        }
+        try? FileManager.default.setAttributes([.modificationDate:
+            Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+        return nil
+    case .ucrt:
+        // One CRT open per file; mtime set on the same fd — no extra opens.
+        // (_wsopen itself is variadic and unavailable to Swift; _wsopen_s is
+        // the fixed-arity form.)
+        // 每檔僅一次 CRT 開檔；mtime 直接設在同一 fd 上——零額外開檔。
+        // （_wsopen 本身是可變參數，Swift 無法呼叫；_wsopen_s 為固定參數版。）
+        var fd: Int32 = -1
+        let openErr = winUcrtPath(dest).withCString(encodedAs: UTF16.self) { w in
+            _wsopen_s(&fd, w, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY | _O_SEQUENTIAL,
+                      _SH_DENYNO, _S_IREAD | _S_IWRITE)
+        }
+        guard openErr == 0, fd >= 0 else {
+            return "cannot create '\(dest)' (errno \(openErr)) / 無法建立 '\(dest)'"
+        }
+        var writeOK = true
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            var off = 0
+            while off < raw.count {
+                let n = _write(fd, raw.baseAddress! + off, UInt32(min(raw.count - off, 1 << 30)))
+                if n <= 0 { writeOK = false; return }
+                off += Int(n)
+            }
+        }
+        if writeOK {
+            var tb = __utimbuf64(actime: __time64_t(mtime), modtime: __time64_t(mtime))
+            _ = _futime64(fd, &tb)
+        }
+        _ = _close(fd)
+        return writeOK ? nil : "write failed for '\(dest)' / 寫入失敗 '\(dest)'"
+    }
+}
+
+/// Extraction writer pool. Per-file cost on Windows is ~2ms of fixed
+/// kernel/filter-driver latency (OPTIMIZATION.md R43-Win §4), so N files in
+/// flight overlap it nearly linearly. Same idiom as ParallelChunkSink:
+/// concurrent queue + group + semaphore backpressure + locked first-failure.
+/// The semaphore also bounds memory: inflight × smallFileMax.
+/// 解壓寫入池。Windows 每檔約 2ms 固定 kernel/filter driver 延遲（見
+/// OPTIMIZATION.md R43-Win §4），N 檔並行可近乎線性重疊。與
+/// ParallelChunkSink 同一 idiom：concurrent queue + group + semaphore 反壓
+/// + 鎖保護 first-failure。semaphore 同時就是記憶體上限：inflight × 小檔上限。
+final class FileWriterPool {
+    static let smallFileMax = 4 << 20        // ≤4 MiB buffered / 小檔緩衝上限
+
+    private let backend: WriteBackend
+    private let sem: DispatchSemaphore
+    private let lock = NSLock()
+    private let queue = DispatchQueue(label: "swifttar.extract", qos: .userInitiated,
+                                      attributes: .concurrent)
+    private let group = DispatchGroup()
+
+    private final class State: @unchecked Sendable { var failure: String? = nil }
+    private let state = State()
+
+    init(backend: WriteBackend, inflight: Int) {
+        self.backend = backend
+        self.sem = DispatchSemaphore(value: max(2, inflight))
+    }
+
+    var failure: String? {
+        lock.lock(); defer { lock.unlock() }
+        return state.failure
+    }
+
+    func submit(dest: String, data: Data, mtime: UInt64) {
+        sem.wait()                            // backpressure / 反壓
+        group.enter()
+        let backend = self.backend
+        queue.async { [self] in
+            if let err = winWriteFile(dest: dest, data: data, mtime: mtime, backend: backend) {
+                lock.lock()
+                state.failure = state.failure ?? err
+                lock.unlock()
+            }
+            sem.signal()
+            group.leave()
+        }
+    }
+
+    /// Barrier: wait until every queued write has completed.
+    /// 屏障：等待所有已排入的寫入完成。
+    func drain() { group.wait() }
+}
+
 #endif // os(Windows)
+
+/// Extraction write backend, selected by -write_foundation / -write_ucrt.
+/// Only affects Windows extraction; other platforms keep the POSIX path.
+/// 解壓寫檔後端，由 -write_foundation / -write_ucrt 選擇。僅影響 Windows
+/// 解壓；其他平台維持 POSIX 路徑。
+enum WriteBackend {
+    case foundation   // Data.write + setAttributes（每檔 2 次開檔 / 2 opens per file）
+    case ucrt         // _wsopen_s + _write + _futime64 + _close（每檔 1 次開檔 / 1 open per file）
+}
 
 // =================================================================
 // MARK: - Tar writer (ustar + pax) / Tar 寫入端（ustar + pax）
@@ -1758,6 +1921,11 @@ final class TarReader {
         var extract: Bool          // false = list only / false 表僅列出
         var destDir: String        // -C target / -C 目的地
         var verbose: Bool
+        // Windows extraction only: parallel writer count (-n) and write
+        // backend (-write_foundation / -write_ucrt); unused elsewhere.
+        // 僅 Windows 解壓使用：平行寫入數（-n）與寫檔後端；其他平台不使用。
+        var inflight: Int = 1
+        var writeBackend: WriteBackend = .ucrt
     }
 
     func run(options: Options) throws {
@@ -1767,11 +1935,19 @@ final class TarReader {
         // Deferred directory mtimes (children would bump them) / 目錄 mtime 延後套用
         var dirTimes: [(path: String, mtime: UInt64)] = []
         let fm = FileManager.default
+#if os(Windows)
+        // Parallel small-file writer pool + dests already handed to it (for
+        // ordering barriers: duplicate paths, hardlink targets).
+        // 平行小檔寫入池＋已交付路徑集合（供順序屏障用：重複路徑、硬連結目標）。
+        let pool: FileWriterPool? = options.extract
+            ? FileWriterPool(backend: options.writeBackend, inflight: options.inflight) : nil
+        var submitted = Set<String>()
+#endif
 
         func skipData(_ size: UInt64) throws {
             var remaining = Int((size + UInt64(TAR_BLOCK) - 1) / UInt64(TAR_BLOCK)) * TAR_BLOCK
             while remaining > 0 {
-                let n = min(remaining, 1 << 20)
+                let n = min(remaining, DECODE_CHUNK)
                 guard readExactly(n) != nil else {
                     throw TarError.format("truncated archive / 檔案不完整")
                 }
@@ -1895,6 +2071,11 @@ final class TarReader {
 #endif
                 dirTimes.append((dest, mtime))
             case UInt8(ascii: "2"):
+#if os(Windows)
+                // A queued write to the same name must land before removeItem.
+                // 同名寫入若仍在佇列，須先落地才能 removeItem。
+                if submitted.contains(dest) { pool?.drain() }
+#endif
                 try? fm.removeItem(atPath: dest)
 #if os(Windows)
                 winCreateSymlink(dest: dest, target: linkname)
@@ -1905,6 +2086,13 @@ final class TarReader {
 #endif
             case UInt8(ascii: "1"):
                 let target = options.destDir.isEmpty ? linkname : options.destDir + "/" + linkname
+#if os(Windows)
+                // The link target may still be queued in the pool — barrier
+                // before linking (hardlinks are rare; the drain is cheap).
+                // 連結目標可能仍在寫入池佇列——建連結前先屏障（硬連結稀少，
+                // drain 成本低）。
+                pool?.drain()
+#endif
                 try? fm.removeItem(atPath: dest)
 #if os(Windows)
                 winCreateHardlink(dest: dest, target: target)
@@ -1919,13 +2107,59 @@ final class TarReader {
                     dirTimes.append((dest, mtime))
                     continue
                 }
+#if os(Windows)
+                if let pool = pool, size <= UInt64(FileWriterPool.smallFileMax) {
+                    // Small file: buffer fully, hand to the pool; the ~2ms
+                    // per-file fixed cost overlaps across inflight workers.
+                    // 小檔：整檔緩衝交給寫入池，讓每檔約 2ms 的固定成本在
+                    // inflight 個 worker 間重疊。
+                    var data = Data()
+                    if size > 0 {
+                        guard let d = readExactly(Int(size)) else {
+                            throw TarError.format("truncated file data / 檔案資料不完整")
+                        }
+                        data = d
+                    }
+                    if let f = pool.failure { throw TarError.io(f) }
+                    if !submitted.insert(dest).inserted {
+                        // Duplicate path: earlier queued write must land first
+                        // so the later entry wins (tar overwrite semantics).
+                        // 重複路徑：先前佇列中的寫入須先落地，後者才能覆蓋
+                        // （tar 的覆蓋語意）。
+                        pool.drain()
+                    }
+                    pool.submit(dest: dest, data: data, mtime: mtime)
+                } else {
+                    // Large file (or list mode): inline streaming, one open,
+                    // mtime via the selected backend's policy kept simple —
+                    // write stream then setAttributes (amortized by size).
+                    // 大檔（或列出模式）：inline 串流寫入，成本被檔案大小攤提。
+                    if submitted.contains(dest) { pool?.drain() }
+                    _ = fm.createFile(atPath: dest, contents: nil)
+                    guard let out = FileHandle(forWritingAtPath: dest) else {
+                        throw TarError.io("cannot create '\(dest)' / 無法建立 '\(dest)'")
+                    }
+                    var remaining = size
+                    while remaining > 0 {
+                        let n = Int(min(remaining, UInt64(DECODE_CHUNK)))
+                        guard let part = readExactly(n) else {
+                            throw TarError.format("truncated file data / 檔案資料不完整")
+                        }
+                        try out.write(contentsOf: part)
+                        remaining -= UInt64(n)
+                    }
+                    try? out.close()
+                    try? fm.setAttributes([.modificationDate:
+                        Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+                }
+#else
                 _ = fm.createFile(atPath: dest, contents: nil)
                 guard let out = FileHandle(forWritingAtPath: dest) else {
                     throw TarError.io("cannot create '\(dest)' / 無法建立 '\(dest)'")
                 }
                 var remaining = size
                 while remaining > 0 {
-                    let n = Int(min(remaining, UInt64(1 << 20)))
+                    let n = Int(min(remaining, UInt64(DECODE_CHUNK)))
                     guard let part = readExactly(n) else {
                         throw TarError.format("truncated file data / 檔案資料不完整")
                     }
@@ -1933,13 +2167,14 @@ final class TarReader {
                     remaining -= UInt64(n)
                 }
                 try? out.close()
+#endif
                 let rem = Int(size % UInt64(TAR_BLOCK))
                 if rem != 0 { _ = readExactly(TAR_BLOCK - rem) }
 #if !os(Windows)
                 chmod(dest, mode_t(mode))
-#endif
                 try? fm.setAttributes([.modificationDate:
                     Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+#endif
             default:
                 eprint("swift_tar: skipping type '\(Character(UnicodeScalar(typeflag)))' entry '\(name)' / 略過未支援型別")
                 try skipData(size)
@@ -1948,7 +2183,17 @@ final class TarReader {
 
         // Drain remainder so upstream decoder threads can finish cleanly.
         // 把殘餘輸入讀完，讓上游解碼執行緒能正常收尾。
-        while let part = try? input.read(upToCount: 1 << 20), !part.isEmpty { _ = part }
+        while let part = try? input.read(upToCount: DECODE_CHUNK), !part.isEmpty { _ = part }
+
+#if os(Windows)
+        // All file writes must land before directory mtimes are applied
+        // (each write bumps its parent directory's mtime).
+        // 所有檔案寫入須先完成，才能套用目錄 mtime（寫檔會更動父目錄 mtime）。
+        if let pool = pool {
+            pool.drain()
+            if let f = pool.failure { throw TarError.io(f) }
+        }
+#endif
 
         // Directory mtimes last, deepest first / 目錄 mtime 最後套用、先深後淺
         for (path, mtime) in dirTimes.sorted(by: { $0.path.count > $1.path.count }) {
@@ -2013,6 +2258,12 @@ private func printTarUsage() {
                         平行在途分塊數（預設 2×核心數）
       -v              : Verbose / 顯示處理中的項目
       -h              : Show this help / 顯示說明
+      -write_foundation / -write_ucrt :
+                        (Windows -x only) extraction write backend: Foundation
+                        Data.write + setAttributes, or CRT single-open
+                        (_wsopen_s + _futime64). Default: ucrt.
+                        （僅 Windows -x）解壓寫檔後端：Foundation 或 CRT 單次
+                        開檔。預設 ucrt。
       -test           : Self test: round-trip plain tar and .tar.gz against the
                         platform's standard tar (create with one, extract with
                         the other, both directions), then exit
@@ -2168,7 +2419,37 @@ func runTarProcess(_ exePath: String, _ args: [String], cwd: String? = nil) -> B
 }
 
 func runSelfTest(debug: Bool = false) {
-    let selfExe = CommandLine.arguments[0]
+    // CommandLine.arguments[0] can be relative (e.g. invoked as `..\swift_tar\
+    // release\swift_tar.exe`) or a bare name with no path component at all
+    // (e.g. plain "tar" -- cmd.exe resolves it via PATH before exec but can
+    // still hand the child just the bare name as argv[0]; reproduced via
+    // run_round.bat's actual `tar -test > file 2>&1`, which is exactly how
+    // the -swift_tar PATH shim gets invoked). Combined with setting
+    // currentDirectoryURL on the nested Process() calls below, an
+    // unqualified executable path resolves against the wrong directory (or
+    // doesn't exist at all) and subprocess launch fails ("cannot find drive
+    // specified" / garbled output / silent failure). Resolve to a real
+    // absolute path up front: try standardizing CommandLine.arguments[0]
+    // first, and if that file doesn't actually exist (the bare-name case),
+    // fall back to a PATH search for the same name.
+    // CommandLine.arguments[0] 可能是相對路徑（例如以 `..\swift_tar\release\
+    // swift_tar.exe` 呼叫），也可能完全沒有路徑成分、只是個裸名稱（例如單純
+    // "tar"——cmd.exe 執行前會用 PATH 解析，但傳給子行程的 argv[0] 仍可能只
+    // 是裸名稱；已用 run_round.bat 實際的 `tar -test > file 2>&1` 重現，這正
+    // 是 -swift_tar PATH shim 被呼叫的方式）。搭配下面 Process() 有設定
+    // currentDirectoryURL，沒有完整路徑的執行檔會解析到錯誤目錄（或根本不存
+    // 在），導致子行程啟動失敗（"cannot find drive specified" ／輸出亂碼／
+    // 靜默失敗）。改成一開始就解析成真正存在的絕對路徑：先嘗試把
+    // CommandLine.arguments[0] 正規化，若那個檔案其實不存在（裸名稱的情
+    // 況），再退回用 PATH 搜尋同一個名稱。
+    var selfExe = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.path
+    if !FileManager.default.isExecutableFile(atPath: selfExe) {
+        let bareName = (CommandLine.arguments[0] as NSString).lastPathComponent
+            .replacingOccurrences(of: ".exe", with: "")
+#if os(Windows)
+        if let resolved = resolveExecutable(bareName) { selfExe = resolved }
+#endif
+    }
     var allOK = true
     func check(_ label: String, _ ok: Bool) {
         print("       \(label): \(ok ? "✓" : "✗ 失敗 / FAILED")")
@@ -2188,8 +2469,8 @@ func runSelfTest(debug: Bool = false) {
 
     let srcDir = "\(tmp)/src"
     try? fm.createDirectory(atPath: "\(srcDir)/sub", withIntermediateDirectories: true)
-    fm.createFile(atPath: "\(srcDir)/root.txt", contents: Data("swift_tar self-test root file\n".utf8))
-    fm.createFile(atPath: "\(srcDir)/sub/nested.txt",
+    _ = fm.createFile(atPath: "\(srcDir)/root.txt", contents: Data("swift_tar self-test root file\n".utf8))
+    _ = fm.createFile(atPath: "\(srcDir)/sub/nested.txt",
                   contents: Data(String(repeating: "nested content line\n", count: 200).utf8))
 
     // Both create sides run with cwd=tmp and archive the relative name
@@ -2236,6 +2517,38 @@ func runSelfTest(debug: Bool = false) {
         check(".tar.gz: std tar create → swift_tar extract", false)
     }
 
+#if os(Windows)
+    // ---- extraction write backends: -write_foundation vs -write_ucrt ----
+    // Correctness on both backends plus a timing comparison on a many-small-
+    // files tree, to guide the choice of the default backend.
+    // 兩種解壓寫檔後端的正確性驗證＋多小檔樹計時對比，供選定預設後端參考。
+    let manySrc = "\(tmp)/many/src"
+    for i in 0..<40 {
+        try? fm.createDirectory(atPath: "\(manySrc)/d\(i)", withIntermediateDirectories: true)
+        for j in 0..<10 {
+            _ = fm.createFile(atPath: "\(manySrc)/d\(i)/f\(j).txt",
+                              contents: Data("backend test payload \(i)/\(j)\n".utf8))
+        }
+    }
+    let manyTar = "\(tmp)/many.tar"
+    if runTarProcess(selfExe, ["-c", "-f", manyTar, "src"], cwd: "\(tmp)/many") {
+        var elapsed: [String: Double] = [:]
+        for backend in ["-write_foundation", "-write_ucrt"] {
+            let out = "\(tmp)/many_out_\(backend.dropFirst())"
+            try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
+            let t0 = Date()
+            let ok = runTarProcess(selfExe, ["-x", backend, "-f", manyTar, "-C", out])
+            elapsed[backend] = Date().timeIntervalSince(t0)
+            check("write backend \(backend): extract → compare", ok && compareTrees(manySrc, "\(out)/src"))
+        }
+        if let tf = elapsed["-write_foundation"], let tu = elapsed["-write_ucrt"] {
+            print(String(format: "       timing, 400 small files / 計時（400 小檔）: foundation %.2fs / ucrt %.2fs", tf, tu))
+        }
+    } else {
+        check("write backend comparison: create archive", false)
+    }
+#endif
+
     exit(allOK ? 0 : 1)
 }
 
@@ -2262,7 +2575,10 @@ struct SwiftTarMain {
         let args: [String] = {
             var out: [String] = [CommandLine.arguments[0]]
             for (idx, a) in CommandLine.arguments.dropFirst().enumerated() {
-                if a.hasPrefix("-") && !a.hasPrefix("--") && a.count > 2 {
+                // Long single-dash flags with "_" (-write_ucrt, -write_foundation)
+                // must not be split into single letters.
+                // 含底線的單槓長旗標（-write_ucrt、-write_foundation）不可拆成單字母。
+                if a.hasPrefix("-") && !a.hasPrefix("--") && a.count > 2 && !a.contains("_") {
                     for ch in a.dropFirst() { out.append("-\(ch)") }
                 } else if idx == 0 && !a.hasPrefix("-") && a.count > 1 && a.allSatisfy({ $0.isLetter }) {
                     for ch in a { out.append("-\(ch)") }
@@ -2330,6 +2646,21 @@ struct SwiftTarMain {
             return min(max(1, n), cores * 4)
         }()
 
+        // extraction write backend (Windows-only effect) / 解壓寫檔後端（僅影響 Windows）
+        let writeBackend: WriteBackend = {
+            let wantUcrt = args.contains("-write_ucrt") || args.contains("--write_ucrt")
+            let wantFoundation = args.contains("-write_foundation") || args.contains("--write_foundation")
+            if wantUcrt && wantFoundation {
+                eprint("Error: -write_ucrt and -write_foundation are mutually exclusive. / 錯誤：-write_ucrt 與 -write_foundation 互斥。")
+                exit(1)
+            }
+            // Default: ucrt — measured 25–35% faster than foundation across
+            // the R45-Win matrix (one open per file vs two).
+            // 預設 ucrt——R45-Win 矩陣實測比 foundation 快 25–35%（每檔 1 次
+            // 開檔 vs 2 次）。
+            return wantFoundation ? .foundation : .ucrt
+        }()
+
         // positional file args (skip flags and their values) / 位置參數（略過旗標與其值）
         var files: [String] = []
         var skipNext = true   // args[0] is the binary path / args[0] 是執行檔路徑
@@ -2348,7 +2679,8 @@ struct SwiftTarMain {
                 try runCat(archivePath: archivePath, inflight: inflightN, verbose: verbose)
             } else {
                 try runRead(archivePath: archivePath, extract: doExtract,
-                            destDir: destDir, inflight: inflightN, verbose: verbose)
+                            destDir: destDir, inflight: inflightN, verbose: verbose,
+                            writeBackend: writeBackend)
             }
         } catch {
             eprint("swift_tar: \(error.localizedDescription)")
@@ -2396,7 +2728,8 @@ struct SwiftTarMain {
     // ---- list / extract / 列出、解出 ----
 
     static func runRead(archivePath: String, extract: Bool, destDir: String,
-                        inflight: Int, verbose: Bool) throws {
+                        inflight: Int, verbose: Bool,
+                        writeBackend: WriteBackend = .ucrt) throws {
         let input = try openInput(archivePath)
         defer { if archivePath != "-" { try? input.close() } }
 
@@ -2411,7 +2744,8 @@ struct SwiftTarMain {
         guard result.ok else {
             throw TarError.io(result.message ?? "filter chain failed / filter 鏈失敗")
         }
-        let options = TarReader.Options(extract: extract, destDir: destDir, verbose: verbose)
+        let options = TarReader.Options(extract: extract, destDir: destDir, verbose: verbose,
+                                        inflight: inflight, writeBackend: writeBackend)
         try TarReader(input: stream.handle, prefix: stream.prefix).run(options: options)
         group.wait()
         guard result.ok else {
@@ -2438,7 +2772,7 @@ struct SwiftTarMain {
         }
         let out = FileHandle.standardOutput
         if !stream.prefix.isEmpty { try out.write(contentsOf: stream.prefix) }
-        while let part = try? stream.handle.read(upToCount: 1 << 20), !part.isEmpty {
+        while let part = try? stream.handle.read(upToCount: DECODE_CHUNK), !part.isEmpty {
             try out.write(contentsOf: part)
         }
         group.wait()

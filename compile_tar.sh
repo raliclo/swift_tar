@@ -32,12 +32,14 @@ done
 # Strip the top-level runCLI() entry point (not valid in multi-file builds)
 # 剝除頂層 runCLI() 進入點（多檔編譯不允許頂層敘述）
 TEMP_CLI="$(mktemp -t lzfse-cli-lib).swift"
-trap 'rm -f "$TEMP_CLI"' EXIT
+TEMP_VERSION="$(mktemp -t swift-tar-version).swift"
+trap 'rm -f "$TEMP_CLI" "$TEMP_VERSION"' EXIT
 grep -v "^runCLI()$" lzfse2/lzfse-cli.swift > "$TEMP_CLI"
+sh ./generate_version.sh "$TEMP_VERSION"
 
 # Build into the release/ folder / 建置輸出至 release/ 資料夾
 mkdir -p release
-swiftc -O "$TEMP_CLI" swift_tar.swift -o release/swift_tar \
+swiftc -O "$TEMP_CLI" "$TEMP_VERSION" swift_tar.swift -o release/swift_tar \
     -lz -lbz2 -L"$BREW_LIB" -llz4 -llzma -lzstd
 
 echo "Built ./release/swift_tar / 已建置 ./release/swift_tar"

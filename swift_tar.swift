@@ -43,9 +43,7 @@
 // =====================================================================
 
 import Foundation
-#if !os(Windows)
 import zlib
-#endif
 #if os(Windows)
 // CRT-level file I/O for the -write_ucrt extraction backend (one open per
 // file, mtime set on the open fd via _futime64 — same syscall profile as
@@ -63,13 +61,11 @@ import ucrt
 /// 由 1 MiB 調升為 4 MiB，降低大型封存檔的每塊呼叫成本。
 let DECODE_CHUNK = 1 << 22
 
-// On Windows there is no bundled zlib/libbz2/liblzma/libzstd/liblz4 to link
-// against, so the non-LZFSE codecs shell out to the same CLI tools
-// encode-win.bat/decode-win.bat already rely on (gzip/bzip2/xz/zstd/lz4/lzip
-// via scoop). The C-library silgen declarations below are macOS/Linux-only.
-// Windows 沒有可連結的 zlib/libbz2/liblzma/libzstd/liblz4，非 LZFSE 引擎改為
-// 呼叫外部 CLI 工具（同 encode-win.bat/decode-win.bat 用的 scoop 版本）。
-// 以下 C 庫 silgen 宣告僅用於 macOS/Linux。
+// Windows statically links the zlib submodule for in-process gzip. The other
+// non-LZFSE codecs still shell out to their CLI tools. The remaining C-library
+// silgen declarations below are macOS/Linux-only.
+// Windows 靜態連結 zlib submodule，在程序內處理 gzip；其他非 LZFSE 引擎仍
+// 呼叫外部 CLI 工具。以下其餘 C 庫 silgen 宣告僅用於 macOS/Linux。
 #if !os(Windows)
 
 // =================================================================
@@ -285,12 +281,10 @@ private func posixRunCompress(exe: String, args: [String], input: Data) -> Data?
 // MARK: - Windows process-based codec backend
 // MARK: - Windows 版：外部程序壓縮引擎
 // =================================================================
-// No C-library linking on Windows; every non-LZFSE codec pipes through the
-// matching CLI tool (gzip/bzip2/xz/zstd/lz4/lzip, all available via scoop —
-// same tools encode-win.bat/decode-win.bat already shell out to for lz4/zstd).
-// Windows 不連結任何 C 庫；非 LZFSE 引擎全部透過對應 CLI 工具（scoop 安裝的
-// gzip/bzip2/xz/zstd/lz4/lzip）以 pipe 呼叫，與 encode-win.bat/decode-win.bat
-// 既有的 lz4/zstd 呼叫方式相同。
+// Windows process backend for codecs that are not linked in-process
+// (bzip2/xz/zstd/lz4/lzip, available via scoop). gzip uses static zlib above.
+// Windows 外部程序 backend 用於未在程序內連結的 codec
+//（bzip2/xz/zstd/lz4/lzip，由 scoop 提供）；gzip 使用上方的靜態 zlib。
 #if os(Windows)
 
 /// Resolve an executable's full path by searching PATH (Process on Windows
@@ -445,9 +439,6 @@ enum TarCodec {
 /// One complete gzip member per chunk (zlib windowBits=31 emits the container).
 /// 每分塊一個完整 gzip 成員（windowBits=31 由 zlib 直接輸出 gzip 容器）。
 func gzipCompressMember(_ input: Data, level: Int32 = 6) -> Data? {
-#if os(Windows)
-    return winRunCompress(exe: "gzip", args: ["-\(level)", "-c"], input: input)
-#else
     var strm = z_stream()
     guard deflateInit2_(&strm, level, Z_DEFLATED, 31, 8, Z_DEFAULT_STRATEGY,
                         ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
@@ -467,7 +458,6 @@ func gzipCompressMember(_ input: Data, level: Int32 = 6) -> Data? {
     }
     guard ok else { return nil }
     return out.prefix(written)
-#endif
 }
 
 /// One complete bzip2 stream per chunk (pbzip2-style concatenation).
@@ -641,9 +631,6 @@ final class ByteReader {
 
 /// Sequential multi-member gzip decode. / 循序解多成員 gzip。
 func gzipDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bool {
-#if os(Windows)
-    return winRunDecompress(exe: "gzip", args: ["-dc"], input: input, prefix: prefix, output: output)
-#else
     var strm = z_stream()
     guard inflateInit2_(&strm, 15 + 32, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK
     else { return false }
@@ -697,7 +684,6 @@ func gzipDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
         if eof { break }
     }
     return atBoundary
-#endif
 }
 
 /// Sequential multi-stream bzip2 decode (pbzip2-style concatenation).
@@ -2349,6 +2335,7 @@ private func printTarUsage() {
                         平行在途分塊數（預設 2×核心數）
       -v              : Verbose / 顯示處理中的項目
       -h              : Show this help / 顯示說明
+      --version       : Show build date version / 顯示建置日期版本
       -write_foundation / -write_ucrt :
                         (Windows -x only) extraction write backend: Foundation
                         Data.write + setAttributes, or CRT single-open
@@ -2656,6 +2643,10 @@ struct SwiftTarMain {
         // with "-", not "--").
         if CommandLine.arguments.contains("-test") {
             runSelfTest(debug: CommandLine.arguments.contains("-debug"))
+        }
+        if CommandLine.arguments.contains("--version") {
+            print("swift_tar \(swiftTarBuildVersion)")
+            exit(0)
         }
         // 展開 combined short flags，相容標準 tar 用法的兩種形式：
         //   帶 dash：-czf → -c -z -f

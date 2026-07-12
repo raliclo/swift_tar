@@ -23,13 +23,37 @@
 
 ```sh
 brew install lz4 xz zstd      # liblz4 / liblzma / libzstd
-git submodule update --init   # 取得 lzfse2 + libarchive
+git submodule update --init   # 取得 lzfse2 + libarchive + zlib
 ./compile_tar.sh              # → release/swift_tar
 ```
 
 建置時將 `lzfse2/lzfse-cli.swift` 當函式庫重用（剝除其頂層 `runCLI()`
 進入點後兩檔合併編譯），並連結 `-lz -lbz2 -llz4 -llzma -lzstd`。
 二進位輸出至 **`release/swift_tar`**。
+
+### Windows
+
+Windows 需要 Swift、CMake 與 Visual Studio 2022 C++ workload。建置腳本會把
+固定版本的 zlib submodule 編譯成 MSVC 靜態庫，再直接連結進
+`swift_tar.exe`；執行時不需要 `zlib.dll` 或外部 `gzip.exe`。
+
+```bat
+git submodule update --init
+zsh ./build_zlib-win.sh
+compile_tar-win.bat
+```
+
+`build_zlib-win.sh` 是相依套件維護步驟：同步 repo 固定的 zlib gitlink、重建
+`zs.lib`，並將精確的 zlib tag、commit 與連結方式寫入 `version.txt`。首次 clone
+或變更 zlib submodule 後才需執行；平常的 `compile_tar-win.bat` 會重用既有靜態
+庫，不會再次呼叫 CMake。
+
+其餘外部 codec 仍需要對應的 Scoop CLI 工具；`build_tool_install-win.sh`
+可安裝完整工具鏈。
+
+Windows ZIP 包含靜態連結的執行檔、Swift runtime DLL、`version.txt` 與
+`zlib-LICENSE.txt`。`zs.lib`、zlib headers 與 CMake build tree 屬於開發產物，
+並非 runtime dependency，因此不放入 release。
 
 ## 使用方式
 
@@ -54,6 +78,12 @@ release/swift_tar -c --gzip         -f src.tar.gz    src/     # 標準 .tar.gz
 tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # （或以管線灌入）
 ```
 
+輸出格式由 codec 旗標決定，不是由副檔名決定。例如
+`--gzip -f archive.zip` 寫出的仍是 gzip 壓縮 tar stream（magic `1f 8b`），
+不是真正的 ZIP container，因此 `unzip` 無法解開。gzip 封存檔應命名為
+`.tgz` 或 `.tar.gz`，並使用 `tar` 或 `swift_tar` 解壓。目前尚未支援建立真正的
+`.zip` 封存檔。
+
 ### 解出／列出（格式自動偵測）
 
 ```sh
@@ -72,7 +102,7 @@ release/swift_tar --cat -f package.rpm > payload.cpio          # 剝除 RPM 外�
 | `--other3-optimal` | `lzfse -algo other3 -optimal3`   | 價格驅動 DP，仍是標準 bvx2 |
 | `--bvx3-fast`      | `lzfse -algo bvx3`               | 私有大字母表區塊（僅本工具可解） |
 | `--bvx3-optimal`   | `lzfse -algo bvx3 -optimal`      | 壓縮率最高、最慢 |
-| `--gzip`, `-z`     | zlib                             | 每分塊一個 gzip 成員（pigz 式 `.tar.gz`） |
+| `--gzip`, `-z`     | zlib                             | 每分塊一個 gzip 成員（pigz 式 `.tar.gz`；不是 ZIP） |
 | `--bzip2`, `-j`    | libbz2                           | 每分塊一個 bzip2 串流（pbzip2 式 `.tar.bz2`） |
 | `--xz`, `-J`       | liblzma                          | 每分塊一個 xz 串流（標準 xz 多串流） |
 | `--lzip`           | lzip CLI                         | 每分塊一個 lzip 串流 |
@@ -101,17 +131,24 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 | `-n <N>`    | 平行在途分塊數（預設 2 × 核心數） |
 | `-v`        | 詳細輸出（列出項目／顯示套用的 filter 鏈） |
 | `-h`        | 顯示說明 |
+| `--version` | 顯示固定的建置日期版本（`yyyyMMdd-HHmmss`） |
+
+`--version` 回報編譯 binary 時擷取的本機日期時間，例如
+`swift_tar 20260712-143015`。相同值會以 `swift_tar_version` 儲存在封裝的
+`version.txt` 中。
 
 ## 檔案結構
 
 ```
 swift_tar.swift    tar 寫入／讀取 + 壓縮引擎 + libarchive 式 filter
 compile_tar.sh     建置腳本 → release/swift_tar
+build_zlib-win.sh  同步／重建 Windows 固定版本的 zlib 靜態相依套件
 release/swift_tar  編譯後的二進位
 lzfse2/            子模組 —— LZFSE 引擎（other3 / bvx3）
 libarchive/        子模組 —— filter 模型的 C 參考實作
+zlib/              子模組 —— Windows 固定版本的靜態 gzip backend
 ```
 
 ## 授權
 
-壓縮引擎授權見 [lzfse2](./lzfse2)；libarchive 保留其自身授權（BSD-2-Clause）。
+壓縮引擎授權見 [lzfse2](./lzfse2)；libarchive 與 zlib 保留各自授權。

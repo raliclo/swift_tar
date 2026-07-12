@@ -1,0 +1,33 @@
+[Info] corpus: claw-code (1.3G)
+[Info] swift_tar: /opt/homebrew/bin/swift_tar
+
+== Encode: peak RSS vs -n ==
+-n      real(s)   maxRSS(bytes)   maxRSS(GB)
+4       7.78      2232827904      2.08
+8       5.14      2234712064      2.08
+12      4.38      2820685824      2.63
+16      4.37      2642214912      2.46
+20      4.36      2413887488      2.25
+24      4.44      2420981760      2.25
+28      4.37      2515828736      2.34
+32      4.36      2450096128      2.28
+36      4.36      2724921344      2.54
+40      4.44      2610380800      2.43
+
+== Decode: peak RSS vs -n ==
+-n      real(s)   maxRSS(bytes)   maxRSS(GB)
+4       2.95      2636922880      2.46
+8       2.82      3211067392      2.99
+12      2.80      3211051008      2.99
+16      3.43      3104096256      2.89
+20      2.92      3211231232      2.99
+24      3.22      3172466688      2.95
+28      3.29      3164962816      2.95
+32      2.98      3211067392      2.99
+36      2.87      3252846592      3.03
+40      2.95      3211378688      2.99
+
+[Info] Encode RSS vs -n has been INCONSISTENT across repeated sweeps in this
+       repo (see header) — don't trust a single run's trend for encode.
+[Info] Decode RSS has been more consistent: ramps n=4 -> n~=12 then plateaus.
+       Compare this run's numbers against the header notes before concluding.

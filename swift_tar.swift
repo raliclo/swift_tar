@@ -322,11 +322,13 @@ private func winRunCompress(exe: String, args: [String], input: Data) -> Data? {
     process.standardError = errPipe
     guard (try? process.run()) != nil else { return nil }
     let writeHandle = inPipe.fileHandleForWriting
-    let writer = Thread {
+    // A dedicated queue avoids starving behind the concurrent compression
+    // workers that are synchronously waiting for this pipe to drain.
+    // 使用專用 queue，避免排在同步等待 pipe 排空的壓縮 worker 後方而飢餓。
+    DispatchQueue(label: "swifttar.win.codec.stdin").async {
         try? writeHandle.write(contentsOf: input)
         try? writeHandle.close()
     }
-    writer.start()
     let output = outPipe.fileHandleForReading.readDataToEndOfFile()
     let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
@@ -358,16 +360,21 @@ private func winRunDecompress(exe: String, args: [String], input: FileHandle,
     process.standardError = errPipe
     guard (try? process.run()) != nil else { return false }
     let writeHandle = inPipe.fileHandleForWriting
-    let writer = Thread {
+    // Keep pipe pumping independent of the filter-chain worker pool.
+    // 讓 pipe 泵送不受 filter-chain worker pool 飢餓影響。
+    DispatchQueue(label: "swifttar.win.codec.stdin").async {
         if !prefix.isEmpty { try? writeHandle.write(contentsOf: prefix) }
-        while let part = try? input.read(upToCount: DECODE_CHUNK), !part.isEmpty {
+        while true {
+            let part = input.readData(ofLength: DECODE_CHUNK)
+            if part.isEmpty { break }
             try? writeHandle.write(contentsOf: part)
         }
         try? writeHandle.close()
     }
-    writer.start()
     let readHandle = outPipe.fileHandleForReading
-    while let part = try? readHandle.read(upToCount: DECODE_CHUNK), !part.isEmpty {
+    while true {
+        let part = readHandle.readData(ofLength: DECODE_CHUNK)
+        if part.isEmpty { break }
         if (try? output.write(contentsOf: part)) == nil { return false }
     }
     process.waitUntilExit()

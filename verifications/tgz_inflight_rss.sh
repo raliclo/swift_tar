@@ -26,6 +26,18 @@
 #   Post-fix: encode ~1.0-1.4GB (-45%), decode ~1.2-1.4GB (-55%), flat
 #     across all n, no time regression. The earlier "n=4 decode free win"
 #     disappeared post-fix — it was a side effect of the leak.
+#   Fix phase 2 (2026-07-12): live heap profiling showed one ~1GB malloc
+#     node — the Data append+removeFirst pattern (removeFirst retains the
+#     backing store) in ParallelChunkSink.buffer and TarReader.pending.
+#     Both rewritten (staging handoff / offset+subdata compaction).
+#     Post-phase-2: encode 90MB(n=4)-300MB(n=40), default n=20 = 219MB;
+#     decode ~50MB flat. Encode now shows the true linear -n relationship.
+#   修正第二階段（2026-07-12）：heap 剖析顯示單筆 ~1GB malloc 節點——
+#     ParallelChunkSink.buffer 與 TarReader.pending 的 Data
+#     append+removeFirst 模式（removeFirst 保留 backing store）。兩處已
+#     重寫（staging 整塊交棒／offset+subdata 壓實）。第二階段後：encode
+#     90MB(n=4)-300MB(n=40)、預設 n=20 為 219MB；decode 約 50MB 打平。
+#     encode 現在才顯現真正的 -n 線性關係。
 #   修正前：encode ~2.1-2.6GB／decode ~2.5-3.0GB，皆接近語料大小且對 -n
 #     不敏感——這是 Foundation FileHandle.read 在 CLI 緊密迴圈中
 #     autorelease 累積的典型特徵。

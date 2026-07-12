@@ -644,36 +644,50 @@ func gzipDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
     var outBuf = [UInt8](repeating: 0, count: DECODE_CHUNK)
     var atBoundary = true
     let reader = ByteReader(input, prefix: prefix)
-    while var inBuf = reader.readSome(DECODE_CHUNK).map({ [UInt8]($0) }) {
-        var consumed = 0
-        let ok: Bool = inBuf.withUnsafeMutableBufferPointer { ib in
-            while consumed < ib.count {
-                strm.next_in = ib.baseAddress! + consumed
-                strm.avail_in = uInt(ib.count - consumed)
-                var rc: Int32 = Z_OK
-                let produced: Int = outBuf.withUnsafeMutableBufferPointer { ob -> Int in
-                    strm.next_out = ob.baseAddress
-                    strm.avail_out = uInt(ob.count)
-                    rc = inflate(&strm, Z_NO_FLUSH)
-                    return ob.count - Int(strm.avail_out)
-                }
-                consumed = ib.count - Int(strm.avail_in)
-                if produced > 0 {
-                    if (try? output.write(contentsOf: Data(bytes: outBuf, count: produced))) == nil { return false }
-                    atBoundary = false
-                }
-                if rc == Z_STREAM_END {
-                    inflateReset(&strm)
-                    atBoundary = true
-                } else if rc == Z_OK || rc == Z_BUF_ERROR {
-                    if rc == Z_BUF_ERROR && strm.avail_in == 0 && produced == 0 { break }
-                } else {
-                    return false
-                }
+    // autoreleasepool: per-chunk reads and Data(bytes:count:) writes are
+    // autoreleased; drain each iteration to keep decode RSS bounded.
+    // autoreleasepool：逐塊讀取與 Data(bytes:count:) 寫出皆為 autoreleased；
+    // 每輪排空以維持 decode RSS 上限。
+    while true {
+        var eof = false
+        var failed = false
+        autoreleasepool {
+            guard var inBuf = reader.readSome(DECODE_CHUNK).map({ [UInt8]($0) }) else {
+                eof = true
+                return
             }
-            return true
+            var consumed = 0
+            let ok: Bool = inBuf.withUnsafeMutableBufferPointer { ib in
+                while consumed < ib.count {
+                    strm.next_in = ib.baseAddress! + consumed
+                    strm.avail_in = uInt(ib.count - consumed)
+                    var rc: Int32 = Z_OK
+                    let produced: Int = outBuf.withUnsafeMutableBufferPointer { ob -> Int in
+                        strm.next_out = ob.baseAddress
+                        strm.avail_out = uInt(ob.count)
+                        rc = inflate(&strm, Z_NO_FLUSH)
+                        return ob.count - Int(strm.avail_out)
+                    }
+                    consumed = ib.count - Int(strm.avail_in)
+                    if produced > 0 {
+                        if (try? output.write(contentsOf: Data(bytes: outBuf, count: produced))) == nil { return false }
+                        atBoundary = false
+                    }
+                    if rc == Z_STREAM_END {
+                        inflateReset(&strm)
+                        atBoundary = true
+                    } else if rc == Z_OK || rc == Z_BUF_ERROR {
+                        if rc == Z_BUF_ERROR && strm.avail_in == 0 && produced == 0 { break }
+                    } else {
+                        return false
+                    }
+                }
+                return true
+            }
+            if !ok { failed = true }
         }
-        if !ok { return false }
+        if failed { return false }
+        if eof { break }
     }
     return atBoundary
 #endif
@@ -1257,19 +1271,25 @@ final class ParallelChunkSink {
         let codec = self.codec
         group.enter()
         queue.async { [self] in
-            let body = codec.compressChunk(chunk)
-            lock.lock()
-            if let body = body {
-                state.results[idx] = body
-                while let r = state.results.removeValue(forKey: state.writeIndex) {
-                    do { try output.write(contentsOf: r) }
-                    catch { state.failure = state.failure ?? "\(error)" }
-                    state.writeIndex += 1
+            // autoreleasepool: GCD worker threads drain pools lazily; compressed
+            // chunk buffers otherwise linger past their ordered write.
+            // autoreleasepool：GCD worker 執行緒的 pool 排空時機不定；壓縮後的
+            // chunk 緩衝區會在按序寫出後仍滯留。
+            autoreleasepool {
+                let body = codec.compressChunk(chunk)
+                lock.lock()
+                if let body = body {
+                    state.results[idx] = body
+                    while let r = state.results.removeValue(forKey: state.writeIndex) {
+                        do { try output.write(contentsOf: r) }
+                        catch { state.failure = state.failure ?? "\(error)" }
+                        state.writeIndex += 1
+                    }
+                } else {
+                    state.failure = state.failure ?? "chunk compression failed"
                 }
-            } else {
-                state.failure = state.failure ?? "chunk compression failed"
+                lock.unlock()
             }
-            lock.unlock()
             sem.signal()
             group.leave()
         }
@@ -1807,12 +1827,18 @@ final class TarWriter {
         defer { try? fh.close() }
         var remaining = size
         while remaining > 0 {
-            let want = Int(min(remaining, UInt64(LZFSEv1.parallelChunkSize)))
-            guard let part = try fh.read(upToCount: want), !part.isEmpty else {
-                throw TarError.io("short read on '\(path)' / 讀取 '\(path)' 時提前結束")
+            // autoreleasepool: FileHandle.read returns autoreleased buffers;
+            // without draining per chunk, RSS grows to ~corpus size.
+            // autoreleasepool：FileHandle.read 回傳 autoreleased 緩衝區；
+            // 不逐塊排空的話 RSS 會膨脹到接近整個語料大小。
+            try autoreleasepool {
+                let want = Int(min(remaining, UInt64(LZFSEv1.parallelChunkSize)))
+                guard let part = try fh.read(upToCount: want), !part.isEmpty else {
+                    throw TarError.io("short read on '\(path)' / 讀取 '\(path)' 時提前結束")
+                }
+                try sink.write(part)
+                remaining -= UInt64(part.count)
             }
-            try sink.write(part)
-            remaining -= UInt64(part.count)
         }
         let rem = Int(size % UInt64(TAR_BLOCK))
         if rem != 0 { try sink.write(Data(count: TAR_BLOCK - rem)) }
@@ -1860,12 +1886,18 @@ final class TarWriter {
             defer { try? fh.close() }
             var remaining = size
             while remaining > 0 {
-                let want = Int(min(remaining, UInt64(LZFSEv1.parallelChunkSize)))
-                guard let part = try fh.read(upToCount: want), !part.isEmpty else {
-                    throw TarError.io("short read on '\(path)' / 讀取 '\(path)' 時提前結束")
+                // autoreleasepool: FileHandle.read returns autoreleased buffers;
+                // without draining per chunk, RSS grows to ~corpus size.
+                // autoreleasepool：FileHandle.read 回傳 autoreleased 緩衝區；
+                // 不逐塊排空的話 RSS 會膨脹到接近整個語料大小。
+                try autoreleasepool {
+                    let want = Int(min(remaining, UInt64(LZFSEv1.parallelChunkSize)))
+                    guard let part = try fh.read(upToCount: want), !part.isEmpty else {
+                        throw TarError.io("short read on '\(path)' / 讀取 '\(path)' 時提前結束")
+                    }
+                    try sink.write(part)
+                    remaining -= UInt64(part.count)
                 }
-                try sink.write(part)
-                remaining -= UInt64(part.count)
             }
             let rem = Int(size % UInt64(TAR_BLOCK))
             if rem != 0 { try sink.write(Data(count: TAR_BLOCK - rem)) }
@@ -1898,9 +1930,16 @@ final class TarReader {
 
     private func readExactly(_ n: Int) -> Data? {
         while pending.count < n {
-            guard let part = try? input.read(upToCount: max(n - pending.count, 1 << 16)),
-                  !part.isEmpty else { return nil }
-            pending.append(part)
+            // autoreleasepool: keep pipe-read buffers from accumulating
+            // across the whole archive walk.
+            // autoreleasepool：避免 pipe 讀取緩衝在整個 archive 掃描期間累積。
+            let got = autoreleasepool { () -> Bool in
+                guard let part = try? input.read(upToCount: max(n - pending.count, 1 << 16)),
+                      !part.isEmpty else { return false }
+                pending.append(part)
+                return true
+            }
+            if !got { return nil }
         }
         let out = pending.prefix(n)
         pending.removeFirst(n)
@@ -2159,12 +2198,16 @@ final class TarReader {
                 }
                 var remaining = size
                 while remaining > 0 {
-                    let n = Int(min(remaining, UInt64(DECODE_CHUNK)))
-                    guard let part = readExactly(n) else {
-                        throw TarError.format("truncated file data / 檔案資料不完整")
+                    // autoreleasepool: per-chunk extract writes are autoreleased.
+                    // autoreleasepool：逐塊解壓寫出為 autoreleased。
+                    try autoreleasepool {
+                        let n = Int(min(remaining, UInt64(DECODE_CHUNK)))
+                        guard let part = readExactly(n) else {
+                            throw TarError.format("truncated file data / 檔案資料不完整")
+                        }
+                        try out.write(contentsOf: part)
+                        remaining -= UInt64(n)
                     }
-                    try out.write(contentsOf: part)
-                    remaining -= UInt64(n)
                 }
                 try? out.close()
 #endif
@@ -2183,7 +2226,9 @@ final class TarReader {
 
         // Drain remainder so upstream decoder threads can finish cleanly.
         // 把殘餘輸入讀完，讓上游解碼執行緒能正常收尾。
-        while let part = try? input.read(upToCount: DECODE_CHUNK), !part.isEmpty { _ = part }
+        while autoreleasepool(invoking: {
+            ((try? input.read(upToCount: DECODE_CHUNK))?.isEmpty == false)
+        }) {}
 
 #if os(Windows)
         // All file writes must land before directory mtimes are applied

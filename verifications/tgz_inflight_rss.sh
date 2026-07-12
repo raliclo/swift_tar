@@ -13,23 +13,29 @@
 #   -n，因此 swift_tar 會退回預設值 inflight = cores*2（上限 cores*4；
 #   R45-Mac 測試機 10 核心 → 預設 20）。
 #
-# Findings (full sweep, n=4..40 step 4, claw-code corpus) / 實測結果（完整
-# 掃描，n=4..40 step 4，claw-code 語料）：
-#   Encode: RSS is flat ~2.1-2.6GB across every n, no monotonic trend with
-#     concurrency. -n does not appear to be the primary driver of
-#     encode-side peak RSS. **Encode-side driver is unconfirmed.**
-#   Decode: RSS ramps from n=4 (2.51GB) -> n=12 (2.99GB) then plateaus
-#     ~3.0GB through n=40, with no time penalty at low n (2.7-4.0s across
-#     the board, no clear pattern) — n=4 is a decode-side free win, saves
-#     ~500MB vs the n>=12 plateau.
-#   Encode：RSS 在所有 n 間打平在 2.1-2.6GB，無單調趨勢——`-n` 看起來不是
-#     encode 端 peak RSS 的主要驅動因子。**encode 端的驅動因子尚未確認。**
-#   Decode：RSS 從 n=4（2.51GB）爬升到 n=12（2.99GB）後打平在 ~3.0GB 直到
-#     n=40，且低 n 沒有時間代價（各 n 都落在 2.7-4.0s，無明顯規律）——
-#     n=4 對 decode 是免費的優化，比 n>=12 的飽和值省約 500MB。
-#
-# Rerun and compare before trusting or acting on any single sweep. /
-# 採信或依此行動前，請先重跑比對。
+# Findings (claw-code corpus, n=4..40 step 4) / 實測結果（claw-code 語料，
+# n=4..40 step 4）：
+#   Pre-fix: encode ~2.1-2.6GB / decode ~2.5-3.0GB, both roughly corpus-
+#     sized and insensitive to -n — the signature of Foundation
+#     FileHandle.read autorelease accumulation in tight CLI loops.
+#   Fix (2026-07-12): wrapped the hot read/write loops in autoreleasepool
+#     (TarWriter.add, ParallelChunkSink.dispatch, gzipDecodeStream,
+#     TarReader.readExactly, extract write loop, drain loop) — the same
+#     pattern lzfse-cli.swift already used, which is why the LZFSE formats
+#     never had this problem.
+#   Post-fix: encode ~1.0-1.4GB (-45%), decode ~1.2-1.4GB (-55%), flat
+#     across all n, no time regression. The earlier "n=4 decode free win"
+#     disappeared post-fix — it was a side effect of the leak.
+#   修正前：encode ~2.1-2.6GB／decode ~2.5-3.0GB，皆接近語料大小且對 -n
+#     不敏感——這是 Foundation FileHandle.read 在 CLI 緊密迴圈中
+#     autorelease 累積的典型特徵。
+#   修正（2026-07-12）：把熱讀寫迴圈包進 autoreleasepool（TarWriter.add、
+#     ParallelChunkSink.dispatch、gzipDecodeStream、TarReader.readExactly、
+#     解壓寫檔迴圈、收尾 drain 迴圈）——與 lzfse-cli.swift 既有模式相同，
+#     這也是 LZFSE 格式從未出現此問題的原因。
+#   修正後：encode ~1.0-1.4GB（-45%）、decode ~1.2-1.4GB（-55%），各 n 間
+#     打平，無時間退化。先前的「decode n=4 免費優化」在修正後消失——
+#     那其實是洩漏的副作用。
 #
 # Usage / 用法：
 #   swift_tar/verifications/tgz_inflight_rss.sh <path-to-corpus>
@@ -43,6 +49,11 @@ SWIFT_TAR_BIN="${SWIFT_TAR_BIN:-/opt/homebrew/bin/swift_tar}"
 CORPUS="${1:?Usage: $0 <path-to-corpus>}"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
+
+# Every run overwrites the sibling output file with this run's stdout.
+# 每次執行都把本次 stdout 覆寫到同目錄的輸出檔。
+OUTPUT_TXT="${0:A:h}/tgz_inflight_rss_output.txt"
+exec > >(tee "$OUTPUT_TXT")
 
 if [[ ! -x "$SWIFT_TAR_BIN" ]]; then
     echo "[Error] swift_tar not found at $SWIFT_TAR_BIN — run swift_tar/compile_tar.sh first." >&2

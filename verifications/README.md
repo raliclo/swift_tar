@@ -15,18 +15,30 @@ Ad-hoc measurement scripts for swift_tar behavior that isn't covered by the main
 swift_tar/verifications/tgz_inflight_rss.sh <path-to-corpus>
 ```
 
-**Raw output**: [`tgz_inflight_rss_output.txt`](tgz_inflight_rss_output.txt) — full sweep (`n=4..40 step 4`) run against the real `claw-code` corpus (~1.3GB) on the R45-Mac test machine.
+**Raw output**: [`tgz_inflight_rss_output.txt`](tgz_inflight_rss_output.txt) — always overwritten with the latest run's stdout (the script tees automatically). Sweeps run against the real `claw-code` corpus (~1.3GB) on the R45-Mac test machine.
+
+### Root cause found & fixed (2026-07-12) / 已找到並修正根因
+
+Pre-fix, both encode (~2.1–2.6GB) and decode (~2.5–3.0GB) peak RSS were roughly corpus-sized and insensitive to `-n` — the signature of **Foundation `FileHandle.read` autorelease accumulation** in tight CLI loops. `lzfse-cli.swift` already wrapped all its read loops in `autoreleasepool` (which is why LZFSE formats measured only a few hundred MB); `swift_tar.swift` had zero `autoreleasepool` usage.
+
+**Fix**: wrapped the hot read/write loops in `autoreleasepool` — `TarWriter.add` file-read loop, `ParallelChunkSink.dispatch` worker, `gzipDecodeStream`, `TarReader.readExactly`, the extract write loop, and the trailing drain loop. Verified with `swift_tar -test -debug` (4/4) plus a full claw-code round-trip (`diff -rq` clean, system tar reads the output).
+
+修正前 encode（~2.1–2.6GB）與 decode（~2.5–3.0GB）的 peak RSS 都接近語料大小且對 `-n` 不敏感——這是 Foundation `FileHandle.read` 在 CLI 緊密迴圈中 **autorelease 累積**的典型特徵。`lzfse-cli.swift` 的讀檔迴圈本來就都包了 `autoreleasepool`（所以 LZFSE 格式只有幾百 MB）；`swift_tar.swift` 則完全沒有使用。修正方式是把熱讀寫迴圈包進 `autoreleasepool`，並以 `swift_tar -test -debug`（4/4）與完整 claw-code round-trip（`diff -rq` 無差異、系統 tar 可讀）驗證。
 
 ### Results summary / 結果摘要
 
-| Side | Status | Finding |
-| --- | --- | --- |
-| Encode | ❌ Unconfirmed / 未確認 | RSS is flat ~2.1–2.6GB across every `-n` from 4 to 40, no monotonic trend with concurrency. `-n` does not appear to be the primary driver of encode-side peak RSS in this sweep. |
-| Decode | ✅ Consistent shape / 形狀一致 | RSS ramps from `n=4` (~2.5GB) up through roughly `n=12` (~3.0GB), then plateaus through `n=40`. `n=4` saves ~500MB–1GB versus the `n≥12` plateau, with no consistent time penalty (2.6–4.0s across all `n`, no pattern tied to `-n`). |
+| Side | Pre-fix | Post-fix | Change |
+| --- | --- | --- | --- |
+| Encode | ~2.1–2.6GB, flat across `-n` | ~1.0–1.4GB, flat across `-n` | **−45%**, no time regression |
+| Decode | ~2.5–3.0GB (ramp `n=4→12` then plateau) | ~1.2–1.4GB, flat across `-n` | **−55%**, no time regression |
+
+The pre-fix "`n=4` decode free win" (~500MB) disappeared post-fix — it was a side effect of the leak (fewer in-flight autoreleased buffers), not a real concurrency/memory trade-off.
+
+修正前觀察到的「decode `n=4` 免費省 500MB」在修正後消失——那是洩漏的副作用（在途 autoreleased 緩衝較少），不是真正的並行度/記憶體取捨。
 
 ### Practical takeaway / 實務結論
 
-- **Decode**: passing `-n 4` when extracting a `.tgz` via swift_tar is a low-risk, reproducible way to cut peak RSS by ~500MB–1GB with no observed time cost. Nothing in the pipeline currently sets this (`zshrc.sh` extract paths don't pass `-n` either).
-- **Encode**: no actionable recommendation yet — this sweep shows no relationship between `-n` and peak RSS, so lowering `-n` in `getar()` would not be expected to help. Before drawing further conclusions, rerun with a controlled disk-cache state (e.g. `purge` between runs, or run each `-n` multiple times and take the median) and investigate what else could be driving encode-side memory.
-- decode：用 swift_tar 解壓 `.tgz` 時帶 `-n 4`，風險低且可重現地省下約 500MB–1GB peak RSS，沒有觀察到時間代價。目前 pipeline（`zshrc.sh` 的解壓路徑）都沒有帶這個旗標。
-- encode：目前沒有可行動的結論——本次掃描顯示 `-n` 與 peak RSS 無關，調低 `getar()` 的 `-n` 預期不會有幫助。要進一步下結論前，應在控制磁碟快取狀態下重跑（例如兩輪之間 `purge`，或每個 `-n` 跑多次取中位數），並查明 encode 端記憶體真正的驅動因子。
+- No `-n` tuning needed for memory: post-fix RSS is flat across `-n` on both sides. Keep the default.
+- Remaining ~1.0–1.4GB is still larger than the LZFSE formats' footprint; if further reduction matters, the next suspects are `ParallelChunkSink`'s `buffer` append/removeFirst pattern and `TarReader.pending` capacity retention — unverified.
+- 記憶體層面不需要調 `-n`：修正後兩側 RSS 在各 `-n` 間都打平，維持預設即可。
+- 剩餘的 ~1.0–1.4GB 仍高於 LZFSE 格式的足跡；若還要再降，下一個嫌疑對象是 `ParallelChunkSink` 的 `buffer` append/removeFirst 模式與 `TarReader.pending` 的容量保留——尚未驗證。

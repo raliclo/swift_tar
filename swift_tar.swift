@@ -1255,11 +1255,26 @@ final class ParallelChunkSink {
             try output.write(contentsOf: data)
             return
         }
-        buffer.append(data)
-        while buffer.count >= chunkSize {
-            let chunk = Data(buffer.prefix(chunkSize))
-            buffer.removeFirst(chunkSize)
-            dispatch(chunk)
+        // Fill the staging buffer to exactly chunkSize, then hand the whole
+        // Data to the worker and start a fresh one. The old append +
+        // removeFirst pattern kept extending one backing store to the size
+        // of the entire tar stream (removeFirst retains storage), which
+        // showed up as a single ~1GB malloc node.
+        // 將暫存緩衝填到剛好 chunkSize 後整塊交給 worker，再換一塊新的。
+        // 舊的 append + removeFirst 模式會讓同一塊 backing store 延長到
+        // 整條 tar stream 的大小（removeFirst 保留儲存空間），實測出現
+        // 單筆約 1GB 的 malloc 節點。
+        var rest = data[data.startIndex...]
+        while !rest.isEmpty {
+            let take = min(chunkSize - buffer.count, rest.count)
+            buffer.append(rest.prefix(take))
+            rest = rest.dropFirst(take)
+            if buffer.count == chunkSize {
+                let chunk = buffer
+                buffer = Data()
+                buffer.reserveCapacity(chunkSize)
+                dispatch(chunk)
+            }
         }
         if let f = state.failure { throw TarError.io(f) }
     }
@@ -1922,14 +1937,34 @@ final class TarWriter {
 final class TarReader {
     private let input: FileHandle
     private var pending = Data()
+    // Consumed bytes at the front of `pending`. The old removeFirst pattern
+    // kept extending one backing store to the size of the whole tar stream
+    // (removeFirst retains storage); an explicit offset + subdata compaction
+    // keeps the backing bounded.
+    // `pending` 前端已消耗的位元組數。舊的 removeFirst 模式會讓同一塊
+    // backing store 延長到整條 tar stream 的大小（removeFirst 保留儲存
+    // 空間）；改用明確 offset + subdata 壓實可讓 backing 保持有界。
+    private var offset = 0
 
     init(input: FileHandle, prefix: Data = Data()) {
         self.input = input
-        self.pending = prefix
+        // Copy into a fresh zero-based Data: `prefix` may be a slice with a
+        // non-zero startIndex, which would break the integer offset math.
+        // 複製到全新的零基底 Data：`prefix` 可能是 startIndex 非零的
+        // slice，會破壞整數 offset 的索引計算。
+        self.pending = Data()
+        self.pending.append(prefix)
     }
 
     private func readExactly(_ n: Int) -> Data? {
-        while pending.count < n {
+        while pending.count - offset < n {
+            // Compact the consumed prefix before growing (subdata copies into
+            // a fresh backing store, releasing the old one).
+            // 追加前先壓實已消耗前綴（subdata 複製到新 backing store，釋放舊的）。
+            if offset > 0 {
+                pending = pending.subdata(in: offset..<pending.count)
+                offset = 0
+            }
             // autoreleasepool: keep pipe-read buffers from accumulating
             // across the whole archive walk.
             // autoreleasepool：避免 pipe 讀取緩衝在整個 archive 掃描期間累積。
@@ -1941,9 +1976,13 @@ final class TarReader {
             }
             if !got { return nil }
         }
-        let out = pending.prefix(n)
-        pending.removeFirst(n)
-        return Data(out)
+        let out = pending.subdata(in: offset..<(offset + n))
+        offset += n
+        if offset == pending.count {
+            pending = Data()
+            offset = 0
+        }
+        return out
     }
 
     /// Reject absolute paths and ".." traversal on extract (libarchive-style hardening).

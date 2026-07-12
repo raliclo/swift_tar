@@ -1,0 +1,31 @@
+[Info] corpus: ../claw-code (1.4G)
+[Info] swift_tar: /c/Users/lowei/proj/lzfse2/swift_tar/verifications/../release/swift_tar.exe
+
+== Encode: peak working set vs -n ==
+-n      real(s)   peakWS(bytes)   peakWS(GB)
+4       43.94     2727157760      2.54
+8       31.31     2703413248      2.52
+12      29.16     2716262400      2.53
+16      27.54     2794516480      2.60
+20      25.04     2802204672      2.61
+24      29.01     2840072192      2.65
+28      32.95     2900443136      2.70
+32      27.88     2839060480      2.64
+36      28.65     2883379200      2.69
+40      9.41      1168683008      1.09
+
+== Decode: peak working set vs -n ==
+-n      real(s)   peakWS(bytes)   peakWS(GB)
+4       16.53     2702295040      2.52
+8       18.30     2723852288      2.54
+12      17.17     2741972992      2.55
+16      16.93     2731642880      2.54
+20      17.35     2705698816      2.52
+24      17.17     2692358144      2.51
+28      15.69     2688192512      2.50
+32      15.68     2742943744      2.55
+36      16.01     2730192896      2.54
+40      16.12     2732154880      2.54
+
+[Info] Compare against tgz_inflight_rss_output.txt (macOS) — see README.md
+       for the pre-fix vs post-fix summary table.

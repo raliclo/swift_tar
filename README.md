@@ -25,7 +25,7 @@ Requires the Xcode toolchain (`swiftc`) and a few Homebrew libraries:
 
 ```sh
 brew install lz4 xz zstd      # liblz4 / liblzma / libzstd
-git submodule update --init   # fetch lzfse2 + libarchive
+git submodule update --init   # fetch lzfse2 + libarchive + zlib
 ./compile_tar.sh              # → release/swift_tar
 ```
 
@@ -33,6 +33,33 @@ The build reuses `lzfse2/lzfse-cli.swift` as a library (its top-level
 `runCLI()` entry point is stripped, then both files are compiled together)
 and links `-lz -lbz2 -llz4 -llzma -lzstd`. The binary is emitted to
 **`release/swift_tar`**.
+
+### Windows
+
+Windows requires Swift, CMake, and the Visual Studio 2022 C++ workload. The
+build compiles the pinned zlib submodule as a static MSVC library, then links
+gzip directly into `swift_tar.exe`; no `zlib.dll` or external `gzip.exe` is
+required at runtime.
+
+```bat
+git submodule update --init
+zsh ./build_zlib-win.sh
+compile_tar-win.bat
+```
+
+`build_zlib-win.sh` is a dependency-maintenance step: it syncs the pinned zlib
+gitlink, rebuilds `zs.lib`, and writes the exact zlib tag/commit/linkage to
+`version.txt`. Run it after cloning or changing the zlib submodule. Normal
+`compile_tar-win.bat` runs reuse the existing static library and do not invoke
+CMake again.
+
+The remaining external codecs require their corresponding Scoop CLI tools;
+`build_tool_install-win.sh` installs the complete toolchain.
+
+The Windows ZIP contains the statically linked executable, Swift runtime DLLs,
+`version.txt`, and `zlib-LICENSE.txt`. It intentionally excludes `zs.lib`, zlib
+headers, and the CMake build tree because they are development artifacts, not
+runtime dependencies.
 
 ## Usage
 
@@ -58,6 +85,12 @@ release/swift_tar -c --gzip         -f src.tar.gz    src/     # standard .tar.gz
 tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # (or pipe in)
 ```
 
+The output format is selected by the codec flag, not by the filename
+extension. For example, `--gzip -f archive.zip` still writes a gzip-compressed
+tar stream (magic `1f 8b`), not a ZIP container. `unzip` cannot extract it;
+name gzip archives `.tgz` or `.tar.gz` and extract them with `tar` or
+`swift_tar`. Creating a true `.zip` archive is not currently supported.
+
 ### Extract / list (codec auto-detected)
 
 ```sh
@@ -76,7 +109,7 @@ Reading always auto-detects, so codec flags apply to `-c` only.
 | `--other3-optimal` | `lzfse -algo other3 -optimal3`   | price-driven DP, still standard bvx2 |
 | `--bvx3-fast`      | `lzfse -algo bvx3`               | private big-alphabet blocks (this tool only) |
 | `--bvx3-optimal`   | `lzfse -algo bvx3 -optimal`      | best ratio, slowest |
-| `--gzip`, `-z`     | zlib                             | one gzip member per chunk (pigz-style `.tar.gz`) |
+| `--gzip`, `-z`     | zlib                             | one gzip member per chunk (pigz-style `.tar.gz`; not ZIP) |
 | `--bzip2`, `-j`    | libbz2                           | one stream per chunk (pbzip2-style `.tar.bz2`) |
 | `--xz`, `-J`       | liblzma                          | one xz stream per chunk (xz multi-stream) |
 | `--lzip`           | lzip CLI                         | one lzip stream per chunk |
@@ -105,18 +138,25 @@ the same behavior as a libarchive built without lzo support.
 | `-n <N>`    | In-flight parallel chunks (default 2 × cores) |
 | `-v`        | Verbose (list entries / show the applied filter chain) |
 | `-h`        | Help |
+| `--version` | Show the fixed build-date version (`yyyyMMdd-HHmmss`) |
+
+`--version` reports the local date and time captured when the binary was
+compiled, for example `swift_tar 20260712-143015`. The same value is stored as
+`swift_tar_version` in the packaged `version.txt`.
 
 ## Layout
 
 ```
 swift_tar.swift    tar writer/reader + codecs + libarchive-style filters
 compile_tar.sh     build script → release/swift_tar
+build_zlib-win.sh  sync/rebuild the pinned Windows static zlib dependency
 release/swift_tar  compiled binary
 lzfse2/            submodule — LZFSE engine (other3 / bvx3)
 libarchive/        submodule — C reference for the filter model
+zlib/              submodule — pinned static gzip backend on Windows
 ```
 
 ## License
 
-See [lzfse2](./lzfse2) for the compression engine's license; libarchive
-retains its own (BSD-2-Clause).
+See [lzfse2](./lzfse2) for the compression engine's license; libarchive and
+zlib retain their own licenses.

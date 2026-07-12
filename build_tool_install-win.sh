@@ -8,11 +8,12 @@
 #   2. MSVC C++ build tools (link.exe)        (winget: Microsoft.VisualStudio.2022.BuildTools,
 #                                               C++ workload -- swiftc needs this to link .exe)
 #   3. scoop package manager                  (get.scoop.sh)
-#   4. Compression CLI tools swift_tar shells out to on Windows -- see the
-#      #if os(Windows) branches in swift_tar.swift (gzip/bzip2/xz/zstd/lz4/lzip)
-#                                              (scoop: gzip bzip2 xz zstd lz4 lzip)
+#   4. CMake                                  (scoop: cmake; builds static zlib)
+#   5. Compression CLI tools swift_tar still shells out to on Windows
+#                                              (scoop: bzip2 xz zstd lz4 lzip)
 #
-# After this script succeeds, build with:
+# After this script succeeds, build the dependency once, then swift_tar:
+#     zsh ./build_zlib-win.sh
 #     ./compile_tar-win.bat
 #
 # 只在缺少時才安裝（可重複執行）：
@@ -20,10 +21,12 @@
 #   2. MSVC C++ 建置工具（link.exe）           (winget: Microsoft.VisualStudio.2022.BuildTools,
 #                                               C++ workload -- swiftc 在 Windows 上連結 .exe 需要)
 #   3. scoop 套件管理員                        (get.scoop.sh)
-#   4. swift_tar 在 Windows 上會 shell out 呼叫的壓縮 CLI 工具，見
-#      swift_tar.swift 內的 #if os(Windows) 分支 (scoop: gzip bzip2 xz zstd lz4 lzip)
+#   4. CMake                                  (scoop: cmake；建置靜態 zlib)
+#   5. swift_tar 在 Windows 上仍會 shell out 呼叫的壓縮 CLI 工具
+#                                              (scoop: bzip2 xz zstd lz4 lzip)
 #
-# 完成後用以下指令建置：
+# 完成後先建置一次相依套件，再建置 swift_tar：
+#     zsh ./build_zlib-win.sh
 #     ./compile_tar-win.bat
 set -e
 
@@ -68,13 +71,21 @@ else
         "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; Invoke-RestMethod get.scoop.sh | Invoke-Expression"
 fi
 
-# 4. Compression CLI tools (see the #if os(Windows) branches in swift_tar.swift).
+# 4. CMake builds the pinned zlib submodule as a static MSVC library.
+if command -v cmake >/dev/null 2>&1; then
+    echo "[OK] cmake already installed: $(cmake --version | head -1)"
+else
+    echo "[INSTALL] cmake via scoop..."
+    scoop install cmake
+fi
+
+# 5. Compression CLI tools (see the #if os(Windows) branches in swift_tar.swift).
 # Checked via `scoop list <name>`, not PATH: some of these names also resolve
 # to limited busybox applets (e.g. a decompress-only `xz`) bundled with other
 # packages, which would produce a false "already installed" positive too.
 # 用 `scoop list <name>` 檢查，不查 PATH：同名指令有時會解析到其他套件附帶
 # 的閹割版 busybox applet（例如只能解壓的 `xz`），查 PATH 一樣會誤判。
-for tool in gzip bzip2 xz zstd lz4 lzip; do
+for tool in bzip2 xz zstd lz4 lzip; do
     if scoop list "$tool" 2>/dev/null | grep -qE "^${tool}[[:space:]]"; then
         echo "[OK] $tool already installed (scoop)"
     else
@@ -83,4 +94,4 @@ for tool in gzip bzip2 xz zstd lz4 lzip; do
     fi
 done
 
-echo "=== Done. Build with: ./compile_tar-win.bat ==="
+echo "=== Done. First run: zsh ./build_zlib-win.sh; then ./compile_tar-win.bat ==="

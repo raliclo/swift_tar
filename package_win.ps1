@@ -5,11 +5,10 @@
 # auto-detect the Swift runtime dir from swiftc's own path, copy every DLL in
 # it alongside the exe, then zip via Compress-Archive.
 #
-# Note: non-LZFSE codecs (gzip/bzip2/xz/zstd/lz4) still shell out to external
-# CLI tools on PATH at runtime -- this zip makes the Swift/Foundation runtime
-# portable, not those external tools. See swift_tar/build_tool_install-win.sh
-# to install them (or install swift_tar via the scoop bucket, which declares
-# them as package dependencies).
+# gzip is statically linked from the zlib submodule. Other non-LZFSE codecs
+# (bzip2/xz/zstd/lz4/lzip) still shell out to external CLI tools on PATH.
+# The package includes version.txt and zlib's license, but not the development
+# .lib/header/build files because no zlib runtime file is required.
 #
 # Usage: powershell -File package_win.ps1 -ExePath release\swift_tar.exe -OutZip release\swift_tar_win.zip
 
@@ -22,6 +21,14 @@ $ErrorActionPreference = "Stop"
 
 if (-not (Test-Path $ExePath)) {
     Write-Error "Not found: $ExePath (build it first, e.g. via compile_tar-win.bat)"
+    exit 1
+}
+if (-not (Test-Path "version.txt")) {
+    Write-Error "version.txt not found (run zsh ./build_zlib-win.sh)"
+    exit 1
+}
+if (-not (Test-Path "zlib\LICENSE")) {
+    Write-Error "zlib\LICENSE not found (initialize the zlib submodule)"
     exit 1
 }
 
@@ -46,10 +53,12 @@ if (Test-Path $stageRoot) { Remove-Item -Recurse -Force $stageRoot }
 New-Item -ItemType Directory -Path $stageDir | Out-Null
 Copy-Item $ExePath -Destination $stageDir
 Copy-Item (Join-Path $rtBin "*.dll") -Destination $stageDir
+Copy-Item "version.txt" -Destination $stageDir
+Copy-Item "zlib\LICENSE" -Destination (Join-Path $stageDir "zlib-LICENSE.txt")
 
 if (Test-Path $OutZip) { Remove-Item -Force $OutZip }
 Compress-Archive -Path $stageDir -DestinationPath $OutZip -CompressionLevel Optimal -Force
 Remove-Item -Recurse -Force $stageRoot
 
 $dllCount = (Get-ChildItem $rtBin -Filter "*.dll").Count
-Write-Host "Packaged: $OutZip (swift_tar.exe + $dllCount Swift runtime DLLs)"
+Write-Host "Packaged: $OutZip (swift_tar.exe + $dllCount Swift runtime DLLs + dependency metadata/licenses)"

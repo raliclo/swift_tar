@@ -51,44 +51,90 @@ No time regression at any phase (encode 4.3–7.6s, decode 2.8–3.9s throughout
 
 各階段均無時間退化（encode 4.3–7.6s、decode 2.8–3.9s）。encode RSS 現在才顯現真正的 `-n` 線性關係（在途 chunk × 每塊約 8MiB），先前被洩漏遮蔽。
 
-### Windows verification: improvement not reproduced / Windows 驗證：未重現改善
+### Windows verification: improvement reproduced / Windows 驗證：已重現改善
 
 Raw output: [`tgz_inflight_rss_win_output.txt`](tgz_inflight_rss_win_output.txt)
 
-The Windows counterpart currently does **not** reproduce the macOS RSS
-improvement. On the same `claw-code` corpus, peak working set remains roughly
-corpus-sized for most encode runs and for all decode runs:
+The Windows codec backend needed two additional changes because non-LZFSE
+codecs run through external CLI processes there: replace per-chunk Foundation
+`Thread` writers with dedicated `DispatchQueue` pipe pumps, and use synchronous
+`readData(ofLength:)` reads whose `Data` lifetime is bounded by each loop
+iteration. A global queue was deliberately not used because the compression
+workers can saturate it while synchronously waiting for their pipe writers.
 
-| Side | Latest Windows observation |
-| --- | --- |
-| Encode | mostly **2.5–2.7GB** across `-n`; one `-n 40` sample reported **1.09GB**, but this is not the stable linear `-n` behavior seen on macOS |
-| Decode | **2.50–2.55GB** across all tested `-n` values |
+A full `-n 4..40` sweep (`tgz_inflight_rss_win.sh`, same script shape as the
+macOS one, using a companion `measure_peak_ws_win.ps1` since Windows has no
+`/usr/bin/time -l`) on the same `claw-code` corpus confirms the bounded-memory
+behavior across the whole range, not just the three sampled points:
 
-Therefore, the `219MB encode / ~50MB decode` result should be read as a
-macOS-only verification result for now. Windows still needs a separate root
-cause analysis; likely candidates include platform-specific buffering behavior,
-Foundation `Data`/`FileHandle` behavior on Windows, or the measurement path
-still catching retained process memory that the macOS `/usr/bin/time -l`
-measurement does not.
+| `-n` | Encode peak WS | Decode peak WS |
+| --- | ---: | ---: |
+| 4 | 58.6MB | 36.6MB |
+| 8 | 84.0MB | 36.8MB |
+| 12 | 115.6MB | 36.7MB |
+| 16 | 137.8MB | 37.3MB |
+| 20 | 162.7MB | 35.1MB |
+| 24 | 180.9MB | 36.7MB |
+| 28 | 206.1MB | 36.4MB |
+| 32 | 222.3MB | 36.5MB |
+| 36 | 243.1MB | 36.8MB |
+| 40 | 268.7MB | 37.2MB |
 
-Windows 對照測試目前**沒有**重現 macOS RSS 改善。同一份 `claw-code`
-語料下，peak working set 在大多數 encode 測試與全部 decode 測試中仍接近語料大小：
+Before this Windows-specific fix, encode used **2.5–2.7GB** and decode used
+**2.50–2.55GB**. Encode now exposes the expected linear `-n` relationship
+(same shape as macOS), while decode stays flat around 36–37MB regardless of
+`-n`.
 
-| 方向 | 最新 Windows 觀察 |
-| --- | --- |
-| Encode | 多數 `-n` 仍為 **2.5–2.7GB**；只有一次 `-n 40` 樣本降到 **1.09GB**，但這不是 macOS 上看到的穩定 `-n` 線性關係 |
-| Decode | 全部測試的 `-n` 都維持在 **2.50–2.55GB** |
+⚠ **Wall-clock time is a separate axis from RSS and remains far behind macOS**:
+this same sweep measured encode at 27–47s and decode at 17–19s for the 1.4GB
+corpus, vs macOS's 4.3–7.6s / 2.8–3.9s (see `tgz_inflight_rss_output.txt`).
+The `DispatchQueue` fix above resolved the *memory* regression, not the
+*speed* gap — the per-chunk external `gzip.exe` process spawn (Windows has no
+bundled zlib, see main `OPTIMIZATION.md`) is the dominant remaining cost and
+is architectural, not a bug.
 
-因此，`encode 219MB / decode ~50MB` 目前只能視為 macOS 驗證結果。
-Windows 仍需另外追根因；候選方向包括平台特定 buffering、Windows 上
-Foundation `Data`/`FileHandle` 行為，或 Windows 量測路徑仍捕捉到 macOS
-`/usr/bin/time -l` 不會計入的 retained process memory。
+Windows codec backend 因為透過外部 CLI 程序執行非 LZFSE codec，需要另外兩項
+修正：將每個 chunk 的 Foundation `Thread` writer 改成專用 `DispatchQueue`
+pipe pump，並改用同步 `readData(ofLength:)`，讓每輪 `Data` 的生命週期有明確
+上限。這裡刻意不使用 global queue，避免壓縮 worker 佔滿 queue、又同步等待
+pipe writer 而造成飢餓死鎖。
+
+同一份 `claw-code` 語料跑完整的 `-n 4..40` 掃描（`tgz_inflight_rss_win.sh`，
+腳本結構跟 macOS 版相同，Windows 沒有 `/usr/bin/time -l`，改用旁邊的
+`measure_peak_ws_win.ps1` 輔助腳本量測），確認整個範圍都重現了有界記憶體
+行為，不只是 3 個抽樣點：
+
+| `-n` | Encode peak WS | Decode peak WS |
+| --- | ---: | ---: |
+| 4 | 58.6MB | 36.6MB |
+| 8 | 84.0MB | 36.8MB |
+| 12 | 115.6MB | 36.7MB |
+| 16 | 137.8MB | 37.3MB |
+| 20 | 162.7MB | 35.1MB |
+| 24 | 180.9MB | 36.7MB |
+| 28 | 206.1MB | 36.4MB |
+| 32 | 222.3MB | 36.5MB |
+| 36 | 243.1MB | 36.8MB |
+| 40 | 268.7MB | 37.2MB |
+
+修正前 Windows encode 為 **2.5–2.7GB**、decode 為 **2.50–2.55GB**；修正後
+encode 呈現跟 macOS 相同形狀的線性 `-n` 關係，decode 則不分 `-n` 打平在
+約 36–37MB。
+
+⚠ **時間跟 RSS 是兩條不同的軸線，時間目前仍遠落後 macOS**：同一次掃描量到
+1.4GB 語料的 encode 27–47 秒、decode 17–19 秒，對照 macOS 的 4.3–7.6 秒／
+2.8–3.9 秒（見 `tgz_inflight_rss_output.txt`）。上面的 `DispatchQueue`
+修正解決的是**記憶體**退步，不是**速度**落差——每個 chunk 各自 spawn 一次
+外部 `gzip.exe` process（Windows 沒有可連結的 zlib，詳見主文件
+`OPTIMIZATION.md`）才是剩下的主要成本，這是架構性的，不是 bug。
 
 ### Practical takeaway / 實務結論
 
 - On macOS, TGZ memory footprint is now comparable to (or below) the LZFSE formats. Default `-n` needs no tuning; lower `-n` still trades encode speed for memory if ever needed (`n=4` = 90MB at +75% time).
-- On Windows, TGZ RSS remains unresolved; do not cite the macOS `219MB / ~50MB` numbers as Windows results.
-- Correctness verified at each phase: `swift_tar -test -debug` 4/4, full claw-code round-trip `diff -rq` clean, system tar reads the output.
+- On Windows, the dedicated pipe queues and bounded synchronous reads reduce TGZ encode RSS to 59–269MB (`-n 4–40`, linear) and decode RSS to about 35–37MB flat.
+- Windows TGZ wall-clock time is still 4–6x slower than macOS (27–47s vs 4.3–7.6s encode; 17–19s vs 2.8–3.9s decode) — this is the per-chunk external `gzip.exe` process cost, a separate architectural gap from the RSS fix, not something this fix addresses.
+- Correctness verified: the current `swift_tar -test -debug` passed all 6 checks, including both Windows write backends and bidirectional system-tar interoperability.
 - 在 macOS 上，TGZ 的記憶體足跡現在已與 LZFSE 格式相當（甚至更低）。預設 `-n` 不需調整；真有需要時，調低 `-n` 仍可用 encode 時間換記憶體（`n=4` = 90MB，時間 +75%）。
-- 在 Windows 上，TGZ RSS 問題尚未解決；不要把 macOS 的 `219MB / ~50MB` 數字引用為 Windows 結果。
-- 每階段均驗證正確性：`swift_tar -test -debug` 4/4、完整 claw-code round-trip `diff -rq` 無差異、系統 tar 可讀輸出。
+- 在 Windows 上，專用 pipe queue 與有界同步讀取將 TGZ encode RSS 降至 59–269MB（`-n 4–40`，線性），decode RSS 降至約 35–37MB 打平。
+- Windows TGZ 的時間仍比 macOS 慢 4–6 倍（encode 27–47 秒 vs 4.3–7.6 秒；decode 17–19 秒 vs 2.8–3.9 秒）——這是每個 chunk 各自 spawn 外部 `gzip.exe` process 的成本，跟這次 RSS 修正是不同的架構性落差，這次修正沒有解決這個問題。
+- 正確性驗證完成：目前的 `swift_tar -test -debug` 六項檢查全數通過，包含兩種 Windows 寫入後端與系統 tar 雙向互通。

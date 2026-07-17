@@ -2,7 +2,7 @@
 chcp 65001 > nul
 :: compile_tar-win.bat -- build swift_tar.exe (multi-core tar archiver) on Windows
 ::
-:: gzip links the zlib submodule statically. bzip2/xz/zstd/lz4 still shell out
+:: gzip links the zlib submodule statically; zstd links the zstd submodule statically. bzip2/xz/lz4 still shell out
 :: to scoop-installed CLI tools. The LZFSE family stays native, reusing
 :: lzfse2's lzfse-cli.swift.
 :: NOTE: comments in this file are English-only on purpose -- non-ASCII
@@ -18,6 +18,11 @@ if not exist ..\lzfse-cli.swift (
 
 if not exist zlib\build\Release\zs.lib (
     echo [FAIL] zlib static library not found. Run: zsh ./build_zlib-win.sh
+    pause
+    exit /b 1
+)
+if not exist zstd\build\lib\Release\zstd_static.lib (
+    echo [FAIL] zstd static library not found. Run: zsh ./build_zstd-win.sh
     pause
     exit /b 1
 )
@@ -47,7 +52,7 @@ if errorlevel 1 (
 if not exist release mkdir release
 
 set "_build_exe=swift_tar-build-%RANDOM%.exe"
-swiftc -O "%_temp_cli%" "%_temp_version%" swift_tar.swift -o "%_build_exe%" -I cmodules\zlib -Xcc -Izlib -Xcc -Izlib\build -Lzlib\build\Release -lzs
+swiftc -O "%_temp_cli%" "%_temp_version%" swift_tar.swift -o "%_build_exe%" -I cmodules\zlib -Xcc -Izlib -Xcc -Izlib\build -Lzlib\build\Release -lzs -Lzstd\build\lib\Release -lzstd_static
 set "_rc=%ERRORLEVEL%"
 del /Q "%_temp_cli%" "%_temp_version%" > nul 2>&1
 if not "%_rc%"=="0" (

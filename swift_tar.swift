@@ -189,10 +189,16 @@ private let LZMA_FINISH: Int32 = 3
 private let LZMA_CONCATENATED: UInt32 = 0x08
 private let LZMA_CHECK_CRC64: Int32 = 4
 
+#endif // !os(Windows)
+
 // =================================================================
-// MARK: - libzstd API (silgen; homebrew zstd)
-// MARK: - libzstd API（silgen；homebrew zstd）
+// MARK: - libzstd API (silgen; static libzstd on Windows, homebrew on macOS)
+// MARK: - libzstd API（silgen；Windows 靜態 libzstd、macOS homebrew）
 // =================================================================
+// zstd runs in-process on ALL platforms — Windows links the static libzstd
+// submodule (see build_zstd-win.sh) instead of spawning one zstd.exe per chunk.
+// zstd 在所有平台皆 in-process——Windows 連結靜態 libzstd submodule
+// （見 build_zstd-win.sh），不再每個 chunk 生一個 zstd.exe。
 
 private struct ZSTDInBuffer {                 // ZSTD_inBuffer
     var src: UnsafeRawPointer? = nil
@@ -220,8 +226,6 @@ private func ZSTD_freeDStream(_ zds: OpaquePointer?) -> Int
 private func ZSTD_decompressStream(_ zds: OpaquePointer?,
                                    _ output: UnsafeMutableRawPointer,
                                    _ input: UnsafeMutableRawPointer) -> Int
-
-#endif // !os(Windows)
 
 #if !os(Windows)
 
@@ -517,9 +521,6 @@ func lzipCompressStream(_ input: Data, level: Int32 = 6) -> Data? {
 /// One complete zstd frame per chunk (frames concatenate per spec).
 /// 每分塊一個完整 zstd frame（依規格可串接）。
 func zstdCompressFrame(_ input: Data, level: Int32 = 3) -> Data? {
-#if os(Windows)
-    return winRunCompress(exe: "zstd", args: ["-\(level)", "-q", "-c", "-"], input: input)
-#else
     let bound = ZSTD_compressBound(input.count)
     var out = Data(count: bound)
     let n: Int = input.withUnsafeBytes { s in
@@ -529,7 +530,6 @@ func zstdCompressFrame(_ input: Data, level: Int32 = 3) -> Data? {
     }
     guard ZSTD_isError(n) == 0 else { return nil }
     return out.prefix(n)
-#endif
 }
 
 /// One standard LZ4 frame per chunk (magic 0x184D2204).
@@ -811,9 +811,6 @@ func lzmaDecodeStream(kind: LZMAKind, input: FileHandle, prefix: Data, output: F
 /// zstd streaming decode (handles back-to-back frames).
 /// zstd 串流解碼（自動處理背靠背 frame）。
 func zstdDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bool {
-#if os(Windows)
-    return winRunDecompress(exe: "zstd", args: ["-dc", "-q"], input: input, prefix: prefix, output: output)
-#else
     guard let zds = ZSTD_createDStream() else { return false }
     defer { _ = ZSTD_freeDStream(zds) }
     var outBuf = [UInt8](repeating: 0, count: DECODE_CHUNK)
@@ -847,7 +844,6 @@ func zstdDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
         if !ok { return false }
     }
     return lastRet == 0   // 0 ⟺ frame boundary at EOF / EOF 落在 frame 邊界
-#endif
 }
 
 /// Sequential decode of concatenated LZ4 frames. / 循序解串接 LZ4 frame。

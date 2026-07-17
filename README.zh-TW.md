@@ -34,26 +34,28 @@ git submodule update --init   # 取得 lzfse2 + libarchive + zlib
 ### Windows
 
 Windows 需要 Swift、CMake 與 Visual Studio 2022 C++ workload。建置腳本會把
-固定版本的 zlib submodule 編譯成 MSVC 靜態庫，再直接連結進
-`swift_tar.exe`；執行時不需要 `zlib.dll` 或外部 `gzip.exe`。
+固定版本的 zlib 與 zstd submodule 各編譯成 MSVC 靜態庫，再直接把 gzip 與 zstd
+連結進 `swift_tar.exe`；執行時不需要 `zlib.dll`、外部 `gzip.exe`，也不再每個
+chunk 生一個 `zstd.exe`。
 
 ```bat
 git submodule update --init
 zsh ./build_zlib-win.sh
+zsh ./build_zstd-win.sh
 compile_tar-win.bat
 ```
 
-`build_zlib-win.sh` 是相依套件維護步驟：同步 repo 固定的 zlib gitlink、重建
-`zs.lib`，並將精確的 zlib tag、commit 與連結方式寫入 `version.txt`。首次 clone
-或變更 zlib submodule 後才需執行；平常的 `compile_tar-win.bat` 會重用既有靜態
-庫，不會再次呼叫 CMake。
+`build_zlib-win.sh` 與 `build_zstd-win.sh` 是相依套件維護步驟：各自同步固定的
+gitlink、重建靜態庫（`zs.lib`／`zstd_static.lib`），並將精確的 tag、commit 與
+連結方式寫入 `version.txt`。首次 clone 或變更任一 submodule 後才需執行；平常的
+`compile_tar-win.bat` 會重用既有靜態庫，不會再次呼叫 CMake。
 
-其餘外部 codec 仍需要對應的 Scoop CLI 工具；`build_tool_install-win.sh`
-可安裝完整工具鏈。
+其餘外部 codec（bzip2、xz、lz4、lzip）仍需要對應的 Scoop CLI 工具；
+`build_tool_install-win.sh` 可安裝完整工具鏈。
 
-Windows ZIP 包含靜態連結的執行檔、Swift runtime DLL、`version.txt` 與
-`zlib-LICENSE.txt`。`zs.lib`、zlib headers 與 CMake build tree 屬於開發產物，
-並非 runtime dependency，因此不放入 release。
+Windows ZIP 包含靜態連結的執行檔、Swift runtime DLL、`version.txt`、
+`zlib-LICENSE.txt` 與 `zstd-LICENSE.txt`。`zs.lib`、`zstd_static.lib`、headers 與
+CMake build tree 屬於開發產物，並非 runtime dependency，因此不放入 release。
 
 ## 使用方式
 
@@ -143,10 +145,12 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 swift_tar.swift    tar 寫入／讀取 + 壓縮引擎 + libarchive 式 filter
 compile_tar.sh     建置腳本 → release/swift_tar
 build_zlib-win.sh  同步／重建 Windows 固定版本的 zlib 靜態相依套件
+build_zstd-win.sh  同步／重建 Windows 固定版本的 zstd 靜態相依套件
 release/swift_tar  編譯後的二進位
 lzfse2/            子模組 —— LZFSE 引擎（other3 / bvx3）
 libarchive/        子模組 —— filter 模型的 C 參考實作
 zlib/              子模組 —— Windows 固定版本的靜態 gzip backend
+zstd/              子模組 —— Windows 固定版本的靜態 zstd backend
 ```
 
 ## 授權

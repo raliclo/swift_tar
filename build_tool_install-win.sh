@@ -12,8 +12,9 @@
 #   5. Compression CLI tools swift_tar still shells out to on Windows
 #                                              (scoop: bzip2 xz zstd lz4 lzip)
 #
-# After this script succeeds, build the dependency once, then swift_tar:
+# After this script succeeds, build the dependencies once, then swift_tar:
 #     zsh ./build_zlib-win.sh
+#     zsh ./build_zstd-win.sh
 #     ./compile_tar-win.bat
 #
 # 只在缺少時才安裝（可重複執行）：
@@ -27,6 +28,7 @@
 #
 # 完成後先建置一次相依套件，再建置 swift_tar：
 #     zsh ./build_zlib-win.sh
+#     zsh ./build_zstd-win.sh
 #     ./compile_tar-win.bat
 set -e
 
@@ -94,4 +96,4 @@ for tool in bzip2 xz zstd lz4 lzip; do
     fi
 done
 
-echo "=== Done. First run: zsh ./build_zlib-win.sh; then ./compile_tar-win.bat ==="
+echo "=== Done. First run: zsh ./build_zlib-win.sh; zsh ./build_zstd-win.sh; then ./compile_tar-win.bat ==="

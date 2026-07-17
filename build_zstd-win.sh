@@ -15,11 +15,26 @@ git submodule update --init zstd
 # rebuild over risking a stale library from the previous gitlink.
 # 相依版本更新可能改變 CMake target／輸出名稱。此 helper 本來就與日常建置
 # 分離，因此每次乾淨重建，避免誤連前一個 gitlink 留下的舊 library。
-build_dir="$SCRIPT_DIR/zstd/build"
-case "$build_dir" in
-    "$SCRIPT_DIR/zstd/build") cmake -E remove_directory "$build_dir" ;;
-    *) echo "[FAIL] unsafe zstd build path: $build_dir" >&2; exit 1 ;;
-esac
+#
+# zstd keeps its CMake *source* project in zstd/build/cmake, so we must NOT
+# delete the whole zstd/build tree to clean it: that removes the source and
+# makes the `cmake -S zstd/build/cmake` step below fail with
+# "The source directory ... does not exist". Downstream (compile_tar-win.bat)
+# also hardcodes zstd/build/lib/Release, so the output must stay under
+# zstd/build. Instead, reset zstd/build to its pristine tracked state --
+# restore any deleted tracked source, then drop all generated/untracked output.
+# zstd 的 CMake 原始碼在 zstd/build/cmake，因此不能整個刪掉 zstd/build 來清理
+# （會連原始碼一起刪掉，導致下方 `cmake -S zstd/build/cmake` 找不到來源）。且
+# 下游 compile_tar-win.bat 寫死 zstd/build/lib/Release，輸出必須留在 zstd/build。
+# 改為把 zstd/build 還原成乾淨的受版控狀態：先還原被刪的受版控原始碼，再清掉產生物。
+git -C "$SCRIPT_DIR/zstd" checkout -- build
+git -C "$SCRIPT_DIR/zstd" clean -ffdx build
+
+if [ ! -f "$SCRIPT_DIR/zstd/build/cmake/CMakeLists.txt" ]; then
+    echo "[FAIL] zstd/build/cmake/CMakeLists.txt missing -- submodule not populated." >&2
+    echo "[hint] run: git submodule update --init --force zstd" >&2
+    exit 1
+fi
 
 # zstd's CMake project lives under build/cmake. Build ONLY the static libzstd
 # target -- no CLI programs, tests, legacy formats, or multithreading (we

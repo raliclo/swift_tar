@@ -48,7 +48,9 @@ compile_tar-win.bat
 `build_zlib-win.sh` 與 `build_zstd-win.sh` 是相依套件維護步驟：各自同步固定的
 gitlink、重建靜態庫（`zs.lib`／`zstd_static.lib`），並將精確的 tag、commit 與
 連結方式寫入 `version.txt`。首次 clone 或變更任一 submodule 後才需執行；平常的
-`compile_tar-win.bat` 會重用既有靜態庫，不會再次呼叫 CMake。
+`compile_tar-win.bat` 會重用既有靜態庫，不會再次呼叫 CMake。建置版本產生流程會
+保留 `zlib_*` 與 `zstd_*` provenance 欄位；可用
+`zsh ../Test/test_swift_tar_provenance.sh` 驗證 generator 與 Windows ZIP。
 
 其餘外部 codec（bzip2、xz、lz4、lzip）仍需要對應的 Scoop CLI 工具；
 `build_tool_install-win.sh` 可安裝完整工具鏈。

@@ -53,7 +53,9 @@ each syncs its pinned gitlink, rebuilds the static library (`zs.lib` /
 `zstd_static.lib`), and writes the exact tag/commit/linkage to `version.txt`.
 Run them after cloning or changing either submodule. Normal
 `compile_tar-win.bat` runs reuse the existing static libraries and do not invoke
-CMake again.
+CMake again. Build-version generation preserves both the `zlib_*` and `zstd_*`
+provenance fields, and `zsh ../Test/test_swift_tar_provenance.sh` verifies the
+generator and packaged Windows ZIP.
 
 The remaining external codecs (bzip2, xz, lz4, lzip) require their corresponding
 Scoop CLI tools; `build_tool_install-win.sh` installs the complete toolchain.

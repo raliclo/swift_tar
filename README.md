@@ -37,29 +37,31 @@ and links `-lz -lbz2 -llz4 -llzma -lzstd`. The binary is emitted to
 ### Windows
 
 Windows requires Swift, CMake, and the Visual Studio 2022 C++ workload. The
-build compiles the pinned zlib submodule as a static MSVC library, then links
-gzip directly into `swift_tar.exe`; no `zlib.dll` or external `gzip.exe` is
-required at runtime.
+build compiles the pinned zlib and zstd submodules as static MSVC libraries,
+then links gzip and zstd directly into `swift_tar.exe`; no `zlib.dll`,
+external `gzip.exe`, or per-chunk `zstd.exe` is required at runtime.
 
 ```bat
 git submodule update --init
 zsh ./build_zlib-win.sh
+zsh ./build_zstd-win.sh
 compile_tar-win.bat
 ```
 
-`build_zlib-win.sh` is a dependency-maintenance step: it syncs the pinned zlib
-gitlink, rebuilds `zs.lib`, and writes the exact zlib tag/commit/linkage to
-`version.txt`. Run it after cloning or changing the zlib submodule. Normal
-`compile_tar-win.bat` runs reuse the existing static library and do not invoke
+`build_zlib-win.sh` and `build_zstd-win.sh` are dependency-maintenance steps:
+each syncs its pinned gitlink, rebuilds the static library (`zs.lib` /
+`zstd_static.lib`), and writes the exact tag/commit/linkage to `version.txt`.
+Run them after cloning or changing either submodule. Normal
+`compile_tar-win.bat` runs reuse the existing static libraries and do not invoke
 CMake again.
 
-The remaining external codecs require their corresponding Scoop CLI tools;
-`build_tool_install-win.sh` installs the complete toolchain.
+The remaining external codecs (bzip2, xz, lz4, lzip) require their corresponding
+Scoop CLI tools; `build_tool_install-win.sh` installs the complete toolchain.
 
 The Windows ZIP contains the statically linked executable, Swift runtime DLLs,
-`version.txt`, and `zlib-LICENSE.txt`. It intentionally excludes `zs.lib`, zlib
-headers, and the CMake build tree because they are development artifacts, not
-runtime dependencies.
+`version.txt`, `zlib-LICENSE.txt`, and `zstd-LICENSE.txt`. It intentionally
+excludes `zs.lib`, `zstd_static.lib`, headers, and the CMake build trees
+because they are development artifacts, not runtime dependencies.
 
 ## Usage
 
@@ -150,10 +152,12 @@ compiled, for example `swift_tar 20260712-143015`. The same value is stored as
 swift_tar.swift    tar writer/reader + codecs + libarchive-style filters
 compile_tar.sh     build script → release/swift_tar
 build_zlib-win.sh  sync/rebuild the pinned Windows static zlib dependency
+build_zstd-win.sh  sync/rebuild the pinned Windows static zstd dependency
 release/swift_tar  compiled binary
 lzfse2/            submodule — LZFSE engine (other3 / bvx3)
 libarchive/        submodule — C reference for the filter model
 zlib/              submodule — pinned static gzip backend on Windows
+zstd/              submodule — pinned static zstd backend on Windows
 ```
 
 ## License

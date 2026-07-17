@@ -5,10 +5,10 @@
 # auto-detect the Swift runtime dir from swiftc's own path, copy every DLL in
 # it alongside the exe, then zip via Compress-Archive.
 #
-# gzip is statically linked from the zlib submodule. Other non-LZFSE codecs
-# (bzip2/xz/zstd/lz4/lzip) still shell out to external CLI tools on PATH.
-# The package includes version.txt and zlib's license, but not the development
-# .lib/header/build files because no zlib runtime file is required.
+# gzip and zstd are statically linked from the zlib and zstd submodules. Other
+# non-LZFSE codecs (bzip2/xz/lz4/lzip) still shell out to external CLI tools on
+# PATH. The package includes version.txt and the zlib + zstd licenses, but not
+# the development .lib/header/build files because no runtime file is required.
 #
 # Usage: powershell -File package_win.ps1 -ExePath release\swift_tar.exe -OutZip release\swift_tar_win.zip
 
@@ -29,6 +29,10 @@ if (-not (Test-Path "version.txt")) {
 }
 if (-not (Test-Path "zlib\LICENSE")) {
     Write-Error "zlib\LICENSE not found (initialize the zlib submodule)"
+    exit 1
+}
+if (-not (Test-Path "zstd\LICENSE")) {
+    Write-Error "zstd\LICENSE not found (initialize the zstd submodule)"
     exit 1
 }
 
@@ -55,6 +59,7 @@ Copy-Item $ExePath -Destination $stageDir
 Copy-Item (Join-Path $rtBin "*.dll") -Destination $stageDir
 Copy-Item "version.txt" -Destination $stageDir
 Copy-Item "zlib\LICENSE" -Destination (Join-Path $stageDir "zlib-LICENSE.txt")
+Copy-Item "zstd\LICENSE" -Destination (Join-Path $stageDir "zstd-LICENSE.txt")
 
 if (Test-Path $OutZip) { Remove-Item -Force $OutZip }
 Compress-Archive -Path $stageDir -DestinationPath $OutZip -CompressionLevel Optimal -Force

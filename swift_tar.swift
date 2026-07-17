@@ -1515,7 +1515,7 @@ private func winUcrtPath(_ path: String) -> String {
 /// 以選定後端寫出一個解壓檔案；失敗回傳錯誤訊息，成功回傳 nil。由
 /// FileWriterPool 的 worker 呼叫（路徑各自獨立，無共享狀態）。
 private func winWriteFile(dest: String, data: Data, mtime: UInt64,
-                          backend: WriteBackend) -> String? {
+                          backend: WriteBackend, restoreMtime: Bool = true) -> String? {
     switch backend {
     case .foundation:
         // Single-call create+write+close (ONE open), then mtime via
@@ -1527,8 +1527,10 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
         } catch {
             return "cannot write '\(dest)': \(error) / 無法寫入 '\(dest)'"
         }
-        try? FileManager.default.setAttributes([.modificationDate:
-            Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+        if restoreMtime {
+            try? FileManager.default.setAttributes([.modificationDate:
+                Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+        }
         return nil
     case .ucrt:
         // One CRT open per file; mtime set on the same fd — no extra opens.
@@ -1553,7 +1555,7 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
                 off += Int(n)
             }
         }
-        if writeOK {
+        if writeOK && restoreMtime {
             var tb = __utimbuf64(actime: __time64_t(mtime), modtime: __time64_t(mtime))
             _ = _futime64(fd, &tb)
         }
@@ -1575,6 +1577,7 @@ final class FileWriterPool {
     static let smallFileMax = 4 << 20        // ≤4 MiB buffered / 小檔緩衝上限
 
     private let backend: WriteBackend
+    private let restoreMtime: Bool
     private let sem: DispatchSemaphore
     private let lock = NSLock()
     private let queue = DispatchQueue(label: "swifttar.extract", qos: .userInitiated,
@@ -1584,8 +1587,9 @@ final class FileWriterPool {
     private final class State: @unchecked Sendable { var failure: String? = nil }
     private let state = State()
 
-    init(backend: WriteBackend, inflight: Int) {
+    init(backend: WriteBackend, inflight: Int, restoreMtime: Bool = true) {
         self.backend = backend
+        self.restoreMtime = restoreMtime
         self.sem = DispatchSemaphore(value: max(2, inflight))
     }
 
@@ -1598,8 +1602,10 @@ final class FileWriterPool {
         sem.wait()                            // backpressure / 反壓
         group.enter()
         let backend = self.backend
+        let restoreMtime = self.restoreMtime
         queue.async { [self] in
-            if let err = winWriteFile(dest: dest, data: data, mtime: mtime, backend: backend) {
+            if let err = winWriteFile(dest: dest, data: data, mtime: mtime, backend: backend,
+                                      restoreMtime: restoreMtime) {
                 lock.lock()
                 state.failure = state.failure ?? err
                 lock.unlock()
@@ -1993,6 +1999,10 @@ final class TarReader {
         // 僅 Windows 解壓使用：平行寫入數（-n）與寫檔後端；其他平台不使用。
         var inflight: Int = 1
         var writeBackend: WriteBackend = .ucrt
+        // false (--touch) leaves extracted entries at the current time,
+        // GNU tar --touch semantics. / false（--touch）時解出項目維持目前
+        // 時間，語意同 GNU tar --touch。
+        var restoreMtime: Bool = true
     }
 
     func run(options: Options) throws {
@@ -2007,7 +2017,8 @@ final class TarReader {
         // ordering barriers: duplicate paths, hardlink targets).
         // 平行小檔寫入池＋已交付路徑集合（供順序屏障用：重複路徑、硬連結目標）。
         let pool: FileWriterPool? = options.extract
-            ? FileWriterPool(backend: options.writeBackend, inflight: options.inflight) : nil
+            ? FileWriterPool(backend: options.writeBackend, inflight: options.inflight,
+                             restoreMtime: options.restoreMtime) : nil
         var submitted = Set<String>()
 #endif
 
@@ -2216,8 +2227,10 @@ final class TarReader {
                         remaining -= UInt64(n)
                     }
                     try? out.close()
-                    try? fm.setAttributes([.modificationDate:
-                        Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+                    if options.restoreMtime {
+                        try? fm.setAttributes([.modificationDate:
+                            Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+                    }
                 }
 #else
                 _ = fm.createFile(atPath: dest, contents: nil)
@@ -2243,8 +2256,10 @@ final class TarReader {
                 if rem != 0 { _ = readExactly(TAR_BLOCK - rem) }
 #if !os(Windows)
                 chmod(dest, mode_t(mode))
-                try? fm.setAttributes([.modificationDate:
-                    Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+                if options.restoreMtime {
+                    try? fm.setAttributes([.modificationDate:
+                        Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+                }
 #endif
             default:
                 eprint("swift_tar: skipping type '\(Character(UnicodeScalar(typeflag)))' entry '\(name)' / 略過未支援型別")
@@ -2269,9 +2284,11 @@ final class TarReader {
 #endif
 
         // Directory mtimes last, deepest first / 目錄 mtime 最後套用、先深後淺
-        for (path, mtime) in dirTimes.sorted(by: { $0.path.count > $1.path.count }) {
-            try? fm.setAttributes([.modificationDate:
-                Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: path)
+        if options.restoreMtime {
+            for (path, mtime) in dirTimes.sorted(by: { $0.path.count > $1.path.count }) {
+                try? fm.setAttributes([.modificationDate:
+                    Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: path)
+            }
         }
     }
 }
@@ -2330,6 +2347,10 @@ private func printTarUsage() {
       -n <N>          : In-flight parallel chunks (default 2×cores)
                         平行在途分塊數（預設 2×核心數）
       -v              : Verbose / 顯示處理中的項目
+      --touch         : (-x only) do not restore archive mtimes; extracted
+                        entries keep the current time (GNU tar semantics)
+                        （僅 -x）不還原封存的 mtime，解出項目維持目前時間
+                        （GNU tar 語意）
       -h              : Show this help / 顯示說明
       --version       : Show build date version / 顯示建置日期版本
       -write_foundation / -write_ucrt :
@@ -2739,6 +2760,10 @@ struct SwiftTarMain {
             return wantFoundation ? .foundation : .ucrt
         }()
 
+        // --touch: leave extracted entries at the current time (GNU tar
+        // semantics). / --touch：解出項目維持目前時間（GNU tar 語意）。
+        let restoreMtime = !args.contains("--touch")
+
         // positional file args (skip flags and their values) / 位置參數（略過旗標與其值）
         var files: [String] = []
         var skipNext = true   // args[0] is the binary path / args[0] 是執行檔路徑
@@ -2758,7 +2783,7 @@ struct SwiftTarMain {
             } else {
                 try runRead(archivePath: archivePath, extract: doExtract,
                             destDir: destDir, inflight: inflightN, verbose: verbose,
-                            writeBackend: writeBackend)
+                            writeBackend: writeBackend, restoreMtime: restoreMtime)
             }
         } catch {
             eprint("swift_tar: \(error.localizedDescription)")
@@ -2807,7 +2832,8 @@ struct SwiftTarMain {
 
     static func runRead(archivePath: String, extract: Bool, destDir: String,
                         inflight: Int, verbose: Bool,
-                        writeBackend: WriteBackend = .ucrt) throws {
+                        writeBackend: WriteBackend = .ucrt,
+                        restoreMtime: Bool = true) throws {
         let input = try openInput(archivePath)
         defer { if archivePath != "-" { try? input.close() } }
 
@@ -2823,7 +2849,8 @@ struct SwiftTarMain {
             throw TarError.io(result.message ?? "filter chain failed / filter 鏈失敗")
         }
         let options = TarReader.Options(extract: extract, destDir: destDir, verbose: verbose,
-                                        inflight: inflight, writeBackend: writeBackend)
+                                        inflight: inflight, writeBackend: writeBackend,
+                                        restoreMtime: restoreMtime)
         try TarReader(input: stream.handle, prefix: stream.prefix).run(options: options)
         group.wait()
         guard result.ok else {

@@ -1,4 +1,7 @@
-swift_tar_version=20260717-160051
+swift_tar_version=20260717-170758
 zlib_version=v1.3.2
 zlib_commit=da607da739fa6047df13e66a2af6b8bec7c2a498
 zlib_linkage=static
+zstd_version=v1.5.7
+zstd_commit=f8745da6ff1ad1e7bab384bd1f9d742439278e99
+zstd_linkage=static

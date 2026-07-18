@@ -7,6 +7,32 @@ main benchmark pipeline (`../../benchmark.sh` / `../../benchmark2.sh`). Results
 here are exploratory—read the "Status" line on each before trusting a
 conclusion.
 
+## Create-side `-C` compatibility (2026-07-18)
+
+`swift_tar -c` previously parsed `-C` but only passed it to extraction, so a
+system-tar-style command such as `swift_tar -c --zstd -f out.tar.zst -C
+<parent> <leaf>` tried to stat `<leaf>` in the invocation directory and failed.
+Create now opens the archive first, changes the input working directory, and
+restores the original directory afterward. This preserves the expected
+relative `-f` location while keeping parent paths and `..` out of entry names.
+
+Windows build `swift_tar 20260718-171714` was verified with:
+
+- `swift_tar -test -debug`: all seven checks passed, including plain/gzip
+  system-tar interoperability, native ZSTD create-side `-C`, and both Windows
+  extraction write backends.
+- An isolated `-C ../source leaf` native-ZSTD round-trip: archive output stayed
+  in the invocation directory; entries were only `leaf/` and
+  `leaf/README.md`; external `zstd` plus Windows system tar listed the same
+  entries; extracted content matched byte-for-byte.
+- The root Windows helper pipeline was copied into an isolated directory and
+  run in both file and nul modes at `n=2`; all eight formats passed in both
+  modes, ZSTD file extraction matched the TGZ tree, and raw ZSTD logs recorded
+  `native libzstd via swift_tar`.
+- The packaged `release/swift_tar_win.zip`: bundled executable reported
+  `20260718-171714`, passed its self-test, and retained static zlib 1.3.2 and
+  zstd 1.5.7 provenance.
+
 ## tgz_inflight_rss.sh
 
 **Question**: Does swift_tar's `-n` flag (in-flight chunk concurrency for
@@ -125,5 +151,6 @@ and `swift_tar -x` both succeeded. Use `.tgz` or `.tar.gz` for this output.
 - Static zlib removes per-chunk `gzip.exe` spawning: parallel encode is now
   7.2–7.8s. Decode improves to 9.7–11.0s and remains a Windows-specific
   optimization target.
-- The current `swift_tar -test -debug` passes all six checks, including both
-  Windows write backends and bidirectional system-tar interoperability.
+- The current `swift_tar -test -debug` passes all seven checks, including
+  create-side `-C`, native ZSTD, both Windows write backends and bidirectional
+  system-tar interoperability.

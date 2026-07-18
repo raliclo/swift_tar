@@ -6,6 +6,27 @@
 （`../../benchmark.sh`／`../../benchmark2.sh`）未測試的行為。這些結果屬於
 探索性質；採信結論前，請先閱讀各節的「狀態」。
 
+## 建立端 `-C` 相容性（2026-07-18）
+
+`swift_tar -c` 過去雖會解析 `-C`，卻只在解出流程使用，因此系統 tar 常見的
+`swift_tar -c --zstd -f out.tar.zst -C <parent> <leaf>` 會錯誤地從原始呼叫
+目錄尋找 `<leaf>`。修正後會先開啟封存輸出，再切換輸入工作目錄，結束時還原
+原目錄；因此相對 `-f` 仍建立在呼叫目錄，entry name 也不會帶入 parent path
+或 `..`。
+
+Windows build `swift_tar 20260718-171714` 已完成以下驗證：
+
+- `swift_tar -test -debug` 七項全數通過，涵蓋 plain／gzip 系統 tar 互通、
+  native ZSTD 建立端 `-C`，以及兩種 Windows 解出寫入後端。
+- 隔離的 `-C ../source leaf` native-ZSTD round-trip：archive 留在 invocation
+  directory；entry 僅有 `leaf/` 與 `leaf/README.md`；外部 `zstd` 加 Windows
+  系統 tar 列出相同項目；解出內容逐 byte 相同。
+- 將 root Windows helper pipeline 複製到隔離目錄，以 `n=2` 跑 file／nul
+  兩種模式；八種格式在兩種模式皆通過，ZSTD file 解出樹與 TGZ 相同，原始
+  ZSTD log 也記錄 `native libzstd via swift_tar`。
+- `release/swift_tar_win.zip` 內的執行檔回報 `20260718-171714`、self-test
+  通過，並保留 static zlib 1.3.2 與 zstd 1.5.7 provenance。
+
 ## tgz_inflight_rss.sh
 
 **問題**：swift_tar 的 `-n` 旗標（chunk-parallel gzip 的在途 chunk 並行數）
@@ -117,5 +138,5 @@ Native zlib 解決了另一條 encode 速度軸線。Windows build 現在靜態�
   （`-n 4–40`，線性），decode RSS 約 43–45MB，且不受 `-n` 影響。
 - 靜態 zlib 消除每個 chunk 啟動 `gzip.exe` 的成本：平行 encode 現為
   7.2–7.8 秒；decode 改善至 9.7–11.0 秒，仍是 Windows 特定的最佳化目標。
-- 目前的 `swift_tar -test -debug` 六項檢查全數通過，包含兩種 Windows
-  寫入後端與系統 tar 雙向互通。
+- 目前的 `swift_tar -test -debug` 七項檢查全數通過，包含建立端 `-C`、
+  native ZSTD、兩種 Windows 寫入後端與系統 tar 雙向互通。

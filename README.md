@@ -54,8 +54,8 @@ each syncs its pinned gitlink, rebuilds the static library (`zs.lib` /
 Run them after cloning or changing either submodule. Normal
 `compile_tar-win.bat` runs reuse the existing static libraries and do not invoke
 CMake again. Build-version generation preserves both the `zlib_*` and `zstd_*`
-provenance fields, and `zsh ../Test/test_swift_tar_provenance.sh` verifies the
-generator and packaged Windows ZIP.
+provenance fields in `version.txt`, and the packaging step copies that file
+into the Windows ZIP for release verification.
 
 The remaining external codecs (bzip2, xz, lz4, lzip) require their corresponding
 Scoop CLI tools; `build_tool_install-win.sh` installs the complete toolchain.
@@ -86,8 +86,15 @@ in pipelines.
 ```sh
 release/swift_tar -c --bvx3-optimal -f src.tar.bvx3 src/
 release/swift_tar -c --gzip         -f src.tar.gz    src/     # standard .tar.gz
+release/swift_tar -c --zstd -f src.tar.zst -C /path/to parent-leaf
 tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # (or pipe in)
 ```
+
+For create mode, `-C <dir>` changes the input working directory before the
+listed leaf paths are archived, matching system tar. The archive named by a
+relative `-f` path is still created relative to the original invocation
+directory. Using `-C <parent> <leaf>` keeps parent paths and `..` out of archive
+entry names.
 
 The output format is selected by the codec flag, not by the filename
 extension. For example, `--gzip -f archive.zip` still writes a gzip-compressed
@@ -138,7 +145,7 @@ the same behavior as a libarchive built without lzo support.
 | Option | Meaning |
 |--------|---------|
 | `-f <path>` | Archive file (`-` = stdin/stdout; default `-`) |
-| `-C <dir>`  | Extract into `<dir>` |
+| `-C <dir>`  | Change input directory before create; extract into it when reading |
 | `-n <N>`    | In-flight parallel chunks (default 2 × cores) |
 | `-v`        | Verbose (list entries / show the applied filter chain) |
 | `-h`        | Help |

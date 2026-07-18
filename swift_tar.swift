@@ -2343,7 +2343,8 @@ private func printTarUsage() {
     Options:
       -f <path>       : Archive file ("-" = stdin/stdout; default "-")
                         封存檔路徑（"-" 表標準輸入／輸出；預設 "-"）
-      -C <dir>        : Extract into <dir> / 解出至 <dir>
+      -C <dir>        : Change directory before create, or extract into <dir>
+                        建立封存前切換目錄，或解出至 <dir>
       -n <N>          : In-flight parallel chunks (default 2×cores)
                         平行在途分塊數（預設 2×核心數）
       -v              : Verbose / 顯示處理中的項目
@@ -2575,7 +2576,7 @@ func runSelfTest(debug: Bool = false) {
     // ---- plain tar ----
     let plainA = "\(tmp)/plain_by_swift_tar.tar"
     let plainB = "\(tmp)/plain_by_std_tar.tar"
-    if runTarProcess(selfExe, ["-c", "-f", plainA, "src"], cwd: tmp) {
+    if runTarProcess(selfExe, ["-c", "-f", plainA, "-C", tmp, "src"]) {
         let out = "\(tmp)/plain_out_std"
         try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
         let extracted = runTarProcess(stdTar, ["-x", "-f", plainA, "-C", out])
@@ -2595,7 +2596,7 @@ func runSelfTest(debug: Bool = false) {
     // ---- .tar.gz ----
     let gzA = "\(tmp)/gz_by_swift_tar.tar.gz"
     let gzB = "\(tmp)/gz_by_std_tar.tar.gz"
-    if runTarProcess(selfExe, ["-c", "--gzip", "-f", gzA, "src"], cwd: tmp) {
+    if runTarProcess(selfExe, ["-c", "--gzip", "-f", gzA, "-C", tmp, "src"]) {
         let out = "\(tmp)/gz_out_std"
         try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
         let extracted = runTarProcess(stdTar, ["-x", "-z", "-f", gzA, "-C", out])
@@ -2610,6 +2611,27 @@ func runSelfTest(debug: Bool = false) {
         check(".tar.gz: std tar create → swift_tar extract", extracted && compareTrees(srcDir, "\(out)/src"))
     } else {
         check(".tar.gz: std tar create → swift_tar extract", false)
+    }
+
+    // ---- create-side -C plus native ZSTD ----
+    // Use a relative archive path from a separate invocation directory. This
+    // verifies that -f remains relative to the caller while leaf inputs are
+    // resolved after -C, and that archive entries contain no parent or '..'.
+    // ---- 建立端 -C 與原生 ZSTD ----
+    // 從另一個呼叫目錄使用相對封存路徑，驗證 -f 仍相對於呼叫端，而 leaf
+    // 輸入在 -C 後解析，且封存項目不含 parent 或 '..'。
+    let invokeDir = "\(tmp)/invoke"
+    try? fm.createDirectory(atPath: invokeDir, withIntermediateDirectories: true)
+    let zstdC = "\(invokeDir)/zstd_create_c.tar.zst"
+    if runTarProcess(selfExe, ["-c", "--zstd", "-f", "zstd_create_c.tar.zst",
+                               "-C", tmp, "src"], cwd: invokeDir) {
+        let out = "\(tmp)/zstd_create_c_out"
+        try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
+        let extracted = runTarProcess(selfExe, ["-x", "-f", zstdC, "-C", out])
+        check("create-side -C: native ZSTD round-trip",
+              fm.fileExists(atPath: zstdC) && extracted && compareTrees(srcDir, "\(out)/src"))
+    } else {
+        check("create-side -C: native ZSTD round-trip", false)
     }
 
 #if os(Windows)
@@ -2777,7 +2799,7 @@ struct SwiftTarMain {
         do {
             if doCreate {
                 try runCreate(archivePath: archivePath, files: files, codec: codec,
-                              inflight: inflightN, verbose: verbose)
+                              changeDir: destDir, inflight: inflightN, verbose: verbose)
             } else if doCat {
                 try runCat(archivePath: archivePath, inflight: inflightN, verbose: verbose)
             } else {
@@ -2794,7 +2816,7 @@ struct SwiftTarMain {
     // ---- create / 建立 ----
 
     static func runCreate(archivePath: String, files: [String], codec: TarCodec,
-                          inflight: Int, verbose: Bool) throws {
+                          changeDir: String, inflight: Int, verbose: Bool) throws {
         guard !files.isEmpty else {
             throw TarError.io("no files to archive / 未指定要打包的檔案")
         }
@@ -2809,6 +2831,21 @@ struct SwiftTarMain {
             output = fh
         }
         defer { if archivePath != "-" { try? output.close() } }
+
+        // Open the archive before applying create-side -C, matching system
+        // tar: a relative -f path stays relative to the invocation directory,
+        // while input paths are resolved from the requested directory.
+        // 先開啟封存輸出再套用建立端 -C，與系統 tar 一致：相對 -f 路徑仍以
+        // 呼叫時目錄為基準，輸入路徑則改由指定目錄解析。
+        let originalDir = FileManager.default.currentDirectoryPath
+        if !changeDir.isEmpty && !FileManager.default.changeCurrentDirectoryPath(changeDir) {
+            throw TarError.io("cannot chdir to '\(changeDir)' / 無法切換至 '\(changeDir)'")
+        }
+        defer {
+            if !changeDir.isEmpty {
+                _ = FileManager.default.changeCurrentDirectoryPath(originalDir)
+            }
+        }
 
         let sink = ParallelChunkSink(codec: codec, output: output, inflight: inflight)
         let writer = TarWriter(sink: sink, verbose: verbose)

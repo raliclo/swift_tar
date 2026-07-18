@@ -49,8 +49,8 @@ compile_tar-win.bat
 gitlink、重建靜態庫（`zs.lib`／`zstd_static.lib`），並將精確的 tag、commit 與
 連結方式寫入 `version.txt`。首次 clone 或變更任一 submodule 後才需執行；平常的
 `compile_tar-win.bat` 會重用既有靜態庫，不會再次呼叫 CMake。建置版本產生流程會
-保留 `zlib_*` 與 `zstd_*` provenance 欄位；可用
-`zsh ../Test/test_swift_tar_provenance.sh` 驗證 generator 與 Windows ZIP。
+在 `version.txt` 保留 `zlib_*` 與 `zstd_*` provenance 欄位，封裝步驟也會將
+該檔案放入 Windows ZIP，供 release 驗證。
 
 其餘外部 codec（bzip2、xz、lz4、lzip）仍需要對應的 Scoop CLI 工具；
 `build_tool_install-win.sh` 可安裝完整工具鏈。
@@ -79,8 +79,13 @@ swift_tar -c|-x|-t|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...
 ```sh
 release/swift_tar -c --bvx3-optimal -f src.tar.bvx3 src/
 release/swift_tar -c --gzip         -f src.tar.gz    src/     # 標準 .tar.gz
+release/swift_tar -c --zstd -f src.tar.zst -C /path/to parent-leaf
 tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # （或以管線灌入）
 ```
+
+建立模式下，`-C <dir>` 會先切換輸入工作目錄，再封存後方列出的 leaf path，
+語意與系統 tar 一致。相對 `-f` 路徑仍以原始呼叫目錄為基準建立。使用
+`-C <parent> <leaf>` 可避免封存項目名稱包含 parent path 或 `..`。
 
 輸出格式由 codec 旗標決定，不是由副檔名決定。例如
 `--gzip -f archive.zip` 寫出的仍是 gzip 壓縮 tar stream（magic `1f 8b`），
@@ -131,7 +136,7 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 | 選項 | 意義 |
 |------|------|
 | `-f <path>` | 封存檔路徑（`-` 表標準輸入／輸出；預設 `-`） |
-| `-C <dir>`  | 解出至 `<dir>` |
+| `-C <dir>`  | 建立前切換輸入目錄；讀取時解出至此目錄 |
 | `-n <N>`    | 平行在途分塊數（預設 2 × 核心數） |
 | `-v`        | 詳細輸出（列出項目／顯示套用的 filter 鏈） |
 | `-h`        | 顯示說明 |

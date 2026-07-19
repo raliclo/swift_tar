@@ -32,7 +32,23 @@ git submodule update --init   # fetch lzfse2 + libarchive + zlib
 The build reuses `lzfse2/lzfse-cli.swift` as a library (its top-level
 `runCLI()` entry point is stripped, then both files are compiled together)
 and links `-lz -lbz2 -llz4 -llzma -lzstd`. The binary is emitted to
-**`release/swift_tar`**.
+**`release/swift_tar`**. If the `lzfse2` submodule is missing, the build stops
+with an error suggesting `git submodule update --init` or the LZFSE-free build
+below.
+
+### Public build without LZFSE
+
+`compile_no_lzfse.sh` (a wrapper for `compile_tar.sh --no-lzfse`) builds a
+public/distributable binary that ships **none** of the private LZFSE engine —
+`lzfse-cli.swift` is not compiled in, so the binary can neither create nor decode
+any LZFSE-family archive (`other3` / `bvx3` / `bvx2`) and contains no LZFSE code
+or format strings. The standard external codecs (gzip / bzip2 / xz / zstd / lz4)
+and plain tar are unaffected. This build does not need the `lzfse2` submodule.
+
+```sh
+./compile_no_lzfse.sh         # → release/swift_tar (public, LZFSE-free)
+./test_no_lzfse.sh            # verify the exclusion + standard codecs still work
+```
 
 ### Windows
 

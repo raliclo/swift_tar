@@ -29,7 +29,21 @@ git submodule update --init   # 取得 lzfse2 + libarchive + zlib
 
 建置時將 `lzfse2/lzfse-cli.swift` 當函式庫重用（剝除其頂層 `runCLI()`
 進入點後兩檔合併編譯），並連結 `-lz -lbz2 -llz4 -llzma -lzstd`。
-二進位輸出至 **`release/swift_tar`**。
+二進位輸出至 **`release/swift_tar`**。若缺少 `lzfse2` submodule，建置會以錯誤中止，
+並提示執行 `git submodule update --init` 或改用下方不含 LZFSE 的建置。
+
+### 不含 LZFSE 的公開版
+
+`compile_no_lzfse.sh`（`compile_tar.sh --no-lzfse` 的包裝）建置「公開／可散布」版
+binary，完全**不含**私有 LZFSE 引擎——不編譯 `lzfse-cli.swift`，因此既不能建立也
+不能解碼任何 LZFSE 家族封存（`other3` / `bvx3` / `bvx2`），binary 內也無任何 LZFSE
+程式碼或格式字串。標準外部 codec（gzip / bzip2 / xz / zstd / lz4）與純 tar 不受影響。
+此建置不需要 `lzfse2` submodule。
+
+```sh
+./compile_no_lzfse.sh         # → release/swift_tar（公開版、不含 LZFSE）
+./test_no_lzfse.sh            # 驗證排除是否生效，且標準 codec 仍可用
+```
 
 ### Windows
 

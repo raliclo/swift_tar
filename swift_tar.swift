@@ -61,6 +61,22 @@ import ucrt
 /// 由 1 MiB 調升為 4 MiB，降低大型封存檔的每塊呼叫成本。
 let DECODE_CHUNK = 1 << 22
 
+// 4 MiB parallel chunk size for the tar stream. In a normal build this mirrors
+// LZFSEv1.parallelChunkSize; defined locally so the --no-lzfse build (which does
+// not compile the LZFSE library) still has it.
+// tar 串流的 4 MiB 平行分塊大小。一般建置與 LZFSEv1.parallelChunkSize 相同；此處
+// 本地定義，讓不編譯 LZFSE library 的 --no-lzfse 建置仍可使用。
+let TAR_CHUNK_SIZE = 1 << 22
+
+#if EXCLUDE_LZFSE
+// The LZFSE library also provides eprint(); supply a local one when it is not
+// compiled in (--no-lzfse). / LZFSE library 也提供 eprint()，未編入（--no-lzfse）
+// 時在此提供本地版本。
+func eprint(_ message: String) {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
+}
+#endif
+
 // Windows statically links the zlib submodule for in-process gzip. The other
 // non-LZFSE codecs still shell out to their CLI tools. The remaining C-library
 // silgen declarations below are macOS/Linux-only.
@@ -393,8 +409,10 @@ private func winRunDecompress(exe: String, args: [String], input: FileHandle,
 
 enum TarCodec {
     case none                       // plain tar / 純 tar
+#if !EXCLUDE_LZFSE
     case other3(optimal: Bool)      // standard bvx2 blocks / 標準 bvx2 區塊
     case bvx3(optimal: Bool)        // private big-alphabet blocks / 私有大字母表區塊
+#endif
     case gzip                       // zlib, gzip members / gzip 成員
     case bzip2                      // libbz2 streams / bzip2 串流
     case xz                         // liblzma xz streams / xz 串流
@@ -403,7 +421,11 @@ enum TarCodec {
     case lz4                        // liblz4 standard frames / 標準 LZ4 frame
 
     var isLZFSEFamily: Bool {
+#if EXCLUDE_LZFSE
+        return false
+#else
         switch self { case .other3, .bvx3: return true; default: return false }
+#endif
     }
 
     /// Compress one chunk into an independent, self-contained unit.
@@ -413,10 +435,12 @@ enum TarCodec {
         switch self {
         case .none:
             return chunk
+#if !EXCLUDE_LZFSE
         case .other3(let opt):
             return LZFSEv1.compressBody(chunk, strong: true, optimal3: opt)
         case .bvx3(let opt):
             return LZFSEv1.compressBody(chunk, strong: true, bvx3: true, optimal: opt)
+#endif
         case .gzip:
             return gzipCompressMember(chunk)
         case .bzip2:
@@ -1057,7 +1081,11 @@ func rpmUnwrapStream(input: FileHandle, prefix: Data, output: FileHandle) -> Boo
 // =================================================================
 
 enum ReadFilter {
+#if EXCLUDE_LZFSE
+    case gzip, bzip2, xz, lzmaAlone, lzip, lz4, zstd, compressLZW, uu, rpm, lzop
+#else
     case gzip, bzip2, xz, lzmaAlone, lzip, lz4, zstd, compressLZW, uu, rpm, lzfse, lzop
+#endif
 
     var name: String {
         switch self {
@@ -1066,7 +1094,10 @@ enum ReadFilter {
         case .lzip: return "lzip";        case .lz4: return "lz4"
         case .zstd: return "zstd";        case .compressLZW: return "compress (.Z)"
         case .uu: return "uudecode";      case .rpm: return "rpm"
-        case .lzfse: return "lzfse";      case .lzop: return "lzop"
+#if !EXCLUDE_LZFSE
+        case .lzfse: return "lzfse"
+#endif
+        case .lzop: return "lzop"
         }
     }
 }
@@ -1087,7 +1118,9 @@ func sniffFilter(_ head: [UInt8]) -> ReadFilter? {
     if b[0] == 0x89 && b[1] == UInt8(ascii: "L") && b[2] == UInt8(ascii: "Z")
         && b[3] == UInt8(ascii: "O") && b[4] == 0x00 { return .lzop }
     if b[0] == 0xED && b[1] == 0xAB && b[2] == 0xEE && b[3] == 0xDB { return .rpm }
+#if !EXCLUDE_LZFSE
     if b[0] == UInt8(ascii: "b") && b[1] == UInt8(ascii: "v") && b[2] == UInt8(ascii: "x") { return .lzfse }
+#endif
     // .lzma alone: properties byte (commonly 0x5D) + LE dict size whose two
     // low bytes are zero for the usual power-of-two sizes.
     // .lzma alone：屬性位元組（常見 0x5D）+ LE 字典大小（常見 2 的冪，低位為零）。
@@ -1149,6 +1182,7 @@ func resolveFilterChain(input: FileHandle, prefix: Data, filePath: String?,
         case .compressLZW: ok = lzwDecodeStream(input: input, prefix: capturedHead, output: w)
         case .uu:          ok = uuDecodeStream(input: input, prefix: capturedHead, output: w)
         case .rpm:         ok = rpmUnwrapStream(input: input, prefix: capturedHead, output: w)
+#if !EXCLUDE_LZFSE
         case .lzfse:
             // Top layer + real file → multi-core chunk-parallel file decoder.
             // 最外層且輸入為檔案 → 多核心分塊平行檔案解碼。
@@ -1164,6 +1198,7 @@ func resolveFilterChain(input: FileHandle, prefix: Data, filePath: String?,
                 ok = wholeBufferLZFSEDecode(input: input, head: capturedHead, filePath: nil,
                                             inflight: inflight, output: w)
             }
+#endif
         case .lzop:
             ok = false
         }
@@ -1176,6 +1211,7 @@ func resolveFilterChain(input: FileHandle, prefix: Data, filePath: String?,
                               result: result, depth: depth + 1, names: names + [filter.name])
 }
 
+#if !EXCLUDE_LZFSE
 /// Whole-buffer LZFSE-family decode (nested layers / stdin / foreign streams).
 /// 整檔緩衝的 LZFSE 家族解碼（巢狀層、標準輸入或外來串流）。
 func wholeBufferLZFSEDecode(input: FileHandle, head: Data, filePath: String?,
@@ -1199,6 +1235,7 @@ func wholeBufferLZFSEDecode(input: FileHandle, head: Data, filePath: String?,
                                         chunkRaw: LZFSEv1.parallelChunkSize,
                                         inflight: inflight, output: output)
 }
+#endif
 
 // =================================================================
 // MARK: - Multi-core chunked compression sink
@@ -1232,7 +1269,7 @@ final class ParallelChunkSink {
     private let state = State()
 
     init(codec: TarCodec, output: FileHandle, inflight: Int,
-         chunkSize: Int = LZFSEv1.parallelChunkSize) {
+         chunkSize: Int = TAR_CHUNK_SIZE) {
         self.codec = codec
         self.output = output
         self.chunkSize = chunkSize
@@ -1862,7 +1899,7 @@ final class TarWriter {
             // autoreleasepool：FileHandle.read 回傳 autoreleased 緩衝區；
             // 不逐塊排空的話 RSS 會膨脹到接近整個語料大小。
             try autoreleasepool {
-                let want = Int(min(remaining, UInt64(LZFSEv1.parallelChunkSize)))
+                let want = Int(min(remaining, UInt64(TAR_CHUNK_SIZE)))
                 guard let part = try fh.read(upToCount: want), !part.isEmpty else {
                     throw TarError.io("short read on '\(path)' / 讀取 '\(path)' 時提前結束")
                 }
@@ -1925,7 +1962,7 @@ final class TarWriter {
                 // autoreleasepool：FileHandle.read 回傳 autoreleased 緩衝區；
                 // 不逐塊排空的話 RSS 會膨脹到接近整個語料大小。
                 try autoreleasepool {
-                    let want = Int(min(remaining, UInt64(LZFSEv1.parallelChunkSize)))
+                    let want = Int(min(remaining, UInt64(TAR_CHUNK_SIZE)))
                     guard let part = try fh.read(upToCount: want), !part.isEmpty else {
                         throw TarError.io("short read on '\(path)' / 讀取 '\(path)' 時提前結束")
                     }
@@ -2322,7 +2359,12 @@ final class TarReader {
 // =================================================================
 
 private func printTarUsage() {
-    print("""
+    // The usage is assembled from segments so the LZFSE-family lines can be
+    // excluded from the string literal at COMPILE time under --no-lzfse — a
+    // runtime filter would still leave "bvx3" text in the binary.
+    // 說明文字以分段組裝，讓 LZFSE 家族說明行在 --no-lzfse 時於「編譯期」自字串
+    // 常數排除——僅靠執行期過濾仍會把 "bvx3" 文字留在 binary 內。
+    let head = """
     Usage: swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...]
 
     Commands:
@@ -2352,6 +2394,9 @@ private func printTarUsage() {
 
     Codec (create only; reading auto-detects, see below):
     壓縮引擎（僅建立時指定；讀取自動偵測，見下）:
+    """
+#if !EXCLUDE_LZFSE
+    let lzfseCodecs = "\n" + """
       --other3-fast    : LZFSE other3, multi-core (standard bvx2, Apple-decodable)
                          等同 lzfse -algo other3 / 多核心，輸出標準 bvx2
       --other3-optimal : other3 + optimal parsing (= lzfse -algo other3 -optimal3)
@@ -2360,6 +2405,11 @@ private func printTarUsage() {
                          私有 bvx3 區塊／多核心（僅本工具可解）
       --bvx3-optimal   : bvx3 + optimal parsing (= lzfse -algo bvx3 -optimal)
                          bvx3 + 最優解析（壓縮率最高、最慢）
+    """
+#else
+    let lzfseCodecs = ""
+#endif
+    let externalCodecs = "\n" + """
       --gzip, -z       : zlib, one gzip member per 4MiB chunk (pigz-style .tar.gz)
                          每 4MiB 分塊一個 gzip 成員（pigz 式標準 .tar.gz）
       --bzip2, -j      : libbz2, one stream per chunk (pbzip2-style .tar.bz2)
@@ -2377,7 +2427,13 @@ private func printTarUsage() {
       uuencoded files (uu & base64)  / uuencode（uu 與 base64 變體）
       files with RPM wrapper         / RPM 外包裝（payload 通常為 cpio，用 --cat）
       gzip, bzip2, compress/LZW, lzma, lzip, xz, lz4, zstandard,
-      LZFSE family (bvx2/bvx3 multi-core parallel decode)
+    """
+#if !EXCLUDE_LZFSE
+    let lzfseReadFilter = "\n" + "      LZFSE family (bvx2/bvx3 multi-core parallel decode)"
+#else
+    let lzfseReadFilter = ""
+#endif
+    let tail = "\n" + """
       lzop: detected, needs liblzo2 (not bundled) / lzop：可偵測，需另裝 liblzo2
 
     Options:
@@ -2412,16 +2468,17 @@ private func printTarUsage() {
                         搜尋標準 tar 過程中找到／略過的候選項目
 
     Notes / 注意:
-      - Multi-core model is identical to lzfse2's runParallelEncode: 4MiB chunks
-        compressed concurrently, written in order. All standard codecs emit
-        concatenatable streams, so stock tools decode the output directly.
-        多核心模式與 lzfse2 的 runParallelEncode 相同：4MiB 分塊併發壓縮、按序
-        寫出；標準引擎輸出皆可串接，原生工具可直接解開。
+      - Multi-core model: 4MiB chunks compressed concurrently, written in order.
+        All standard codecs emit concatenatable streams, so stock tools decode
+        the output directly.
+        多核心模式：4MiB 分塊併發壓縮、按序寫出；標準引擎輸出皆可串接，原生
+        工具可直接解開。
       - C libraries are used the way libarchive uses them: zlib/libbz2/liblzma/
         libzstd/liblz4 provide the primitives; framing is assembled here.
         compress/LZW, uu and RPM are pure-Swift ports of libarchive filters.
         C 庫用法仿 libarchive：僅取壓縮原語，框架自組；LZW/uu/RPM 為純 Swift 移植。
-    """)
+    """
+    print(head + lzfseCodecs + externalCodecs + lzfseReadFilter + tail)
 }
 
 // =================================================================
@@ -2772,10 +2829,12 @@ struct SwiftTarMain {
         // codec flags / 壓縮引擎旗標
         var codec: TarCodec = .none
         var codecCount = 0
+#if !EXCLUDE_LZFSE
         if args.contains("--other3-fast")    { codec = .other3(optimal: false); codecCount += 1 }
         if args.contains("--other3-optimal") { codec = .other3(optimal: true);  codecCount += 1 }
         if args.contains("--bvx3-fast")      { codec = .bvx3(optimal: false);   codecCount += 1 }
         if args.contains("--bvx3-optimal")   { codec = .bvx3(optimal: true);    codecCount += 1 }
+#endif
         if args.contains("--gzip") || args.contains("-z")  { codec = .gzip;  codecCount += 1 }
         if args.contains("--bzip2") || args.contains("-j") { codec = .bzip2; codecCount += 1 }
         if args.contains("--xz") || args.contains("-J")    { codec = .xz;    codecCount += 1 }

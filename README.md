@@ -68,7 +68,7 @@ because they are development artifacts, not runtime dependencies.
 ## Usage
 
 ```
-swift_tar -c|-x|-t|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...]
+swift_tar -c|-x|-t|-r|-u|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...]
 ```
 
 | Command | Meaning |
@@ -76,6 +76,9 @@ swift_tar -c|-x|-t|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...
 | `-c`    | Create an archive |
 | `-x`    | Extract an archive |
 | `-t`    | List archive contents |
+| `-r`    | Append files to the end of an archive (uncompressed tar only) |
+| `-u`    | Append files newer than the archived copy, or not yet present (uncompressed tar only) |
+| `--delete` | Remove named members from an archive in place (uncompressed tar only; swift_tar-only — BSD tar has no `--delete`) |
 | `--cat` | Decompress the filter chain only, raw payload to stdout (≈ `bsdcat`) |
 
 `-f -` (or omitting `-f`) reads stdin / writes stdout, so swift_tar composes
@@ -101,6 +104,29 @@ extension. For example, `--gzip -f archive.zip` still writes a gzip-compressed
 tar stream (magic `1f 8b`), not a ZIP container. `unzip` cannot extract it;
 name gzip archives `.tgz` or `.tar.gz` and extract them with `tar` or
 `swift_tar`. Creating a true `.zip` archive is not currently supported.
+
+### Append / update / delete
+
+```sh
+release/swift_tar -r -f archive.tar -C src newfile      # append newfile
+release/swift_tar -u -f archive.tar -C src src/         # append only newer/absent members
+release/swift_tar --delete -f archive.tar old.txt dir/  # remove members in place
+```
+
+`-r`, `-u`, and `--delete` operate on **uncompressed** tar only — the codec flag
+is rejected and a compressed `-f` archive is refused. No mainstream tar (GNU,
+BSD/libarchive, star) supports these on compressed archives either, for the same
+reason: the trailing EOF lives inside the final compressed frame, so a cheap
+seek-and-append is impossible. All three need a seekable `-f` archive (not
+stdin/stdout).
+
+- `-r` (append): a missing archive is created (GNU tar semantics).
+- `-u` (update): appends a member only when it is newer than the archived copy
+  (or absent), never rewriting or deleting the old entry — extraction takes the
+  last copy.
+- `--delete`: rewrites the archive without the named members (matching entry by
+  name, directory names with or without a trailing `/`). This is a swift_tar
+  extension — BSD tar, the `tar` shipped with macOS, has no `--delete`.
 
 ### Extract / list (codec auto-detected)
 

@@ -62,7 +62,7 @@ CMake build tree 屬於開發產物，並非 runtime dependency，因此不放�
 ## 使用方式
 
 ```
-swift_tar -c|-x|-t|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...]
+swift_tar -c|-x|-t|-r|-u|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...]
 ```
 
 | 指令 | 意義 |
@@ -70,6 +70,9 @@ swift_tar -c|-x|-t|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...
 | `-c`    | 建立封存檔 |
 | `-x`    | 解出封存檔 |
 | `-t`    | 列出封存內容 |
+| `-r`    | 將檔案追加到封存檔尾端（僅未壓縮 tar） |
+| `-u`    | 僅追加比封存副本新、或尚不存在的檔案（僅未壓縮 tar） |
+| `--delete` | 就地從封存移除指定項目（僅未壓縮 tar；swift_tar 獨有——BSD tar 無 `--delete`） |
 | `--cat` | 僅解壓 filter 鏈、原始內容輸出至 stdout（等同 `bsdcat`） |
 
 `-f -`（或省略 `-f`）表示讀取標準輸入／寫至標準輸出，可組進管線。
@@ -92,6 +95,25 @@ tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # （或以管線�
 不是真正的 ZIP container，因此 `unzip` 無法解開。gzip 封存檔應命名為
 `.tgz` 或 `.tar.gz`，並使用 `tar` 或 `swift_tar` 解壓。目前尚未支援建立真正的
 `.zip` 封存檔。
+
+### 追加／更新／刪除
+
+```sh
+release/swift_tar -r -f archive.tar -C src newfile      # 追加 newfile
+release/swift_tar -u -f archive.tar -C src src/         # 僅追加較新／不存在的成員
+release/swift_tar --delete -f archive.tar old.txt dir/  # 就地移除成員
+```
+
+`-r`、`-u`、`--delete` 僅作用在**未壓縮** tar——帶 codec 旗標會被拒絕，壓縮的
+`-f` 封存也會被拒。主流 tar（GNU、BSD/libarchive、star）同樣都不支援對壓縮封存
+做這些操作，原因相同：尾端 EOF 封在最後一個壓縮 frame 內，無法廉價 seek 續接。
+三者都需要可定位的 `-f` 封存（不可用 stdin/stdout）。
+
+- `-r`（追加）：目標封存不存在時直接建立（GNU tar 語意）。
+- `-u`（更新）：僅在成員比封存副本新（或不存在）時追加，不改寫也不刪除舊項目——
+  解壓時取最後一份。
+- `--delete`：重寫封存、去除指定成員（依名稱比對，目錄名可帶或不帶結尾 `/`）。
+  這是 swift_tar 擴充功能——macOS 內建的 BSD tar 沒有 `--delete`。
 
 ### 解出／列出（格式自動偵測）
 

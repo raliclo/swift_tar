@@ -1641,10 +1641,26 @@ final class TarWriter {
     /// Hardlink tracking: (dev, ino) → archived name, for st_nlink > 1 files.
     /// 硬連結追蹤：(dev, ino) → 已入檔名稱，用於 st_nlink > 1 的檔案。
     private var seenInodes: [String: String] = [:]
+    /// Update (-u) baseline: archived name → mtime. When set, a non-directory
+    /// entry whose mtime is not newer than the archived copy is skipped
+    /// (GNU tar --update semantics). nil for plain append (-r) / create (-c).
+    /// 更新（-u）基準：檔內名稱 → mtime。設定後，mtime 未比封存副本新的非目錄
+    /// 項目會被略過（GNU tar --update 語意）。純追加（-r）／建立（-c）為 nil。
+    private let updateBaseline: [String: UInt64]?
 
-    init(sink: ParallelChunkSink, verbose: Bool) {
+    init(sink: ParallelChunkSink, verbose: Bool, updateBaseline: [String: UInt64]? = nil) {
         self.sink = sink
         self.verbose = verbose
+        self.updateBaseline = updateBaseline
+    }
+
+    /// -u gate: true ⟺ an archived copy exists and is at least as new, so this
+    /// entry should be skipped. Directories are never gated (we still descend).
+    /// -u 閘門：true ⟺ 已有同名且不比其舊的封存副本，故此項目應略過。目錄不受
+    /// 閘門限制（仍需向下遞迴尋找較新的子檔）。
+    private func skipForUpdate(_ name: String, _ mtime: UInt64) -> Bool {
+        guard let base = updateBaseline, let old = base[name] else { return false }
+        return mtime <= old
     }
 
     // ---- pax helpers / pax 輔助 ----
@@ -1798,6 +1814,10 @@ final class TarWriter {
         let uid: UInt32 = 0, gid: UInt32 = 0
         let mtime = st.mtime
 
+        // -u: skip non-directory entries that are not newer than the archived
+        // copy. / -u：略過不比封存副本新的非目錄項目。
+        if !st.isDir && skipForUpdate(name, mtime) { return }
+
         if st.isSymlink {
             if verbose { eprint("a \(name)") }
             let dest = (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) ?? ""
@@ -1860,6 +1880,10 @@ final class TarWriter {
         let mode = UInt32(st.st_mode & 0o7777)
         let uid = UInt32(st.st_uid), gid = UInt32(st.st_gid)
         let mtime = UInt64(max(0, st.st_mtimespec.tv_sec))
+
+        // -u: skip non-directory entries that are not newer than the archived
+        // copy. / -u：略過不比封存副本新的非目錄項目。
+        if (st.st_mode & S_IFMT) != S_IFDIR && skipForUpdate(name, mtime) { return }
 
         switch st.st_mode & S_IFMT {
         case S_IFDIR:
@@ -2299,12 +2323,23 @@ final class TarReader {
 
 private func printTarUsage() {
     print("""
-    Usage: swift_tar -c|-x|-t|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...]
+    Usage: swift_tar -c|-x|-t|-r|-u|--delete|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...]
 
     Commands:
       -c              : Create an archive / 建立封存檔
       -x              : Extract an archive / 解出封存檔
       -t              : List archive contents / 列出封存內容
+      -r              : Append files to the end of an archive (uncompressed
+                        tar only; needs a seekable -f archive)
+                        將檔案追加到封存檔尾端（僅未壓縮 tar，需可定位的 -f）
+      -u              : Append files that are newer than the archived copy
+                        (or not yet present); uncompressed tar only
+                        僅追加比封存副本新（或尚不存在）的檔案；僅未壓縮 tar
+      --delete        : Remove named members from an archive in place
+                        (swift_tar-only; BSD tar has no --delete); uncompressed
+                        tar only, needs a seekable -f archive
+                        就地從封存移除指定項目（swift_tar 獨有，BSD tar 無此
+                        功能）；僅未壓縮 tar，需可定位的 -f
       --cat           : Decompress filter chain only, raw payload to stdout
                         (bsdcat equivalent; use for RPM payloads etc.)
                         僅解壓 filter 鏈、原始內容輸出至 stdout（等同 bsdcat；
@@ -2718,8 +2753,11 @@ struct SwiftTarMain {
         let doExtract = args.contains("-x")
         let doList = args.contains("-t")
         let doCat = args.contains("--cat")
-        guard [doCreate, doExtract, doList, doCat].filter({ $0 }).count == 1 else {
-            eprint("Error: specify exactly one of -c, -x, -t, --cat. / 錯誤：請指定 -c、-x、-t、--cat 其中之一。")
+        let doAppend = args.contains("-r")
+        let doUpdate = args.contains("-u")
+        let doDelete = args.contains("--delete")
+        guard [doCreate, doExtract, doList, doCat, doAppend, doUpdate, doDelete].filter({ $0 }).count == 1 else {
+            eprint("Error: specify exactly one of -c, -x, -t, --cat, -r, -u, --delete. / 錯誤：請指定 -c、-x、-t、--cat、-r、-u、--delete 其中之一。")
             exit(1)
         }
 
@@ -2740,7 +2778,11 @@ struct SwiftTarMain {
             eprint("Error: at most one codec flag. / 錯誤：壓縮引擎旗標至多一個。")
             exit(1)
         }
-        if codecCount > 0 && !doCreate {
+        if codecCount > 0 && (doAppend || doUpdate) {
+            eprint("Error: -r/-u work on uncompressed tar only; drop the codec flag. / 錯誤：-r/-u 僅支援未壓縮 tar，請移除引擎旗標。")
+            exit(1)
+        }
+        if codecCount > 0 && !doCreate && !doAppend && !doUpdate {
             eprint("Note: codec flags only affect -c; reading auto-detects. / 提示：引擎旗標僅影響 -c，讀取自動偵測。")
         }
 
@@ -2800,6 +2842,11 @@ struct SwiftTarMain {
             if doCreate {
                 try runCreate(archivePath: archivePath, files: files, codec: codec,
                               changeDir: destDir, inflight: inflightN, verbose: verbose)
+            } else if doAppend || doUpdate {
+                try runAppend(archivePath: archivePath, files: files, update: doUpdate,
+                              changeDir: destDir, inflight: inflightN, verbose: verbose)
+            } else if doDelete {
+                try runDelete(archivePath: archivePath, names: files, verbose: verbose)
             } else if doCat {
                 try runCat(archivePath: archivePath, inflight: inflightN, verbose: verbose)
             } else {
@@ -2853,6 +2900,308 @@ struct SwiftTarMain {
             try writer.add(path: f)
         }
         try writer.finish()
+    }
+
+    // ---- append / update (-r / -u) / 追加、更新 ----
+
+    /// Report the codec name if `head` starts with a known compression magic,
+    /// else nil. Used to reject -r/-u on compressed archives (matching GNU/BSD
+    /// tar, which only append to uncompressed tar).
+    /// 若 `head` 以已知壓縮 magic 開頭則回傳 codec 名稱，否則 nil。用於拒絕對
+    /// 壓縮封存做 -r/-u（與 GNU/BSD tar 一致，僅未壓縮 tar 可追加）。
+    static func compressedMagicName(_ head: Data) -> String? {
+        let b = [UInt8](head)
+        func has(_ magic: [UInt8]) -> Bool { b.count >= magic.count && Array(b.prefix(magic.count)) == magic }
+        if has([0x1f, 0x8b]) { return "gzip" }
+        if has([0x28, 0xb5, 0x2f, 0xfd]) { return "zstd" }
+        if has([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]) { return "xz" }
+        if has([0x42, 0x5a, 0x68]) { return "bzip2" }          // "BZh"
+        if has([0x04, 0x22, 0x4d, 0x18]) { return "lz4" }
+        if has([0x4c, 0x5a, 0x49, 0x50]) { return "lzip" }     // "LZIP"
+        if has([0x1f, 0x9d]) { return "compress" }             // .Z
+        if has([0x62, 0x76, 0x78]) { return "lzfse" }          // "bvx" (bvx2/bvx3/...)
+        return nil
+    }
+
+    /// Scan an uncompressed tar to find (a) the logical EOF offset — the start
+    /// of the first zero-block terminator — and (b) an archived name → mtime
+    /// baseline for -u. Only 512-byte headers are read; entry data is skipped
+    /// by seeking, so this is cheap on large archives. Extended headers
+    /// (pax x/g, GNU L/K) are skipped by size like any entry, so the EOF offset
+    /// stays correct even though their long names are not resolved into the
+    /// baseline (an unresolved long-name entry simply gets re-added by -u).
+    /// 掃描未壓縮 tar，取得 (a) 邏輯 EOF 位移——第一個零塊結尾的起點——與 (b)
+    /// 供 -u 用的「檔內名稱 → mtime」基準。只讀 512-byte 標頭，資料以 seek 跳過，
+    /// 故對大型封存很省。擴充標頭（pax x/g、GNU L/K）與一般項目一樣依 size 跳過，
+    /// 因此即使未解析其長檔名，EOF 位移仍正確（未解析的長檔名項目只會被 -u 重新追加）。
+    static func scanTarEntries(path: String) throws -> (eofOffset: UInt64, baseline: [String: UInt64]) {
+        guard let fh = FileHandle(forReadingAtPath: path) else {
+            throw TarError.io("cannot open '\(path)' / 無法開啟 '\(path)'")
+        }
+        defer { try? fh.close() }
+
+        let head = (try? fh.read(upToCount: 8)) ?? Data()
+        if let codecName = compressedMagicName(head) {
+            throw TarError.io("cannot append to a \(codecName)-compressed archive; -r/-u work on uncompressed tar only / 無法對 \(codecName) 壓縮封存做 -r/-u；僅支援未壓縮 tar")
+        }
+
+        var offset: UInt64 = 0
+        var baseline: [String: UInt64] = [:]
+        while true {
+            try fh.seek(toOffset: offset)
+            guard let block = try fh.read(upToCount: TAR_BLOCK), block.count == TAR_BLOCK else {
+                break   // no zero-block terminator; append at current end / 無零塊結尾，於目前末端接續
+            }
+            if block.allSatisfy({ $0 == 0 }) { break }   // logical EOF / 邏輯 EOF
+            let h = [UInt8](block)
+            func str(_ range: Range<Int>) -> String {
+                let slice = h[range]
+                let end = slice.firstIndex(of: 0) ?? range.upperBound
+                return String(decoding: slice[range.lowerBound..<end], as: UTF8.self)
+            }
+            var name = str(0..<100)
+            let prefix = str(345..<500)
+            if !prefix.isEmpty { name = prefix + "/" + name }
+            let size = parseTarNumber(h[124..<136])
+            let mtime = parseTarNumber(h[136..<148])
+            let typeflag = h[156]
+            if typeflag != UInt8(ascii: "x") && typeflag != UInt8(ascii: "g")
+                && typeflag != UInt8(ascii: "L") && typeflag != UInt8(ascii: "K") {
+                // Directory names are stored with a trailing "/"; strip it so the
+                // key matches TarWriter.archiveName for dirs (though dirs are not
+                // gated by -u). / 目錄名以 "/" 結尾，去除以對齊 archiveName。
+                var key = name
+                if key.hasSuffix("/") { key.removeLast() }
+                baseline[key] = mtime
+            }
+            let dataBlocks = (size + UInt64(TAR_BLOCK) - 1) / UInt64(TAR_BLOCK) * UInt64(TAR_BLOCK)
+            offset += UInt64(TAR_BLOCK) + dataBlocks
+        }
+        return (offset, baseline)
+    }
+
+    static func runAppend(archivePath: String, files: [String], update: Bool,
+                          changeDir: String, inflight: Int, verbose: Bool) throws {
+        guard !files.isEmpty else {
+            throw TarError.io("no files to append / 未指定要追加的檔案")
+        }
+        guard archivePath != "-" else {
+            throw TarError.io("-r/-u need a seekable -f archive (not stdin/stdout) / -r/-u 需可定位的 -f 封存檔（不可用 stdin/stdout）")
+        }
+        let fm = FileManager.default
+        // Missing archive: create it, matching GNU tar's -r/-u semantics.
+        // 封存檔不存在：直接建立，與 GNU tar 的 -r/-u 語意一致。
+        if !fm.fileExists(atPath: archivePath) {
+            try runCreate(archivePath: archivePath, files: files, codec: .none,
+                          changeDir: changeDir, inflight: inflight, verbose: verbose)
+            return
+        }
+
+        let (eofOffset, baseline) = try scanTarEntries(path: archivePath)
+
+        guard let output = FileHandle(forWritingAtPath: archivePath) else {
+            throw TarError.io("cannot open '\(archivePath)' for append / 無法開啟 '\(archivePath)' 以追加")
+        }
+        defer { try? output.close() }
+        try output.truncate(atOffset: eofOffset)   // drop the old zero-block terminator / 移除舊的零塊結尾
+        try output.seek(toOffset: eofOffset)
+
+        // Apply create-side -C after opening the archive, same as runCreate.
+        // 開啟封存後再套用建立端 -C，與 runCreate 一致。
+        let originalDir = fm.currentDirectoryPath
+        if !changeDir.isEmpty && !fm.changeCurrentDirectoryPath(changeDir) {
+            throw TarError.io("cannot chdir to '\(changeDir)' / 無法切換至 '\(changeDir)'")
+        }
+        defer {
+            if !changeDir.isEmpty { _ = fm.changeCurrentDirectoryPath(originalDir) }
+        }
+
+        let sink = ParallelChunkSink(codec: .none, output: output, inflight: inflight)
+        let writer = TarWriter(sink: sink, verbose: verbose,
+                               updateBaseline: update ? baseline : nil)
+        for f in files {
+            try writer.add(path: f)
+        }
+        try writer.finish()
+    }
+
+    // ---- delete (swift_tar-only; BSD tar has no --delete) / 刪除（swift_tar 獨有，BSD tar 無此功能）----
+
+    /// Remove named members from an uncompressed tar in place (≈ GNU tar
+    /// --delete, which BSD tar lacks). Entries are streamed to a temp file:
+    /// kept ones (with any preceding pax/GNU extended headers) are copied
+    /// byte-for-byte, deleted ones — and their extended headers — are dropped.
+    /// Large entry data is skipped by seeking, never buffered. The temp file
+    /// then atomically replaces the original.
+    /// 就地從未壓縮 tar 移除指定項目（≈ GNU tar --delete，BSD tar 沒有）。項目
+    /// 串流至暫存檔：保留者（含其前置 pax/GNU 擴充標頭）逐位元組複製，刪除者
+    /// （連同其擴充標頭）丟棄。大型項目資料以 seek 略過、不進記憶體。最後以暫存檔
+    /// 原子替換原檔。
+    static func runDelete(archivePath: String, names: [String], verbose: Bool) throws {
+        guard !names.isEmpty else {
+            throw TarError.io("no members to delete / 未指定要刪除的項目")
+        }
+        guard archivePath != "-" else {
+            throw TarError.io("--delete needs a seekable -f archive (not stdin/stdout) / --delete 需可定位的 -f 封存檔（不可用 stdin/stdout）")
+        }
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: archivePath) else {
+            throw TarError.io("cannot open '\(archivePath)' / 無法開啟 '\(archivePath)'")
+        }
+        guard let input = FileHandle(forReadingAtPath: archivePath) else {
+            throw TarError.io("cannot open '\(archivePath)' / 無法開啟 '\(archivePath)'")
+        }
+        defer { try? input.close() }
+
+        let head = (try? input.read(upToCount: 8)) ?? Data()
+        if let codecName = compressedMagicName(head) {
+            throw TarError.io("cannot delete from a \(codecName)-compressed archive; --delete works on uncompressed tar only / 無法從 \(codecName) 壓縮封存刪除；--delete 僅支援未壓縮 tar")
+        }
+        try input.seek(toOffset: 0)
+
+        func norm(_ s: String) -> String {
+            var t = s
+            while t.hasSuffix("/") { t.removeLast() }
+            return t
+        }
+        let wanted = Set(names.map { norm($0) })
+        var matched = Set<String>()
+
+        let tmpPath = archivePath + ".swifttar-del.tmp"
+        _ = fm.createFile(atPath: tmpPath, contents: nil)
+        guard let output = FileHandle(forWritingAtPath: tmpPath) else {
+            throw TarError.io("cannot create temp '\(tmpPath)' / 無法建立暫存 '\(tmpPath)'")
+        }
+        var outputClosed = false
+        func closeOutput() { if !outputClosed { try? output.close(); outputClosed = true } }
+        // On any thrown error, drop the half-written temp file.
+        // 若中途拋錯，清掉寫到一半的暫存檔。
+        defer { closeOutput(); try? fm.removeItem(atPath: tmpPath) }
+
+        func readFull(_ n: Int) throws -> Data? {
+            var buf = Data(); buf.reserveCapacity(n)
+            while buf.count < n {
+                guard let part = try input.read(upToCount: n - buf.count), !part.isEmpty else {
+                    return buf.isEmpty ? nil : buf
+                }
+                buf.append(part)
+            }
+            return buf
+        }
+        func str(_ h: [UInt8], _ range: Range<Int>) -> String {
+            let slice = h[range]
+            let end = slice.firstIndex(of: 0) ?? range.upperBound
+            return String(decoding: slice[range.lowerBound..<end], as: UTF8.self)
+        }
+
+        var pending = Data()          // buffered pre-headers (pax x, GNU L/K) for the next entry
+        var pendingName: String? = nil // effective name override from those pre-headers
+        var removed = 0
+
+        entries: while true {
+            guard let block = try readFull(TAR_BLOCK), block.count == TAR_BLOCK else { break }
+            if block.allSatisfy({ $0 == 0 }) { break }   // logical EOF / 邏輯 EOF
+            let h = [UInt8](block)
+            let size = parseTarNumber(h[124..<136])
+            let typeflag = h[156]
+            let dataLen = Int((size + UInt64(TAR_BLOCK) - 1) / UInt64(TAR_BLOCK)) * TAR_BLOCK
+
+            switch typeflag {
+            case UInt8(ascii: "x"), UInt8(ascii: "L"), UInt8(ascii: "K"):
+                // Per-entry extended header: buffer header + data, decode name.
+                // 逐項目擴充標頭：緩衝標頭＋資料，並解出名稱。
+                guard let data = try readFull(dataLen), data.count == dataLen else {
+                    throw TarError.format("truncated extended header / 擴充標頭不完整")
+                }
+                if typeflag == UInt8(ascii: "x") {
+                    let records = data.prefix(Int(size))
+                    var pos = records.startIndex
+                    while pos < records.endIndex {
+                        guard let sp = records[pos...].firstIndex(of: UInt8(ascii: " ")),
+                              let len = Int(String(decoding: records[pos..<sp], as: UTF8.self)),
+                              len > 0, pos + len <= records.endIndex else { break }
+                        let kv = records[(sp + 1)..<(pos + len)]
+                        if let eq = kv.firstIndex(of: UInt8(ascii: "=")) {
+                            let key = String(decoding: kv[kv.startIndex..<eq], as: UTF8.self)
+                            if key == "path" {
+                                var v = kv[(eq + 1)...]
+                                if v.last == UInt8(ascii: "\n") { v = v.dropLast() }
+                                pendingName = String(decoding: v, as: UTF8.self)
+                            }
+                        }
+                        pos += len
+                    }
+                } else if typeflag == UInt8(ascii: "L") {   // GNU long name
+                    let raw = data.prefix(Int(size))
+                    let end = raw.firstIndex(of: 0) ?? raw.endIndex
+                    pendingName = String(decoding: raw[raw.startIndex..<end], as: UTF8.self)
+                }
+                pending.append(block)
+                pending.append(data)
+                continue
+
+            case UInt8(ascii: "g"):
+                // Global pax header: applies to all following entries, always keep.
+                // 全域 pax 標頭：作用於後續所有項目，一律保留。
+                guard let data = try readFull(dataLen), data.count == dataLen else {
+                    throw TarError.format("truncated global header / 全域標頭不完整")
+                }
+                try output.write(contentsOf: block)
+                try output.write(contentsOf: data)
+                continue
+
+            default:
+                var name = str(h, 0..<100)
+                let prefix = str(h, 345..<500)
+                if !prefix.isEmpty { name = prefix + "/" + name }
+                let effName = pendingName ?? name
+                if wanted.contains(norm(effName)) {
+                    matched.insert(norm(effName))
+                    removed += 1
+                    if verbose { eprint("d \(effName)") }
+                    // drop pending pre-headers + this entry's data / 丟棄前置標頭與本項目資料
+                    pending.removeAll(keepingCapacity: true)
+                    pendingName = nil
+                    try input.seek(toOffset: try input.offset() + UInt64(dataLen))
+                } else {
+                    // keep: write pre-headers + header, then stream the data
+                    // 保留：寫出前置標頭與標頭，再串流資料
+                    if !pending.isEmpty { try output.write(contentsOf: pending) }
+                    pending.removeAll(keepingCapacity: true)
+                    pendingName = nil
+                    try output.write(contentsOf: block)
+                    var remaining = dataLen
+                    while remaining > 0 {
+                        let want = min(remaining, DECODE_CHUNK)
+                        guard let part = try readFull(want), part.count == want else {
+                            throw TarError.format("truncated file data / 檔案資料不完整")
+                        }
+                        try output.write(contentsOf: part)
+                        remaining -= want
+                    }
+                }
+            }
+        }
+        // Terminate with two zero blocks (standard tar EOF).
+        // 以兩個全零區塊作結尾（標準 tar EOF）。
+        try output.write(contentsOf: Data(count: TAR_BLOCK * 2))
+        closeOutput()
+        try? input.close()
+
+        for miss in wanted.subtracting(matched).sorted() {
+            eprint("swift_tar: '\(miss)': not found in archive / 封存中找不到 '\(miss)'")
+        }
+        guard removed > 0 else {
+            // Nothing removed: leave the original untouched, discard temp.
+            // 未刪除任何項目：原檔不動，丟棄暫存。
+            try? fm.removeItem(atPath: tmpPath)
+            throw TarError.io("no matching members deleted / 未刪除任何符合的項目")
+        }
+        // Atomically replace the original with the rewritten archive.
+        // 以重寫後的封存原子替換原檔。
+        _ = try? fm.removeItem(atPath: archivePath)
+        try fm.moveItem(atPath: tmpPath, toPath: archivePath)
+        if verbose { eprint("swift_tar: deleted \(removed) member(s) / 已刪除 \(removed) 個項目") }
     }
 
     // ---- shared input opening / 共用輸入開啟 ----

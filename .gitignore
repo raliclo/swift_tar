@@ -24,3 +24,6 @@ next-env.d.ts
 .claude
 swift_tar-build*
 tmp_review_codecs
+
+# compiled binaries — never commit post-compile artifacts
+/release/

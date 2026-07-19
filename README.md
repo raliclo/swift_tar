@@ -79,6 +79,7 @@ swift_tar -c|-x|-t|-r|-u|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [fi
 | `-r`    | Append files to the end of an archive (uncompressed tar only) |
 | `-u`    | Append files newer than the archived copy, or not yet present (uncompressed tar only) |
 | `--delete` | Remove named members from an archive in place (uncompressed tar only; swift_tar-only — BSD tar has no `--delete`) |
+| `--identify` | Detect the compression format by magic bytes and print the filter chain (e.g. `gzip → tar`), then stop — no extraction. Works on any filename |
 | `--cat` | Decompress the filter chain only, raw payload to stdout (≈ `bsdcat`) |
 
 `-f -` (or omitting `-f`) reads stdin / writes stdout, so swift_tar composes
@@ -135,6 +136,20 @@ release/swift_tar -t -f src.tar.gz
 release/swift_tar -x -f src.tar.bvx3 -C /tmp/out
 release/swift_tar --cat -f package.rpm > payload.cpio          # strip RPM wrapper
 ```
+
+### Identify an unknown file
+
+Reading never looks at the extension — the codec is auto-detected by magic
+bytes. `--identify` exposes that detection as a `file`-like report without
+extracting anything, and it also reads from stdin:
+
+```sh
+release/swift_tar --identify -f mystery.bin     # e.g. "mystery.bin: gzip → tar"
+cat mystery.bin | release/swift_tar --identify  # "<stdin>: gzip → tar"
+```
+
+On a normal read, `-v` prints the same detection (`compression format: gzip`,
+or `none` when the archive is uncompressed).
 
 ## Codec flags (create only)
 

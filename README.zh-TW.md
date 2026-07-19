@@ -73,6 +73,7 @@ swift_tar -c|-x|-t|-r|-u|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [fi
 | `-r`    | 將檔案追加到封存檔尾端（僅未壓縮 tar） |
 | `-u`    | 僅追加比封存副本新、或尚不存在的檔案（僅未壓縮 tar） |
 | `--delete` | 就地從封存移除指定項目（僅未壓縮 tar；swift_tar 獨有——BSD tar 無 `--delete`） |
+| `--identify` | 依 magic 位元組偵測壓縮格式並印出 filter 鏈（例如 `gzip → tar`）後即停，不解壓；任何檔名皆可 |
 | `--cat` | 僅解壓 filter 鏈、原始內容輸出至 stdout（等同 `bsdcat`） |
 
 `-f -`（或省略 `-f`）表示讀取標準輸入／寫至標準輸出，可組進管線。
@@ -122,6 +123,19 @@ release/swift_tar -t -f src.tar.gz
 release/swift_tar -x -f src.tar.bvx3 -C /tmp/out
 release/swift_tar --cat -f package.rpm > payload.cpio          # 剝除 RPM 外包裝
 ```
+
+### 辨識未知檔案
+
+讀取從不看副檔名——codec 由 magic 位元組自動偵測。`--identify` 把這個偵測以類似
+`file` 指令的形式回報、但不解壓任何內容，也可從 stdin 讀取：
+
+```sh
+release/swift_tar --identify -f mystery.bin     # 例如「mystery.bin: gzip → tar」
+cat mystery.bin | release/swift_tar --identify  # 「<stdin>: gzip → tar」
+```
+
+一般讀取時，`-v` 會印出相同的偵測結果（`compression format: gzip`，未壓縮則印
+`none`）。
 
 ## 壓縮引擎旗標（僅建立時）
 

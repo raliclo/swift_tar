@@ -2323,7 +2323,7 @@ final class TarReader {
 
 private func printTarUsage() {
     print("""
-    Usage: swift_tar -c|-x|-t|-r|-u|--delete|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...]
+    Usage: swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...]
 
     Commands:
       -c              : Create an archive / 建立封存檔
@@ -2340,6 +2340,11 @@ private func printTarUsage() {
                         tar only, needs a seekable -f archive
                         就地從封存移除指定項目（swift_tar 獨有，BSD tar 無此
                         功能）；僅未壓縮 tar，需可定位的 -f
+      --identify      : Detect the compression format by magic bytes and print
+                        the filter chain (e.g. "gzip → tar"), then stop — no
+                        extraction. Works on any filename; codec is auto-detected.
+                        依 magic 位元組偵測壓縮格式並印出 filter 鏈（例如
+                        「gzip → tar」）後即停，不解壓。任何檔名皆可，格式自動偵測。
       --cat           : Decompress filter chain only, raw payload to stdout
                         (bsdcat equivalent; use for RPM payloads etc.)
                         僅解壓 filter 鏈、原始內容輸出至 stdout（等同 bsdcat；
@@ -2382,7 +2387,9 @@ private func printTarUsage() {
                         建立封存前切換目錄，或解出至 <dir>
       -n <N>          : In-flight parallel chunks (default 2×cores)
                         平行在途分塊數（預設 2×核心數）
-      -v              : Verbose / 顯示處理中的項目
+      -v              : Verbose; on read also prints the detected compression
+                        format ("none" if uncompressed)
+                        詳細輸出；讀取時另印出偵測到的壓縮格式（未壓縮則印 none）
       --touch         : (-x only) do not restore archive mtimes; extracted
                         entries keep the current time (GNU tar semantics)
                         （僅 -x）不還原封存的 mtime，解出項目維持目前時間
@@ -2756,8 +2763,9 @@ struct SwiftTarMain {
         let doAppend = args.contains("-r")
         let doUpdate = args.contains("-u")
         let doDelete = args.contains("--delete")
-        guard [doCreate, doExtract, doList, doCat, doAppend, doUpdate, doDelete].filter({ $0 }).count == 1 else {
-            eprint("Error: specify exactly one of -c, -x, -t, --cat, -r, -u, --delete. / 錯誤：請指定 -c、-x、-t、--cat、-r、-u、--delete 其中之一。")
+        let doIdentify = args.contains("--identify")
+        guard [doCreate, doExtract, doList, doCat, doAppend, doUpdate, doDelete, doIdentify].filter({ $0 }).count == 1 else {
+            eprint("Error: specify exactly one of -c, -x, -t, --cat, -r, -u, --delete, --identify. / 錯誤：請指定 -c、-x、-t、--cat、-r、-u、--delete、--identify 其中之一。")
             exit(1)
         }
 
@@ -2847,6 +2855,8 @@ struct SwiftTarMain {
                               changeDir: destDir, inflight: inflightN, verbose: verbose)
             } else if doDelete {
                 try runDelete(archivePath: archivePath, names: files, verbose: verbose)
+            } else if doIdentify {
+                try runIdentify(archivePath: archivePath, inflight: inflightN)
             } else if doCat {
                 try runCat(archivePath: archivePath, inflight: inflightN, verbose: verbose)
             } else {
@@ -3228,8 +3238,9 @@ struct SwiftTarMain {
         let stream = resolveFilterChain(input: input, prefix: Data(),
                                         filePath: archivePath, inflight: inflight,
                                         group: group, result: result)
-        if verbose && !stream.names.isEmpty {
-            eprint("swift_tar: filter chain: \(stream.names.joined(separator: " → ")) / 已套用 filter 鏈")
+        if verbose {
+            let fmt = stream.names.isEmpty ? "none" : stream.names.joined(separator: " → ")
+            eprint("swift_tar: compression format / 壓縮格式：\(fmt)")
         }
         guard result.ok else {
             throw TarError.io(result.message ?? "filter chain failed / filter 鏈失敗")
@@ -3255,8 +3266,9 @@ struct SwiftTarMain {
         let stream = resolveFilterChain(input: input, prefix: Data(),
                                         filePath: archivePath, inflight: inflight,
                                         group: group, result: result)
-        if verbose && !stream.names.isEmpty {
-            eprint("swift_tar: filter chain: \(stream.names.joined(separator: " → ")) / 已套用 filter 鏈")
+        if verbose {
+            let fmt = stream.names.isEmpty ? "none" : stream.names.joined(separator: " → ")
+            eprint("swift_tar: compression format / 壓縮格式：\(fmt)")
         }
         guard result.ok else {
             throw TarError.io(result.message ?? "filter chain failed / filter 鏈失敗")
@@ -3270,5 +3282,60 @@ struct SwiftTarMain {
         guard result.ok else {
             throw TarError.io(result.message ?? "decompression failed / 解壓失敗")
         }
+    }
+
+    // ---- identify (magic detection only, like `file`) / 辨識（只做 magic 偵測，類似 file）----
+
+    /// Detect the compression/filter chain of `archivePath` by magic bytes,
+    /// classify the decoded payload as tar or raw, print the result and stop —
+    /// no extraction, nothing written to disk. Reuses the same libarchive-style
+    /// bidder chain the read path uses, so detection is identical. Only enough
+    /// bytes are read to identify (one tar block past the last filter); the
+    /// decoder threads unwind on process exit.
+    /// 依 magic 位元組偵測 `archivePath` 的壓縮／filter 鏈，判定解出的 payload 是 tar
+    /// 或原始內容，印出後即停——不解壓、不落地。重用讀取端相同的 libarchive bidder
+    /// 鏈，偵測結果一致。只讀到足以辨識（最後一層 filter 後一個 tar 區塊）；解碼
+    /// 執行緒在行程結束時收束。
+    static func runIdentify(archivePath: String, inflight: Int) throws {
+        // Deliberately do not close `input`: the decoder threads may still be
+        // reading it, and this is a one-shot command — the OS reclaims the fd
+        // on exit. / 刻意不關閉 `input`：解碼執行緒可能仍在讀，且這是一次性指令，
+        // fd 由行程結束時回收。
+        let input = try openInput(archivePath)
+        let group = DispatchGroup()
+        let result = ChainResult()
+        let stream = resolveFilterChain(input: input, prefix: Data(),
+                                        filePath: archivePath, inflight: inflight,
+                                        group: group, result: result)
+        let label = archivePath == "-" ? "<stdin>" : archivePath
+
+        // A bidder claimed the stream but it could not be decoded (e.g. lzop
+        // without liblzo2): report the detected filter without probing further.
+        // 有 bidder 認領但無法解碼（例如缺 liblzo2 的 lzop）：只回報偵測到的 filter。
+        guard result.ok else {
+            let chain = stream.names.isEmpty ? "unknown" : stream.names.joined(separator: " → ")
+            print("\(label): \(chain) — \(result.message ?? "cannot decode / 無法解碼")")
+            return
+        }
+
+        // Peek the decoded payload's first tar block to classify tar vs raw.
+        // 探解出 payload 的第一個 tar 區塊，判定 tar 或原始內容。
+        var head = Data(stream.prefix)
+        while head.count < TAR_BLOCK,
+              let part = try? stream.handle.read(upToCount: TAR_BLOCK - head.count), !part.isEmpty {
+            head.append(part)
+        }
+        let h = [UInt8](head)
+        let isTar = h.count >= 262 && Array(h[257..<262]) == Array("ustar".utf8)
+
+        var chain = stream.names
+        if isTar {
+            chain.append("tar")
+        } else if stream.names.isEmpty {
+            chain.append("unrecognized (not tar) / 無法辨識（非 tar）")
+        } else {
+            chain.append("raw payload / 原始內容")
+        }
+        print("\(label): \(chain.joined(separator: " → "))")
     }
 }

@@ -1331,6 +1331,407 @@ enum TarError: LocalizedError {
     }
 }
 
+// =================================================================
+// MARK: - RGB1 raw image container / RGB1 原始影像容器
+// =================================================================
+
+enum RGB1Error: LocalizedError {
+    case badDimensions
+    case badGeo
+    case badMagic
+    case badText(String)
+    case shortHeader(Int)
+    case payloadSizeMismatch(expected: Int, actual: Int)
+    case missingArgument(String)
+    case io(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .badDimensions:
+            return "RGB1 width and height must be positive UInt32 values. / RGB1 寬高必須是正 UInt32。"
+        case .badGeo:
+            return "RGB1 geo fields are out of range. / RGB1 地理欄位超出範圍。"
+        case .badMagic:
+            return "Not an RGB1 file. / 不是 RGB1 檔案。"
+        case .badText(let field):
+            return "RGB1 text field is invalid: \(field). / RGB1 文字欄位無效：\(field)。"
+        case .shortHeader(let actual):
+            return "RGB1 header is incomplete (\(actual) of 862 bytes). / RGB1 標頭不完整（\(actual) / 862 bytes）。"
+        case .payloadSizeMismatch(let expected, let actual):
+            return "RGB1 payload size mismatch: expected \(expected), got \(actual). / RGB1 payload 大小不符：預期 \(expected)，實際 \(actual)。"
+        case .missingArgument(let name):
+            return "Missing RGB1 argument \(name). / 缺少 RGB1 參數 \(name)。"
+        case .io(let message):
+            return message
+        }
+    }
+}
+
+struct RGB1Image {
+    static let magic = Data([0x52, 0x47, 0x42, 0x31]) // "RGB1"
+    static let baseHeaderSize = 32
+    // Fixed binary header fields: raw ASCII byte arrays, not JSON/XML/CSV.
+    // 固定二進位 header 欄位：raw ASCII byte array，不是 JSON/XML/CSV。
+    static let titleFieldSize = 64
+    static let countryFieldSize = 512
+    static let creatorEmailFieldSize = 254
+    static let rightFieldSize = 4
+    static let createdTimestampFieldSize = 8
+    static let timezoneOffsetFieldSize = 2
+    static let taiwanTimezoneOffsetMinutes: Int16 = 480
+    static let headerSize = baseHeaderSize + titleFieldSize + countryFieldSize
+        + creatorEmailFieldSize + rightFieldSize + createdTimestampFieldSize
+        + timezoneOffsetFieldSize
+    static let bytesPerPixel = 3
+    static let geoPresentFlag: UInt32 = 1
+    static let wgs84EllipsoidDatum: UInt32 = 1
+
+    let width: UInt32
+    let height: UInt32
+    let latitudeE7: Int32
+    let longitudeE7: Int32
+    let heightMillimeters: Int32
+    let geoDatumCode: UInt32
+    let title: String
+    let country: String
+    let creatorEmail: String
+    let right: String
+    let createdUnixMilliseconds: Int64
+    let timezoneOffsetMinutes: Int16
+    let payload: Data
+
+    init(
+        width: UInt32,
+        height: UInt32,
+        latitudeE7: Int32,
+        longitudeE7: Int32,
+        heightMillimeters: Int32,
+        geoDatumCode: UInt32 = RGB1Image.wgs84EllipsoidDatum,
+        title: String,
+        country: String,
+        creatorEmail: String,
+        right: String,
+        createdUnixMilliseconds: Int64,
+        timezoneOffsetMinutes: Int16 = RGB1Image.taiwanTimezoneOffsetMinutes,
+        payload: Data
+    ) throws {
+        guard width > 0, height > 0 else { throw RGB1Error.badDimensions }
+        guard latitudeE7 >= -900_000_000,
+              latitudeE7 <= 900_000_000,
+              longitudeE7 >= -1_800_000_000,
+              longitudeE7 <= 1_800_000_000
+        else {
+            throw RGB1Error.badGeo
+        }
+        let expected = try Self.payloadByteCount(width: width, height: height)
+        guard payload.count == expected else {
+            throw RGB1Error.payloadSizeMismatch(expected: expected, actual: payload.count)
+        }
+        try Self.validateASCII(title, field: "title", maxBytesExclusive: titleFieldSize)
+        try Self.validateASCII(country, field: "country", maxBytesExclusive: countryFieldSize)
+        try Self.validateEmail(creatorEmail)
+        try Self.validateRight(right)
+        self.width = width
+        self.height = height
+        self.latitudeE7 = latitudeE7
+        self.longitudeE7 = longitudeE7
+        self.heightMillimeters = heightMillimeters
+        self.geoDatumCode = geoDatumCode
+        self.title = title
+        self.country = country
+        self.creatorEmail = creatorEmail
+        self.right = right
+        self.createdUnixMilliseconds = createdUnixMilliseconds
+        self.timezoneOffsetMinutes = timezoneOffsetMinutes
+        self.payload = payload
+    }
+
+    init(fileData: Data) throws {
+        guard fileData.count >= Self.headerSize else {
+            throw RGB1Error.shortHeader(fileData.count)
+        }
+        guard Data(fileData.prefix(4)) == Self.magic else { throw RGB1Error.badMagic }
+
+        let width = Self.readUInt32BE(fileData, offset: 4)
+        let height = Self.readUInt32BE(fileData, offset: 8)
+        let flags = Self.readUInt32BE(fileData, offset: 12)
+        guard flags & Self.geoPresentFlag != 0 else { throw RGB1Error.badGeo }
+        let latitudeE7 = Self.readInt32BE(fileData, offset: 16)
+        let longitudeE7 = Self.readInt32BE(fileData, offset: 20)
+        let heightMillimeters = Self.readInt32BE(fileData, offset: 24)
+        let geoDatumCode = Self.readUInt32BE(fileData, offset: 28)
+        let title = try Self.readFixedASCII(fileData, offset: 32, size: Self.titleFieldSize)
+        let country = try Self.readFixedASCII(
+            fileData,
+            offset: 32 + Self.titleFieldSize,
+            size: Self.countryFieldSize
+        )
+        let creatorEmail = try Self.readFixedASCII(
+            fileData,
+            offset: 32 + Self.titleFieldSize + Self.countryFieldSize,
+            size: Self.creatorEmailFieldSize
+        )
+        let right = try Self.readFixedASCII(
+            fileData,
+            offset: 32 + Self.titleFieldSize + Self.countryFieldSize + Self.creatorEmailFieldSize,
+            size: Self.rightFieldSize
+        )
+        let createdUnixMilliseconds = Self.readInt64BE(
+            fileData,
+            offset: 32 + Self.titleFieldSize + Self.countryFieldSize
+                + Self.creatorEmailFieldSize + Self.rightFieldSize
+        )
+        let timezoneOffsetMinutes = Self.readInt16BE(
+            fileData,
+            offset: 32 + Self.titleFieldSize + Self.countryFieldSize
+                + Self.creatorEmailFieldSize + Self.rightFieldSize
+                + Self.createdTimestampFieldSize
+        )
+        let payload = fileData.dropFirst(Self.headerSize)
+        try self.init(
+            width: width,
+            height: height,
+            latitudeE7: latitudeE7,
+            longitudeE7: longitudeE7,
+            heightMillimeters: heightMillimeters,
+            geoDatumCode: geoDatumCode,
+            title: title,
+            country: country,
+            creatorEmail: creatorEmail,
+            right: right,
+            createdUnixMilliseconds: createdUnixMilliseconds,
+            timezoneOffsetMinutes: timezoneOffsetMinutes,
+            payload: Data(payload)
+        )
+    }
+
+    var fileData: Data {
+        var out = Data()
+        out.reserveCapacity(Self.headerSize + payload.count)
+        out.append(Self.magic)
+        Self.appendUInt32BE(width, to: &out)
+        Self.appendUInt32BE(height, to: &out)
+        Self.appendUInt32BE(Self.geoPresentFlag, to: &out)
+        Self.appendInt32BE(latitudeE7, to: &out)
+        Self.appendInt32BE(longitudeE7, to: &out)
+        Self.appendInt32BE(heightMillimeters, to: &out)
+        Self.appendUInt32BE(geoDatumCode, to: &out)
+        Self.appendFixedASCII(title, size: Self.titleFieldSize, to: &out)
+        Self.appendFixedASCII(country, size: Self.countryFieldSize, to: &out)
+        Self.appendFixedASCII(creatorEmail, size: Self.creatorEmailFieldSize, to: &out)
+        Self.appendFixedASCII(right, size: Self.rightFieldSize, to: &out)
+        Self.appendInt64BE(createdUnixMilliseconds, to: &out)
+        Self.appendInt16BE(timezoneOffsetMinutes, to: &out)
+        out.append(payload)
+        return out
+    }
+
+    static func payloadByteCount(width: UInt32, height: UInt32) throws -> Int {
+        let pixels = UInt64(width) * UInt64(height)
+        let bytes = pixels * UInt64(bytesPerPixel)
+        guard bytes <= UInt64(Int.max) else { throw RGB1Error.badDimensions }
+        return Int(bytes)
+    }
+
+    private static func readUInt32BE(_ data: Data, offset: Int) -> UInt32 {
+        var value: UInt32 = 0
+        for byte in data[offset..<(offset + 4)] {
+            value = (value << 8) | UInt32(byte)
+        }
+        return value
+    }
+
+    private static func readInt32BE(_ data: Data, offset: Int) -> Int32 {
+        Int32(bitPattern: readUInt32BE(data, offset: offset))
+    }
+
+    private static func readInt16BE(_ data: Data, offset: Int) -> Int16 {
+        let hi = UInt16(data[offset])
+        let lo = UInt16(data[offset + 1])
+        return Int16(bitPattern: (hi << 8) | lo)
+    }
+
+    private static func readInt64BE(_ data: Data, offset: Int) -> Int64 {
+        var value: UInt64 = 0
+        for byte in data[offset..<(offset + 8)] {
+            value = (value << 8) | UInt64(byte)
+        }
+        return Int64(bitPattern: value)
+    }
+
+    private static func appendUInt32BE(_ value: UInt32, to data: inout Data) {
+        data.append(UInt8((value >> 24) & 0xff))
+        data.append(UInt8((value >> 16) & 0xff))
+        data.append(UInt8((value >> 8) & 0xff))
+        data.append(UInt8(value & 0xff))
+    }
+
+    private static func appendInt32BE(_ value: Int32, to data: inout Data) {
+        appendUInt32BE(UInt32(bitPattern: value), to: &data)
+    }
+
+    private static func appendInt16BE(_ value: Int16, to data: inout Data) {
+        let raw = UInt16(bitPattern: value)
+        data.append(UInt8((raw >> 8) & 0xff))
+        data.append(UInt8(raw & 0xff))
+    }
+
+    private static func appendInt64BE(_ value: Int64, to data: inout Data) {
+        let raw = UInt64(bitPattern: value)
+        data.append(UInt8((raw >> 56) & 0xff))
+        data.append(UInt8((raw >> 48) & 0xff))
+        data.append(UInt8((raw >> 40) & 0xff))
+        data.append(UInt8((raw >> 32) & 0xff))
+        data.append(UInt8((raw >> 24) & 0xff))
+        data.append(UInt8((raw >> 16) & 0xff))
+        data.append(UInt8((raw >> 8) & 0xff))
+        data.append(UInt8(raw & 0xff))
+    }
+
+    private static func validateASCII(
+        _ value: String,
+        field: String,
+        maxBytesExclusive: Int
+    ) throws {
+        guard let bytes = value.data(using: .ascii),
+              !bytes.isEmpty,
+              bytes.count < maxBytesExclusive,
+              bytes.allSatisfy({ $0 >= 0x20 && $0 <= 0x7e })
+        else {
+            throw RGB1Error.badText(field)
+        }
+    }
+
+    private static func validateEmail(_ value: String) throws {
+        try validateASCII(value, field: "creator_email", maxBytesExclusive: creatorEmailFieldSize + 1)
+        guard value.count <= creatorEmailFieldSize,
+              !value.contains(" "),
+              let at = value.firstIndex(of: "@"),
+              at != value.startIndex,
+              at != value.index(before: value.endIndex),
+              value[value.index(after: at)...].contains(".")
+        else {
+            throw RGB1Error.badText("creator_email")
+        }
+    }
+
+    private static func validateRight(_ value: String) throws {
+        guard let bytes = value.data(using: .ascii),
+              !bytes.isEmpty,
+              bytes.count <= rightFieldSize,
+              bytes.allSatisfy({
+                  ($0 >= UInt8(ascii: "A") && $0 <= UInt8(ascii: "Z"))
+                  || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "z"))
+              })
+        else {
+            throw RGB1Error.badText("right")
+        }
+    }
+
+    private static func readFixedASCII(_ data: Data, offset: Int, size: Int) throws -> String {
+        let bytes = data[offset..<(offset + size)]
+        let end = bytes.firstIndex(of: 0) ?? bytes.endIndex
+        let field = Data(bytes[..<end])
+        guard let value = String(data: field, encoding: .ascii) else {
+            throw RGB1Error.badText("ascii")
+        }
+        return value
+    }
+
+    private static func appendFixedASCII(_ value: String, size: Int, to data: inout Data) {
+        let bytes = value.data(using: .ascii) ?? Data()
+        precondition(bytes.count <= size, "RGB1 fixed ASCII field exceeds its storage size")
+        data.append(bytes)
+        data.append(Data(count: size - bytes.count))
+    }
+}
+
+func runRGB1Pack(
+    inputPath: String,
+    outputPath: String,
+    width: UInt32,
+    height: UInt32,
+    latitude: Double,
+    longitude: Double,
+    heightMeters: Double,
+    title: String,
+    country: String,
+    creatorEmail: String,
+    right: String,
+    createdUnixMilliseconds: Int64,
+    timezoneOffsetMinutes: Int16 = RGB1Image.taiwanTimezoneOffsetMinutes
+) throws {
+    let payload: Data
+    if inputPath == "-" {
+        payload = FileHandle.standardInput.readDataToEndOfFile()
+    } else {
+        payload = try Data(contentsOf: URL(fileURLWithPath: inputPath))
+    }
+    let latitudeE7 = try rgb1ScaledGeo(latitude, scale: 10_000_000, min: -90, max: 90)
+    let longitudeE7 = try rgb1ScaledGeo(longitude, scale: 10_000_000, min: -180, max: 180)
+    let heightMillimeters = try rgb1ScaledGeo(
+        heightMeters,
+        scale: 1_000,
+        min: Double(Int32.min) / 1_000,
+        max: Double(Int32.max) / 1_000
+    )
+    let image = try RGB1Image(
+        width: width,
+        height: height,
+        latitudeE7: latitudeE7,
+        longitudeE7: longitudeE7,
+        heightMillimeters: heightMillimeters,
+        geoDatumCode: RGB1Image.wgs84EllipsoidDatum,
+        title: title,
+        country: country,
+        creatorEmail: creatorEmail,
+        right: right,
+        createdUnixMilliseconds: createdUnixMilliseconds,
+        timezoneOffsetMinutes: timezoneOffsetMinutes,
+        payload: payload
+    )
+    let data = image.fileData
+    if outputPath == "-" {
+        try FileHandle.standardOutput.write(contentsOf: data)
+    } else {
+        try data.write(to: URL(fileURLWithPath: outputPath), options: [])
+    }
+}
+
+func runRGB1Info(inputPath: String) throws {
+    let data = try Data(contentsOf: URL(fileURLWithPath: inputPath))
+    let image = try RGB1Image(fileData: data)
+    print("format=RGB1")
+    print("width=\(image.width)")
+    print("height=\(image.height)")
+    print(String(format: "latitude=%.7f", Double(image.latitudeE7) / 10_000_000))
+    print(String(format: "longitude=%.7f", Double(image.longitudeE7) / 10_000_000))
+    print(String(format: "height_m=%.3f", Double(image.heightMillimeters) / 1_000))
+    print("geo_datum_code=\(image.geoDatumCode)")
+    print("title=\(image.title)")
+    print("country=\(image.country)")
+    print("creator_email=\(image.creatorEmail)")
+    print("right=\(image.right)")
+    print("created_unix_ms=\(image.createdUnixMilliseconds)")
+    print("timezone_offset_minutes=\(image.timezoneOffsetMinutes)")
+    print("payload_bytes=\(image.payload.count)")
+}
+
+func runRGB1Raw(inputPath: String) throws {
+    let data = try Data(contentsOf: URL(fileURLWithPath: inputPath))
+    let image = try RGB1Image(fileData: data)
+    try FileHandle.standardOutput.write(contentsOf: image.payload)
+}
+
+private func rgb1ScaledGeo(_ value: Double, scale: Double, min: Double, max: Double) throws -> Int32 {
+    guard value.isFinite, value >= min, value <= max else { throw RGB1Error.badGeo }
+    let scaled = (value * scale).rounded()
+    guard scaled >= Double(Int32.min), scaled <= Double(Int32.max) else {
+        throw RGB1Error.badGeo
+    }
+    return Int32(scaled)
+}
+
 let TAR_BLOCK = 512
 
 /// Zero-padded octal field with trailing NUL, e.g. "%07o\0" for width 8.
@@ -2347,6 +2748,9 @@ final class TarReader {
 private func printTarUsage() {
     print("""
     Usage: swift_tar -c|-x|-t|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...]
+           swift_tar --rgb1-pack --width <W> --height <H> --lat <deg> --lng <deg> --height-m <m> --title <text> --country <text> --creator-email <email> --right <text> --created-ms <unix_ms> -f <out.rgb1> <raw.rgb>
+           swift_tar --rgb1-info -f <image.rgb1>
+           swift_tar --rgb1-raw -f <image.rgb1> > image.rgb
 
     Commands:
       -c              : Create an archive / 建立封存檔
@@ -2356,6 +2760,12 @@ private func printTarUsage() {
                         (bsdcat equivalent; use for RPM payloads etc.)
                         僅解壓 filter 鏈、原始內容輸出至 stdout（等同 bsdcat；
                         RPM payload 等非 tar 內容可用此模式取出）
+      --rgb1-pack     : Wrap raw RGB bytes with an RGB1 header
+                        將 raw RGB bytes 包成 RGB1 標頭格式
+      --rgb1-info     : Print RGB1 width, height, geo, and payload size
+                        輸出 RGB1 寬、高、地理資訊與 payload 大小
+      --rgb1-raw      : Strip RGB1 header and write raw RGB payload to stdout
+                        移除 RGB1 標頭，將 raw RGB payload 輸出至 stdout
 
     Codec (create only; reading auto-detects, see below):
     壓縮引擎（僅建立時指定；讀取自動偵測，見下）:
@@ -2393,10 +2803,37 @@ private func printTarUsage() {
     Options:
       -f <path>       : Archive file ("-" = stdin/stdout; default "-")
                         封存檔路徑（"-" 表標準輸入／輸出；預設 "-"）
+                        RGB1 modes use -f as the RGB1 input/output path.
+                        RGB1 模式以 -f 作為 RGB1 輸入／輸出路徑。
       -C <dir>        : Change directory before create, or extract into <dir>
                         建立封存前切換目錄，或解出至 <dir>
       -n <N>          : In-flight parallel chunks (default 2×cores)
                         平行在途分塊數（預設 2×核心數）
+      --width <W>     : RGB1 pack width, UInt32 pixels
+                        RGB1 pack 的寬度，UInt32 像素
+      --height <H>    : RGB1 pack height, UInt32 pixels
+                        RGB1 pack 的高度，UInt32 像素
+      --lat <deg>     : RGB1 latitude in WGS84 degrees (-90...90)
+                        RGB1 WGS84 緯度，單位度（-90...90）
+      --lng <deg>     : RGB1 longitude in WGS84 degrees (-180...180)
+                        RGB1 WGS84 經度，單位度（-180...180）
+      --height-m <m>  : RGB1 WGS84 ellipsoid height, meters stored as millimeters
+                        RGB1 WGS84 ellipsoid height，輸入公尺、header 儲存毫米
+      --title <text>  : RGB1 ASCII title, less than 64 bytes
+                        RGB1 ASCII 標題，小於 64 bytes
+      --country <text>: RGB1 ASCII country, less than 512 bytes
+                        RGB1 ASCII 國家，小於 512 bytes
+      --creator-email <email>:
+                        RGB1 creator email, ASCII, at most 254 bytes
+                        RGB1 建立者 email，ASCII，最多 254 bytes
+      --right <text>  : RGB1 rights code, 1 to 4 English letters
+                        RGB1 權利代碼，1 到 4 個英文字母
+      --created-ms <unix_ms>:
+                        RGB1 created timestamp, Int64 UTC Unix milliseconds
+                        RGB1 建立時間戳，Int64 UTC Unix milliseconds
+      --tz-offset-min <minutes>:
+                        RGB1 timezone offset minutes, Int16; default 480 (TW)
+                        RGB1 時區 offset 分鐘，Int16；預設 480（台灣）
       -v              : Verbose / 顯示處理中的項目
       --touch         : (-x only) do not restore archive mtimes; extracted
                         entries keep the current time (GNU tar semantics)
@@ -2765,6 +3202,96 @@ struct SwiftTarMain {
             exit(args.count < 2 ? 1 : 0)
         }
 
+        func optValue(_ flag: String) -> String? {
+            guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
+            return args[i + 1]
+        }
+
+        let rgb1Pack = args.contains("--rgb1-pack")
+        let rgb1Info = args.contains("--rgb1-info")
+        let rgb1Raw = args.contains("--rgb1-raw")
+        if [rgb1Pack, rgb1Info, rgb1Raw].filter({ $0 }).count > 0 {
+            guard [rgb1Pack, rgb1Info, rgb1Raw].filter({ $0 }).count == 1 else {
+                eprint("Error: specify exactly one RGB1 command. / 錯誤：RGB1 命令只能指定一個。")
+                exit(1)
+            }
+            do {
+                let rgb1Path = optValue("-f") ?? "-"
+                if rgb1Pack {
+                    guard let widthRaw = optValue("--width"),
+                          let width = UInt32(widthRaw),
+                          let heightRaw = optValue("--height"),
+                          let height = UInt32(heightRaw),
+                          let latitudeRaw = optValue("--lat"),
+                          let latitude = Double(latitudeRaw),
+                          let longitudeRaw = optValue("--lng"),
+                          let longitude = Double(longitudeRaw),
+                          let heightMetersRaw = optValue("--height-m"),
+                          let heightMeters = Double(heightMetersRaw),
+                          let title = optValue("--title"),
+                          let country = optValue("--country"),
+                          let creatorEmail = optValue("--creator-email"),
+                          let right = optValue("--right"),
+                          let createdRaw = optValue("--created-ms"),
+                          let createdUnixMilliseconds = Int64(createdRaw)
+                    else {
+                        throw RGB1Error.missingArgument("--width/--height/--lat/--lng/--height-m/--title/--country/--creator-email/--right/--created-ms")
+                    }
+                    let timezoneOffsetMinutes: Int16
+                    if let timezoneRaw = optValue("--tz-offset-min") {
+                        guard let parsed = Int16(timezoneRaw) else {
+                            throw RGB1Error.badText("tz_offset_min")
+                        }
+                        timezoneOffsetMinutes = parsed
+                    } else {
+                        timezoneOffsetMinutes = RGB1Image.taiwanTimezoneOffsetMinutes
+                    }
+
+                    let inputPath = args.last { candidate in
+                        !candidate.hasPrefix("-")
+                        && candidate != args[0]
+                        && candidate != rgb1Path
+                        && candidate != widthRaw
+                        && candidate != heightRaw
+                        && candidate != latitudeRaw
+                        && candidate != longitudeRaw
+                        && candidate != heightMetersRaw
+                        && candidate != title
+                        && candidate != country
+                        && candidate != creatorEmail
+                        && candidate != right
+                        && candidate != createdRaw
+                        && candidate != optValue("--tz-offset-min")
+                    } ?? "-"
+                    try runRGB1Pack(
+                        inputPath: inputPath,
+                        outputPath: rgb1Path,
+                        width: width,
+                        height: height,
+                        latitude: latitude,
+                        longitude: longitude,
+                        heightMeters: heightMeters,
+                        title: title,
+                        country: country,
+                        creatorEmail: creatorEmail,
+                        right: right,
+                        createdUnixMilliseconds: createdUnixMilliseconds,
+                        timezoneOffsetMinutes: timezoneOffsetMinutes
+                    )
+                } else if rgb1Info {
+                    if rgb1Path == "-" { throw RGB1Error.missingArgument("-f <image.rgb1>") }
+                    try runRGB1Info(inputPath: rgb1Path)
+                } else {
+                    if rgb1Path == "-" { throw RGB1Error.missingArgument("-f <image.rgb1>") }
+                    try runRGB1Raw(inputPath: rgb1Path)
+                }
+                exit(0)
+            } catch {
+                eprint("swift_tar RGB1 error: \(error.localizedDescription)")
+                exit(1)
+            }
+        }
+
         let doCreate = args.contains("-c")
         let doExtract = args.contains("-x")
         let doList = args.contains("-t")
@@ -2810,11 +3337,6 @@ struct SwiftTarMain {
         }
 
         let verbose = args.contains("-v")
-
-        func optValue(_ flag: String) -> String? {
-            guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
-            return args[i + 1]
-        }
         let archivePath = optValue("-f") ?? "-"
         let destDir = optValue("-C") ?? ""
 

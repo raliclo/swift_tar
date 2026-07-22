@@ -20,6 +20,9 @@ zlib_linkage=$(value zlib_linkage)
 zstd_version=$(value zstd_version)
 zstd_commit=$(value zstd_commit)
 zstd_linkage=$(value zstd_linkage)
+libarchive_version=$(value libarchive_version)
+libarchive_commit=$(value libarchive_commit)
+libarchive_linkage=$(value libarchive_linkage)
 
 {
     echo "swift_tar_version=$build_version"
@@ -29,6 +32,9 @@ zstd_linkage=$(value zstd_linkage)
     [ -n "$zstd_version" ] && echo "zstd_version=$zstd_version"
     [ -n "$zstd_commit" ] && echo "zstd_commit=$zstd_commit"
     [ -n "$zstd_linkage" ] && echo "zstd_linkage=$zstd_linkage"
+    [ -n "$libarchive_version" ] && echo "libarchive_version=$libarchive_version"
+    [ -n "$libarchive_commit" ] && echo "libarchive_commit=$libarchive_commit"
+    [ -n "$libarchive_linkage" ] && echo "libarchive_linkage=$libarchive_linkage"
 } > "$SCRIPT_DIR/version.txt.tmp"
 mv "$SCRIPT_DIR/version.txt.tmp" "$SCRIPT_DIR/version.txt"
 

@@ -40,6 +40,9 @@
 //   - LZFSE-family streams decode with the multi-core chunk-parallel decoder
 //     from lzfse-cli.swift.
 //     LZFSE 家族用 lzfse-cli.swift 的多核心分塊平行解碼器。
+//   - True ZIP/ZIP64 containers are created and read through the bundled
+//     libarchive backend on macOS and Windows.
+//     真實 ZIP/ZIP64 容器在 macOS 與 Windows 上皆透過內附 libarchive 後端建立與讀取。
 // =====================================================================
 
 import Foundation
@@ -53,6 +56,99 @@ import zlib
 // runtime module，並非 R44-Win 已移除的 WinSDK。
 import ucrt
 #endif
+
+// A narrow C ABI keeps libarchive's C types out of the Swift implementation
+// while sharing exactly the same ZIP/ZIP64 backend on macOS and Windows.
+// 使用精簡 C ABI 隔離 libarchive C 型別，讓 macOS 與 Windows 共用完全相同的
+// ZIP/ZIP64 後端。
+@_silgen_name("swift_tar_zip_create")
+private func cSwiftTarZipCreate(
+    _ archivePath: UnsafePointer<CChar>,
+    _ changeDir: UnsafePointer<CChar>,
+    _ paths: UnsafePointer<UnsafePointer<CChar>?>,
+    _ pathCount: Int,
+    _ forceZip64: Int32,
+    _ verbose: Int32,
+    _ errorBuffer: UnsafeMutablePointer<CChar>,
+    _ errorCapacity: Int
+) -> Int32
+
+@_silgen_name("swift_tar_zip_read")
+private func cSwiftTarZipRead(
+    _ archivePath: UnsafePointer<CChar>,
+    _ destinationDir: UnsafePointer<CChar>,
+    _ extract: Int32,
+    _ verbose: Int32,
+    _ restoreMtime: Int32,
+    _ errorBuffer: UnsafeMutablePointer<CChar>,
+    _ errorCapacity: Int
+) -> Int32
+
+private func withCStrings<R>(_ strings: [String],
+                             _ body: ([UnsafePointer<CChar>]) -> R) -> R {
+    var pointers: [UnsafePointer<CChar>] = []
+    pointers.reserveCapacity(strings.count)
+    func append(_ index: Int) -> R {
+        guard index < strings.count else { return body(pointers) }
+        return strings[index].withCString { pointer in
+            pointers.append(pointer)
+            defer { pointers.removeLast() }
+            return append(index + 1)
+        }
+    }
+    return append(0)
+}
+
+private func isZipMagic(_ archivePath: String) -> Bool {
+    guard archivePath != "-", let input = FileHandle(forReadingAtPath: archivePath) else {
+        return false
+    }
+    defer { try? input.close() }
+    guard let data = try? input.read(upToCount: 4), data.count == 4 else { return false }
+    let bytes = [UInt8](data)
+    guard bytes[0] == 0x50 && bytes[1] == 0x4b else { return false }
+    return (bytes[2] == 0x03 && bytes[3] == 0x04) ||
+           (bytes[2] == 0x05 && bytes[3] == 0x06) ||
+           (bytes[2] == 0x06 && bytes[3] == 0x06) ||
+           (bytes[2] == 0x07 && bytes[3] == 0x08)
+}
+
+private func runZipCreate(archivePath: String, files: [String], changeDir: String,
+                          forceZip64: Bool, verbose: Bool) throws {
+    guard !files.isEmpty else {
+        throw TarError.io("no files to archive / 未指定要打包的檔案")
+    }
+    var error = [CChar](repeating: 0, count: 4096)
+    let status = archivePath.withCString { archive in
+        changeDir.withCString { directory in
+            withCStrings(files) { filePointers in
+                let nullable = filePointers.map(Optional.some)
+                return nullable.withUnsafeBufferPointer { paths in
+                    cSwiftTarZipCreate(archive, directory, paths.baseAddress!, paths.count,
+                                       forceZip64 ? 1 : 0, verbose ? 1 : 0,
+                                       &error, error.count)
+                }
+            }
+        }
+    }
+    guard status == 0 else {
+        throw TarError.io(String(cString: error))
+    }
+}
+
+private func runZipRead(archivePath: String, extract: Bool, destDir: String,
+                        verbose: Bool, restoreMtime: Bool) throws {
+    var error = [CChar](repeating: 0, count: 4096)
+    let status = archivePath.withCString { archive in
+        destDir.withCString { directory in
+            cSwiftTarZipRead(archive, directory, extract ? 1 : 0, verbose ? 1 : 0,
+                             restoreMtime ? 1 : 0, &error, error.count)
+        }
+    }
+    guard status == 0 else {
+        throw TarError.io(String(cString: error))
+    }
+}
 
 /// Streaming chunk size for the decompression/extraction paths (decoder
 /// loops, pipe pumps, tar-layer reads and file writes). Raised from 1 MiB
@@ -2410,6 +2506,10 @@ private func printTarUsage() {
     let lzfseCodecs = ""
 #endif
     let externalCodecs = "\n" + """
+      --zip            : True ZIP container via libarchive (Deflate; auto ZIP64)
+                         透過 libarchive 建立真實 ZIP 容器（Deflate；需要時自動 ZIP64）
+      --zip64          : True ZIP container with ZIP64 records forced
+                         建立真實 ZIP 容器並強制寫入 ZIP64 記錄
       --gzip, -z       : zlib, one gzip member per 4MiB chunk (pigz-style .tar.gz)
                          每 4MiB 分塊一個 gzip 成員（pigz 式標準 .tar.gz）
       --bzip2, -j      : libbz2, one stream per chunk (pbzip2-style .tar.bz2)
@@ -2458,25 +2558,25 @@ private func printTarUsage() {
                         (_wsopen_s + _futime64). Default: ucrt.
                         （僅 Windows -x）解壓寫檔後端：Foundation 或 CRT 單次
                         開檔。預設 ucrt。
-      -test           : Self test: round-trip plain tar and .tar.gz against the
+      -test           : Self test: round-trip tar, .tar.gz, ZIP and ZIP64 against the
                         platform's standard tar (create with one, extract with
                         the other, both directions), then exit
-                        自我測試：與平台標準 tar 做雙向 round-trip（純 tar 與
-                        .tar.gz，兩邊互建互解），完成後結束
+                        自我測試：與平台標準 tar 做雙向 round-trip（純 tar、
+                        .tar.gz、ZIP 與 ZIP64），完成後結束
       -debug          : With -test, print which standard-tar candidates were
                         found/skipped while searching / 搭配 -test 使用，印出
                         搜尋標準 tar 過程中找到／略過的候選項目
 
     Notes / 注意:
-      - Multi-core model: 4MiB chunks compressed concurrently, written in order.
-        All standard codecs emit concatenatable streams, so stock tools decode
-        the output directly.
-        多核心模式：4MiB 分塊併發壓縮、按序寫出；標準引擎輸出皆可串接，原生
-        工具可直接解開。
-      - C libraries are used the way libarchive uses them: zlib/libbz2/liblzma/
-        libzstd/liblz4 provide the primitives; framing is assembled here.
-        compress/LZW, uu and RPM are pure-Swift ports of libarchive filters.
-        C 庫用法仿 libarchive：僅取壓縮原語，框架自組；LZW/uu/RPM 為純 Swift 移植。
+      - Tar-filter model: 4MiB chunks compressed concurrently, written in order.
+        Those codecs emit concatenatable streams, so stock tools decode them.
+        tar filter 模式：4MiB 分塊併發壓縮、按序寫出；這些引擎輸出皆可串接，
+        原生工具可直接解開。
+      - ZIP/ZIP64 container handling uses the bundled libarchive backend.
+        Other C libraries provide tar-filter compression primitives; framing
+        is assembled here. compress/LZW, uu and RPM are pure-Swift ports.
+        ZIP/ZIP64 容器由內附 libarchive 後端處理；其他 C 庫提供 tar filter
+        壓縮原語、框架由本工具自組；LZW/uu/RPM 為純 Swift 移植。
     """
     print(head + lzfseCodecs + externalCodecs + lzfseReadFilter + tail)
 }
@@ -2485,10 +2585,10 @@ private func printTarUsage() {
 // MARK: - Self test (-test): round-trip vs. the platform's standard tar
 // MARK: - 自我測試（-test）：與平台標準 tar 的 round-trip
 // =================================================================
-// Goal: prove swift_tar's plain-tar and .tar.gz output is byte-for-byte
+// Goal: prove swift_tar's tar and ZIP-family output is
 // interchangeable with the platform's real tar (bsdtar on macOS/Windows 10+,
 // GNU tar on Linux) -- not swift_tar tested against itself.
-// 目標：證明 swift_tar 的純 tar 與 .tar.gz 輸出跟平台的真實 tar（macOS/
+// 目標：證明 swift_tar 的 tar 與 ZIP 家族輸出跟平台的真實 tar（macOS/
 // Windows 10+ 為 bsdtar，Linux 為 GNU tar）位元組級互通——不是拿 swift_tar
 // 跟自己比。
 
@@ -2712,6 +2812,47 @@ func runSelfTest(debug: Bool = false) {
         check(".tar.gz: std tar create → swift_tar extract", false)
     }
 
+    // ---- true ZIP / ZIP64 via bundled libarchive ----
+    // The platform bsdtar is the independent compatibility peer. ZIP reads do
+    // not need an explicit flag because swift_tar dispatches on PK magic.
+    // ---- 透過內附 libarchive 建立真實 ZIP / ZIP64 ----
+    // 以平台 bsdtar 作為獨立互通對象；swift_tar 讀取時依 PK magic 自動分派，
+    // 不需明確指定旗標。
+    let zipA = "\(tmp)/zip_by_swift_tar.zip"
+    let zipB = "\(tmp)/zip_by_std_tar.zip"
+    if runTarProcess(selfExe, ["-c", "--zip", "-f", zipA, "-C", tmp, "src"]) {
+        let out = "\(tmp)/zip_out_std"
+        try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
+        let extracted = runTarProcess(stdTar, ["-x", "-f", zipA, "-C", out])
+        check("ZIP: swift_tar create → std tar extract",
+              extracted && compareTrees(srcDir, "\(out)/src"))
+    } else {
+        check("ZIP: swift_tar create → std tar extract", false)
+    }
+    if runTarProcess(stdTar, ["-c", "--format", "zip", "-f", zipB, "-C", tmp, "src"]) {
+        let out = "\(tmp)/zip_out_swift"
+        try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
+        let extracted = runTarProcess(selfExe, ["-x", "-f", zipB, "-C", out])
+        check("ZIP: std tar create → swift_tar extract",
+              extracted && compareTrees(srcDir, "\(out)/src"))
+    } else {
+        check("ZIP: std tar create → swift_tar extract", false)
+    }
+
+    let zip64 = "\(tmp)/zip64_by_swift_tar.zip"
+    if runTarProcess(selfExe, ["-c", "--zip64", "-f", zip64, "-C", tmp, "src"]),
+       let zip64Data = fm.contents(atPath: zip64) {
+        let signature = Data([0x50, 0x4b, 0x06, 0x06])
+        let hasZip64Record = zip64Data.range(of: signature) != nil
+        let out = "\(tmp)/zip64_out_std"
+        try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
+        let extracted = runTarProcess(stdTar, ["-x", "-f", zip64, "-C", out])
+        check("ZIP64: record + std tar extract",
+              hasZip64Record && extracted && compareTrees(srcDir, "\(out)/src"))
+    } else {
+        check("ZIP64: record + std tar extract", false)
+    }
+
     // ---- create-side -C plus native ZSTD ----
     // Use a relative archive path from a separate invocation directory. This
     // verifies that -f remains relative to the caller while leaf inputs are
@@ -2841,16 +2982,23 @@ struct SwiftTarMain {
         if args.contains("--lzip")           { codec = .lzip;                  codecCount += 1 }
         if args.contains("--zstd")           { codec = .zstd;                  codecCount += 1 }
         if args.contains("--lz4")            { codec = .lz4;                   codecCount += 1 }
-        guard codecCount <= 1 else {
+        let explicitZip = args.contains("--zip")
+        let forceZip64 = args.contains("--zip64")
+        let zipFlagCount = (explicitZip ? 1 : 0) + (forceZip64 ? 1 : 0)
+        guard codecCount + zipFlagCount <= 1 else {
             eprint("Error: at most one codec flag. / 錯誤：壓縮引擎旗標至多一個。")
             exit(1)
         }
-        if codecCount > 0 && (doAppend || doUpdate) {
+        if codecCount + zipFlagCount > 0 && (doAppend || doUpdate || doDelete) {
             eprint("Error: -r/-u work on uncompressed tar only; drop the codec flag. / 錯誤：-r/-u 僅支援未壓縮 tar，請移除引擎旗標。")
             exit(1)
         }
         if codecCount > 0 && !doCreate && !doAppend && !doUpdate {
             eprint("Note: codec flags only affect -c; reading auto-detects. / 提示：引擎旗標僅影響 -c，讀取自動偵測。")
+        }
+        if forceZip64 && !doCreate {
+            eprint("Error: --zip64 is a create-only option. / 錯誤：--zip64 僅能用於建立封存。")
+            exit(1)
         }
 
         let verbose = args.contains("-v")
@@ -2907,21 +3055,41 @@ struct SwiftTarMain {
 
         do {
             if doCreate {
-                try runCreate(archivePath: archivePath, files: files, codec: codec,
-                              changeDir: destDir, inflight: inflightN, verbose: verbose)
+                if explicitZip || forceZip64 {
+                    try runZipCreate(archivePath: archivePath, files: files,
+                                     changeDir: destDir, forceZip64: forceZip64,
+                                     verbose: verbose)
+                } else {
+                    try runCreate(archivePath: archivePath, files: files, codec: codec,
+                                  changeDir: destDir, inflight: inflightN, verbose: verbose)
+                }
             } else if doAppend || doUpdate {
                 try runAppend(archivePath: archivePath, files: files, update: doUpdate,
                               changeDir: destDir, inflight: inflightN, verbose: verbose)
             } else if doDelete {
                 try runDelete(archivePath: archivePath, names: files, verbose: verbose)
             } else if doIdentify {
-                try runIdentify(archivePath: archivePath, inflight: inflightN)
+                if explicitZip || isZipMagic(archivePath) {
+                    let label = archivePath == "-" ? "<stdin>" : archivePath
+                    print("\(label): zip")
+                } else {
+                    try runIdentify(archivePath: archivePath, inflight: inflightN)
+                }
             } else if doCat {
+                if explicitZip || isZipMagic(archivePath) {
+                    throw TarError.io("--cat does not apply to ZIP containers / --cat 不適用於 ZIP 容器")
+                }
                 try runCat(archivePath: archivePath, inflight: inflightN, verbose: verbose)
             } else {
-                try runRead(archivePath: archivePath, extract: doExtract,
-                            destDir: destDir, inflight: inflightN, verbose: verbose,
-                            writeBackend: writeBackend, restoreMtime: restoreMtime)
+                if explicitZip || isZipMagic(archivePath) {
+                    try runZipRead(archivePath: archivePath, extract: doExtract,
+                                   destDir: destDir, verbose: verbose,
+                                   restoreMtime: restoreMtime)
+                } else {
+                    try runRead(archivePath: archivePath, extract: doExtract,
+                                destDir: destDir, inflight: inflightN, verbose: verbose,
+                                writeBackend: writeBackend, restoreMtime: restoreMtime)
+                }
             }
         } catch {
             eprint("swift_tar: \(error.localizedDescription)")

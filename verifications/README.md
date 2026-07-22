@@ -7,6 +7,17 @@ main benchmark pipeline (`../../benchmark.sh` / `../../benchmark2.sh`). Results
 here are exploratory—read the "Status" line on each before trusting a
 conclusion.
 
+## ZIP throughput and RSS on claw-code
+
+`zip_claw_code_mbps_rss.sh` runs true-ZIP encode and decode against the complete
+`claw-code` corpus, reports logical-input MiB/s and process peak RSS for each
+round, and compares the first extracted tree with the source. By default it
+runs three rounds and writes `zip_claw_code_mbps_rss_output.txt`.
+
+```sh
+ROUNDS=3 ./zip_claw_code_mbps_rss.sh ../../claw-code
+```
+
 ## Create-side `-C` compatibility (2026-07-18)
 
 `swift_tar -c` previously parsed `-C` but only passed it to extraction, so a

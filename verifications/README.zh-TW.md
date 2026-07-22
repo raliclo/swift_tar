@@ -6,6 +6,16 @@
 （`../../benchmark.sh`／`../../benchmark2.sh`）未測試的行為。這些結果屬於
 探索性質；採信結論前，請先閱讀各節的「狀態」。
 
+## claw-code ZIP 吞吐量與 RSS
+
+`zip_claw_code_mbps_rss.sh` 以完整 `claw-code` 語料執行真實 ZIP encode 與
+decode，逐輪回報 logical-input MiB/s 與程序 peak RSS，並比較第一輪解壓目錄和
+來源。預設執行三輪，結果寫入 `zip_claw_code_mbps_rss_output.txt`。
+
+```sh
+ROUNDS=3 ./zip_claw_code_mbps_rss.sh ../../claw-code
+```
+
 ## 建立端 `-C` 相容性（2026-07-18）
 
 `swift_tar -c` 過去雖會解析 `-C`，卻只在解出流程使用，因此系統 tar 常見的

@@ -32,6 +32,21 @@ if not exist version.txt (
     exit /b 1
 )
 
+zsh .\build_libarchive-win.sh
+if errorlevel 1 (
+    echo [FAIL] libarchive backend build failed / libarchive 後端建置失敗
+    pause
+    exit /b 1
+)
+
+if not exist build mkdir build
+cl /nologo /O2 /MD /DLIBARCHIVE_STATIC /c libarchive_zip_bridge.c /Ilibarchive\libarchive /Fobuild\libarchive_zip_bridge.obj
+if errorlevel 1 (
+    echo [FAIL] libarchive bridge compile failed / libarchive bridge 編譯失敗
+    pause
+    exit /b 1
+)
+
 :: Strip the top-level runCLI() entry point (not valid in multi-file builds)
 set "_temp_cli=%TEMP%\swift_tar_lzfse_cli-%RANDOM%.swift"
 set "_temp_version=%TEMP%\swift_tar_version-%RANDOM%.swift"
@@ -52,7 +67,7 @@ if errorlevel 1 (
 if not exist release mkdir release
 
 set "_build_exe=swift_tar-build-%RANDOM%.exe"
-swiftc -O "%_temp_cli%" "%_temp_version%" swift_tar.swift -o "%_build_exe%" -I cmodules\zlib -Xcc -Izlib -Xcc -Izlib\build -Lzlib\build\Release -lzs -Lzstd\build\lib\Release -lzstd_static
+swiftc -O "%_temp_cli%" "%_temp_version%" swift_tar.swift build\libarchive_zip_bridge.obj build\libarchive-win\libarchive\Release\archive.lib -o "%_build_exe%" -I cmodules\zlib -Xcc -Izlib -Xcc -Izlib\build -Lzlib\build\Release -lzs -Lzstd\build\lib\Release -lzstd_static
 set "_rc=%ERRORLEVEL%"
 del /Q "%_temp_cli%" "%_temp_version%" > nul 2>&1
 if not "%_rc%"=="0" (

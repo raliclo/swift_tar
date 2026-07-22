@@ -14,6 +14,8 @@ compression engine and modeled on **libarchive**'s filter architecture.
   concurrency skeleton as `lzfse2`'s `runParallelEncode`.
 - **libarchive-style read filters**: the codec is auto-detected by magic
   bytes and filters stack (e.g. `payload.tar.gz.uu`).
+- **True ZIP/ZIP64 backend**: the bundled libarchive creates and reads standard
+  ZIP containers on macOS and Windows; ZIP64 is automatic or can be forced.
 - **C libraries used the libarchive way**: `zlib` / `libbz2` / `liblzma` /
   `libzstd` / `liblz4` supply the compression primitive; the container
   framing is assembled by swift_tar. `compress`/LZW, uudecode and the RPM
@@ -31,7 +33,8 @@ git submodule update --init   # fetch lzfse2 + libarchive + zlib
 
 The build reuses `lzfse2/lzfse-cli.swift` as a library (its top-level
 `runCLI()` entry point is stripped, then both files are compiled together)
-and links `-lz -lbz2 -llz4 -llzma -lzstd`. The binary is emitted to
+and links `-lz -lbz2 -llz4 -llzma -lzstd` plus the bundled static libarchive
+ZIP backend. The binary is emitted to
 **`release/swift_tar`**. If the `lzfse2` submodule is missing, the build stops
 with an error suggesting `git submodule update --init` or the LZFSE-free build
 below.
@@ -42,8 +45,9 @@ below.
 public/distributable binary that ships **none** of the private LZFSE engine —
 `lzfse-cli.swift` is not compiled in, so the binary can neither create nor decode
 any LZFSE-family archive (`other3` / `bvx3` / `bvx2`) and contains no LZFSE code
-or format strings. The standard external codecs (gzip / bzip2 / xz / zstd / lz4)
-and plain tar are unaffected. This build does not need the `lzfse2` submodule.
+or format strings. The standard external codecs (gzip / bzip2 / xz / zstd / lz4),
+plain tar, and ZIP/ZIP64 are unaffected. This build does not need the `lzfse2`
+submodule.
 
 ```sh
 ./compile_no_lzfse.sh         # → release/swift_tar (public, LZFSE-free)
@@ -53,8 +57,8 @@ and plain tar are unaffected. This build does not need the `lzfse2` submodule.
 ### Windows
 
 Windows requires Swift, CMake, and the Visual Studio 2022 C++ workload. The
-build compiles the pinned zlib and zstd submodules as static MSVC libraries,
-then links gzip and zstd directly into `swift_tar.exe`; no `zlib.dll`,
+build compiles the pinned zlib, zstd, and libarchive submodules as static MSVC
+libraries, then links gzip, zstd, and ZIP support directly into `swift_tar.exe`; no `zlib.dll`,
 external `gzip.exe`, or per-chunk `zstd.exe` is required at runtime.
 
 ```bat
@@ -68,8 +72,8 @@ compile_tar-win.bat
 each syncs its pinned gitlink, rebuilds the static library (`zs.lib` /
 `zstd_static.lib`), and writes the exact tag/commit/linkage to `version.txt`.
 Run them after cloning or changing either submodule. Normal
-`compile_tar-win.bat` runs reuse the existing static libraries and do not invoke
-CMake again. Build-version generation preserves both the `zlib_*` and `zstd_*`
+`compile_tar-win.bat` rebuilds the incremental libarchive backend and reuses the
+existing zlib/zstd libraries. Build-version generation preserves the `zlib_*`, `zstd_*`, and `libarchive_*`
 provenance fields in `version.txt`, and the packaging step copies that file
 into the Windows ZIP for release verification.
 
@@ -77,7 +81,8 @@ The remaining external codecs (bzip2, xz, lz4, lzip) require their corresponding
 Scoop CLI tools; `build_tool_install-win.sh` installs the complete toolchain.
 
 The Windows ZIP contains the statically linked executable, Swift runtime DLLs,
-`version.txt`, `zlib-LICENSE.txt`, and `zstd-LICENSE.txt`. It intentionally
+`version.txt`, `zlib-LICENSE.txt`, `zstd-LICENSE.txt`, and
+`libarchive-COPYING.txt`. It intentionally
 excludes `zs.lib`, `zstd_static.lib`, headers, and the CMake build trees
 because they are development artifacts, not runtime dependencies.
 
@@ -106,6 +111,8 @@ in pipelines.
 ```sh
 release/swift_tar -c --bvx3-optimal -f src.tar.bvx3 src/
 release/swift_tar -c --gzip         -f src.tar.gz    src/     # standard .tar.gz
+release/swift_tar -c --zip          -f src.zip       src/     # standard ZIP
+release/swift_tar -c --zip64        -f src.zip       src/     # force ZIP64 records
 release/swift_tar -c --zstd -f src.tar.zst -C /path/to parent-leaf
 tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # (or pipe in)
 ```
@@ -118,9 +125,9 @@ entry names.
 
 The output format is selected by the codec flag, not by the filename
 extension. For example, `--gzip -f archive.zip` still writes a gzip-compressed
-tar stream (magic `1f 8b`), not a ZIP container. `unzip` cannot extract it;
-name gzip archives `.tgz` or `.tar.gz` and extract them with `tar` or
-`swift_tar`. Creating a true `.zip` archive is not currently supported.
+tar stream (magic `1f 8b`), not a ZIP container. Use `--zip` for a true ZIP;
+libarchive automatically emits ZIP64 when required, while `--zip64` forces
+ZIP64 records for compatibility testing or explicit format selection.
 
 ### Append / update / delete
 
@@ -149,6 +156,7 @@ stdin/stdout).
 
 ```sh
 release/swift_tar -t -f src.tar.gz
+release/swift_tar -t -f src.zip
 release/swift_tar -x -f src.tar.bvx3 -C /tmp/out
 release/swift_tar --cat -f package.rpm > payload.cpio          # strip RPM wrapper
 ```
@@ -169,10 +177,13 @@ or `none` when the archive is uncompressed).
 
 ## Codec flags (create only)
 
-Reading always auto-detects, so codec flags apply to `-c` only.
+Reading files always auto-detects. `--zip` may also be supplied when ZIP input
+comes from stdin, where probing without consuming input is not possible.
 
 | Flag | Equivalent | Notes |
 |------|------------|-------|
+| `--zip`             | libarchive ZIP                   | Deflate; ZIP64 automatic when required |
+| `--zip64`           | libarchive ZIP64                 | Deflate; forces ZIP64 records |
 | `--other3-fast`    | `lzfse -algo other3`             | standard bvx2, Apple-decodable |
 | `--other3-optimal` | `lzfse -algo other3 -optimal3`   | price-driven DP, still standard bvx2 |
 | `--bvx3-fast`      | `lzfse -algo bvx3`               | private big-alphabet blocks (this tool only) |
@@ -185,8 +196,9 @@ Reading always auto-detects, so codec flags apply to `-c` only.
 | `--lz4`            | liblz4                           | standard LZ4 frames |
 | *(none)*           | —                                | plain uncompressed tar |
 
-All standard codecs emit concatenatable streams, so `gunzip`, `bunzip2`,
-`xz`, `lzip`, `zstd`, `lz4` and `bsdtar` decode swift_tar's output directly.
+The tar compression codecs emit concatenatable streams, so `gunzip`, `bunzip2`,
+`xz`, `lzip`, `zstd`, and `lz4` decode those outputs directly. ZIP/ZIP64 is a
+container backend and interoperates with `unzip`, `bsdtar`, and other ZIP tools.
 
 ## Read filters (auto-detected, stackable)
 
@@ -217,11 +229,13 @@ compiled, for example `swift_tar 20260712-143015`. The same value is stored as
 ```
 swift_tar.swift    tar writer/reader + codecs + libarchive-style filters
 compile_tar.sh     build script → release/swift_tar
+build_libarchive.sh / build_libarchive-win.sh  static ZIP backend builds
+libarchive_zip_bridge.c  shared macOS/Windows ZIP C ABI
 build_zlib-win.sh  sync/rebuild the pinned Windows static zlib dependency
 build_zstd-win.sh  sync/rebuild the pinned Windows static zstd dependency
 release/swift_tar  compiled binary
 lzfse2/            submodule — LZFSE engine (other3 / bvx3)
-libarchive/        submodule — C reference for the filter model
+libarchive/        submodule — active static ZIP/ZIP64 backend
 zlib/              submodule — pinned static gzip backend on Windows
 zstd/              submodule — pinned static zstd backend on Windows
 ```

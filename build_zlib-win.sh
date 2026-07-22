@@ -43,8 +43,9 @@ tmp_version="version.txt.tmp"
     echo "zlib_version=$zlib_version"
     echo "zlib_commit=$zlib_commit"
     echo "zlib_linkage=static"
-    # Preserve zstd_* keys written by build_zstd-win.sh. / 保留 build_zstd-win.sh 寫入的 zstd_* 鍵。
-    grep -E '^zstd_(version|commit|linkage)=' version.txt 2>/dev/null || true
+    # Preserve dependency provenance written by the other backend builders.
+    # 保留其他後端建置腳本寫入的相依套件 provenance。
+    grep -E '^(zstd|libarchive)_(version|commit|linkage)=' version.txt 2>/dev/null || true
 } > "$tmp_version"
 mv "$tmp_version" version.txt
 

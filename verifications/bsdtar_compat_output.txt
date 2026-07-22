@@ -1,0 +1,6 @@
+INFO: using bundled swift_tar from release/swift_tar_win.zip
+INFO: swift_tar = .tmp_bsdtar_compat.886/swift_tar_zip/swift_tar-win/swift_tar.exe
+INFO: bsdtar    = C:\Windows\System32\tar.exe
+INFO: hardlink fixture enabled
+INFO: symlink fixture enabled
+PASS: plain: swift_tar create -> bsdtar extract

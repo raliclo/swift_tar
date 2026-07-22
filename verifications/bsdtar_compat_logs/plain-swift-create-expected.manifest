@@ -1,0 +1,9 @@
+F ./binary.bin d9655bb96c2123f77690acaef4fbec8441a9b695fe59cb242af29c5a65d52603
+F ./empty-file.txt e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+F ./hardlink-to-root.txt e44e9dcc1fc0801aaa83320b3d814c9ca2e43cf5bdc9f1b8bfeb6abfb066f33e
+F ./long-name-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz.txt 3de3645bc20d62701a08933b0a6cb87274a2a04c4d97a2002efebd684e96355d
+F ./root.txt e44e9dcc1fc0801aaa83320b3d814c9ca2e43cf5bdc9f1b8bfeb6abfb066f33e
+D ./sub
+D ./sub/empty-dir
+F ./sub/nested.txt ec4493fa06153adad602e928e25c0a0dea8e024cc2c3f7cad88d2b14c4cdb720
+L ./symlink-to-root.txt -> root.txt

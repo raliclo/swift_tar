@@ -399,7 +399,7 @@ enum TarCodec {
     case bzip2                      // libbz2 streams / bzip2 串流
     case xz                         // liblzma xz streams / xz 串流
     case lzip                       // lzip streams via CLI / 透過 CLI 產生 lzip 串流
-    case zstd                       // libzstd frames / zstd frame
+    case zstd(level: Int32)         // libzstd frames / zstd frame
     case lz4                        // liblz4 standard frames / 標準 LZ4 frame
 
     var isLZFSEFamily: Bool {
@@ -425,8 +425,8 @@ enum TarCodec {
             return xzCompressStream(chunk)
         case .lzip:
             return lzipCompressStream(chunk)
-        case .zstd:
-            return zstdCompressFrame(chunk)
+        case .zstd(let level):
+            return zstdCompressFrame(chunk, level: level)
         case .lz4:
             return lz4CompressFrame(chunk)
         }
@@ -520,7 +520,7 @@ func lzipCompressStream(_ input: Data, level: Int32 = 6) -> Data? {
 
 /// One complete zstd frame per chunk (frames concatenate per spec).
 /// 每分塊一個完整 zstd frame（依規格可串接）。
-func zstdCompressFrame(_ input: Data, level: Int32 = 3) -> Data? {
+func zstdCompressFrame(_ input: Data, level: Int32 = 9) -> Data? {
     let bound = ZSTD_compressBound(input.count)
     var out = Data(count: bound)
     let n: Int = input.withUnsafeBytes { s in
@@ -2012,6 +2012,14 @@ final class TarReader {
         // Deferred directory mtimes (children would bump them) / 目錄 mtime 延後套用
         var dirTimes: [(path: String, mtime: UInt64)] = []
         let fm = FileManager.default
+        var ensuredDirs = Set<String>()
+
+        func ensureDir(_ path: String) {
+            guard !path.isEmpty else { return }
+            if ensuredDirs.insert(path).inserted {
+                try? fm.createDirectory(atPath: path, withIntermediateDirectories: true)
+            }
+        }
 #if os(Windows)
         // Parallel small-file writer pool + dests already handed to it (for
         // ordering barriers: duplicate paths, hardlink targets).
@@ -2137,13 +2145,11 @@ final class TarReader {
             }
             let dest = options.destDir.isEmpty ? rel : options.destDir + "/" + rel
             let parent = (dest as NSString).deletingLastPathComponent
-            if !parent.isEmpty {
-                try? fm.createDirectory(atPath: parent, withIntermediateDirectories: true)
-            }
+            ensureDir(parent)
 
             switch typeflag {
             case UInt8(ascii: "5"):
-                try? fm.createDirectory(atPath: dest, withIntermediateDirectories: true)
+                ensureDir(dest)
 #if !os(Windows)
                 chmod(dest, mode_t(mode))
 #endif
@@ -2181,7 +2187,7 @@ final class TarReader {
 #endif
             case UInt8(ascii: "0"), 0, UInt8(ascii: "7"):
                 if isDir {   // some writers mark dirs with '0' + trailing "/" / 某些工具以 '0'+尾斜線表目錄
-                    try? fm.createDirectory(atPath: dest, withIntermediateDirectories: true)
+                    ensureDir(dest)
                     dirTimes.append((dest, mtime))
                     continue
                 }
@@ -2208,28 +2214,69 @@ final class TarReader {
                     }
                     pool.submit(dest: dest, data: data, mtime: mtime)
                 } else {
-                    // Large file (or list mode): inline streaming, one open,
-                    // mtime via the selected backend's policy kept simple —
-                    // write stream then setAttributes (amortized by size).
-                    // 大檔（或列出模式）：inline 串流寫入，成本被檔案大小攤提。
+                    // Large file: stream inline through the selected backend.
+                    // The ucrt path avoids Foundation FileHandle writes and
+                    // opens with O_TRUNC, matching the small-file backend.
+                    // 大檔：依選定後端 inline 串流寫入。ucrt 路徑避開
+                    // Foundation FileHandle 寫入，並以 O_TRUNC 開檔，與小檔
+                    // 後端語意一致。
                     if submitted.contains(dest) { pool?.drain() }
-                    _ = fm.createFile(atPath: dest, contents: nil)
-                    guard let out = FileHandle(forWritingAtPath: dest) else {
-                        throw TarError.io("cannot create '\(dest)' / 無法建立 '\(dest)'")
-                    }
-                    var remaining = size
-                    while remaining > 0 {
-                        let n = Int(min(remaining, UInt64(DECODE_CHUNK)))
-                        guard let part = readExactly(n) else {
-                            throw TarError.format("truncated file data / 檔案資料不完整")
+                    switch options.writeBackend {
+                    case .ucrt:
+                        var fd: Int32 = -1
+                        let openErr = winUcrtPath(dest).withCString(encodedAs: UTF16.self) { w in
+                            _wsopen_s(&fd, w, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY | _O_SEQUENTIAL,
+                                      _SH_DENYNO, _S_IREAD | _S_IWRITE)
                         }
-                        try out.write(contentsOf: part)
-                        remaining -= UInt64(n)
-                    }
-                    try? out.close()
-                    if options.restoreMtime {
-                        try? fm.setAttributes([.modificationDate:
-                            Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+                        guard openErr == 0, fd >= 0 else {
+                            throw TarError.io("cannot create '\(dest)' (errno \(openErr)) / 無法建立 '\(dest)'")
+                        }
+                        defer { _ = _close(fd) }
+                        var remaining = size
+                        while remaining > 0 {
+                            let n = Int(min(remaining, UInt64(DECODE_CHUNK)))
+                            guard let part = readExactly(n) else {
+                                throw TarError.format("truncated file data / 檔案資料不完整")
+                            }
+                            var writeOK = true
+                            part.withUnsafeBytes { raw in
+                                var off = 0
+                                while off < raw.count {
+                                    let wrote = _write(fd, raw.baseAddress! + off,
+                                                       UInt32(min(raw.count - off, 1 << 30)))
+                                    if wrote <= 0 { writeOK = false; return }
+                                    off += Int(wrote)
+                                }
+                            }
+                            if !writeOK {
+                                throw TarError.io("write failed for '\(dest)' / 寫入失敗 '\(dest)'")
+                            }
+                            remaining -= UInt64(n)
+                        }
+                        if options.restoreMtime {
+                            var tb = __utimbuf64(actime: __time64_t(mtime), modtime: __time64_t(mtime))
+                            _ = _futime64(fd, &tb)
+                        }
+                    case .foundation:
+                        try? fm.removeItem(atPath: dest)
+                        _ = fm.createFile(atPath: dest, contents: nil)
+                        guard let out = FileHandle(forWritingAtPath: dest) else {
+                            throw TarError.io("cannot create '\(dest)' / 無法建立 '\(dest)'")
+                        }
+                        var remaining = size
+                        while remaining > 0 {
+                            let n = Int(min(remaining, UInt64(DECODE_CHUNK)))
+                            guard let part = readExactly(n) else {
+                                throw TarError.format("truncated file data / 檔案資料不完整")
+                            }
+                            try out.write(contentsOf: part)
+                            remaining -= UInt64(n)
+                        }
+                        try? out.close()
+                        if options.restoreMtime {
+                            try? fm.setAttributes([.modificationDate:
+                                Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+                        }
                     }
                 }
 #else
@@ -2328,7 +2375,10 @@ private func printTarUsage() {
                          每分塊一個 xz 串流（標準 xz 多串流）
       --lzip           : lzip CLI, one lzip stream per chunk
                          每分塊一個 lzip 串流（需 lzip CLI）
-      --zstd           : libzstd, one frame per chunk / 每分塊一個 zstd frame
+      --zstd           : libzstd, one frame per chunk; default level -9
+                         每分塊一個 zstd frame；預設等級 -9
+      -1..-22          : With --zstd create, override zstd compression level
+                         搭配 --zstd 建立時覆寫 zstd 壓縮等級
       --lz4            : liblz4 standard frames / 標準 LZ4 frame
       (none)           : Plain uncompressed tar / 不壓縮的純 tar
 
@@ -2699,7 +2749,8 @@ struct SwiftTarMain {
                 // Long single-dash flags with "_" (-write_ucrt, -write_foundation)
                 // must not be split into single letters.
                 // 含底線的單槓長旗標（-write_ucrt、-write_foundation）不可拆成單字母。
-                if a.hasPrefix("-") && !a.hasPrefix("--") && a.count > 2 && !a.contains("_") {
+                let isNumericFlag = a.hasPrefix("-") && a.dropFirst().allSatisfy({ $0.isNumber })
+                if a.hasPrefix("-") && !a.hasPrefix("--") && a.count > 2 && !a.contains("_") && !isNumericFlag {
                     for ch in a.dropFirst() { out.append("-\(ch)") }
                 } else if idx == 0 && !a.hasPrefix("-") && a.count > 1 && a.allSatisfy({ $0.isLetter }) {
                     for ch in a { out.append("-\(ch)") }
@@ -2734,7 +2785,21 @@ struct SwiftTarMain {
         if args.contains("--bzip2") || args.contains("-j") { codec = .bzip2; codecCount += 1 }
         if args.contains("--xz") || args.contains("-J")    { codec = .xz;    codecCount += 1 }
         if args.contains("--lzip")           { codec = .lzip;                  codecCount += 1 }
-        if args.contains("--zstd")           { codec = .zstd;                  codecCount += 1 }
+        let zstdLevel: Int32 = {
+            var level: Int32 = 9
+            for a in args.dropFirst() {
+                guard a.hasPrefix("-"), a.count > 1 else { continue }
+                let raw = String(a.dropFirst())
+                guard raw.allSatisfy({ $0.isNumber }), let parsed = Int32(raw) else { continue }
+                guard parsed >= 1 && parsed <= 22 else {
+                    eprint("Error: zstd level expects -1 through -22. / 錯誤：zstd 等級需為 -1 到 -22。")
+                    exit(1)
+                }
+                level = parsed
+            }
+            return level
+        }()
+        if args.contains("--zstd")           { codec = .zstd(level: zstdLevel); codecCount += 1 }
         if args.contains("--lz4")            { codec = .lz4;                   codecCount += 1 }
         guard codecCount <= 1 else {
             eprint("Error: at most one codec flag. / 錯誤：壓縮引擎旗標至多一個。")

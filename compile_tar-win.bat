@@ -52,7 +52,7 @@ if errorlevel 1 (
 if not exist release mkdir release
 
 set "_build_exe=swift_tar-build-%RANDOM%.exe"
-swiftc -O "%_temp_cli%" "%_temp_version%" swift_tar.swift -o "%_build_exe%" -I cmodules\zlib -Xcc -Izlib -Xcc -Izlib\build -Lzlib\build\Release -lzs -Lzstd\build\lib\Release -lzstd_static
+swiftc -O "%_temp_cli%" "%_temp_version%" swift_tar.swift rgb1.swift -o "%_build_exe%" -I cmodules\zlib -Xcc -Izlib -Xcc -Izlib\build -Lzlib\build\Release -lzs -Lzstd\build\lib\Release -lzstd_static
 set "_rc=%ERRORLEVEL%"
 del /Q "%_temp_cli%" "%_temp_version%" > nul 2>&1
 if not "%_rc%"=="0" (

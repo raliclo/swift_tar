@@ -39,7 +39,7 @@ sh ./generate_version.sh "$TEMP_VERSION"
 
 # Build into the release/ folder / 建置輸出至 release/ 資料夾
 mkdir -p release
-swiftc -O "$TEMP_CLI" "$TEMP_VERSION" swift_tar.swift -o release/swift_tar \
+swiftc -O "$TEMP_CLI" "$TEMP_VERSION" swift_tar.swift rgb1.swift -o release/swift_tar \
     -lz -lbz2 -L"$BREW_LIB" -llz4 -llzma -lzstd
 
 echo "Built ./release/swift_tar / 已建置 ./release/swift_tar"

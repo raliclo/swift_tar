@@ -2462,6 +2462,9 @@ private func printTarUsage() {
     // 常數排除——僅靠執行期過濾仍會把 "bvx3" 文字留在 binary 內。
     let head = """
     Usage: swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...]
+           swift_tar --rgb1-pack --width <W> --height <H> --lat <deg> --lng <deg> --height-m <m> --title <text> --country <text> --creator-email <email> --right <text> --created-ms <unix_ms> -f <out.rgb1> <raw.rgb>
+           swift_tar --rgb1-info -f <image.rgb1>
+           swift_tar --rgb1-raw -f <image.rgb1> > image.rgb
 
     Commands:
       -c              : Create an archive / 建立封存檔
@@ -2487,6 +2490,12 @@ private func printTarUsage() {
                         (bsdcat equivalent; use for RPM payloads etc.)
                         僅解壓 filter 鏈、原始內容輸出至 stdout（等同 bsdcat；
                         RPM payload 等非 tar 內容可用此模式取出）
+      --rgb1-pack     : Wrap raw RGB bytes with an RGB1 header
+                        將 raw RGB bytes 包成 RGB1 標頭格式
+      --rgb1-info     : Print RGB1 width, height, geo, and payload size
+                        輸出 RGB1 寬、高、地理資訊與 payload 大小
+      --rgb1-raw      : Strip RGB1 header and write raw RGB payload to stdout
+                        移除 RGB1 標頭，將 raw RGB payload 輸出至 stdout
 
     Codec (create only; reading auto-detects, see below):
     壓縮引擎（僅建立時指定；讀取自動偵測，見下）:
@@ -2539,10 +2548,37 @@ private func printTarUsage() {
     Options:
       -f <path>       : Archive file ("-" = stdin/stdout; default "-")
                         封存檔路徑（"-" 表標準輸入／輸出；預設 "-"）
+                        RGB1 modes use -f as the RGB1 input/output path.
+                        RGB1 模式以 -f 作為 RGB1 輸入／輸出路徑。
       -C <dir>        : Change directory before create, or extract into <dir>
                         建立封存前切換目錄，或解出至 <dir>
       -n <N>          : In-flight parallel chunks (default 2×cores)
                         平行在途分塊數（預設 2×核心數）
+      --width <W>     : RGB1 pack width, UInt32 pixels
+                        RGB1 pack 的寬度，UInt32 像素
+      --height <H>    : RGB1 pack height, UInt32 pixels
+                        RGB1 pack 的高度，UInt32 像素
+      --lat <deg>     : RGB1 latitude in WGS84 degrees (-90...90)
+                        RGB1 WGS84 緯度，單位度（-90...90）
+      --lng <deg>     : RGB1 longitude in WGS84 degrees (-180...180)
+                        RGB1 WGS84 經度，單位度（-180...180）
+      --height-m <m>  : RGB1 WGS84 ellipsoid height, meters stored as millimeters
+                        RGB1 WGS84 ellipsoid height，輸入公尺、header 儲存毫米
+      --title <text>  : RGB1 ASCII title, less than 64 bytes
+                        RGB1 ASCII 標題，小於 64 bytes
+      --country <text>: RGB1 ASCII country, less than 512 bytes
+                        RGB1 ASCII 國家，小於 512 bytes
+      --creator-email <email>:
+                        RGB1 creator email, ASCII, at most 254 bytes
+                        RGB1 建立者 email，ASCII，最多 254 bytes
+      --right <text>  : RGB1 rights code, 1 to 4 English letters
+                        RGB1 權利代碼，1 到 4 個英文字母
+      --created-ms <unix_ms>:
+                        RGB1 created timestamp, Int64 UTC Unix milliseconds
+                        RGB1 建立時間戳，Int64 UTC Unix milliseconds
+      --tz-offset-min <minutes>:
+                        RGB1 timezone offset minutes, Int16; default 480 (TW)
+                        RGB1 時區 offset 分鐘，Int16；預設 480（台灣）
       -v              : Verbose; on read also prints the detected compression
                         format ("none" if uncompressed)
                         詳細輸出；讀取時另印出偵測到的壓縮格式（未壓縮則印 none）
@@ -2952,6 +2988,95 @@ struct SwiftTarMain {
         if args.contains("-h") || args.count < 2 {
             printTarUsage()
             exit(args.count < 2 ? 1 : 0)
+        }
+
+        // RGB1 raw-image container modes (self-contained, see rgb1.swift). Handled
+        // before the tar mode guard because they use neither -c/-x/-t nor a codec.
+        // RGB1 原始影像容器模式（自足，見 rgb1.swift）。在 tar 模式守衛前處理，
+        // 因為它們不使用 -c/-x/-t 也不使用 codec。
+        let rgb1Pack = args.contains("--rgb1-pack")
+        let rgb1Info = args.contains("--rgb1-info")
+        let rgb1Raw = args.contains("--rgb1-raw")
+        if [rgb1Pack, rgb1Info, rgb1Raw].filter({ $0 }).count > 0 {
+            guard [rgb1Pack, rgb1Info, rgb1Raw].filter({ $0 }).count == 1 else {
+                eprint("Error: specify exactly one RGB1 command. / 錯誤：RGB1 命令只能指定一個。")
+                exit(1)
+            }
+            do {
+                let rgb1Path = optValue("-f") ?? "-"
+                if rgb1Pack {
+                    guard let widthRaw = optValue("--width"),
+                          let width = UInt32(widthRaw),
+                          let heightRaw = optValue("--height"),
+                          let height = UInt32(heightRaw),
+                          let latitudeRaw = optValue("--lat"),
+                          let latitude = Double(latitudeRaw),
+                          let longitudeRaw = optValue("--lng"),
+                          let longitude = Double(longitudeRaw),
+                          let heightMetersRaw = optValue("--height-m"),
+                          let heightMeters = Double(heightMetersRaw),
+                          let title = optValue("--title"),
+                          let country = optValue("--country"),
+                          let creatorEmail = optValue("--creator-email"),
+                          let right = optValue("--right"),
+                          let createdRaw = optValue("--created-ms"),
+                          let createdUnixMilliseconds = Int64(createdRaw)
+                    else {
+                        throw RGB1Error.missingArgument("--width/--height/--lat/--lng/--height-m/--title/--country/--creator-email/--right/--created-ms")
+                    }
+                    let timezoneOffsetMinutes: Int16
+                    if let timezoneRaw = optValue("--tz-offset-min") {
+                        guard let parsed = Int16(timezoneRaw) else {
+                            throw RGB1Error.badText("tz_offset_min")
+                        }
+                        timezoneOffsetMinutes = parsed
+                    } else {
+                        timezoneOffsetMinutes = RGB1Image.taiwanTimezoneOffsetMinutes
+                    }
+
+                    let inputPath = args.last { candidate in
+                        !candidate.hasPrefix("-")
+                        && candidate != args[0]
+                        && candidate != rgb1Path
+                        && candidate != widthRaw
+                        && candidate != heightRaw
+                        && candidate != latitudeRaw
+                        && candidate != longitudeRaw
+                        && candidate != heightMetersRaw
+                        && candidate != title
+                        && candidate != country
+                        && candidate != creatorEmail
+                        && candidate != right
+                        && candidate != createdRaw
+                        && candidate != optValue("--tz-offset-min")
+                    } ?? "-"
+                    try runRGB1Pack(
+                        inputPath: inputPath,
+                        outputPath: rgb1Path,
+                        width: width,
+                        height: height,
+                        latitude: latitude,
+                        longitude: longitude,
+                        heightMeters: heightMeters,
+                        title: title,
+                        country: country,
+                        creatorEmail: creatorEmail,
+                        right: right,
+                        createdUnixMilliseconds: createdUnixMilliseconds,
+                        timezoneOffsetMinutes: timezoneOffsetMinutes
+                    )
+                } else if rgb1Info {
+                    if rgb1Path == "-" { throw RGB1Error.missingArgument("-f <image.rgb1>") }
+                    try runRGB1Info(inputPath: rgb1Path)
+                } else {
+                    if rgb1Path == "-" { throw RGB1Error.missingArgument("-f <image.rgb1>") }
+                    try runRGB1Raw(inputPath: rgb1Path)
+                }
+                exit(0)
+            } catch {
+                eprint("swift_tar RGB1 error: \(error.localizedDescription)")
+                exit(1)
+            }
         }
 
         let doCreate = args.contains("-c")

@@ -1,0 +1,19 @@
+[Info] date: 2026-07-31 07:46:03 CST
+[Info] host: Darwin 25.5.0 arm64
+[Info] swift_tar: /Users/raliclo/proj/lzfse2/swift_tar/release/swift_tar
+[Info] version: swift_tar 20260731-073605
+[Info] corpus: synthetic RGB1 1024x1024 (3 MiB payload + 876B header = 3146604 B)
+[Info] MB/s = container bytes / time (MB = 10^6); times are the mean of 3 runs
+
+== RGB1 container: size / time / throughput by codec ==
+codec                 size(B)   ratio  create(ms)  cr(MB/s) extract(ms)  ex(MB/s)
+---------------- ------------ ------- ----------- --------- ----------- ---------
+plain                 3148288   1.000        11.7     268.9        11.7     268.9
+gzip                    23138   0.007        15.7     200.4        12.2     257.9
+bzip2                   40980   0.013       589.0       5.3        37.0      85.0
+xz                       4884   0.002        33.7      93.4        15.1     208.4
+zstd                     4567   0.001        10.7     294.1        12.6     249.7
+lz4                     18653   0.006        10.8     291.4        12.1     260.0
+zip                     23200   0.007        15.2     207.0        10.4     302.6
+bvx3-optimal             4590   0.001        15.5     203.0        13.1     240.2
+other3-optimal           6392   0.002        20.4     154.2        13.0     242.0

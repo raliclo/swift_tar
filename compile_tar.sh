@@ -74,7 +74,7 @@ sh ./generate_version.sh "$TEMP_VERSION"
 # Build into the release/ folder / 建置輸出至 release/ 資料夾
 mkdir -p release
 sh ./build_libarchive.sh
-swiftc -O $SWIFT_DEFINES $CLI_SRC "$TEMP_VERSION" swift_tar.swift \
+swiftc -O $SWIFT_DEFINES $CLI_SRC "$TEMP_VERSION" swift_tar.swift rgb1.swift \
     build/libarchive_zip_bridge.o build/libarchive-macos/libarchive/libarchive.a \
     -o release/swift_tar -lz -lbz2 -L"$BREW_LIB" -llz4 -llzma -lzstd
 

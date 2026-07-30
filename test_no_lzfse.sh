@@ -21,6 +21,8 @@ TMP="$(mktemp -d "$HERE/.test_nolz.XXXXXX")"
 cleanup() { rm -rf "$TMP"; ./compile_tar.sh >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
+echo "[Info] date: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+
 pass=0; fail=0
 ok()  { echo "PASS: $1"; pass=$((pass+1)); }
 bad() { echo "FAIL: $1"; fail=$((fail+1)); }

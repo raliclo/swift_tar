@@ -28,6 +28,9 @@ TMP="$(mktemp -d "$HERE/.test_append_update.XXXXXX")"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT   # remove temp folder when the test finishes / 測試結束移除暫存資料夾
 
+echo "[Info] date: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+echo "[Info] swift_tar: $ST"
+
 pass=0; fail=0
 ok()   { echo "PASS: $1"; pass=$((pass+1)); }
 bad()  { echo "FAIL: $1"; fail=$((fail+1)); }

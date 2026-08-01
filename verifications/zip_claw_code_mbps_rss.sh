@@ -46,7 +46,7 @@ CORPUS_PARENT="${CORPUS:h}"
 CORPUS_LEAF="${CORPUS:t}"
 RAW_BYTES="$(find "$CORPUS" -type f -exec stat -f '%z' {} + | awk '{sum += $1} END {printf "%.0f", sum}')"
 FILE_COUNT="$(find "$CORPUS" -type f | wc -l | tr -d ' ')"
-RAW_MIB="$(awk -v bytes="$RAW_BYTES" 'BEGIN {printf "%.2f", bytes / 1048576}')"
+RAW_MB="$(awk -v bytes="$RAW_BYTES" 'BEGIN {printf "%.2f", bytes / 1000000}')"
 ARCHIVE="$TMP_DIR/claw-code.zip"
 
 typeset MEASURE_REAL MEASURE_RSS
@@ -74,10 +74,10 @@ echo "[Info] machine / 機器: $(uname -m), $(sysctl -n machdep.cpu.brand_string
 echo "[Info] swift_tar: $SWIFT_TAR_BIN ($("$SWIFT_TAR_BIN" --version))"
 echo "[Info] corpus / 語料: $CORPUS"
 echo "[Info] regular files / 一般檔案: $FILE_COUNT"
-echo "[Info] logical input / 邏輯輸入: $RAW_BYTES bytes ($RAW_MIB MiB)"
+echo "[Info] logical input / 邏輯輸入: $RAW_BYTES bytes ($RAW_MB MB)"
 echo "[Info] rounds / 輪數: $ROUNDS"
 echo
-printf "%-7s %-7s %10s %12s %12s\n" "phase" "round" "real(s)" "MiB/s" "peakRSS(MB)"
+printf "%-7s %-7s %10s %12s %12s\n" "phase" "round" "real(s)" "MB/s" "peakRSS(MB)"
 
 typeset -a ENCODE_SECONDS ENCODE_SPEEDS ENCODE_RSS_MB
 typeset -a DECODE_SECONDS DECODE_SPEEDS DECODE_RSS_MB
@@ -85,8 +85,8 @@ typeset -a DECODE_SECONDS DECODE_SPEEDS DECODE_RSS_MB
 for round in $(seq 1 "$ROUNDS"); do
     measure "$SWIFT_TAR_BIN" -c --zip -f "$ARCHIVE" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
     seconds="$MEASURE_REAL"
-    speed="$(awk -v mib="$RAW_MIB" -v sec="$seconds" 'BEGIN {printf "%.2f", mib/sec}')"
-    rss_mb="$(awk -v bytes="$MEASURE_RSS" 'BEGIN {printf "%.2f", bytes/1048576}')"
+    speed="$(awk -v bytes="$RAW_BYTES" -v sec="$seconds" 'BEGIN {printf "%.2f", (sec > 0 ? bytes/1000000/sec : 0)}')"
+    rss_mb="$(awk -v bytes="$MEASURE_RSS" 'BEGIN {printf "%.2f", bytes/1000000}')"
     ENCODE_SECONDS+=("$seconds")
     ENCODE_SPEEDS+=("$speed")
     ENCODE_RSS_MB+=("$rss_mb")
@@ -96,8 +96,8 @@ for round in $(seq 1 "$ROUNDS"); do
     mkdir -p "$dest"
     measure "$SWIFT_TAR_BIN" -x -f "$ARCHIVE" -C "$dest"
     seconds="$MEASURE_REAL"
-    speed="$(awk -v mib="$RAW_MIB" -v sec="$seconds" 'BEGIN {printf "%.2f", mib/sec}')"
-    rss_mb="$(awk -v bytes="$MEASURE_RSS" 'BEGIN {printf "%.2f", bytes/1048576}')"
+    speed="$(awk -v bytes="$RAW_BYTES" -v sec="$seconds" 'BEGIN {printf "%.2f", (sec > 0 ? bytes/1000000/sec : 0)}')"
+    rss_mb="$(awk -v bytes="$MEASURE_RSS" 'BEGIN {printf "%.2f", bytes/1000000}')"
     DECODE_SECONDS+=("$seconds")
     DECODE_SPEEDS+=("$speed")
     DECODE_RSS_MB+=("$rss_mb")
@@ -111,15 +111,15 @@ for round in $(seq 1 "$ROUNDS"); do
 done
 
 ARCHIVE_BYTES="$(stat -f '%z' "$ARCHIVE")"
-ARCHIVE_MIB="$(awk -v bytes="$ARCHIVE_BYTES" 'BEGIN {printf "%.2f", bytes/1048576}')"
+ARCHIVE_MB="$(awk -v bytes="$ARCHIVE_BYTES" 'BEGIN {printf "%.2f", bytes/1000000}')"
 RATIO="$(awk -v archive="$ARCHIVE_BYTES" -v raw="$RAW_BYTES" 'BEGIN {printf "%.2f", archive/raw*100}')"
 
 echo
 echo "== Summary / 摘要 =="
-echo "ZIP size / ZIP 大小: $ARCHIVE_BYTES bytes ($ARCHIVE_MIB MiB, $RATIO% of logical input)"
-printf "Encode median: %.2f s, %.2f MiB/s, peak RSS median %.2f MB\n" \
+echo "ZIP size / ZIP 大小: $ARCHIVE_BYTES bytes ($ARCHIVE_MB MB, $RATIO% of logical input)"
+printf "Encode median: %.2f s, %.2f MB/s, peak RSS median %.2f MB\n" \
     "$(median "${ENCODE_SECONDS[@]}")" "$(median "${ENCODE_SPEEDS[@]}")" "$(median "${ENCODE_RSS_MB[@]}")"
-printf "Decode median: %.2f s, %.2f MiB/s, peak RSS median %.2f MB\n" \
+printf "Decode median: %.2f s, %.2f MB/s, peak RSS median %.2f MB\n" \
     "$(median "${DECODE_SECONDS[@]}")" "$(median "${DECODE_SPEEDS[@]}")" "$(median "${DECODE_RSS_MB[@]}")"
 echo "[PASS] ZIP throughput, RSS, and round-trip verification completed."
 echo "[PASS] ZIP 吞吐量、RSS 與往返正確性驗證完成。"

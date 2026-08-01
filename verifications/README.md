@@ -10,7 +10,7 @@ conclusion.
 ## ZIP throughput and RSS on claw-code
 
 `zip_claw_code_mbps_rss.sh` runs true-ZIP encode and decode against the complete
-`claw-code` corpus, reports logical-input MiB/s and process peak RSS for each
+`claw-code` corpus, reports decimal logical-input MB/s and process peak RSS for each
 round, and compares the first extracted tree with the source. By default it
 runs three rounds and writes `zip_claw_code_mbps_rss_output.txt`.
 

@@ -1,1 +1,23 @@
-[Error] /usr/bin/time -l is required / 需要 macOS /usr/bin/time -l
+[Info] date / 日期: 2026-08-01 11:28:35 CST
+[Info] machine / 機器: arm64, Apple M4
+[Info] swift_tar: /Users/raliclo/proj/lzfse2/swift_tar/release/swift_tar (swift_tar 20260731-074643)
+[Info] corpus / 語料: /Users/raliclo/proj/lzfse2/claw-code
+[Info] regular files / 一般檔案: 5395
+[Info] logical input / 邏輯輸入: 1402954040 bytes (1402.95 MB)
+[Info] rounds / 輪數: 3
+
+phase   round      real(s)         MB/s  peakRSS(MB)
+encode  1            32.62        43.01         8.80
+decode  1             2.23       629.13         9.56
+[Verify] extracted tree matches claw-code / 解壓目錄與 claw-code 完全一致
+encode  2            30.82        45.52         8.86
+decode  2             2.27       618.04         9.58
+encode  3            30.83        45.51         8.86
+decode  3             2.15       652.54         9.58
+
+== Summary / 摘要 ==
+ZIP size / ZIP 大小: 493956323 bytes (493.96 MB, 35.21% of logical input)
+Encode median: 30.83 s, 45.51 MB/s, peak RSS median 8.86 MB
+Decode median: 2.23 s, 629.13 MB/s, peak RSS median 9.58 MB
+[PASS] ZIP throughput, RSS, and round-trip verification completed.
+[PASS] ZIP 吞吐量、RSS 與往返正確性驗證完成。

@@ -9,7 +9,7 @@
 ## claw-code ZIP 吞吐量與 RSS
 
 `zip_claw_code_mbps_rss.sh` 以完整 `claw-code` 語料執行真實 ZIP encode 與
-decode，逐輪回報 logical-input MiB/s 與程序 peak RSS，並比較第一輪解壓目錄和
+decode，逐輪回報十進位 logical-input MB/s 與程序 peak RSS，並比較第一輪解壓目錄和
 來源。預設執行三輪，結果寫入 `zip_claw_code_mbps_rss_output.txt`。
 
 ```sh

@@ -34,33 +34,40 @@ present in `crypto.swift`:
 - Neither the encrypt nor the decrypt loop wrapped its per-chunk work in
   `autoreleasepool`, so Foundation's `FileHandle` reads piled up.
 
-| Phase | Before | After |
-| --- | ---: | ---: |
-| plain tar create + encrypt | 1454 MB | **42 MB** |
-| extract + decrypt | 1475 MB | **39 MB** |
-| `--encrypt-only` | 1438 MB | **24 MB** |
-| `--decrypt-only` | 1460 MB | **20 MB** |
+| Phase | Unbounded | Bounded serial | Bounded parallel |
+| --- | ---: | ---: | ---: |
+| plain tar create + encrypt | 1454 MB | 42 MB | **231 MB** |
+| extract + decrypt | 1475 MB | 39 MB | **192 MB** |
+| `--encrypt-only` | 1438 MB | 24 MB | **228 MB** |
+| `--decrypt-only` | 1460 MB | 20 MB | **156 MB** |
+
+The parallel pipeline deliberately holds up to `-n` 4 MiB chunks. Its semaphore
+slot is released only after a result is written in order, so memory is bounded
+by the configured in-flight count rather than the 1.4 GB stream size.
 
 ### Results summary (Apple M4, claw-code 1.40 GB, medians of 3)
 
 | Codec | create | create + encrypt | extract | extract + decrypt |
 | --- | ---: | ---: | ---: | ---: |
-| plain tar | 671 MB/s | 106 MB/s | 825 MB/s | 104 MB/s |
-| gzip | 301 MB/s | 223 MB/s | 391 MB/s | 188 MB/s |
-| zstd | 602 MB/s | 356 MB/s | 395 MB/s | 209 MB/s |
+| plain tar | 698 MB/s | 489 MB/s | 688 MB/s | 355 MB/s |
+| gzip | 306 MB/s | 268 MB/s | 428 MB/s | 348 MB/s |
+| zstd | 594 MB/s | 597 MB/s | 357 MB/s | 297 MB/s |
 
-`--encrypt-only` and `--decrypt-only` both run at about 115 MB/s, and
-`--decrypt-only` output is verified byte-identical to the original.
+`--encrypt-only` runs at **295 MB/s** with 228 MB peak RSS and `--decrypt-only`
+runs at **264 MB/s** with 156 MB peak RSS. The decrypted output is verified
+byte-identical to the original.
 
 Size overhead is **48 bytes of header plus 21 bytes per 4 MiB chunk** — 7125
 bytes on a 1.4 GB archive (0.0005%).
 
-> **Status**: the ~105–115 MB/s ceiling is the pure-Swift ChaCha20-Poly1305
-> layer, which currently runs **single-threaded** while compression is
-> chunk-parallel. That is why encryption costs the most on the fastest codecs
-> (zstd create drops from 602 to 356 MB/s) and least on the slowest. Each chunk
-> is sealed independently, so this layer could be parallelised the same way the
-> codecs are; that work has not been done.
+Passphrase derivation is now measured directly against the same `crypto.swift`:
+the three-run median is **0.210 s** per scrypt derivation, with 51.49 MB peak RSS
+versus 6.18 MB for the keyfile baseline.
+
+> **Status**: the pure-Swift ChaCha20-Poly1305 layer now seals and opens chunks
+> concurrently according to `-n`, then writes results in order with bounded
+> backpressure. The current figures apply to that parallel implementation and
+> supersede the earlier single-threaded ~115 MB/s result.
 
 ## RGB1 container throughput by codec
 

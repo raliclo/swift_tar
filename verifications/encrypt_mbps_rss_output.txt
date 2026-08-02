@@ -1,40 +1,40 @@
-[Info] date / 日期: 2026-08-03 04:12:50 CST
+[Info] date / 日期: 2026-08-03 06:52:29 CST
 [Info] machine / 機器: arm64, Apple M4
-[Info] swift_tar: /Users/raliclo/proj/lzfse2/swift_tar/release/swift_tar (swift_tar 20260803-041205)
+[Info] swift_tar: /Users/raliclo/proj/lzfse2/swift_tar/release/swift_tar (swift_tar 20260803-065143)
 [Info] corpus / 語料: /Users/raliclo/proj/lzfse2/claw-code
-[Info] regular files / 一般檔案: 5395
-[Info] logical input / 邏輯輸入: 1402954040 bytes (1402.95 MB)
+[Info] regular files / 一般檔案: 5402
+[Info] logical input / 邏輯輸入: 1402999124 bytes (1403.00 MB)
 [Info] rounds / 輪數: 3 (median reported / 取中位數)
 [Info] key / 金鑰: 64-byte keyfile (no scrypt; see the KDF note below)
 
 == A) create/extract, plain vs encrypted ==
 codec            mode         real(s)       MB/s  peakRSS(MB) archive(bytes)
-plain-tar        create          2.09     671.27        20.17     1407493120
-                 create+enc      13.18     106.45        42.43     1407500245
-                 extract         1.70     825.27        32.26              -
-                 extr+dec       13.43     104.46        39.26              -
-gzip             create          4.66     301.06       217.56      491308431
-                 create+enc       6.29     223.05       281.94      491310978
-                 extract         3.59     390.79        51.69              -
-                 extr+dec        7.46     188.06        63.14              -
-zstd             create          2.33     602.13       216.56      433566701
-                 create+enc       3.94     356.08       318.54      433568954
-                 extract         3.55     395.20       493.49              -
-                 extr+dec        6.70     209.40       501.51              -
+plain-tar        create          2.01     698.01        20.91     1407545344
+                 create+enc       2.87     488.85       230.56     1407552469
+                 extract         2.04     687.74        31.51              -
+                 extr+dec        3.95     355.19       191.97              -
+gzip             create          4.58     306.33       219.43      491321601
+                 create+enc       5.24     267.75       265.62      491324148
+                 extract         3.28     427.74        50.00              -
+                 extr+dec        4.03     348.14       232.75              -
+zstd             create          2.36     594.49       228.74      433753307
+                 create+enc       2.35     597.02       331.92      433755560
+                 extract         3.93     357.00       495.67              -
+                 extr+dec        4.72     297.25       552.52              -
 
 == B) --encrypt-only / --decrypt-only on an existing .tar ==
 phase               real(s)       MB/s  peakRSS(MB)  output(bytes)
-encrypt-only          12.22     114.81        23.64     1407500245
-decrypt-only          12.22     114.81        19.50     1407493120
+encrypt-only           4.76     294.75       228.02     1407552469
+decrypt-only           5.32     263.72       156.25     1407545344
 [OK] decrypt-only output is byte-identical to the original / 與原檔位元組一致
 [Info] size overhead / 大小開銷: 7125 bytes (0.0005%), = 48B header + 21B per 4 MiB chunk
 
 == C) passphrase KDF (scrypt N=2^15, r=8, p=1) ==
-[Info] --keyfile skips this; --encrypt pays it once per archive, on both
-       create and read / --keyfile 不含此成本；--encrypt 每個封存於建立與
-       讀取時各支付一次
-[Info] keyfile encrypt of a small file / 小檔 keyfile 加密: 0.00s (KDF-free baseline)
-[Info] the scrypt parameters cost roughly 32 MiB and ~0.1 s per derivation
-       scrypt 參數約需 32 MiB 記憶體、每次衍生約 0.1 秒
+mode                real(s)  peakRSS(MB)
+keyfile                0.00         6.18
+passphrase             0.21        51.49
+[Info] measured scrypt time delta / 實測 scrypt 時間差: 0.210 s per derivation
+[Info] --encrypt pays this once per archive on create and read.
+       --encrypt 每個封存於建立與讀取時各支付一次此成本。
 
 [Done] output / 輸出: /Users/raliclo/proj/lzfse2/swift_tar/verifications/encrypt_mbps_rss_output.txt

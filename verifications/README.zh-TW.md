@@ -31,31 +31,36 @@ peak RSS 達 **1454 MB**，未加密的建立僅 20 MB。下方 TGZ 調查中的
 - 加密與解密迴圈都未以 `autoreleasepool` 包住每個 chunk 的工作，導致
   Foundation `FileHandle` 讀取不斷堆積。
 
-| 階段 | 修正前 | 修正後 |
-| --- | ---: | ---: |
-| 純 tar 建立 + 加密 | 1454 MB | **42 MB** |
-| 解出 + 解密 | 1475 MB | **39 MB** |
-| `--encrypt-only` | 1438 MB | **24 MB** |
-| `--decrypt-only` | 1460 MB | **20 MB** |
+| 階段 | 無界 | 有界單執行緒 | 有界平行 |
+| --- | ---: | ---: | ---: |
+| 純 tar 建立 + 加密 | 1454 MB | 42 MB | **231 MB** |
+| 解出 + 解密 | 1475 MB | 39 MB | **192 MB** |
+| `--encrypt-only` | 1438 MB | 24 MB | **228 MB** |
+| `--decrypt-only` | 1460 MB | 20 MB | **156 MB** |
+
+平行管線依設計最多保留 `-n` 個 4 MiB chunk。每個 semaphore 額度只在結果按序
+寫出後歸還，因此記憶體由設定的在途數量限制，而不會隨 1.4 GB 串流大小成長。
 
 ### 結果摘要（Apple M4、claw-code 1.40 GB、3 次中位數）
 
 | Codec | 建立 | 建立 + 加密 | 解出 | 解出 + 解密 |
 | --- | ---: | ---: | ---: | ---: |
-| 純 tar | 671 MB/s | 106 MB/s | 825 MB/s | 104 MB/s |
-| gzip | 301 MB/s | 223 MB/s | 391 MB/s | 188 MB/s |
-| zstd | 602 MB/s | 356 MB/s | 395 MB/s | 209 MB/s |
+| 純 tar | 698 MB/s | 489 MB/s | 688 MB/s | 355 MB/s |
+| gzip | 306 MB/s | 268 MB/s | 428 MB/s | 348 MB/s |
+| zstd | 594 MB/s | 597 MB/s | 357 MB/s | 297 MB/s |
 
-`--encrypt-only` 與 `--decrypt-only` 皆約 115 MB/s，且 `--decrypt-only` 的輸出
-已驗證與原檔位元組一致。
+`--encrypt-only` 為 **295 MB/s**、peak RSS 228 MB；`--decrypt-only` 為
+**264 MB/s**、peak RSS 156 MB。解密輸出已驗證與原檔位元組一致。
 
 大小開銷為 **48 bytes 標頭加上每 4 MiB chunk 21 bytes**——1.4 GB 封存為 7125
 bytes（0.0005%）。
 
-> **狀態**：約 105–115 MB/s 的上限來自純 Swift 的 ChaCha20-Poly1305 層，該層
-> 目前為**單執行緒**，而壓縮是分塊平行的。因此加密對最快的 codec 影響最大
-> （zstd 建立由 602 降至 356 MB/s），對最慢的影響最小。由於每個 chunk 各自
-> 獨立封裝，此層本可比照 codec 平行化；該項尚未實作。
+密語衍生現已直接使用同一份 `crypto.swift` 實測：三輪中位數為每次 scrypt
+**0.210 秒**，peak RSS 51.49 MB；keyfile baseline 則為 6.18 MB。
+
+> **狀態**：純 Swift ChaCha20-Poly1305 層現在依 `-n` 平行封裝與解封 chunk，
+> 再以有界反壓按序寫出。目前數字適用於此平行實作，並取代先前單執行緒約
+> 115 MB/s 的結果。
 
 ## RGB1 容器各 codec 吞吐量
 

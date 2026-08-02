@@ -12,7 +12,7 @@
 #
 # The keyfile path is used throughout so the runs are non-interactive. Because
 # --keyfile skips the scrypt KDF, these numbers measure the AEAD itself; the
-# one-off scrypt cost of a passphrase is reported separately at the end.
+# one-off scrypt cost of a passphrase is measured separately at the end.
 # 全程使用 keyfile 以維持非互動。由於 --keyfile 不走 scrypt KDF，這些數字量的是
 # AEAD 本身；密語一次性的 scrypt 成本另於結尾單獨回報。
 #
@@ -46,6 +46,10 @@ if ! [[ "$ROUNDS" =~ '^[1-9][0-9]*$' ]]; then
 fi
 if [[ ! -x /usr/bin/time ]]; then
     echo "[Error] /usr/bin/time -l is required / 需要 macOS /usr/bin/time -l" >&2
+    exit 1
+fi
+if ! command -v swiftc >/dev/null 2>&1; then
+    echo "[Error] swiftc is required for the KDF measurement / KDF 量測需要 swiftc" >&2
     exit 1
 fi
 
@@ -193,21 +197,33 @@ awk -v raw="$BASE_BYTES" -v enc="$ENC_BYTES" 'BEGIN {
 }'
 
 # ---------------------------------------------------------------------
-# C) The one-off scrypt cost that --keyfile skips.
-#    --keyfile 略過的一次性 scrypt 成本。
+# C) Measure the one-off scrypt cost that --keyfile skips. A tiny helper is
+#    compiled against the same crypto.swift and encrypts an empty stream, so the
+#    difference between modes isolates key derivation from payload processing.
+#    量測 --keyfile 略過的一次性 scrypt 成本。小型 helper 直接連結同一份
+#    crypto.swift 並加密空串流，兩種模式的差異可排除 payload 處理成本。
 # ---------------------------------------------------------------------
 echo
 echo "== C) passphrase KDF (scrypt N=2^15, r=8, p=1) =="
-echo "[Info] --keyfile skips this; --encrypt pays it once per archive, on both"
-echo "       create and read / --keyfile 不含此成本；--encrypt 每個封存於建立與"
-echo "       讀取時各支付一次"
-SMALL="$TMP_DIR/small.tar"
-"$SWIFT_TAR_BIN" -c -f "$SMALL" -C "$SCRIPT_DIR" README.md 2>/dev/null || \
-    "$SWIFT_TAR_BIN" -c -f "$SMALL" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
-measure_to_file "$TMP_DIR/small.enc" "$SWIFT_TAR_BIN" --encrypt-only --keyfile "$KEYFILE" -f "$SMALL"
-echo "[Info] keyfile encrypt of a small file / 小檔 keyfile 加密: ${MEASURE_REAL}s (KDF-free baseline)"
-echo "[Info] the scrypt parameters cost roughly 32 MiB and ~0.1 s per derivation"
-echo "       scrypt 參數約需 32 MiB 記憶體、每次衍生約 0.1 秒"
+KDF_BENCH="$TMP_DIR/kdf_benchmark"
+swiftc -O "$SCRIPT_DIR/../crypto.swift" "$SCRIPT_DIR/kdf_benchmark.swift" -o "$KDF_BENCH"
+typeset -a kdf_key_t kdf_key_r kdf_pass_t kdf_pass_r
+for round in $(seq 1 "$ROUNDS"); do
+    measure "$KDF_BENCH" keyfile
+    kdf_key_t+=("$MEASURE_REAL"); kdf_key_r+=("$MEASURE_RSS")
+    measure "$KDF_BENCH" passphrase
+    kdf_pass_t+=("$MEASURE_REAL"); kdf_pass_r+=("$MEASURE_RSS")
+done
+key_t="$(median $kdf_key_t)"; pass_t="$(median $kdf_pass_t)"
+key_r="$(rssmb $(median $kdf_key_r))"; pass_r="$(rssmb $(median $kdf_pass_r))"
+printf "%-16s %10s %12s\n" "mode" "real(s)" "peakRSS(MB)"
+printf "%-16s %10s %12s\n" "keyfile" "$key_t" "$key_r"
+printf "%-16s %10s %12s\n" "passphrase" "$pass_t" "$pass_r"
+awk -v pass="$pass_t" -v key="$key_t" 'BEGIN {
+    printf "[Info] measured scrypt time delta / 實測 scrypt 時間差: %.3f s per derivation\n", pass - key
+}'
+echo "[Info] --encrypt pays this once per archive on create and read."
+echo "       --encrypt 每個封存於建立與讀取時各支付一次此成本。"
 
 echo
 echo "[Done] output / 輸出: $OUTPUT_TXT"

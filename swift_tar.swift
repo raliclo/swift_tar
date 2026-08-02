@@ -1336,7 +1336,7 @@ func resolveFilterChain(input: FileHandle, prefix: Data, filePath: String?,
             // 認證解密；解密後的位元組由下方遞迴再次嗅探，因此加密的 .tar.gz 亦可運作。
             do {
                 try TarCrypto.decryptStream(input: input, prefix: capturedHead, output: w,
-                                            secret: encryptionSecret!)
+                                            secret: encryptionSecret!, inflight: inflight)
                 ok = true
             } catch {
                 result.fail(error.localizedDescription)
@@ -3317,9 +3317,10 @@ struct SwiftTarMain {
                     try runIdentify(archivePath: archivePath, inflight: inflightN)
                 }
             } else if doEncryptOnly {
-                try runEncryptOnly(inputPath: archivePath, secret: tarEncryptionSecret!)
+                try runEncryptOnly(inputPath: archivePath, secret: tarEncryptionSecret!,
+                                   inflight: inflightN)
             } else if doDecryptOnly {
-                try runDecryptOnly(inputPath: archivePath)
+                try runDecryptOnly(inputPath: archivePath, inflight: inflightN)
             } else if doCat {
                 if explicitZip || isZipMagic(archivePath) {
                     throw TarError.io("--cat does not apply to ZIP containers / --cat 不適用於 ZIP 容器")
@@ -3393,7 +3394,8 @@ struct SwiftTarMain {
                 defer { encryptGroup.leave() }
                 do {
                     try TarCrypto.encryptStream(input: pipe.fileHandleForReading,
-                                                output: output, secret: secret)
+                                                output: output, secret: secret,
+                                                inflight: inflight)
                 } catch {
                     encryptError.fail(error.localizedDescription)
                 }
@@ -3763,10 +3765,12 @@ struct SwiftTarMain {
     /// encrypted result goes to stdout. Useful for encrypting an archive that
     /// already exists. / 原樣加密一個檔案，不做 tar 也不壓縮：`-f` 為輸入，加密
     /// 結果寫到 stdout。適合加密既有的封存。
-    static func runEncryptOnly(inputPath: String, secret: TarCrypto.KeySecret) throws {
+    static func runEncryptOnly(inputPath: String, secret: TarCrypto.KeySecret,
+                               inflight: Int) throws {
         let input = try openInput(inputPath)
         defer { if inputPath != "-" { try? input.close() } }
-        try TarCrypto.encryptStream(input: input, output: .standardOutput, secret: secret)
+        try TarCrypto.encryptStream(input: input, output: .standardOutput, secret: secret,
+                                    inflight: inflight)
     }
 
     /// Strip only the encryption layer: `-f` is the encrypted input and the
@@ -3774,7 +3778,7 @@ struct SwiftTarMain {
     /// back as a plain .tar.gz. Unlike --cat, the codec is left untouched.
     /// 只剝除加密層：`-f` 為加密輸入，仍為壓縮狀態的內容寫到 stdout，因此加密的
     /// .tar.gz 會還原成一般 .tar.gz。與 --cat 不同，壓縮層不會被拆掉。
-    static func runDecryptOnly(inputPath: String) throws {
+    static func runDecryptOnly(inputPath: String, inflight: Int) throws {
         let input = try openInput(inputPath)
         defer { if inputPath != "-" { try? input.close() } }
 
@@ -3792,7 +3796,7 @@ struct SwiftTarMain {
             throw TarError.io("no key available / 無可用金鑰")
         }
         try TarCrypto.decryptStream(input: input, prefix: head, output: .standardOutput,
-                                    secret: try provider())
+                                    secret: try provider(), inflight: inflight)
     }
 
     static func runCat(archivePath: String, inflight: Int, verbose: Bool) throws {

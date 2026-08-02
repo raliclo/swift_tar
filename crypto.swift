@@ -564,8 +564,12 @@ enum TarCrypto {
                 UInt8((index >> 8) & 0xff), UInt8(index & 0xff)]
     }
 
-    /// Encrypt everything readable from `input` to `output`. / 將 `input` 全部加密寫入 `output`。
-    static func encryptStream(input: FileHandle, output: FileHandle, secret: KeySecret) throws {
+    /// Encrypt everything readable from `input` to `output`. Chunks are sealed
+    /// concurrently (`inflight`, from -n) and written back in order.
+    /// 將 `input` 全部加密寫入 `output`。各 chunk 併發封裝（`inflight`，來自 -n）
+    /// 後按序寫回。
+    static func encryptStream(input: FileHandle, output: FileHandle, secret: KeySecret,
+                              inflight: Int = 1) throws {
         let header = Header(kdf: secret.kdfID, logN: defaultLogN, r: defaultR, p: defaultP,
                             salt: cryptoRandomBytes(16), nonceSeed: cryptoRandomBytes(8),
                             chunkSize: UInt32(chunkSize))
@@ -573,11 +577,16 @@ enum TarCrypto {
         let key = contentKey(secret: secret, header: header)
         try output.write(contentsOf: Data(hb))
 
-        // Each chunk is wrapped in an autoreleasepool: Foundation's FileHandle
-        // reads accumulate autoreleased buffers in a tight CLI loop, which would
-        // otherwise grow RSS to the size of the whole stream.
-        // 每個 chunk 以 autoreleasepool 包住：Foundation FileHandle 讀取在密集的
-        // CLI 迴圈中會累積 autorelease 緩衝區，否則 RSS 會長到整個串流的大小。
+        // Reading stays sequential (it is I/O bound); the AEAD is the expensive
+        // part and runs on the pipeline. Each read is wrapped in an
+        // autoreleasepool: Foundation's FileHandle reads accumulate autoreleased
+        // buffers in a tight CLI loop, which would otherwise grow RSS to the
+        // size of the whole stream.
+        // 讀取維持循序（受 I/O 限制）；昂貴的是 AEAD，交由管線執行。每次讀取以
+        // autoreleasepool 包住：Foundation FileHandle 讀取在密集的 CLI 迴圈中會
+        // 累積 autorelease 緩衝區，否則 RSS 會長到整個串流的大小。
+        let pipeline = OrderedPipeline(output: output, inflight: inflight)
+        let seed = header.nonceSeed
         var index: UInt32 = 0
         var done = false
         while !done {
@@ -585,19 +594,33 @@ enum TarCrypto {
                 guard let part = try input.read(upToCount: chunkSize), !part.isEmpty else {
                     done = true; return
                 }
-                try writeChunk(Array(part), index: index, final: false, key: key, header: hb,
-                               seed: header.nonceSeed, output: output)
+                let idx = index
                 index &+= 1
+                if !pipeline.reserveSlot() {
+                    done = true
+                    return
+                }
+                pipeline.submitWork(index: Int(idx)) {
+                    sealFrame([UInt8](part), index: idx, final: false, key: key,
+                              header: hb, seed: seed)
+                }
             }
         }
-        // final marker: empty chunk that authenticates the end of the stream
-        // 結尾標記：驗證串流結束的空 chunk
-        try writeChunk([], index: index, final: true, key: key, header: hb,
-                       seed: header.nonceSeed, output: output)
+        if let failure = pipeline.finish() { throw TarCryptoError.io(failure) }
+        // final marker: empty chunk that authenticates the end of the stream.
+        // Written after every worker has finished so it lands last.
+        // 結尾標記：驗證串流結束的空 chunk。待所有 worker 完成後才寫，確保位於最後。
+        try output.write(contentsOf: sealFrame([], index: index, final: true, key: key,
+                                               header: hb, seed: seed))
     }
 
-    private static func writeChunk(_ plain: [UInt8], index: UInt32, final: Bool, key: [UInt8],
-                                   header: [UInt8], seed: [UInt8], output: FileHandle) throws {
+    /// Seal one chunk into its complete on-disk frame. Pure and self-contained:
+    /// every input it needs comes from the chunk index, so frames can be built
+    /// concurrently and written back in order.
+    /// 將一個 chunk 封裝成完整的落盤 frame。純函式且自足：所需輸入皆由 chunk
+    /// 索引決定，因此可併發產生 frame 再按序寫回。
+    private static func sealFrame(_ plain: [UInt8], index: UInt32, final: Bool, key: [UInt8],
+                                  header: [UInt8], seed: [UInt8]) -> Data {
         let flags: UInt8 = final ? 1 : 0
         let sealed = ChaChaPoly.seal(plaintext: plain, key: key,
                                      nonce: nonce(seed: seed, index: index),
@@ -607,13 +630,97 @@ enum TarCrypto {
                            UInt8((n >> 8) & 0xff), UInt8(n & 0xff), flags])
         out += sealed.ciphertext
         out += sealed.tag
-        try output.write(contentsOf: Data(out))
+        return Data(out)
+    }
+
+    /// Ordered concurrent pipeline shared by encrypt and decrypt: a semaphore
+    /// bounds in-flight chunks, results are keyed by index and drained in order.
+    /// Same skeleton as ParallelChunkSink.
+    /// 加密與解密共用的保序併發管線：以 semaphore 限制在途 chunk 數，結果以索引
+    /// 為鍵並按序排出。骨架與 ParallelChunkSink 相同。
+    private final class OrderedPipeline: @unchecked Sendable {
+        private let sem: DispatchSemaphore
+        private let lock = NSLock()
+        private let queue = DispatchQueue(label: "swifttar.crypto", qos: .userInitiated,
+                                          attributes: .concurrent)
+        private let group = DispatchGroup()
+        private let output: FileHandle
+        private var results: [Int: Data] = [:]
+        private var writeIndex = 0
+        private var failure: String? = nil
+
+        init(output: FileHandle, inflight: Int) {
+            self.output = output
+            self.sem = DispatchSemaphore(value: max(1, inflight))
+        }
+
+        /// Reserve one bounded slot. The slot remains held until that chunk is
+        /// written in order, so completed out-of-order results cannot accumulate
+        /// beyond `inflight`.
+        /// 保留一個有界額度。直到該 chunk 按序寫出後才歸還，因此已完成但尚未按序
+        /// 寫出的結果不會累積超過 `inflight`。
+        func reserveSlot() -> Bool {
+            sem.wait()
+            lock.lock()
+            let accepted = failure == nil
+            lock.unlock()
+            if !accepted { sem.signal() }
+            return accepted
+        }
+
+        /// Run work for a slot already reserved by `reserveSlot()`.
+        /// 對已由 `reserveSlot()` 保留額度的 chunk 執行工作。
+        func submitWork(index: Int, _ work: @escaping () -> Data?) {
+            group.enter()
+            queue.async { [self] in
+                autoreleasepool {
+                    let produced = work()
+                    var slotsToRelease = 0
+                    lock.lock()
+                    if failure != nil {
+                        slotsToRelease = 1
+                    } else if let produced {
+                        results[index] = produced
+                        // Drain only the contiguous run, so a failed chunk stops
+                        // output instead of letting later chunks past it.
+                        // 只排出連續段，讓失敗的 chunk 阻斷輸出，後續 chunk 不會越過。
+                        while let r = results.removeValue(forKey: writeIndex) {
+                            do {
+                                try output.write(contentsOf: r)
+                                slotsToRelease += 1
+                            } catch {
+                                failure = "\(error)"
+                                slotsToRelease += 1 + results.count
+                                results.removeAll(keepingCapacity: false)
+                                break
+                            }
+                            writeIndex += 1
+                        }
+                    } else {
+                        failure = "chunk \(index) failed"
+                        slotsToRelease = 1 + results.count
+                        results.removeAll(keepingCapacity: false)
+                    }
+                    lock.unlock()
+                    for _ in 0..<slotsToRelease { sem.signal() }
+                }
+                group.leave()
+            }
+        }
+
+        /// Wait for every worker; returns the first failure, if any.
+        /// 等待所有 worker；若有失敗則回傳第一個。
+        func finish() -> String? {
+            group.wait()
+            lock.lock(); defer { lock.unlock() }
+            return failure
+        }
     }
 
     /// Decrypt `input` (with `prefix` already consumed from it) into `output`.
     /// 解密 `input`（`prefix` 為已自其讀出的前置位元組）並寫入 `output`。
     static func decryptStream(input: FileHandle, prefix: Data, output: FileHandle,
-                              secret: KeySecret) throws {
+                              secret: KeySecret, inflight: Int = 1) throws {
         // `pending` only ever holds the sniffed prefix (a few bytes), and each
         // read allocates exactly what the caller asked for. An accumulate-then-
         // removeFirst buffer would retain its backing store and grow RSS to the
@@ -642,8 +749,17 @@ enum TarCrypto {
         let header = try Header.parse(hb)
         let key = contentKey(secret: secret, header: header)
 
+        // Framing is parsed sequentially — a chunk's length must be read before
+        // the next one starts — but that is just I/O. The AEAD open, which is
+        // the expensive part, runs concurrently and the plaintext is written
+        // back in order.
+        // framing 循序解析——必須先讀出長度才知道下一個 chunk 的位置——但那只是
+        // I/O。昂貴的 AEAD 驗證解密則併發執行，明文按序寫回。
+        let pipeline = OrderedPipeline(output: output, inflight: inflight)
+        let seed = header.nonceSeed
         var index: UInt32 = 0
         var finished = false
+        var authFailure: Int? = nil
         while !finished {
             // See encryptStream: the pool keeps per-chunk buffers from piling up.
             // 參見 encryptStream：此 pool 避免每個 chunk 的緩衝區堆積。
@@ -655,16 +771,41 @@ enum TarCrypto {
                 guard n <= Int(header.chunkSize) else { throw TarCryptoError.badHeader("chunk length \(n)") }
                 let ciphertext = try need(n)
                 let tag = try need(ChaChaPoly.tagSize)
-                guard let plain = ChaChaPoly.open(ciphertext: ciphertext, tag: tag, key: key,
-                                                  nonce: nonce(seed: header.nonceSeed, index: index),
-                                                  aad: aad(header: hb, index: index, flags: flags))
-                else { throw TarCryptoError.authenticationFailed(Int(index)) }
-                if flags & 1 != 0 {             // authenticated end of stream / 已驗證的串流結尾
-                    finished = true; return
+                let idx = index
+                if flags & 1 != 0 {
+                    // The final marker is verified inline: it carries no payload
+                    // and must authenticate before the stream is accepted.
+                    // 結尾標記就地驗證：它不含內容，且必須通過驗證才接受此串流。
+                    guard ChaChaPoly.open(ciphertext: ciphertext, tag: tag, key: key,
+                                          nonce: nonce(seed: seed, index: idx),
+                                          aad: aad(header: hb, index: idx, flags: flags)) != nil
+                    else { authFailure = Int(idx); finished = true; return }
+                    finished = true
+                    return
                 }
-                if !plain.isEmpty { try output.write(contentsOf: Data(plain)) }
                 index &+= 1
+                if !pipeline.reserveSlot() {
+                    finished = true
+                    return
+                }
+                pipeline.submitWork(index: Int(idx)) {
+                    guard let plain = ChaChaPoly.open(ciphertext: ciphertext, tag: tag, key: key,
+                                                      nonce: nonce(seed: seed, index: idx),
+                                                      aad: aad(header: hb, index: idx, flags: flags))
+                    else { return nil }         // stops the ordered writer here / 保序寫出就此停住
+                    return Data(plain)
+                }
             }
+        }
+        let pipelineFailure = pipeline.finish()
+        // Report authentication problems as such; a wrong key looks like this.
+        // 驗證問題如實回報；金鑰錯誤即為此種情形。
+        if let i = authFailure { throw TarCryptoError.authenticationFailed(i) }
+        if let f = pipelineFailure {
+            if f.hasPrefix("chunk "), let i = Int(f.split(separator: " ")[1]) {
+                throw TarCryptoError.authenticationFailed(i)
+            }
+            throw TarCryptoError.io(f)
         }
     }
 }
@@ -951,6 +1092,63 @@ func cryptoSelfTest() -> Bool {
                   mutate: { $0[20] ^= 0x01 }, expectFailure: true)
     containerCase("container: truncation rejected", payload: big,
                   mutate: { $0.removeLast(64) }, expectFailure: true)
+    // Concurrency (-n) must not affect the result. Chunks are sealed in parallel
+    // and written back in order, so every inflight setting must produce a stream
+    // that any other inflight setting decrypts back to the original bytes. The
+    // ciphertexts themselves differ by design — each archive gets a fresh random
+    // salt and nonce seed — so the invariant is the decrypted content, not the
+    // archive bytes. A reordering bug in the pipeline surfaces here as a content
+    // mismatch or an authentication failure.
+    // 併發度（-n）不得影響結果。各 chunk 併發封裝後按序寫回，因此任一 inflight
+    // 產生的串流，都必須能被其他任一 inflight 解回原始位元組。密文本身依設計即
+    // 不同——每個封存都有全新的隨機 salt 與 nonce seed——所以不變量是「解密後的
+    // 內容」而非封存位元組。管線的保序錯誤會在此顯現為內容不符或驗證失敗。
+    func parallelCase(_ name: String, payload: Data) {
+        let secret = TarCrypto.KeySecret.keyfile(cryptoRandomBytes(32))
+        let plainURL = tmp.appendingPathComponent("p_par.bin")
+        try? payload.write(to: plainURL)
+        let settings = [1, 2, 4, 16]
+        var mismatches: [String] = []
+        for enc in settings {
+            let encURL = tmp.appendingPathComponent("e_par_\(enc).bin")
+            FileManager.default.createFile(atPath: encURL.path, contents: nil)
+            do {
+                let inH = try FileHandle(forReadingFrom: plainURL)
+                let encH = try FileHandle(forWritingTo: encURL)
+                try TarCrypto.encryptStream(input: inH, output: encH, secret: secret, inflight: enc)
+                try? inH.close(); try? encH.close()
+            } catch {
+                mismatches.append("encrypt -n \(enc): \(error.localizedDescription)"); continue
+            }
+            // every encrypt setting must be readable at every decrypt setting
+            // 每種加密設定都必須能被每種解密設定讀取
+            for dec in settings {
+                let outURL = tmp.appendingPathComponent("o_par_\(enc)_\(dec).bin")
+                FileManager.default.createFile(atPath: outURL.path, contents: nil)
+                do {
+                    let rH = try FileHandle(forReadingFrom: encURL)
+                    let oH = try FileHandle(forWritingTo: outURL)
+                    try TarCrypto.decryptStream(input: rH, prefix: Data(), output: oH,
+                                                secret: secret, inflight: dec)
+                    try? rH.close(); try? oH.close()
+                    if (try? Data(contentsOf: outURL)) != payload {
+                        mismatches.append("enc \(enc) → dec \(dec): content differs")
+                    }
+                } catch {
+                    mismatches.append("enc \(enc) → dec \(dec): \(error.localizedDescription)")
+                }
+            }
+        }
+        check("\(name): 16 encrypt/decrypt -n combinations round-trip",
+              mismatches.isEmpty ? "all match" : mismatches.joined(separator: "; "), "all match")
+    }
+    // Multi-chunk is where ordering matters; the odd size also exercises a
+    // partial final chunk. / 多 chunk 才會考驗保序；此奇數大小同時涵蓋不足一塊的尾段。
+    parallelCase("parallel: 9 MiB", payload: big)
+    parallelCase("parallel: exactly two chunks", payload: Data(big.prefix(TarCrypto.chunkSize * 2)))
+    parallelCase("parallel: single chunk", payload: Data(big.prefix(1024)))
+    parallelCase("parallel: empty", payload: Data())
+
     // keyfile path: seal and open with the same key material, and confirm a
     // different keyfile fails. / keyfile 路徑：同一金鑰材料封裝與開啟，並確認不同
     // keyfile 會失敗。

@@ -1176,11 +1176,24 @@ func rpmUnwrapStream(input: FileHandle, prefix: Data, output: FileHandle) -> Boo
 // MARK: - Filter 嗅探與鏈式解包（仿 libarchive bidder 機制）
 // =================================================================
 
+/// How the reader obtains the key for an encrypted archive. Set once from the
+/// parsed command line before any archive is opened; the filter chain is
+/// resolved deep inside the reader, so threading a key through every call site
+/// would touch far more code than this single hand-off.
+/// 讀取端取得加密封存金鑰的方式。於解析命令列後、開啟封存前設定一次；filter 鏈
+/// 在讀取端深處解析，若要逐層傳遞金鑰，改動範圍遠大於此單一交接點。
+var tarDecryptionSecretProvider: (() throws -> TarCrypto.KeySecret)? = nil
+
+/// Set when `--encrypt` (or `--keyfile` with `-c`) is given; nil means the
+/// archive is written in the clear. / 指定 `--encrypt`（或 `-c` 搭配 `--keyfile`）
+/// 時設定；nil 表示封存不加密。
+var tarEncryptionSecret: TarCrypto.KeySecret? = nil
+
 enum ReadFilter {
 #if EXCLUDE_LZFSE
-    case gzip, bzip2, xz, lzmaAlone, lzip, lz4, zstd, compressLZW, uu, rpm, lzop
+    case gzip, bzip2, xz, lzmaAlone, lzip, lz4, zstd, compressLZW, uu, rpm, lzop, encrypted
 #else
-    case gzip, bzip2, xz, lzmaAlone, lzip, lz4, zstd, compressLZW, uu, rpm, lzfse, lzop
+    case gzip, bzip2, xz, lzmaAlone, lzip, lz4, zstd, compressLZW, uu, rpm, lzfse, lzop, encrypted
 #endif
 
     var name: String {
@@ -1194,6 +1207,7 @@ enum ReadFilter {
         case .lzfse: return "lzfse"
 #endif
         case .lzop: return "lzop"
+        case .encrypted: return "encrypted (ChaCha20-Poly1305)"
         }
     }
 }
@@ -1201,6 +1215,9 @@ enum ReadFilter {
 /// Magic-based detection over the first 16 bytes. / 依前 16 位元組 magic 偵測。
 func sniffFilter(_ head: [UInt8]) -> ReadFilter? {
     let b = head + [UInt8](repeating: 0, count: max(0, 16 - head.count))
+    // The encryption layer wraps everything else, so it is checked first.
+    // 加密層包在最外層，故最先檢查。
+    if Array(b[0..<8]) == TarCrypto.magic { return .encrypted }
     if b[0] == 0x1F && b[1] == 0x8B { return .gzip }
     if b[0] == 0x1F && b[1] == 0x9D { return .compressLZW }
     if b[0] == UInt8(ascii: "B") && b[1] == UInt8(ascii: "Z") && b[2] == UInt8(ascii: "h"),
@@ -1261,6 +1278,22 @@ func resolveFilterChain(input: FileHandle, prefix: Data, filePath: String?,
         result.fail("lzop detected but liblzo2 is not available (brew install lzop) / 偵測到 lzop，但缺 liblzo2")
         return FilteredStream(handle: input, prefix: head, names: names + [filter.name])
     }
+    // Resolve the key before going async: prompting for a passphrase from the
+    // decode thread would interleave with the reader's own output.
+    // 在轉入背景執行緒前先取得金鑰：於解碼執行緒提示輸入密語會與讀取端輸出交錯。
+    var encryptionSecret: TarCrypto.KeySecret? = nil
+    if case .encrypted = filter {
+        guard let provider = tarDecryptionSecretProvider else {
+            result.fail("archive is encrypted — supply --keyfile <path>, or run on a terminal to be prompted"
+                        + " / 封存已加密——請以 --keyfile <path> 提供金鑰，或於終端機執行以輸入密語")
+            return FilteredStream(handle: input, prefix: head, names: names + [filter.name])
+        }
+        do { encryptionSecret = try provider() } catch {
+            result.fail(error.localizedDescription)
+            return FilteredStream(handle: input, prefix: head, names: names + [filter.name])
+        }
+    }
+
     let pipe = Pipe()
     let w = pipe.fileHandleForWriting
     let capturedHead = head
@@ -1297,6 +1330,18 @@ func resolveFilterChain(input: FileHandle, prefix: Data, filePath: String?,
 #endif
         case .lzop:
             ok = false
+        case .encrypted:
+            // Authenticated decryption; the decrypted bytes are then re-sniffed
+            // by the recursive call below, so an encrypted .tar.gz still works.
+            // 認證解密；解密後的位元組由下方遞迴再次嗅探，因此加密的 .tar.gz 亦可運作。
+            do {
+                try TarCrypto.decryptStream(input: input, prefix: capturedHead, output: w,
+                                            secret: encryptionSecret!)
+                ok = true
+            } catch {
+                result.fail(error.localizedDescription)
+                ok = false
+            }
         }
         if !ok { result.fail("\(filter.name) decode failed / \(filter.name) 解碼失敗") }
         try? w.close()
@@ -2554,6 +2599,19 @@ private func printTarUsage() {
                         建立封存前切換目錄，或解出至 <dir>
       -n <N>          : In-flight parallel chunks (default 2×cores)
                         平行在途分塊數（預設 2×核心數）
+      --encrypt       : (-c only) encrypt the archive with ChaCha20-Poly1305.
+                        The passphrase is read from the terminal without echo;
+                        reading auto-detects encryption, so no flag is needed
+                        to extract. Encryption wraps the codec, so any codec
+                        (or plain tar) can be encrypted.
+                        （僅 -c）以 ChaCha20-Poly1305 加密封存。密語自終端機
+                        讀取且不回顯；讀取時自動偵測加密，解開無須旗標。加密
+                        包在 codec 之外，故任何 codec（或純 tar）皆可加密。
+      --keyfile <path>: Use the file's bytes as key material instead of a
+                        passphrase (works for both create and read; required
+                        when stdin is not a terminal, e.g. in pipelines)
+                        以檔案內容作為金鑰材料取代密語（建立與讀取皆適用；
+                        stdin 非終端機時（如管線中）必須使用）
       --width <W>     : RGB1 pack width, UInt32 pixels
                         RGB1 pack 的寬度，UInt32 像素
       --height <H>    : RGB1 pack height, UInt32 pixels
@@ -2963,6 +3021,11 @@ struct SwiftTarMain {
             print("swift_tar \(swiftTarBuildVersion)")
             exit(0)
         }
+        // Hand-rolled crypto must be checkable against the specs' own vectors.
+        // 自行實作的密碼學必須能對規範自帶向量驗證。
+        if CommandLine.arguments.contains("--crypto-selftest") {
+            exit(cryptoSelfTest() ? 0 : 1)
+        }
         // 展開 combined short flags，相容標準 tar 用法的兩種形式：
         //   帶 dash：-czf → -c -z -f
         //   傳統形式（第一個位置參數全是字母，無 dash）：czf → -c -z -f
@@ -3135,6 +3198,42 @@ struct SwiftTarMain {
         let archivePath = optValue("-f") ?? "-"
         let destDir = optValue("-C") ?? ""
 
+        // ---- encryption wiring / 加密接線 ----
+        // --encrypt turns on encryption for -c; --keyfile supplies key material
+        // for either direction. Reading auto-detects the magic and asks for a
+        // passphrase only when no --keyfile was given.
+        // --encrypt 讓 -c 加密；--keyfile 於讀寫兩端提供金鑰材料。讀取時自動偵測
+        // magic，僅在未給 --keyfile 時才詢問密語。
+        let keyfilePath = optValue("--keyfile")
+        let wantEncrypt = args.contains("--encrypt")
+        if wantEncrypt && !doCreate {
+            eprint("Error: --encrypt applies to -c; reading auto-detects encryption. / 錯誤：--encrypt 僅用於 -c，讀取時自動偵測。")
+            exit(1)
+        }
+        if (wantEncrypt || keyfilePath != nil) && (doAppend || doUpdate || doDelete) {
+            eprint("Error: -r/-u/--delete work on plain uncompressed tar only. / 錯誤：-r/-u/--delete 僅支援未加密的純 tar。")
+            exit(1)
+        }
+        if wantEncrypt || (keyfilePath != nil && doCreate) {
+            do {
+                if let path = keyfilePath {
+                    tarEncryptionSecret = .keyfile(try KeyInput.keyfileMaterial(path: path))
+                } else {
+                    tarEncryptionSecret = .passphrase(
+                        try KeyInput.promptPassphrase("Passphrase / 密語: ", confirm: true))
+                }
+            } catch {
+                eprint("Error: \(error.localizedDescription)")
+                exit(1)
+            }
+        }
+        // Reader-side provider; only consulted when an encrypted magic is found.
+        // 讀取端金鑰提供者；僅在偵測到加密 magic 時才會被呼叫。
+        tarDecryptionSecretProvider = {
+            if let path = keyfilePath { return .keyfile(try KeyInput.keyfileMaterial(path: path)) }
+            return .passphrase(try KeyInput.promptPassphrase("Passphrase / 密語: "))
+        }
+
         // in-flight chunk budget, same policy as lzfse CLI / 在途分塊數，政策同 lzfse CLI
         let inflightN: Int = {
             let cores = max(1, ProcessInfo.processInfo.activeProcessorCount)
@@ -3173,7 +3272,7 @@ struct SwiftTarMain {
         var skipNext = true   // args[0] is the binary path / args[0] 是執行檔路徑
         for a in args {
             if skipNext { skipNext = false; continue }
-            if a == "-f" || a == "-C" || a == "-n" { skipNext = true; continue }
+            if a == "-f" || a == "-C" || a == "-n" || a == "--keyfile" { skipNext = true; continue }
             if a.hasPrefix("-") { continue }
             files.append(a)
         }
@@ -3256,12 +3355,42 @@ struct SwiftTarMain {
             }
         }
 
-        let sink = ParallelChunkSink(codec: codec, output: output, inflight: inflight)
+        // Encryption wraps the codec: the sink compresses into a pipe and this
+        // thread encrypts the compressed bytes on the way to the archive.
+        // 加密包在 codec 之外：sink 將壓縮結果寫入 pipe，本執行緒再將壓縮後的
+        // 位元組加密寫入封存。
+        var sinkOutput = output
+        var encryptPipe: Pipe? = nil
+        let encryptGroup = DispatchGroup()
+        let encryptError = ChainResult()
+        if let secret = tarEncryptionSecret {
+            let pipe = Pipe()
+            encryptPipe = pipe
+            sinkOutput = pipe.fileHandleForWriting
+            encryptGroup.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                defer { encryptGroup.leave() }
+                do {
+                    try TarCrypto.encryptStream(input: pipe.fileHandleForReading,
+                                                output: output, secret: secret)
+                } catch {
+                    encryptError.fail(error.localizedDescription)
+                }
+            }
+        }
+
+        let sink = ParallelChunkSink(codec: codec, output: sinkOutput, inflight: inflight)
         let writer = TarWriter(sink: sink, verbose: verbose)
         for f in files {
             try writer.add(path: f)
         }
         try writer.finish()
+
+        if encryptPipe != nil {
+            try? sinkOutput.close()          // EOF for the encrypting thread / 讓加密執行緒讀到 EOF
+            encryptGroup.wait()
+            if let message = encryptError.message { throw TarError.io(message) }
+        }
     }
 
     // ---- append / update (-r / -u) / 追加、更新 ----

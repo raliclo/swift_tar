@@ -116,6 +116,50 @@ layer zstd  "--zstd" "encrypted (ChaCha20-Poly1305) → zstd → tar"
 layer xz    "--xz"   "encrypted (ChaCha20-Poly1305) → xz → tar"
 
 # ---------------------------------------------------------------------------
+# 3b) --encrypt-only / --decrypt-only: the encryption layer on its own. The
+#     decrypted result must still be the compressed archive, not raw tar.
+#     --encrypt-only／--decrypt-only：單獨作用的加密層。解密結果必須仍是壓縮後
+#     的封存，而非原始 tar。
+# ---------------------------------------------------------------------------
+tar -czf "$TMP/outside.tgz" -C "$TMP" src
+"$ST" --encrypt-only --keyfile "$KEY" -f "$TMP/outside.tgz" > "$TMP/outside.tgz.enc"
+[ "$(head -c 8 "$TMP/outside.tgz.enc")" = "SWTARC01" ] \
+  && ok "--encrypt-only: output carries the encryption magic" \
+  || bad "--encrypt-only: magic missing"
+
+"$ST" --decrypt-only --keyfile "$KEY" -f "$TMP/outside.tgz.enc" > "$TMP/outside.back.tgz"
+cmp -s "$TMP/outside.tgz" "$TMP/outside.back.tgz" \
+  && ok "--encrypt-only → --decrypt-only round-trips byte-for-byte" \
+  || bad "--encrypt-only → --decrypt-only differs"
+
+# the decrypted payload must still be valid gzip that other tools can read
+# 解密後的內容必須仍是其他工具可讀的合法 gzip
+gzip -t "$TMP/outside.back.tgz" 2>/dev/null \
+  && ok "--decrypt-only leaves a valid gzip stream (compression preserved)" \
+  || bad "--decrypt-only output is not valid gzip"
+tar -tzf "$TMP/outside.back.tgz" >/dev/null 2>&1 \
+  && ok "--decrypt-only output is readable by system tar" \
+  || bad "--decrypt-only output not readable by system tar"
+
+# --decrypt-only on a swift_tar-encrypted .tar.gz must return gzip, while --cat
+# on the same file returns the uncompressed tar / 同一檔案上 --decrypt-only 回傳
+# gzip，--cat 則回傳未壓縮 tar
+"$ST" -c --gzip --keyfile "$KEY" -f "$TMP/enc.tgz.enc" -C "$TMP" src
+"$ST" --decrypt-only --keyfile "$KEY" -f "$TMP/enc.tgz.enc" > "$TMP/d_only.out"
+"$ST" --cat         --keyfile "$KEY" -f "$TMP/enc.tgz.enc" > "$TMP/cat.out"
+if [ "$(head -c 2 "$TMP/d_only.out" | od -An -tx1 | tr -d ' ')" = "1f8b" ] \
+   && tar -tf "$TMP/cat.out" >/dev/null 2>&1; then
+  ok "--decrypt-only keeps compression while --cat undoes it"
+else
+  bad "--decrypt-only/--cat do not differ as documented"
+fi
+
+must_fail "--decrypt-only on a non-encrypted file is rejected" \
+  "$ST" --decrypt-only --keyfile "$KEY" -f "$TMP/outside.tgz"
+must_fail "--decrypt-only with the wrong key is rejected" \
+  "$ST" --decrypt-only --keyfile "$WRONG" -f "$TMP/outside.tgz.enc"
+
+# ---------------------------------------------------------------------------
 # 4) Attacks: every one of these must be rejected, not silently accepted.
 #    攻擊情境：以下每一項都必須被拒絕，不得靜默接受。
 # ---------------------------------------------------------------------------

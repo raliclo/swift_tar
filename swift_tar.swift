@@ -2535,6 +2535,15 @@ private func printTarUsage() {
                         (bsdcat equivalent; use for RPM payloads etc.)
                         僅解壓 filter 鏈、原始內容輸出至 stdout（等同 bsdcat；
                         RPM payload 等非 tar 內容可用此模式取出）
+      --encrypt-only  : Encrypt the -f file as-is (no tar, no codec) to stdout
+                        原樣加密 -f 指定的檔案（不做 tar、不壓縮）並輸出至 stdout
+      --decrypt-only  : Strip ONLY the encryption layer from -f to stdout; a
+                        compressed payload stays compressed (an encrypted
+                        .tar.gz comes back as .tar.gz). Use --cat instead to
+                        also undo the compression.
+                        僅剝除 -f 的加密層並輸出至 stdout；壓縮內容維持壓縮
+                        （加密的 .tar.gz 會還原成 .tar.gz）。若連壓縮也要解開，
+                        請改用 --cat。
       --rgb1-pack     : Wrap raw RGB bytes with an RGB1 header
                         將 raw RGB bytes 包成 RGB1 標頭格式
       --rgb1-info     : Print RGB1 width, height, geo, and payload size
@@ -3150,8 +3159,16 @@ struct SwiftTarMain {
         let doUpdate = args.contains("-u")
         let doDelete = args.contains("--delete")
         let doIdentify = args.contains("--identify")
-        guard [doCreate, doExtract, doList, doCat, doAppend, doUpdate, doDelete, doIdentify].filter({ $0 }).count == 1 else {
-            eprint("Error: specify exactly one of -c, -x, -t, --cat, -r, -u, --delete, --identify. / 錯誤：請指定 -c、-x、-t、--cat、-r、-u、--delete、--identify 其中之一。")
+        // Raw crypto filters: -f is the input and the result goes to stdout,
+        // the same shape as --cat. They touch only the encryption layer, so a
+        // compressed payload stays compressed.
+        // 純加解密 filter：-f 為輸入、結果寫到 stdout，形狀與 --cat 相同。兩者只
+        // 處理加密層，壓縮過的內容仍維持壓縮。
+        let doEncryptOnly = args.contains("--encrypt-only")
+        let doDecryptOnly = args.contains("--decrypt-only")
+        guard [doCreate, doExtract, doList, doCat, doAppend, doUpdate, doDelete, doIdentify,
+               doEncryptOnly, doDecryptOnly].filter({ $0 }).count == 1 else {
+            eprint("Error: specify exactly one of -c, -x, -t, --cat, -r, -u, --delete, --identify, --encrypt-only, --decrypt-only. / 錯誤：請指定 -c、-x、-t、--cat、-r、-u、--delete、--identify、--encrypt-only、--decrypt-only 其中之一。")
             exit(1)
         }
 
@@ -3207,14 +3224,14 @@ struct SwiftTarMain {
         let keyfilePath = optValue("--keyfile")
         let wantEncrypt = args.contains("--encrypt")
         if wantEncrypt && !doCreate {
-            eprint("Error: --encrypt applies to -c; reading auto-detects encryption. / 錯誤：--encrypt 僅用於 -c，讀取時自動偵測。")
+            eprint("Error: --encrypt applies to -c; use --encrypt-only to encrypt an existing file, and reading auto-detects encryption. / 錯誤：--encrypt 僅用於 -c；加密既有檔案請用 --encrypt-only，讀取時則自動偵測。")
             exit(1)
         }
         if (wantEncrypt || keyfilePath != nil) && (doAppend || doUpdate || doDelete) {
             eprint("Error: -r/-u/--delete work on plain uncompressed tar only. / 錯誤：-r/-u/--delete 僅支援未加密的純 tar。")
             exit(1)
         }
-        if wantEncrypt || (keyfilePath != nil && doCreate) {
+        if wantEncrypt || doEncryptOnly || (keyfilePath != nil && doCreate) {
             do {
                 if let path = keyfilePath {
                     tarEncryptionSecret = .keyfile(try KeyInput.keyfileMaterial(path: path))
@@ -3299,6 +3316,10 @@ struct SwiftTarMain {
                 } else {
                     try runIdentify(archivePath: archivePath, inflight: inflightN)
                 }
+            } else if doEncryptOnly {
+                try runEncryptOnly(inputPath: archivePath, secret: tarEncryptionSecret!)
+            } else if doDecryptOnly {
+                try runDecryptOnly(inputPath: archivePath)
             } else if doCat {
                 if explicitZip || isZipMagic(archivePath) {
                     throw TarError.io("--cat does not apply to ZIP containers / --cat 不適用於 ZIP 容器")
@@ -3737,6 +3758,42 @@ struct SwiftTarMain {
     }
 
     // ---- cat (bsdcat equivalent) / cat 模式（等同 bsdcat）----
+
+    /// Encrypt a file as-is, without tar or a codec: `-f` is the input, the
+    /// encrypted result goes to stdout. Useful for encrypting an archive that
+    /// already exists. / 原樣加密一個檔案，不做 tar 也不壓縮：`-f` 為輸入，加密
+    /// 結果寫到 stdout。適合加密既有的封存。
+    static func runEncryptOnly(inputPath: String, secret: TarCrypto.KeySecret) throws {
+        let input = try openInput(inputPath)
+        defer { if inputPath != "-" { try? input.close() } }
+        try TarCrypto.encryptStream(input: input, output: .standardOutput, secret: secret)
+    }
+
+    /// Strip only the encryption layer: `-f` is the encrypted input and the
+    /// still-compressed payload goes to stdout, so an encrypted .tar.gz comes
+    /// back as a plain .tar.gz. Unlike --cat, the codec is left untouched.
+    /// 只剝除加密層：`-f` 為加密輸入，仍為壓縮狀態的內容寫到 stdout，因此加密的
+    /// .tar.gz 會還原成一般 .tar.gz。與 --cat 不同，壓縮層不會被拆掉。
+    static func runDecryptOnly(inputPath: String) throws {
+        let input = try openInput(inputPath)
+        defer { if inputPath != "-" { try? input.close() } }
+
+        var head = Data()
+        while head.count < TarCrypto.magic.count,
+              let part = try input.read(upToCount: TarCrypto.magic.count - head.count),
+              !part.isEmpty {
+            head.append(part)
+        }
+        guard [UInt8](head) == TarCrypto.magic else {
+            throw TarError.io("not an encrypted archive (no swift_tar encryption header)"
+                              + " / 不是加密封存（沒有 swift_tar 加密標頭）")
+        }
+        guard let provider = tarDecryptionSecretProvider else {
+            throw TarError.io("no key available / 無可用金鑰")
+        }
+        try TarCrypto.decryptStream(input: input, prefix: head, output: .standardOutput,
+                                    secret: try provider())
+    }
 
     static func runCat(archivePath: String, inflight: Int, verbose: Bool) throws {
         let input = try openInput(archivePath)

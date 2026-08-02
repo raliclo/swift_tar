@@ -16,6 +16,9 @@ compression engine and modeled on **libarchive**'s filter architecture.
   bytes and filters stack (e.g. `payload.tar.gz.uu`).
 - **True ZIP/ZIP64 backend**: the bundled libarchive creates and reads standard
   ZIP containers on macOS and Windows; ZIP64 is automatic or can be forced.
+- **Authenticated encryption**: ChaCha20-Poly1305 over 4 MiB chunks, layered
+  outside the codec so any archive can be encrypted. Tampering, reordering and
+  truncation are all detected. Pure Swift — no CryptoKit or OpenSSL.
 - **C libraries used the libarchive way**: `zlib` / `libbz2` / `liblzma` /
   `libzstd` / `liblz4` supply the compression primitive; the container
   framing is assembled by swift_tar. `compress`/LZW, uudecode and the RPM
@@ -89,7 +92,8 @@ because they are development artifacts, not runtime dependencies.
 ## Usage
 
 ```
-swift_tar -c|-x|-t|-r|-u|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...]
+swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat [-f <archive>] [codec]
+          [--encrypt|--keyfile <path>] [-C <dir>] [-n N] [-v] [files...]
 ```
 
 | Command | Meaning |
@@ -102,6 +106,7 @@ swift_tar -c|-x|-t|-r|-u|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [fi
 | `--delete` | Remove named members from an archive in place (uncompressed tar only; swift_tar-only — BSD tar has no `--delete`) |
 | `--identify` | Detect the compression format by magic bytes and print the filter chain (e.g. `gzip → tar`), then stop — no extraction. Works on any filename |
 | `--cat` | Decompress the filter chain only, raw payload to stdout (≈ `bsdcat`) |
+| `--rgb1-pack` / `--rgb1-info` / `--rgb1-raw` | RGB1 raw image container: wrap raw RGB bytes with a header, print its fields, or strip it back to the raw payload |
 
 `-f -` (or omitting `-f`) reads stdin / writes stdout, so swift_tar composes
 in pipelines.
@@ -128,6 +133,55 @@ extension. For example, `--gzip -f archive.zip` still writes a gzip-compressed
 tar stream (magic `1f 8b`), not a ZIP container. Use `--zip` for a true ZIP;
 libarchive automatically emits ZIP64 when required, while `--zip64` forces
 ZIP64 records for compatibility testing or explicit format selection.
+
+### Encryption
+
+`--encrypt` encrypts the archive with **ChaCha20-Poly1305**. The layer sits
+*outside* the compression codec, so any codec — or plain tar — can be
+encrypted, and the codec inside is still auto-detected on the way out.
+
+```sh
+release/swift_tar -c --encrypt        -f secret.tar.enc src/   # prompts for a passphrase
+release/swift_tar -c --encrypt --gzip -f secret.tgz.enc src/   # encrypted .tar.gz
+release/swift_tar -c --keyfile k.bin  -f secret.tar.enc src/   # key from a file
+```
+
+Reading needs no flag — the format is detected by magic and decrypted
+automatically. You are prompted for the passphrase, or pass `--keyfile`:
+
+```sh
+release/swift_tar -x -f secret.tar.enc -C /tmp/out      # prompts for the passphrase
+release/swift_tar -t --keyfile k.bin -f secret.tar.enc  # key from a file
+release/swift_tar --identify --keyfile k.bin -f secret.tgz.enc
+#   secret.tgz.enc: encrypted (ChaCha20-Poly1305) → gzip → tar
+```
+
+**Keys.** A passphrase is read from the terminal without echo (so it never
+reaches the shell history) and is confirmed on create; it is stretched with
+**scrypt** (N=2¹⁵, r=8, p=1). `--keyfile <path>` uses the file's bytes as key
+material instead and is **required when stdin is not a terminal**, such as in a
+pipeline — swift_tar refuses to write an archive it cannot key rather than
+silently leaving it unencrypted.
+
+**What the format protects against.** Each 4 MiB chunk is sealed separately,
+and every chunk's AAD binds the full header plus the chunk index, with an
+authenticated end-of-stream marker:
+
+| Attack | Detected by |
+|--------|-------------|
+| Modified ciphertext | per-chunk Poly1305 tag |
+| Modified header (salt, KDF cost) | whole header is part of every chunk's AAD |
+| Reordered or duplicated chunks | chunk index in the AAD and the nonce |
+| Truncated archive | authenticated final marker must be present |
+
+A wrong key, any tampering, or a truncated file makes the command fail with a
+non-zero exit status; it never returns partial plaintext as if it were valid.
+
+`-r`, `-u` and `--delete` do not apply to encrypted archives.
+
+The primitives are implemented from the specifications and checked against
+their published test vectors (RFC 8439, RFC 4231, RFC 7914, FIPS 180-4).
+Run them with `--crypto-selftest`, or the full suite with `./test_encrypt.sh`.
 
 ### Append / update / delete
 
@@ -204,7 +258,9 @@ container backend and interoperates with `unzip`, `bsdtar`, and other ZIP tools.
 
 uuencoded files (classic + base64) · files with an RPM wrapper · gzip ·
 bzip2 · compress/LZW (`.Z`) · lzma · lzip · xz · lz4 · zstandard · the LZFSE
-family (bvx2/bvx3, decoded with the multi-core parallel decoder).
+family (bvx2/bvx3, decoded with the multi-core parallel decoder) ·
+swift_tar's own encryption layer (decrypted first, then the codec inside it is
+detected as usual).
 
 `lzop` is detected but reports as unavailable unless `liblzo2` is present —
 the same behavior as a libarchive built without lzo support.
@@ -217,8 +273,11 @@ the same behavior as a libarchive built without lzo support.
 | `-C <dir>`  | Change input directory before create; extract into it when reading |
 | `-n <N>`    | In-flight parallel chunks (default 2 × cores) |
 | `-v`        | Verbose (list entries / show the applied filter chain) |
+| `--encrypt` | (`-c` only) Encrypt with ChaCha20-Poly1305; prompts for a passphrase |
+| `--keyfile <path>` | Use the file's bytes as key material instead of a passphrase (create and read; required when stdin is not a terminal) |
 | `-h`        | Help |
 | `--version` | Show the fixed build-date version (`yyyyMMdd-HHmmss`) |
+| `--crypto-selftest` | Run the crypto unit tests (published vectors, header parsing, chunk framing), then exit |
 
 `--version` reports the local date and time captured when the binary was
 compiled, for example `swift_tar 20260712-143015`. The same value is stored as
@@ -228,6 +287,8 @@ compiled, for example `swift_tar 20260712-143015`. The same value is stored as
 
 ```
 swift_tar.swift    tar writer/reader + codecs + libarchive-style filters
+crypto.swift       ChaCha20-Poly1305 / scrypt + the encrypted container
+rgb1.swift         RGB1 raw image container
 compile_tar.sh     build script → release/swift_tar
 build_libarchive.sh / build_libarchive-win.sh  static ZIP backend builds
 libarchive_zip_bridge.c  shared macOS/Windows ZIP C ABI

@@ -7,6 +7,22 @@ main benchmark pipeline (`../../benchmark.sh` / `../../benchmark2.sh`). Results
 here are exploratory—read the "Status" line on each before trusting a
 conclusion.
 
+## RGB1 container throughput by codec
+
+`../test_swift_tar_rgb1.sh` archives an RGB1 container through every swift_tar
+codec and records archive size, compression ratio, create/extract time and MB/s
+in [`rgb1_container_mbps_output.txt`](rgb1_container_mbps_output.txt), together
+with the run date and build version.
+
+> **Status**: the corpus is a synthetic 1024×1024 RGB1 image (3 MiB payload)
+> built from a repeating 4 KiB block, so it is highly compressible by
+> construction. The ratios are therefore *not* representative of real
+> photographs — read the table for throughput and relative codec cost only.
+
+```sh
+../test_swift_tar_rgb1.sh
+```
+
 ## ZIP throughput and RSS on claw-code
 
 `zip_claw_code_mbps_rss.sh` runs true-ZIP encode and decode against the complete

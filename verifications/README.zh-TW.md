@@ -6,6 +6,21 @@
 （`../../benchmark.sh`／`../../benchmark2.sh`）未測試的行為。這些結果屬於
 探索性質；採信結論前，請先閱讀各節的「狀態」。
 
+## RGB1 容器各 codec 吞吐量
+
+`../test_swift_tar_rgb1.sh` 將 RGB1 容器經由 swift_tar 各 codec 封存，記錄封存
+大小、壓縮比、建立／解出耗時與 MB/s 至
+[`rgb1_container_mbps_output.txt`](rgb1_container_mbps_output.txt)，並附上執行
+日期與建置版本。
+
+> **狀態**：語料為合成的 1024×1024 RGB1 影像（3 MiB payload），由重複的
+> 4 KiB 區塊組成，因此本質上高度可壓縮。壓縮比**不能**代表真實照片的表現——
+> 此表僅供判讀吞吐量與各 codec 的相對成本。
+
+```sh
+../test_swift_tar_rgb1.sh
+```
+
 ## claw-code ZIP 吞吐量與 RSS
 
 `zip_claw_code_mbps_rss.sh` 以完整 `claw-code` 語料執行真實 ZIP encode 與

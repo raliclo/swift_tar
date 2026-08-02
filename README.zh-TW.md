@@ -15,6 +15,9 @@
   可疊層（例如 `payload.tar.gz.uu`）。
 - **真實 ZIP/ZIP64 後端**：macOS 與 Windows 均使用內附 libarchive 建立及讀取
   標準 ZIP 容器；需要時自動使用 ZIP64，也可明確強制。
+- **認證加密**：以 ChaCha20-Poly1305 對 4 MiB 分塊加密，疊在壓縮引擎之外，
+  因此任何封存皆可加密；竄改、重排與截斷都能偵測。純 Swift 實作——
+  不使用 CryptoKit 或 OpenSSL。
 - **C 庫用法仿 libarchive**：`zlib` / `libbz2` / `liblzma` / `libzstd` /
   `liblz4` 只提供壓縮原語，容器框架由 swift_tar 自組；`compress`/LZW、
   uudecode 與 RPM 外包裝為 libarchive 內建 filter 的純 Swift 移植。
@@ -81,7 +84,8 @@ CMake build tree 屬於開發產物，並非 runtime dependency，因此不放�
 ## 使用方式
 
 ```
-swift_tar -c|-x|-t|-r|-u|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [files...]
+swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat [-f <archive>] [codec]
+          [--encrypt|--keyfile <path>] [-C <dir>] [-n N] [-v] [files...]
 ```
 
 | 指令 | 意義 |
@@ -94,6 +98,7 @@ swift_tar -c|-x|-t|-r|-u|--cat [-f <archive>] [codec] [-C <dir>] [-n N] [-v] [fi
 | `--delete` | 就地從封存移除指定項目（僅未壓縮 tar；swift_tar 獨有——BSD tar 無 `--delete`） |
 | `--identify` | 依 magic 位元組偵測壓縮格式並印出 filter 鏈（例如 `gzip → tar`）後即停，不解壓；任何檔名皆可 |
 | `--cat` | 僅解壓 filter 鏈、原始內容輸出至 stdout（等同 `bsdcat`） |
+| `--rgb1-pack` / `--rgb1-info` / `--rgb1-raw` | RGB1 原始影像容器：將 raw RGB bytes 包上標頭、印出標頭欄位，或移除標頭還原 raw payload |
 
 `-f -`（或省略 `-f`）表示讀取標準輸入／寫至標準輸出，可組進管線。
 
@@ -116,6 +121,51 @@ tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # （或以管線�
 `--gzip -f archive.zip` 寫出的仍是 gzip 壓縮 tar stream（magic `1f 8b`），
 不是真正的 ZIP container。建立真實 ZIP 請使用 `--zip`；libarchive 會在需要時
 自動寫入 ZIP64，`--zip64` 則可強制寫入 ZIP64 記錄。
+
+### 加密
+
+`--encrypt` 以 **ChaCha20-Poly1305** 加密封存。加密層位於壓縮引擎**之外**，
+因此任何 codec——或純 tar——都能加密，解開時內層的 codec 仍會自動偵測。
+
+```sh
+release/swift_tar -c --encrypt        -f secret.tar.enc src/   # 提示輸入密語
+release/swift_tar -c --encrypt --gzip -f secret.tgz.enc src/   # 加密的 .tar.gz
+release/swift_tar -c --keyfile k.bin  -f secret.tar.enc src/   # 金鑰取自檔案
+```
+
+讀取端不需任何旗標——依 magic 偵測格式並自動解密，僅提示輸入密語，
+或以 `--keyfile` 提供金鑰：
+
+```sh
+release/swift_tar -x -f secret.tar.enc -C /tmp/out      # 提示輸入密語
+release/swift_tar -t --keyfile k.bin -f secret.tar.enc  # 金鑰取自檔案
+release/swift_tar --identify --keyfile k.bin -f secret.tgz.enc
+#   secret.tgz.enc: encrypted (ChaCha20-Poly1305) → gzip → tar
+```
+
+**金鑰**。密語自終端機讀取且不回顯（因此不會進入 shell 歷史），建立時需再次
+確認；並以 **scrypt**（N=2¹⁵、r=8、p=1）延展。`--keyfile <path>` 則改用該檔案
+的位元組作為金鑰材料，且在 **stdin 不是終端機時（例如管線中）為必要**——
+swift_tar 寧可報錯，也不會靜默寫出未加密的封存。
+
+**這個格式防護什麼**。每個 4 MiB 分塊各自封裝，且每個分塊的 AAD 都綁定完整
+標頭與分塊索引，並以一個已認證的結尾標記收尾：
+
+| 攻擊 | 由什麼偵測 |
+|------|-----------|
+| 竄改密文 | 每分塊的 Poly1305 tag |
+| 竄改標頭（salt、KDF 成本） | 完整標頭是每個分塊 AAD 的一部分 |
+| 重排或重複分塊 | AAD 與 nonce 中的分塊索引 |
+| 截斷封存 | 必須存在已認證的結尾標記 |
+
+金鑰錯誤、任何竄改或檔案被截斷，都會讓指令以非零狀態碼失敗；絕不會把不完整
+的明文當成有效內容回傳。
+
+`-r`、`-u` 與 `--delete` 不適用於加密封存。
+
+密碼學原語依規範實作，並對照其公開測試向量驗證（RFC 8439、RFC 4231、
+RFC 7914、FIPS 180-4）。可用 `--crypto-selftest` 執行，完整測試套件則為
+`./test_encrypt.sh`。
 
 ### 追加／更新／刪除
 
@@ -187,7 +237,8 @@ tar 壓縮引擎皆輸出可串接串流，故 `gunzip`、`bunzip2`、`xz`、`lz
 
 uuencode（傳統與 base64）· 帶 RPM 外包裝的檔案 · gzip · bzip2 ·
 compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
-（bvx2/bvx3，以多核心平行解碼器解開）。
+（bvx2/bvx3，以多核心平行解碼器解開）· swift_tar 自有的加密層
+（先解密，內層 codec 再照常偵測）。
 
 `lzop` 可被偵測，但除非系統有 `liblzo2`，否則回報為不支援——與未編入 lzo
 支援的 libarchive 行為一致。
@@ -200,8 +251,11 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 | `-C <dir>`  | 建立前切換輸入目錄；讀取時解出至此目錄 |
 | `-n <N>`    | 平行在途分塊數（預設 2 × 核心數） |
 | `-v`        | 詳細輸出（列出項目／顯示套用的 filter 鏈） |
+| `--encrypt` | （僅 `-c`）以 ChaCha20-Poly1305 加密，並提示輸入密語 |
+| `--keyfile <path>` | 以檔案位元組作為金鑰材料取代密語（建立與讀取皆適用；stdin 非終端機時為必要） |
 | `-h`        | 顯示說明 |
 | `--version` | 顯示固定的建置日期版本（`yyyyMMdd-HHmmss`） |
+| `--crypto-selftest` | 執行密碼學單元測試（公開向量、標頭解析、分塊切分）後結束 |
 
 `--version` 回報編譯 binary 時擷取的本機日期時間，例如
 `swift_tar 20260712-143015`。相同值會以 `swift_tar_version` 儲存在封裝的
@@ -211,6 +265,8 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 
 ```
 swift_tar.swift    tar 寫入／讀取 + 壓縮引擎 + libarchive 式 filter
+crypto.swift       ChaCha20-Poly1305 / scrypt 與加密容器
+rgb1.swift         RGB1 原始影像容器
 compile_tar.sh     建置腳本 → release/swift_tar
 build_libarchive.sh / build_libarchive-win.sh  靜態 ZIP 後端建置
 libarchive_zip_bridge.c  macOS/Windows 共用 ZIP C ABI

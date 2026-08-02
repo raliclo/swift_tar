@@ -573,12 +573,22 @@ enum TarCrypto {
         let key = contentKey(secret: secret, header: header)
         try output.write(contentsOf: Data(hb))
 
+        // Each chunk is wrapped in an autoreleasepool: Foundation's FileHandle
+        // reads accumulate autoreleased buffers in a tight CLI loop, which would
+        // otherwise grow RSS to the size of the whole stream.
+        // 每個 chunk 以 autoreleasepool 包住：Foundation FileHandle 讀取在密集的
+        // CLI 迴圈中會累積 autorelease 緩衝區，否則 RSS 會長到整個串流的大小。
         var index: UInt32 = 0
-        while true {
-            guard let part = try input.read(upToCount: chunkSize), !part.isEmpty else { break }
-            try writeChunk(Array(part), index: index, final: false, key: key, header: hb,
-                           seed: header.nonceSeed, output: output)
-            index &+= 1
+        var done = false
+        while !done {
+            try autoreleasepool {
+                guard let part = try input.read(upToCount: chunkSize), !part.isEmpty else {
+                    done = true; return
+                }
+                try writeChunk(Array(part), index: index, final: false, key: key, header: hb,
+                               seed: header.nonceSeed, output: output)
+                index &+= 1
+            }
         }
         // final marker: empty chunk that authenticates the end of the stream
         // 結尾標記：驗證串流結束的空 chunk
@@ -604,15 +614,28 @@ enum TarCrypto {
     /// 解密 `input`（`prefix` 為已自其讀出的前置位元組）並寫入 `output`。
     static func decryptStream(input: FileHandle, prefix: Data, output: FileHandle,
                               secret: KeySecret) throws {
-        var buf = [UInt8](prefix)
+        // `pending` only ever holds the sniffed prefix (a few bytes), and each
+        // read allocates exactly what the caller asked for. An accumulate-then-
+        // removeFirst buffer would retain its backing store and grow RSS to the
+        // size of the whole stream.
+        // `pending` 僅存放已嗅探的前綴（數個位元組），每次讀取只配置呼叫端要求的
+        // 量。若採「累積後 removeFirst」的緩衝區，其底層儲存會被保留，使 RSS 長到
+        // 整個串流的大小。
+        var pending = [UInt8](prefix)
         func need(_ n: Int) throws -> [UInt8] {
-            while buf.count < n {
-                guard let more = try input.read(upToCount: max(n - buf.count, 65536)), !more.isEmpty else {
+            var out = [UInt8](); out.reserveCapacity(n)
+            if !pending.isEmpty {
+                let take = min(n, pending.count)
+                out += pending[0..<take]
+                pending.removeFirst(take)
+            }
+            while out.count < n {
+                guard let more = try input.read(upToCount: n - out.count), !more.isEmpty else {
                     throw TarCryptoError.truncated
                 }
-                buf += [UInt8](more)
+                out += more
             }
-            let out = Array(buf[0..<n]); buf.removeFirst(n); return out
+            return out
         }
 
         let hb = try need(headerSize)
@@ -620,21 +643,28 @@ enum TarCrypto {
         let key = contentKey(secret: secret, header: header)
 
         var index: UInt32 = 0
-        while true {
-            let head = try need(5)
-            let n = Int((UInt32(head[0]) << 24) | (UInt32(head[1]) << 16)
-                        | (UInt32(head[2]) << 8) | UInt32(head[3]))
-            let flags = head[4]
-            guard n <= Int(header.chunkSize) else { throw TarCryptoError.badHeader("chunk length \(n)") }
-            let ciphertext = try need(n)
-            let tag = try need(ChaChaPoly.tagSize)
-            guard let plain = ChaChaPoly.open(ciphertext: ciphertext, tag: tag, key: key,
-                                              nonce: nonce(seed: header.nonceSeed, index: index),
-                                              aad: aad(header: hb, index: index, flags: flags))
-            else { throw TarCryptoError.authenticationFailed(Int(index)) }
-            if flags & 1 != 0 { return }        // authenticated end of stream / 已驗證的串流結尾
-            if !plain.isEmpty { try output.write(contentsOf: Data(plain)) }
-            index &+= 1
+        var finished = false
+        while !finished {
+            // See encryptStream: the pool keeps per-chunk buffers from piling up.
+            // 參見 encryptStream：此 pool 避免每個 chunk 的緩衝區堆積。
+            try autoreleasepool {
+                let head = try need(5)
+                let n = Int((UInt32(head[0]) << 24) | (UInt32(head[1]) << 16)
+                            | (UInt32(head[2]) << 8) | UInt32(head[3]))
+                let flags = head[4]
+                guard n <= Int(header.chunkSize) else { throw TarCryptoError.badHeader("chunk length \(n)") }
+                let ciphertext = try need(n)
+                let tag = try need(ChaChaPoly.tagSize)
+                guard let plain = ChaChaPoly.open(ciphertext: ciphertext, tag: tag, key: key,
+                                                  nonce: nonce(seed: header.nonceSeed, index: index),
+                                                  aad: aad(header: hb, index: index, flags: flags))
+                else { throw TarCryptoError.authenticationFailed(Int(index)) }
+                if flags & 1 != 0 {             // authenticated end of stream / 已驗證的串流結尾
+                    finished = true; return
+                }
+                if !plain.isEmpty { try output.write(contentsOf: Data(plain)) }
+                index &+= 1
+            }
         }
     }
 }

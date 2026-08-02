@@ -6,6 +6,57 @@
 （`../../benchmark.sh`／`../../benchmark2.sh`）未測試的行為。這些結果屬於
 探索性質；採信結論前，請先閱讀各節的「狀態」。
 
+## 加密吞吐量、RSS 與大小開銷
+
+`encrypt_mbps_rss.sh` 量測 ChaCha20-Poly1305 加密層的成本：同一封存在有無
+`--encrypt` 下的對比、以 `--encrypt-only`／`--decrypt-only` 單獨作用的情形，
+以及大小開銷。結果寫入
+[`encrypt_mbps_rss_output.txt`](encrypt_mbps_rss_output.txt)。
+
+```sh
+ROUNDS=3 ./encrypt_mbps_rss.sh ../../claw-code
+```
+
+全程使用 keyfile 以維持非互動；`--keyfile` 不走 scrypt KDF，因此數字量的是
+AEAD 本身，而非金鑰衍生。
+
+### 發現並修正的 RSS 缺陷（2026-08-03）
+
+首次執行暴露的是新加密層的真實缺陷，而非量測誤差：加密 1.3 GB 語料時
+peak RSS 達 **1454 MB**，未加密的建立僅 20 MB。下方 TGZ 調查中的兩個典型成因
+在 `crypto.swift` 裡都出現了：
+
+- `decryptStream` 使用「累積後 `removeFirst`」的緩衝區模式，其底層儲存會被保留
+  並長成整個串流的大小。現已改為每次只讀取所需的位元組，僅保留已嗅探的前綴。
+- 加密與解密迴圈都未以 `autoreleasepool` 包住每個 chunk 的工作，導致
+  Foundation `FileHandle` 讀取不斷堆積。
+
+| 階段 | 修正前 | 修正後 |
+| --- | ---: | ---: |
+| 純 tar 建立 + 加密 | 1454 MB | **42 MB** |
+| 解出 + 解密 | 1475 MB | **39 MB** |
+| `--encrypt-only` | 1438 MB | **24 MB** |
+| `--decrypt-only` | 1460 MB | **20 MB** |
+
+### 結果摘要（Apple M4、claw-code 1.40 GB、3 次中位數）
+
+| Codec | 建立 | 建立 + 加密 | 解出 | 解出 + 解密 |
+| --- | ---: | ---: | ---: | ---: |
+| 純 tar | 671 MB/s | 106 MB/s | 825 MB/s | 104 MB/s |
+| gzip | 301 MB/s | 223 MB/s | 391 MB/s | 188 MB/s |
+| zstd | 602 MB/s | 356 MB/s | 395 MB/s | 209 MB/s |
+
+`--encrypt-only` 與 `--decrypt-only` 皆約 115 MB/s，且 `--decrypt-only` 的輸出
+已驗證與原檔位元組一致。
+
+大小開銷為 **48 bytes 標頭加上每 4 MiB chunk 21 bytes**——1.4 GB 封存為 7125
+bytes（0.0005%）。
+
+> **狀態**：約 105–115 MB/s 的上限來自純 Swift 的 ChaCha20-Poly1305 層，該層
+> 目前為**單執行緒**，而壓縮是分塊平行的。因此加密對最快的 codec 影響最大
+> （zstd 建立由 602 降至 356 MB/s），對最慢的影響最小。由於每個 chunk 各自
+> 獨立封裝，此層本可比照 codec 平行化；該項尚未實作。
+
 ## RGB1 容器各 codec 吞吐量
 
 `../test_swift_tar_rgb1.sh` 將 RGB1 容器經由 swift_tar 各 codec 封存，記錄封存

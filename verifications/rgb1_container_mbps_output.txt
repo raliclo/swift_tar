@@ -1,19 +1,19 @@
-[Info] date: 2026-08-03 03:39:57 CST
+[Info] date: 2026-08-03 04:20:11 CST
 [Info] host: Darwin 25.5.0 arm64
 [Info] swift_tar: /Users/raliclo/proj/lzfse2/swift_tar/release/swift_tar
-[Info] version: swift_tar 20260803-033425
+[Info] version: swift_tar 20260803-041205
 [Info] corpus: synthetic RGB1 1024x1024 (3 MiB payload + 876B header = 3146604 B)
 [Info] MB/s = container bytes / time (MB = 10^6); times are the mean of 3 runs
 
 == RGB1 container: size / time / throughput by codec ==
 codec                 size(B)   ratio  create(ms)  cr(MB/s) extract(ms)  ex(MB/s)
 ---------------- ------------ ------- ----------- --------- ----------- ---------
-plain                 3148288   1.000        10.6     296.8        11.7     268.9
-gzip                    23135   0.007        15.4     204.3        12.7     247.8
-bzip2                   40960   0.013       594.5       5.3        36.9      85.3
-xz                       4884   0.002        33.8      93.1        14.7     214.1
-zstd                     4567   0.001        10.7     294.1        12.4     253.8
-lz4                     18653   0.006        10.6     296.8        12.4     253.8
-zip                     23198   0.007        15.6     201.7        10.3     305.5
-bvx3-optimal             4596   0.001        15.6     201.7        12.4     253.8
-other3-optimal           6398   0.002        20.7     152.0        12.2     257.9
+plain                 3148288   1.000        16.0     196.7        12.5     251.7
+gzip                    23135   0.007        17.5     179.8        14.1     223.2
+bzip2                   40977   0.013       656.1       4.8        43.5      72.3
+xz                       4880   0.002        36.2      86.9        16.8     187.3
+zstd                     4567   0.001        12.7     247.8        13.7     229.7
+lz4                     18653   0.006        12.7     247.8        13.6     231.4
+zip                     23201   0.007        17.3     181.9        12.0     262.2
+bvx3-optimal             4585   0.001        22.2     141.7        13.7     229.7
+other3-optimal           6387   0.002        17.6     178.8        13.8     228.0

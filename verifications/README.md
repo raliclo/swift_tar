@@ -7,6 +7,61 @@ main benchmark pipeline (`../../benchmark.sh` / `../../benchmark2.sh`). Results
 here are exploratory—read the "Status" line on each before trusting a
 conclusion.
 
+## Encryption throughput, RSS and size overhead
+
+`encrypt_mbps_rss.sh` measures what the ChaCha20-Poly1305 layer costs: the same
+archive with and without `--encrypt`, the layer on its own via
+`--encrypt-only` / `--decrypt-only`, and the size overhead. Results in
+[`encrypt_mbps_rss_output.txt`](encrypt_mbps_rss_output.txt).
+
+```sh
+ROUNDS=3 ./encrypt_mbps_rss.sh ../../claw-code
+```
+
+Runs use a keyfile so they stay non-interactive; `--keyfile` skips the scrypt
+KDF, so the numbers measure the AEAD itself rather than key derivation.
+
+### RSS regression found and fixed (2026-08-03)
+
+The first run exposed a real defect in the new layer, not just a measurement:
+encrypting the 1.3 GB corpus peaked at **1454 MB RSS** while the unencrypted
+create used 20 MB. Both classic causes from the TGZ investigation below were
+present in `crypto.swift`:
+
+- `decryptStream` used the accumulate-then-`removeFirst` buffer pattern, which
+  retains its backing store and grows to the size of the whole stream. It now
+  reads exactly the bytes each call needs, keeping only the sniffed prefix.
+- Neither the encrypt nor the decrypt loop wrapped its per-chunk work in
+  `autoreleasepool`, so Foundation's `FileHandle` reads piled up.
+
+| Phase | Before | After |
+| --- | ---: | ---: |
+| plain tar create + encrypt | 1454 MB | **42 MB** |
+| extract + decrypt | 1475 MB | **39 MB** |
+| `--encrypt-only` | 1438 MB | **24 MB** |
+| `--decrypt-only` | 1460 MB | **20 MB** |
+
+### Results summary (Apple M4, claw-code 1.40 GB, medians of 3)
+
+| Codec | create | create + encrypt | extract | extract + decrypt |
+| --- | ---: | ---: | ---: | ---: |
+| plain tar | 671 MB/s | 106 MB/s | 825 MB/s | 104 MB/s |
+| gzip | 301 MB/s | 223 MB/s | 391 MB/s | 188 MB/s |
+| zstd | 602 MB/s | 356 MB/s | 395 MB/s | 209 MB/s |
+
+`--encrypt-only` and `--decrypt-only` both run at about 115 MB/s, and
+`--decrypt-only` output is verified byte-identical to the original.
+
+Size overhead is **48 bytes of header plus 21 bytes per 4 MiB chunk** — 7125
+bytes on a 1.4 GB archive (0.0005%).
+
+> **Status**: the ~105–115 MB/s ceiling is the pure-Swift ChaCha20-Poly1305
+> layer, which currently runs **single-threaded** while compression is
+> chunk-parallel. That is why encryption costs the most on the fastest codecs
+> (zstd create drops from 602 to 356 MB/s) and least on the slowest. Each chunk
+> is sealed independently, so this layer could be parallelised the same way the
+> codecs are; that work has not been done.
+
 ## RGB1 container throughput by codec
 
 `../test_swift_tar_rgb1.sh` archives an RGB1 container through every swift_tar

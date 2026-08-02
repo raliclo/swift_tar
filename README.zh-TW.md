@@ -84,7 +84,8 @@ CMake build tree 屬於開發產物，並非 runtime dependency，因此不放�
 ## 使用方式
 
 ```
-swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat [-f <archive>] [codec]
+swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat|--encrypt-only|--decrypt-only
+          [-f <archive>] [codec]
           [--encrypt|--keyfile <path>] [-C <dir>] [-n N] [-v] [files...]
 ```
 
@@ -98,6 +99,8 @@ swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat [-f <archive>] [codec]
 | `--delete` | 就地從封存移除指定項目（僅未壓縮 tar；swift_tar 獨有——BSD tar 無 `--delete`） |
 | `--identify` | 依 magic 位元組偵測壓縮格式並印出 filter 鏈（例如 `gzip → tar`）後即停，不解壓；任何檔名皆可 |
 | `--cat` | 僅解壓 filter 鏈、原始內容輸出至 stdout（等同 `bsdcat`） |
+| `--encrypt-only` | 原樣加密 `-f` 指定的檔案（不做 tar、不壓縮）並輸出至 stdout |
+| `--decrypt-only` | 僅剝除 `-f` 的加密層並輸出至 stdout；壓縮內容維持壓縮 |
 | `--rgb1-pack` / `--rgb1-info` / `--rgb1-raw` | RGB1 原始影像容器：將 raw RGB bytes 包上標頭、印出標頭欄位，或移除標頭還原 raw payload |
 
 `-f -`（或省略 `-f`）表示讀取標準輸入／寫至標準輸出，可組進管線。
@@ -143,10 +146,34 @@ release/swift_tar --identify --keyfile k.bin -f secret.tgz.enc
 #   secret.tgz.enc: encrypted (ChaCha20-Poly1305) → gzip → tar
 ```
 
-**金鑰**。密語自終端機讀取且不回顯（因此不會進入 shell 歷史），建立時需再次
-確認；並以 **scrypt**（N=2¹⁵、r=8、p=1）延展。`--keyfile <path>` 則改用該檔案
-的位元組作為金鑰材料，且在 **stdin 不是終端機時（例如管線中）為必要**——
+#### 不重新打包的加密與解密
+
+`--decrypt-only` **只**剝除加密層，內容維持壓縮；`--encrypt-only` 則原樣加密
+既有檔案。兩者都以 `-f` 指定輸入、寫到 stdout，形狀與 `--cat` 相同：
+
+```sh
+swift_tar --decrypt-only --keyfile k.bin -f secret.tgz.enc > secret.tar.gz
+swift_tar --encrypt-only --keyfile k.bin -f archive.tar.gz > archive.tgz.enc
+```
+
+若連壓縮也要解開請改用 `--cat`——它回傳原始 tar，而 `--decrypt-only` 交還的是
+仍然合法的 `.tar.gz`。
+
+#### 金鑰
+
+密語自終端機讀取且不回顯（因此不會進入 shell 歷史），建立時需再次確認；
+並以 **scrypt**（N=2¹⁵、r=8、p=1）延展。`--keyfile <path>` 則改用該檔案的
+位元組作為金鑰材料，且在 **stdin 不是終端機時（例如管線中）為必要**——
 swift_tar 寧可報錯，也不會靜默寫出未加密的封存。
+
+keyfile **沒有格式要求**：文字或二進位、任何長度皆可，位元組原樣使用，
+僅空檔案會被拒絕。有兩點務必知道：
+
+- **結尾換行也是金鑰的一部分。** `printf 'secret' > k` 與 `echo secret > k`
+  產生的是**不同**金鑰。請用產生的方式而非手動輸入：
+  `head -c 64 /dev/urandom > k.bin && chmod 600 k.bin`。
+- **`--keyfile` 不執行 KDF**，因為假設其材料為高熵。請勿把人為選定的短密碼放進
+  keyfile——那種情況應改用 `--encrypt`，讓它經過 scrypt。
 
 **這個格式防護什麼**。每個 4 MiB 分塊各自封裝，且每個分塊的 AAD 都綁定完整
 標頭與分塊索引，並以一個已認證的結尾標記收尾：

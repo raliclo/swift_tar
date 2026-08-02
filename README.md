@@ -92,7 +92,8 @@ because they are development artifacts, not runtime dependencies.
 ## Usage
 
 ```
-swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat [-f <archive>] [codec]
+swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat|--encrypt-only|--decrypt-only
+          [-f <archive>] [codec]
           [--encrypt|--keyfile <path>] [-C <dir>] [-n N] [-v] [files...]
 ```
 
@@ -106,6 +107,8 @@ swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat [-f <archive>] [codec]
 | `--delete` | Remove named members from an archive in place (uncompressed tar only; swift_tar-only — BSD tar has no `--delete`) |
 | `--identify` | Detect the compression format by magic bytes and print the filter chain (e.g. `gzip → tar`), then stop — no extraction. Works on any filename |
 | `--cat` | Decompress the filter chain only, raw payload to stdout (≈ `bsdcat`) |
+| `--encrypt-only` | Encrypt the `-f` file as-is (no tar, no codec) to stdout |
+| `--decrypt-only` | Strip only the encryption layer from `-f` to stdout; a compressed payload stays compressed |
 | `--rgb1-pack` / `--rgb1-info` / `--rgb1-raw` | RGB1 raw image container: wrap raw RGB bytes with a header, print its fields, or strip it back to the raw payload |
 
 `-f -` (or omitting `-f`) reads stdin / writes stdout, so swift_tar composes
@@ -156,12 +159,39 @@ release/swift_tar --identify --keyfile k.bin -f secret.tgz.enc
 #   secret.tgz.enc: encrypted (ChaCha20-Poly1305) → gzip → tar
 ```
 
-**Keys.** A passphrase is read from the terminal without echo (so it never
-reaches the shell history) and is confirmed on create; it is stretched with
-**scrypt** (N=2¹⁵, r=8, p=1). `--keyfile <path>` uses the file's bytes as key
-material instead and is **required when stdin is not a terminal**, such as in a
+#### Encrypting or decrypting without repacking
+
+`--decrypt-only` strips **just** the encryption layer, leaving the payload
+compressed, and `--encrypt-only` encrypts an existing file as-is. Both take the
+input with `-f` and write to stdout, like `--cat`:
+
+```sh
+swift_tar --decrypt-only --keyfile k.bin -f secret.tgz.enc > secret.tar.gz
+swift_tar --encrypt-only --keyfile k.bin -f archive.tar.gz > archive.tgz.enc
+```
+
+Use `--cat` instead when you want the compression undone as well — it returns
+the raw tar, whereas `--decrypt-only` hands back a still-valid `.tar.gz`.
+
+#### Keys
+
+A passphrase is read from the terminal without echo (so it never reaches the
+shell history) and is confirmed on create; it is stretched with **scrypt**
+(N=2¹⁵, r=8, p=1). `--keyfile <path>` uses the file's bytes as key material
+instead and is **required when stdin is not a terminal**, such as in a
 pipeline — swift_tar refuses to write an archive it cannot key rather than
 silently leaving it unencrypted.
+
+A keyfile has **no format requirement**: text or binary, any length, and the
+bytes are used exactly as they are. Only an empty file is rejected. Two
+consequences are worth knowing:
+
+- **A trailing newline is part of the key.** `printf 'secret' > k` and
+  `echo secret > k` produce *different* keys. Generate keyfiles instead of
+  typing them: `head -c 64 /dev/urandom > k.bin && chmod 600 k.bin`.
+- **`--keyfile` does not run the KDF**, because the material is assumed to be
+  high-entropy. Do not put a short human-chosen password in a keyfile — use
+  `--encrypt` so it goes through scrypt.
 
 **What the format protects against.** Each 4 MiB chunk is sealed separately,
 and every chunk's AAD binds the full header plus the chunk index, with an

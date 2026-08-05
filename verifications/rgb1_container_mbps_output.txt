@@ -1,19 +1,19 @@
-[Info] date: 2026-08-03 04:20:11 CST
-[Info] host: Darwin 25.5.0 arm64
+[Info] date: 2026-08-05 19:24:04 CST
+[Info] host: Darwin 27.0.0 arm64
 [Info] swift_tar: /Users/raliclo/proj/lzfse2/swift_tar/release/swift_tar
-[Info] version: swift_tar 20260803-041205
+[Info] version: swift_tar 20260805-074201
 [Info] corpus: synthetic RGB1 1024x1024 (3 MiB payload + 876B header = 3146604 B)
 [Info] MB/s = container bytes / time (MB = 10^6); times are the mean of 3 runs
 
 == RGB1 container: size / time / throughput by codec ==
 codec                 size(B)   ratio  create(ms)  cr(MB/s) extract(ms)  ex(MB/s)
 ---------------- ------------ ------- ----------- --------- ----------- ---------
-plain                 3148288   1.000        16.0     196.7        12.5     251.7
-gzip                    23135   0.007        17.5     179.8        14.1     223.2
-bzip2                   40977   0.013       656.1       4.8        43.5      72.3
-xz                       4880   0.002        36.2      86.9        16.8     187.3
-zstd                     4567   0.001        12.7     247.8        13.7     229.7
-lz4                     18653   0.006        12.7     247.8        13.6     231.4
-zip                     23201   0.007        17.3     181.9        12.0     262.2
-bvx3-optimal             4585   0.001        22.2     141.7        13.7     229.7
-other3-optimal           6387   0.002        17.6     178.8        13.8     228.0
+plain                 3148288   1.000        12.3     255.8        12.6     249.7
+gzip                    23131   0.007        17.6     178.8        13.9     226.4
+bzip2                   40937   0.013       611.6       5.1        38.6      81.5
+xz                       4880   0.002        35.8      87.9        16.6     189.6
+zstd                     4567   0.001        12.0     262.2        13.8     228.0
+lz4                     18653   0.006        12.3     255.8        14.0     224.8
+zip                     23200   0.007        16.9     186.2        12.0     262.2
+bvx3-optimal             4589   0.001        16.8     187.3        13.8     228.0
+other3-optimal           6392   0.002        17.1     184.0        14.2     221.6

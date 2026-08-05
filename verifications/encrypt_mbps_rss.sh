@@ -63,6 +63,21 @@ RAW_MB="$(awk -v bytes="$RAW_BYTES" 'BEGIN {printf "%.2f", bytes / 1000000}')"
 KEYFILE="$TMP_DIR/key.bin"
 head -c 64 /dev/urandom > "$KEYFILE"
 
+# Each phase cleans up after itself, so the peak requirement is roughly three
+# corpus-sized files at once. Running out of space does not fail the commands —
+# it just makes every timing meaningless — so refuse to start instead.
+# 各階段會自行清理，因此尖峰需求約為三份語料大小的檔案。空間不足並不會讓指令
+#失敗，只會讓所有計時失去意義，故寧可拒絕開始。
+NEED_KB=$(( (RAW_BYTES / 1024) * 3 ))
+FREE_KB="$(df -k "$TMP_DIR" | awk 'NR==2 {print $4}')"
+if (( FREE_KB < NEED_KB )); then
+    awk -v need="$NEED_KB" -v free="$FREE_KB" 'BEGIN {
+        printf "[Error] need ~%.1f GB free for temp files, have %.1f GB / 暫存檔約需 %.1f GB，目前僅 %.1f GB\n",
+            need/1048576, free/1048576, need/1048576, free/1048576
+    }' >&2
+    exit 1
+fi
+
 typeset MEASURE_REAL MEASURE_RSS
 measure() {
     local log="$TMP_DIR/time-$RANDOM.log"
@@ -153,7 +168,12 @@ run_pair() { # label codec-flag
     local xc="$(median $x_c)" xe="$(median $x_e)"
     printf "%-16s %-9s %10s %10s %12s %14s\n" "" "extract" "$xc" "$(mbps $xc)" "$(rssmb $(median $xr_c))" "-"
     printf "%-16s %-9s %10s %10s %12s %14s\n" "" "extr+dec" "$xe" "$(mbps $xe)" "$(rssmb $(median $xr_e))" "-"
-    rm -rf "$TMP_DIR/x"
+    # Drop this codec's archives before the next one starts. Keeping all three
+    # codecs' clear+encrypted copies alive at once needs ~6 GB for a 1.4 GB
+    # corpus, and a nearly-full disk makes every figure here meaningless.
+    # 在下一個 codec 開始前刪除本 codec 的封存。若三個 codec 的未加密＋加密副本
+    # 同時存在，1.4 GB 語料需約 6 GB 空間，而磁碟將滿時所有數字都失去意義。
+    rm -rf "$TMP_DIR/x" "$clear" "$enc"
 }
 
 run_pair "plain-tar" ""
@@ -195,6 +215,70 @@ awk -v raw="$BASE_BYTES" -v enc="$ENC_BYTES" 'BEGIN {
     printf "[Info] size overhead / 大小開銷: %d bytes (%.4f%%), = 48B header + 21B per 4 MiB chunk\n",
         over, (raw > 0 ? over * 100.0 / raw : 0)
 }'
+# base.tar is still needed as B2's input; its derived copies are not.
+# base.tar 仍是 B2 的輸入而須保留；由它衍生的副本則不需要。
+rm -f "$TMP_DIR/base.tar.enc" "$TMP_DIR/base.back.tar"
+
+# ---------------------------------------------------------------------
+# B2) How the AEAD scales with -n. Each chunk is sealed independently, so the
+#     encryption layer uses the same in-flight budget as the codecs. Measured on
+#     --encrypt-only/--decrypt-only over the .tar built above, which is
+#     incompressible enough that the AEAD, not a codec, is the work.
+#     AEAD 隨 -n 的擴展。各 chunk 獨立封裝，因此加密層與 codec 共用同一組在途
+#     預算。以上方建立的 .tar 走 --encrypt-only／--decrypt-only 量測，其內容
+#     足夠不可壓縮，主要工作即為 AEAD 而非 codec。
+# ---------------------------------------------------------------------
+echo
+echo "== B2) -n scaling of the encryption layer =="
+CORES="$(sysctl -n hw.ncpu 2>/dev/null || echo 8)"
+DEFAULT_N=$(( CORES * 2 ))
+echo "[Info] cores / 核心數: $CORES, default -n / 預設 -n: $DEFAULT_N (2 x cores, capped at 4 x cores)"
+# Settings are interleaved — every round runs the whole sweep — and the best
+# time per setting is reported. Running all rounds of one -n before moving to
+# the next lets the CPU heat up monotonically, which makes later settings look
+# slower than they are; an early version of this script reported a sharp drop at
+# high -n that was purely thermal. Interleaving gives each setting the same
+# thermal exposure, and best-of picks its coolest sample.
+# 各設定交錯執行——每一輪跑完整個 sweep——並回報各設定的最佳時間。若把某個 -n
+# 的所有輪次跑完才換下一個，CPU 會單調升溫，使後面的設定看起來較慢；本腳本早期
+# 版本就曾回報高 -n 大幅下降，而那純粹是溫度造成的。交錯可讓各設定獲得相同的
+# 溫度暴露，取最佳值則挑出其最涼的樣本。
+typeset -A best_e best_d rss_e rss_d
+SWEEP=(1 2 4 8 16 "$DEFAULT_N")
+for n in $SWEEP; do best_e[$n]=999999; best_d[$n]=999999; rss_e[$n]=0; rss_d[$n]=0; done
+for round in $(seq 1 "$ROUNDS"); do
+    for n in $SWEEP; do
+        measure_to_file "$TMP_DIR/scale.enc" "$SWIFT_TAR_BIN" --encrypt-only \
+            --keyfile "$KEYFILE" -n "$n" -f "$BASE"
+        if (( $(awk -v a="$MEASURE_REAL" -v b="${best_e[$n]}" 'BEGIN{print (a<b)}') )); then
+            best_e[$n]="$MEASURE_REAL"; rss_e[$n]="$MEASURE_RSS"
+        fi
+        measure_to_file "$TMP_DIR/scale.out" "$SWIFT_TAR_BIN" --decrypt-only \
+            --keyfile "$KEYFILE" -n "$n" -f "$TMP_DIR/scale.enc"
+        if (( $(awk -v a="$MEASURE_REAL" -v b="${best_d[$n]}" 'BEGIN{print (a<b)}') )); then
+            best_d[$n]="$MEASURE_REAL"; rss_d[$n]="$MEASURE_RSS"
+        fi
+        # correctness must hold at every setting, not just the default
+        # 每一種設定都必須正確，而不只是預設值
+        if ! cmp -s "$BASE" "$TMP_DIR/scale.out"; then
+            echo "[Error] -n $n produced a different plaintext / -n $n 解出的明文不一致" >&2
+            exit 1
+        fi
+        # Free this round's copies immediately: two corpus-sized files per -n
+        # would otherwise sit on disk for the whole sweep.
+        # 立即釋放本輪副本：否則每個 -n 的兩份語料大小檔案會佔用整個 sweep 期間。
+        rm -f "$TMP_DIR/scale.enc" "$TMP_DIR/scale.out"
+    done
+done
+printf "%-6s %12s %10s %12s %12s %10s %12s\n" \
+    "-n" "enc best(s)" "enc MB/s" "enc RSS(MB)" "dec best(s)" "dec MB/s" "dec RSS(MB)"
+for n in $SWEEP; do
+    printf "%-6s %12s %10s %12s %12s %10s %12s\n" "$n" \
+        "${best_e[$n]}" "$(mbps ${best_e[$n]})" "$(rssmb ${rss_e[$n]})" \
+        "${best_d[$n]}" "$(mbps ${best_d[$n]})" "$(rssmb ${rss_d[$n]})"
+done
+echo "[OK] every -n setting round-trips to identical bytes / 每種 -n 設定皆還原為相同位元組"
+rm -f "$BASE"          # last consumer of base.tar / base.tar 的最後一個使用者
 
 # ---------------------------------------------------------------------
 # C) Measure the one-off scrypt cost that --keyfile skips. A tiny helper is

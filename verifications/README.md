@@ -36,10 +36,10 @@ present in `crypto.swift`:
 
 | Phase | Unbounded | Bounded serial | Bounded parallel |
 | --- | ---: | ---: | ---: |
-| plain tar create + encrypt | 1454 MB | 42 MB | **231 MB** |
-| extract + decrypt | 1475 MB | 39 MB | **192 MB** |
+| plain tar create + encrypt | 1454 MB | 42 MB | **198 MB** |
+| extract + decrypt | 1475 MB | 39 MB | **184 MB** |
 | `--encrypt-only` | 1438 MB | 24 MB | **228 MB** |
-| `--decrypt-only` | 1460 MB | 20 MB | **156 MB** |
+| `--decrypt-only` | 1460 MB | 20 MB | **190 MB** |
 
 The parallel pipeline deliberately holds up to `-n` 4 MiB chunks. Its semaphore
 slot is released only after a result is written in order, so memory is bounded
@@ -49,25 +49,54 @@ by the configured in-flight count rather than the 1.4 GB stream size.
 
 | Codec | create | create + encrypt | extract | extract + decrypt |
 | --- | ---: | ---: | ---: | ---: |
-| plain tar | 698 MB/s | 489 MB/s | 688 MB/s | 355 MB/s |
-| gzip | 306 MB/s | 268 MB/s | 428 MB/s | 348 MB/s |
-| zstd | 594 MB/s | 597 MB/s | 357 MB/s | 297 MB/s |
+| plain tar | 550 MB/s | 299 MB/s | 570 MB/s | 426 MB/s |
+| gzip | 322 MB/s | 277 MB/s | 474 MB/s | 411 MB/s |
+| zstd | 1542 MB/s | 1231 MB/s | 396 MB/s | 460 MB/s |
 
-`--encrypt-only` runs at **295 MB/s** with 228 MB peak RSS and `--decrypt-only`
-runs at **264 MB/s** with 156 MB peak RSS. The decrypted output is verified
+`--encrypt-only` runs at **542 MB/s** with 228 MB peak RSS and `--decrypt-only`
+runs at **392 MB/s** with 190 MB peak RSS. The decrypted output is verified
 byte-identical to the original.
 
 Size overhead is **48 bytes of header plus 21 bytes per 4 MiB chunk** — 7125
 bytes on a 1.4 GB archive (0.0005%).
 
-Passphrase derivation is now measured directly against the same `crypto.swift`:
-the three-run median is **0.210 s** per scrypt derivation, with 51.49 MB peak RSS
-versus 6.18 MB for the keyfile baseline.
+Passphrase derivation is measured directly against the same `crypto.swift`:
+**0.180 s** per scrypt derivation, with 51.48 MB peak RSS versus 6.13 MB for the
+keyfile baseline.
 
-> **Status**: the pure-Swift ChaCha20-Poly1305 layer now seals and opens chunks
-> concurrently according to `-n`, then writes results in order with bounded
-> backpressure. The current figures apply to that parallel implementation and
-> supersede the earlier single-threaded ~115 MB/s result.
+### `-n` scaling of the encryption layer
+
+Each chunk is sealed independently — its nonce and AAD derive only from the
+chunk index — so the layer uses the same ordered concurrent pipeline and the
+same `-n` budget as the codecs. **The container format did not change**, so
+archives written before and after this change are mutually readable.
+
+| `-n` | encrypt | RSS | decrypt | RSS |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 132 MB/s | 28 MB | 133 MB/s | 28 MB |
+| 2 | 262 MB/s | 45 MB | 260 MB/s | 41 MB |
+| 4 | 479 MB/s | 79 MB | 479 MB/s | 58 MB |
+| 8 | 662 MB/s | 147 MB | 656 MB/s | 92 MB |
+| 16 | **763 MB/s** | 206 MB | **742 MB/s** | 135 MB |
+| 20 (default) | 754 MB/s | 232 MB | 738 MB/s | 152 MB |
+
+Throughput scales cleanly to about `-n 16` on this 10-core machine — a **5.8×**
+speed-up over `-n 1` — and the default (`2 × cores` = 20) sits at the plateau,
+so it needs no tuning. RSS grows linearly with in-flight chunks (~4 MiB each),
+the same trade-off the codecs make.
+
+> **Methodology**: the sweep interleaves settings — every round runs the whole
+> sweep and the best time per setting is reported. Running all rounds of one
+> `-n` before the next lets the CPU heat up monotonically; an earlier version of
+> this script did exactly that and reported a sharp collapse at high `-n`
+> (`-n 20` at 146 MB/s) that reversing the order proved to be purely thermal.
+> Each phase now deletes its archives as soon as it is done, and the script
+> refuses to start without room for them.
+
+> **Status**: verified on Apple M4 only. Correctness is enforced rather than
+> assumed — the sweep aborts if any `-n` setting fails to round-trip to
+> identical bytes, and `--crypto-selftest` checks all 16 encrypt/decrypt `-n`
+> combinations across four payload shapes.
 
 ## RGB1 container throughput by codec
 

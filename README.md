@@ -16,9 +16,10 @@ compression engine and modeled on **libarchive**'s filter architecture.
   bytes and filters stack (e.g. `payload.tar.gz.uu`).
 - **True ZIP/ZIP64 backend**: the bundled libarchive creates and reads standard
   ZIP containers on macOS and Windows; ZIP64 is automatic or can be forced.
-- **Authenticated encryption**: ChaCha20-Poly1305 over 4 MiB chunks, layered
-  outside the codec so any archive can be encrypted. Tampering, reordering and
-  truncation are all detected. Pure Swift — no CryptoKit or OpenSSL.
+- **Authenticated encryption**: ChaCha20-Poly1305 over 4 MiB chunks, sealed
+  concurrently across `-n` like the codecs, layered outside the codec so any
+  archive can be encrypted. Tampering, reordering and truncation are all
+  detected. Pure Swift — no CryptoKit or OpenSSL.
 - **C libraries used the libarchive way**: `zlib` / `libbz2` / `liblzma` /
   `libzstd` / `liblz4` supply the compression primitive; the container
   framing is assembled by swift_tar. `compress`/LZW, uudecode and the RPM

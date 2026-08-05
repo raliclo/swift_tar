@@ -15,9 +15,9 @@
   可疊層（例如 `payload.tar.gz.uu`）。
 - **真實 ZIP/ZIP64 後端**：macOS 與 Windows 均使用內附 libarchive 建立及讀取
   標準 ZIP 容器；需要時自動使用 ZIP64，也可明確強制。
-- **認證加密**：以 ChaCha20-Poly1305 對 4 MiB 分塊加密，疊在壓縮引擎之外，
-  因此任何封存皆可加密；竄改、重排與截斷都能偵測。純 Swift 實作——
-  不使用 CryptoKit 或 OpenSSL。
+- **認證加密**：以 ChaCha20-Poly1305 對 4 MiB 分塊加密，並如 codec 一般依
+  `-n` 併發封裝；加密層疊在壓縮引擎之外，因此任何封存皆可加密；竄改、重排與
+  截斷都能偵測。純 Swift 實作——不使用 CryptoKit 或 OpenSSL。
 - **C 庫用法仿 libarchive**：`zlib` / `libbz2` / `liblzma` / `libzstd` /
   `liblz4` 只提供壓縮原語，容器框架由 swift_tar 自組；`compress`/LZW、
   uudecode 與 RPM 外包裝為 libarchive 內建 filter 的純 Swift 移植。

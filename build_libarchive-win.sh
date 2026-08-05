@@ -17,6 +17,7 @@ build_dir="build/libarchive-win"
 cmake -S libarchive -B "$build_dir" -G "Visual Studio 17 2022" -A x64 \
     -DBUILD_SHARED_LIBS=OFF \
     -DMSVC_USE_STATIC_CRT=OFF \
+    -DCMAKE_C_FLAGS=//utf-8 \
     -DZLIB_LIBRARY="$SCRIPT_DIR/zlib/build/Release/zs.lib" \
     -DZLIB_INCLUDE_DIR="$SCRIPT_DIR/zlib" \
     -DENABLE_ZLIB=ON \

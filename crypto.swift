@@ -818,6 +818,8 @@ enum TarCrypto {
 import Darwin
 #elseif canImport(Glibc)
 import Glibc
+#elseif os(Windows)
+import ucrt
 #endif
 
 enum KeyInput {
@@ -827,7 +829,12 @@ enum KeyInput {
     /// 以關閉回顯的方式自終端讀取一行，密語不會顯示於畫面，也不會進入 shell
     /// 歷史。stdin 非 TTY 時退回一般讀取（管線請改用 --keyfile）。
     static func promptPassphrase(_ prompt: String, confirm: Bool = false) throws -> String {
-        guard isatty(fileno(stdin)) == 1 else {
+#if os(Windows)
+        let isTerminal = _isatty(_fileno(stdin)) != 0
+#else
+        let isTerminal = isatty(fileno(stdin)) == 1
+#endif
+        guard isTerminal else {
             throw TarCryptoError.io(
                 "stdin is not a terminal — pass the key with --keyfile <path>"
                 + " / stdin 不是終端機——請以 --keyfile <path> 提供金鑰")
@@ -847,6 +854,27 @@ enum KeyInput {
 
     private static func readSecretLine(_ prompt: String) throws -> String {
         FileHandle.standardError.write(Data(prompt.utf8))
+        defer { FileHandle.standardError.write(Data("\n".utf8)) }
+#if os(Windows)
+        // No termios on Windows: read raw keystrokes via the CRT console API
+        // (conio.h _getch, no WinSDK) instead of disabling line-buffered echo.
+        // Windows 沒有 termios：改用 CRT console API（conio.h 的 _getch，非
+        // WinSDK）逐鍵讀取原始按鍵，取代 POSIX 關閉行緩衝回顯的做法。
+        var bytes: [UInt8] = []
+        while true {
+            let c = _getch()
+            if c == 13 || c == 10 { break }
+            if c == 8 || c == 127 {
+                if !bytes.isEmpty { bytes.removeLast() }
+                continue
+            }
+            bytes.append(UInt8(truncatingIfNeeded: c))
+        }
+        guard let line = String(bytes: bytes, encoding: .utf8) else {
+            throw TarCryptoError.io("passphrase is not valid UTF-8 / 密語不是有效的 UTF-8")
+        }
+        return line
+#else
         var term = termios(), saved = termios()
         guard tcgetattr(fileno(stdin), &term) == 0 else {
             throw TarCryptoError.io("cannot read terminal settings / 無法讀取終端機設定")
@@ -854,14 +882,12 @@ enum KeyInput {
         saved = term
         term.c_lflag &= ~UInt(ECHO)
         _ = tcsetattr(fileno(stdin), TCSAFLUSH, &term)
-        defer {
-            _ = tcsetattr(fileno(stdin), TCSAFLUSH, &saved)
-            FileHandle.standardError.write(Data("\n".utf8))
-        }
+        defer { _ = tcsetattr(fileno(stdin), TCSAFLUSH, &saved) }
         guard let line = readLine(strippingNewline: true) else {
             throw TarCryptoError.io("no passphrase supplied / 未輸入密語")
         }
         return line
+#endif
     }
 
     /// Key material from a keyfile: the file's raw bytes. / keyfile 的金鑰材料：檔案原始位元組。

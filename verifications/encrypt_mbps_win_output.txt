@@ -1,11 +1,11 @@
-[Info] date / 日期: 2026-08-06 06:52:06 TST
+[Info] date / 日期: 2026-08-06 15:01:56 TST
 [Info] host / 主機: MSYS_NT-10.0-26200 Ralic-W11 3.6.10-8fbd9808.x86_64 2026-07-31 07:26 UTC x86_64 Msys
-[Info] swift_tar: /c/Users/lowei/proj/lzfse2/swift_tar/release/swift_tar.exe (swift_tar 20260805-193735)
-[Info] corpus / 語料: /c/Users/lowei/proj/lzfse2/claw-code
-[Info] regular files / 一般檔案: 5403
-[Info] logical input / 邏輯輸入: 1402916995 bytes (1402.92 MB)
+[Info] swift_tar: /c/Users/lowei/proj/lzfse2/swift_tar/release/swift_tar.exe (swift_tar 20260806-144221)
+[Info] corpus / 語料: /tmp/tmp.8Epree7O5r/corpus
+[Info] regular files / 一般檔案: 3
+[Info] logical input / 邏輯輸入: 1048588 bytes (1.05 MB)
 [Info] rounds / 輪數: 1 (median reported / 取中位數)
-[Info] verify tree / 完整 tree 比對: 0 (default 0 for Windows throughput / Windows 吞吐量預設關閉)
+[Info] verify tree / 完整 tree 比對: 1 (default 0 for Windows throughput / Windows 吞吐量預設關閉)
 [Info] key / 金鑰: 64-byte keyfile (no scrypt / 不含 scrypt KDF)
 
 == crypto self-test ==
@@ -58,30 +58,33 @@ crypto self-test — PASS: 44  FAIL: 0
 
 == A) create/extract, plain vs encrypted ==
 codec            mode         real(s)       MB/s archive(bytes)
-plain-tar        create      7.862214     178.44     1407468032
-                 create+enc   9.553685     146.85     1407475157
-                 extract    14.200308      98.79              -
-                 extr+dec   17.388288      80.68              -
+plain-tar        create      0.089440      11.72        1053184
+                 create+enc   0.104630      10.02        1053274
+                 extract     0.086819      12.08              -
+                 extr+dec    0.115525       9.08              -
 PASS: plain-tar extracted file count matches source
-gzip             create      8.476663     165.50      491317354
-                 create+enc   9.602211     146.10      491319901
-                 extract    14.854775      94.44              -
-                 extr+dec   14.934718      93.94              -
+PASS: plain-tar full tree diff matches source
+gzip             create      0.110210       9.51        1049299
+                 create+enc   0.119333       8.79        1049389
+                 extract     0.086214      12.16              -
+                 extr+dec    0.112064       9.36              -
 PASS: gzip extracted file count matches source
-zstd             create      7.100306     197.59      433604603
-                 create+enc   7.758126     180.83      433606856
-                 extract    13.232744     106.02              -
-                 extr+dec   14.437873      97.17              -
+PASS: gzip full tree diff matches source
+zstd             create      0.083199      12.60        1050728
+                 create+enc   0.109045       9.62        1050818
+                 extract     0.087884      11.93              -
+                 extr+dec    0.106441       9.85              -
 PASS: zstd extracted file count matches source
+PASS: zstd full tree diff matches source
 
 == B) --encrypt-only / --decrypt-only on an existing .tar ==
 phase               real(s)       MB/s  output(bytes)
 PASS: encrypt-only/decrypt-only byte-for-byte round 1
-encrypt-only       5.537705     253.34     1407475157
-decrypt-only       5.218508     268.83     1407468032
-[Info] size overhead / 大小開銷: 7125 bytes (0.0005%), = 48B header + 21B per 4 MiB chunk
+encrypt-only       0.112861       9.29        1053274
+decrypt-only       0.121203       8.65        1053184
+[Info] size overhead / 大小開銷: 90 bytes (0.0085%), = 48B header + 21B per 4 MiB chunk
 PASS: wrong key is rejected
 PASS: tampered ciphertext is rejected
 
-SUMMARY: PASS=6 FAIL=0
+SUMMARY: PASS=9 FAIL=0
 [Done] output / 輸出: /c/Users/lowei/proj/lzfse2/swift_tar/verifications/encrypt_mbps_win_output.txt

@@ -2193,6 +2193,13 @@ final class TarReader {
         return comps.joined(separator: "/")
     }
 
+    private static func stripComponents(_ rel: String, count: Int) -> String? {
+        guard count > 0 else { return rel }
+        let comps = rel.split(separator: "/", omittingEmptySubsequences: true)
+        guard comps.count > count else { return nil }
+        return comps.dropFirst(count).joined(separator: "/")
+    }
+
     struct Options {
         var extract: Bool          // false = list only / false 表僅列出
         var destDir: String        // -C target / -C 目的地
@@ -2202,6 +2209,7 @@ final class TarReader {
         // 僅 Windows 解壓使用：平行寫入數（-n）與寫檔後端；其他平台不使用。
         var inflight: Int = 1
         var writeBackend: WriteBackend = .ucrt
+        var stripComponents: Int = 0
         // false (--touch) leaves extracted entries at the current time,
         // GNU tar --touch semantics. / false（--touch）時解出項目維持目前
         // 時間，語意同 GNU tar --touch。
@@ -2322,21 +2330,26 @@ final class TarReader {
             if let l = gnuLongLink { linkname = l; gnuLongLink = nil }
 
             let isDir = typeflag == UInt8(ascii: "5") || name.hasSuffix("/")
-            if options.verbose || !options.extract {
-                print(options.extract ? "x \(name)" : name)
-            }
-
             guard options.extract else {
+                print(name)
                 if typeflag == UInt8(ascii: "0") || typeflag == 0 || typeflag == UInt8(ascii: "7") {
                     try skipData(size)
                 }
                 continue
             }
 
-            guard let rel = TarReader.safeRelativePath(name), !rel.isEmpty else {
+            guard let safeRel = TarReader.safeRelativePath(name), !safeRel.isEmpty else {
                 eprint("swift_tar: skipping unsafe path '\(name)' / 略過不安全路徑 '\(name)'")
                 if !isDir { try skipData(size) }
                 continue
+            }
+            guard let rel = TarReader.stripComponents(safeRel, count: options.stripComponents),
+                  !rel.isEmpty else {
+                if !isDir { try skipData(size) }
+                continue
+            }
+            if options.verbose {
+                print("x \(rel)")
             }
             let dest = options.destDir.isEmpty ? rel : options.destDir + "/" + rel
             let parent = (dest as NSString).deletingLastPathComponent
@@ -2366,7 +2379,12 @@ final class TarReader {
                 }
 #endif
             case UInt8(ascii: "1"):
-                let target = options.destDir.isEmpty ? linkname : options.destDir + "/" + linkname
+                guard let safeLink = TarReader.safeRelativePath(linkname),
+                      let strippedLink = TarReader.stripComponents(safeLink, count: options.stripComponents),
+                      !strippedLink.isEmpty else {
+                    continue
+                }
+                let target = options.destDir.isEmpty ? strippedLink : options.destDir + "/" + strippedLink
 #if os(Windows)
                 // The link target may still be queued in the pool — barrier
                 // before linking (hardlinks are rare; the drain is cheap).
@@ -2607,6 +2625,10 @@ private func printTarUsage() {
                         RGB1 模式以 -f 作為 RGB1 輸入／輸出路徑。
       -C <dir>        : Change directory before create, or extract into <dir>
                         建立封存前切換目錄，或解出至 <dir>
+      --strip-components <N>
+                      : (-x only) strip N leading path components from member
+                        names before extraction, matching standard tar
+                        （僅 -x）解出前移除成員路徑前 N 層，語意同標準 tar
       -n <N>          : In-flight parallel chunks (default 2×cores)
                         平行在途分塊數（預設 2×核心數）
       --encrypt       : (-c only) encrypt the archive with ChaCha20-Poly1305.
@@ -3213,6 +3235,11 @@ struct SwiftTarMain {
             guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
             return args[i + 1]
         }
+        func optValueLong(_ flag: String) -> String? {
+            if let exact = optValue(flag) { return exact }
+            let prefix = flag + "="
+            return args.first(where: { $0.hasPrefix(prefix) }).map { String($0.dropFirst(prefix.count)) }
+        }
         let archivePath = optValue("-f") ?? "-"
         let destDir = optValue("-C") ?? ""
 
@@ -3285,12 +3312,31 @@ struct SwiftTarMain {
         // semantics). / --touch：解出項目維持目前時間（GNU tar 語意）。
         let restoreMtime = !args.contains("--touch")
 
+        let hasStripComponents = args.contains("--strip-components")
+            || args.contains(where: { $0.hasPrefix("--strip-components=") })
+        let stripComponents: Int = {
+            guard hasStripComponents else { return 0 }
+            guard let raw = optValueLong("--strip-components") else {
+                eprint("Error: --strip-components expects a non-negative integer. / 錯誤：--strip-components 需要非負整數。")
+                exit(1)
+            }
+            guard doExtract else {
+                eprint("Error: --strip-components applies to -x only. / 錯誤：--strip-components 僅能用於 -x。")
+                exit(1)
+            }
+            guard let v = Int(raw), v >= 0 else {
+                eprint("Error: --strip-components expects a non-negative integer. / 錯誤：--strip-components 需要非負整數。")
+                exit(1)
+            }
+            return v
+        }()
+
         // positional file args (skip flags and their values) / 位置參數（略過旗標與其值）
         var files: [String] = []
         var skipNext = true   // args[0] is the binary path / args[0] 是執行檔路徑
         for a in args {
             if skipNext { skipNext = false; continue }
-            if a == "-f" || a == "-C" || a == "-n" || a == "--keyfile" { skipNext = true; continue }
+            if a == "-f" || a == "-C" || a == "-n" || a == "--keyfile" || a == "--strip-components" { skipNext = true; continue }
             if a.hasPrefix("-") { continue }
             files.append(a)
         }
@@ -3329,13 +3375,17 @@ struct SwiftTarMain {
                 try runCat(archivePath: archivePath, inflight: inflightN, verbose: verbose)
             } else {
                 if explicitZip || isZipMagic(archivePath) {
+                    if stripComponents != 0 {
+                        throw TarError.io("--strip-components is not supported for ZIP extraction / ZIP 解出不支援 --strip-components")
+                    }
                     try runZipRead(archivePath: archivePath, extract: doExtract,
                                    destDir: destDir, verbose: verbose,
                                    restoreMtime: restoreMtime)
                 } else {
                     try runRead(archivePath: archivePath, extract: doExtract,
                                 destDir: destDir, inflight: inflightN, verbose: verbose,
-                                writeBackend: writeBackend, restoreMtime: restoreMtime)
+                                writeBackend: writeBackend, restoreMtime: restoreMtime,
+                                stripComponents: stripComponents)
                 }
             }
         } catch {
@@ -3734,7 +3784,8 @@ struct SwiftTarMain {
     static func runRead(archivePath: String, extract: Bool, destDir: String,
                         inflight: Int, verbose: Bool,
                         writeBackend: WriteBackend = .ucrt,
-                        restoreMtime: Bool = true) throws {
+                        restoreMtime: Bool = true,
+                        stripComponents: Int = 0) throws {
         let input = try openInput(archivePath)
         defer { if archivePath != "-" { try? input.close() } }
 
@@ -3752,6 +3803,7 @@ struct SwiftTarMain {
         }
         let options = TarReader.Options(extract: extract, destDir: destDir, verbose: verbose,
                                         inflight: inflight, writeBackend: writeBackend,
+                                        stripComponents: stripComponents,
                                         restoreMtime: restoreMtime)
         try TarReader(input: stream.handle, prefix: stream.prefix).run(options: options)
         group.wait()

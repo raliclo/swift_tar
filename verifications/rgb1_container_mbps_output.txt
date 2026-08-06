@@ -1,19 +1,19 @@
-[Info] date: 2026-08-05 19:24:04 CST
-[Info] host: Darwin 27.0.0 arm64
-[Info] swift_tar: /Users/raliclo/proj/lzfse2/swift_tar/release/swift_tar
-[Info] version: swift_tar 20260805-074201
+[Info] date: 2026-08-06 14:47:01 TST
+[Info] host: MSYS_NT-10.0-26200 3.6.10-8fbd9808.x86_64 x86_64
+[Info] swift_tar: /c/Users/lowei/proj/lzfse2/swift_tar/release/swift_tar.exe
+[Info] version: swift_tar 20260806-144221
 [Info] corpus: synthetic RGB1 1024x1024 (3 MiB payload + 876B header = 3146604 B)
 [Info] MB/s = container bytes / time (MB = 10^6); times are the mean of 3 runs
 
 == RGB1 container: size / time / throughput by codec ==
 codec                 size(B)   ratio  create(ms)  cr(MB/s) extract(ms)  ex(MB/s)
 ---------------- ------------ ------- ----------- --------- ----------- ---------
-plain                 3148288   1.000        12.3     255.8        12.6     249.7
-gzip                    23131   0.007        17.6     178.8        13.9     226.4
-bzip2                   40937   0.013       611.6       5.1        38.6      81.5
-xz                       4880   0.002        35.8      87.9        16.6     189.6
-zstd                     4567   0.001        12.0     262.2        13.8     228.0
-lz4                     18653   0.006        12.3     255.8        14.0     224.8
-zip                     23200   0.007        16.9     186.2        12.0     262.2
-bvx3-optimal             4589   0.001        16.8     187.3        13.8     228.0
-other3-optimal           6392   0.002        17.1     184.0        14.2     221.6
+plain                 3148288   1.000       109.9      28.6       173.1      18.2
+gzip                    23127   0.007       114.0      27.6       103.4      30.4
+bzip2                   41006   0.013      1243.4       2.5       171.8      18.3
+xz                       4876   0.002       220.0      14.3       143.0      22.0
+zstd                     4560   0.001       100.3      31.4       100.4      31.3
+lz4                     16619   0.005       177.6      17.7       149.0      21.1
+zip                     23201   0.007       107.9      29.2        93.5      33.7
+bvx3-optimal             4595   0.001       106.3      29.6       101.6      31.0
+other3-optimal           6396   0.002       146.5      21.5        97.8      32.2

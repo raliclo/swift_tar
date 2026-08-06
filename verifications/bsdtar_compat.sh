@@ -157,7 +157,7 @@ run_tool() {
         for arg in "$@"; do
             line="$line $(cmd_arg "$arg")"
         done
-        run_with_optional_timeout cmd /d /c "$line" >/dev/null
+        run_with_optional_timeout cmd //d //c "$line" >/dev/null
     else
         COPYFILE_DISABLE=1 run_with_optional_timeout "$exe" "$@" >/dev/null
     fi
@@ -174,7 +174,7 @@ capture_tool() {
         for arg in "$@"; do
             line="$line $(cmd_arg "$arg")"
         done
-        run_with_optional_timeout cmd /d /c "$line" >"$out_file"
+        run_with_optional_timeout cmd //d //c "$line" >"$out_file"
     else
         COPYFILE_DISABLE=1 run_with_optional_timeout "$exe" "$@" >"$out_file"
     fi
@@ -272,8 +272,8 @@ compare_tree() {
     set +e
     diff -u "$a" "$b" >"$LOG_DIR/${label}-tree.diff"
     local rc=$?
-    set -e
     if (( rc == 0 )); then
+        set -e
         return "$RC_OK"
     fi
     return "$RC_INCOMPATIBLE"

@@ -1,6 +1,25 @@
-INFO: using bundled swift_tar from release/swift_tar_win.zip
-INFO: swift_tar = .tmp_bsdtar_compat.886/swift_tar_zip/swift_tar-win/swift_tar.exe
+INFO: platform  = MSYS_NT-10.0-26200
+INFO: swift_tar = release\swift_tar.exe
 INFO: bsdtar    = C:\Windows\System32\tar.exe
-INFO: hardlink fixture enabled
-INFO: symlink fixture enabled
+SKIP: hardlink/symlink fixture disabled by default; rerun with EXTENDED_ENTRIES=1
 PASS: plain: swift_tar create -> bsdtar extract
+PASS: plain: bsdtar create -> swift_tar extract
+PASS: plain: list smoke
+PASS: gzip: swift_tar create -> bsdtar extract
+PASS: gzip: bsdtar create -> swift_tar extract
+PASS: gzip: list smoke
+PASS: bzip2: swift_tar create -> bsdtar extract
+PASS: bzip2: bsdtar create -> swift_tar extract
+PASS: bzip2: list smoke
+PASS: xz: swift_tar create -> bsdtar extract
+PASS: xz: bsdtar create -> swift_tar extract
+PASS: xz: list smoke
+PASS: zstd: swift_tar create -> bsdtar extract
+PASS: zstd: bsdtar create -> swift_tar extract
+PASS: zstd: list smoke
+XFAIL: unicode path: swift_tar create -> bsdtar extract (tracked in todo/todo.md)
+
+Summary: 15/15 passed, 0 failed, 1 skipped, 1 expected-failed
+Failure classes: 0 hang, 0 error, 0 incompatible
+Logs: /c/Users/lowei/proj/lzfse2/swift_tar/verifications/bsdtar_compat_logs
+Output: /c/Users/lowei/proj/lzfse2/swift_tar/verifications/bsdtar_compat_output.txt

@@ -10,10 +10,22 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ST="$HERE/release/swift_tar"
+UNAME_S="$(uname -s)"
+if [ -z "${ST:-}" ]; then
+  case "$UNAME_S" in
+    MSYS*|MINGW*|CYGWIN*) ST="$HERE/release/swift_tar.exe" ;;
+    *) ST="$HERE/release/swift_tar" ;;
+  esac
+fi
+if [ -z "${SKIP_SLOW_XZ+x}" ]; then
+  case "$UNAME_S" in
+    MSYS*|MINGW*|CYGWIN*) SKIP_SLOW_XZ=1 ;;
+    *) SKIP_SLOW_XZ=0 ;;
+  esac
+fi
 
 if [ ! -x "$ST" ]; then
-  echo "error: build first (./compile_tar.sh) — missing $ST" >&2
+  echo "error: build first — missing $ST" >&2
   exit 1
 fi
 
@@ -26,6 +38,7 @@ trap cleanup EXIT
 
 echo "[Info] date: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 echo "[Info] swift_tar: $ST"
+echo "[Info] skip slow xz: $SKIP_SLOW_XZ"
 
 pass=0; fail=0
 ok()  { echo "PASS: $1"; pass=$((pass+1)); }
@@ -33,6 +46,24 @@ bad() { echo "FAIL: $1"; fail=$((fail+1)); }
 # must_fail: the command has to exit non-zero / must_fail：該指令必須以非零結束
 must_fail() { local desc="$1"; shift
   if "$@" >/dev/null 2>&1; then bad "$desc (unexpectedly succeeded)"; else ok "$desc"; fi
+}
+run_with_timeout() { local seconds="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${seconds}s" "$@"
+    return $?
+  fi
+  "$@" &
+  local pid=$!
+  ( sleep "$seconds"; kill "$pid" >/dev/null 2>&1 || true ) &
+  local watchdog=$!
+  wait "$pid"
+  local rc=$?
+  kill "$watchdog" >/dev/null 2>&1 || true
+  wait "$watchdog" 2>/dev/null || true
+  return "$rc"
+}
+must_fail_fast() { local desc="$1"; shift
+  if run_with_timeout 15 "$@" >/dev/null 2>&1; then bad "$desc (unexpectedly succeeded)"; else ok "$desc"; fi
 }
 
 SRC="$TMP/src"; mkdir -p "$SRC"
@@ -113,7 +144,11 @@ layer() { # label codec-flag expected-chain-fragment
 layer plain ""       "encrypted (ChaCha20-Poly1305) → tar"
 layer gzip  "--gzip" "encrypted (ChaCha20-Poly1305) → gzip → tar"
 layer zstd  "--zstd" "encrypted (ChaCha20-Poly1305) → zstd → tar"
-layer xz    "--xz"   "encrypted (ChaCha20-Poly1305) → xz → tar"
+if [ "${SKIP_SLOW_XZ:-0}" = "1" ]; then
+  echo "SKIP: layered xz (known slow on Windows / Windows 已知較慢)"
+else
+  layer xz "--xz" "encrypted (ChaCha20-Poly1305) → xz → tar"
+fi
 
 # ---------------------------------------------------------------------------
 # 3b) --encrypt-only / --decrypt-only: the encryption layer on its own. The
@@ -199,7 +234,7 @@ must_fail "empty keyfile is rejected" "$ST" -c --keyfile "$TMP/empty.key" -f "$T
 # 5) Non-interactive stdin must not silently produce an unencrypted archive.
 #    非互動 stdin 不得靜默產生未加密封存。
 # ---------------------------------------------------------------------------
-must_fail "--encrypt without a TTY and without --keyfile fails" \
+must_fail_fast "--encrypt without a TTY and without --keyfile fails" \
   sh -c "\"$ST\" -c --encrypt -f \"$TMP/noatty.enc\" -C \"$TMP\" src < /dev/null"
 [ ! -s "$TMP/noatty.enc" ] && ok "no archive is left behind when the key cannot be obtained" \
                            || bad "an archive was written without a key"

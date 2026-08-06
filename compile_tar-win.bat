@@ -1,5 +1,6 @@
-@echo off
-chcp 65001 > nul
+@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+chcp 65001 > nul
 :: compile_tar-win.bat -- build swift_tar.exe (multi-core tar archiver) on Windows
 ::
 :: gzip links the zlib submodule statically; zstd links the zstd submodule statically. bzip2/xz/lz4 still shell out
@@ -8,9 +9,37 @@ chcp 65001 > nul
 :: NOTE: comments in this file are English-only on purpose -- non-ASCII
 :: bytes on a comment line were found to corrupt cmd.exe's parsing of
 :: subsequent lines in this environment (reproduced independent of chcp).
-cd /d "%~dp0"
-
-if not exist ..\lzfse-cli.swift (
+cd /d "%~dp0"
+
+set "_vswhere=C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+where cl.exe > nul 2>&1
+if errorlevel 1 (
+    if not exist "%_vswhere%" (
+        echo [FAIL] vswhere.exe not found. Run: zsh ./build_tool_install-win.sh
+        pause
+        exit /b 1
+    )
+    set "_vsroot="
+    for /f "usebackq delims=" %%I in (`"%_vswhere%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "_vsroot=%%I"
+    if not defined _vsroot (
+        echo [FAIL] MSVC C++ tools not found. Run: zsh ./build_tool_install-win.sh
+        pause
+        exit /b 1
+    )
+    if not exist "!_vsroot!\VC\Auxiliary\Build\vcvars64.bat" (
+        echo [FAIL] vcvars64.bat not found under "!_vsroot!"
+        pause
+        exit /b 1
+    )
+    call "!_vsroot!\VC\Auxiliary\Build\vcvars64.bat" > nul
+    if errorlevel 1 (
+        echo [FAIL] failed to load MSVC x64 build environment
+        pause
+        exit /b 1
+    )
+)
+
+if not exist ..\lzfse-cli.swift (
     echo [FAIL] ..\lzfse-cli.swift not found / 找不到 ..\lzfse-cli.swift
     pause
     exit /b 1

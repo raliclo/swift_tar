@@ -96,7 +96,7 @@ because they are development artifacts, not runtime dependencies.
 ```
 swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat|--encrypt-only|--decrypt-only
           [-f <archive>] [codec]
-          [--encrypt|--keyfile <path>] [-C <dir>] [-n N] [-v] [files...]
+          [--encrypt|--keyfile <path>] [-C <dir>] [--strip-components N] [-n N] [-v] [files...]
 ```
 
 | Command | Meaning |
@@ -322,6 +322,7 @@ the same behavior as a libarchive built without lzo support.
 |--------|---------|
 | `-f <path>` | Archive file (`-` = stdin/stdout; default `-`) |
 | `-C <dir>`  | Change input directory before create; extract into it when reading |
+| `--strip-components <N>` | (`-x` tar extraction only) Remove N leading path components before writing entries; also accepts `--strip-components=N` |
 | `-n <N>`    | In-flight parallel chunks (default 2 × cores) |
 | `-v`        | Verbose (list entries / show the applied filter chain) |
 | `--encrypt` | (`-c` only) Encrypt with ChaCha20-Poly1305; prompts for a passphrase |

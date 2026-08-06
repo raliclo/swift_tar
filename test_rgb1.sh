@@ -12,7 +12,12 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ST="$HERE/release/swift_tar"
+if [ -z "${ST:-}" ]; then
+  case "$(uname -s)" in
+    MSYS*|MINGW*|CYGWIN*) ST="$HERE/release/swift_tar.exe" ;;
+    *) ST="$HERE/release/swift_tar" ;;
+  esac
+fi
 
 if [ ! -x "$ST" ]; then
   echo "error: build first (./compile_tar.sh) — missing $ST" >&2

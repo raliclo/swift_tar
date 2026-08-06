@@ -10,7 +10,12 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ST="$HERE/release/swift_tar"
+if [ -z "${ST:-}" ]; then
+  case "$(uname -s)" in
+    MSYS*|MINGW*|CYGWIN*) ST="$HERE/release/swift_tar.exe" ;;
+    *) ST="$HERE/release/swift_tar" ;;
+  esac
+fi
 SYS_TAR="$(command -v tar)"
 
 if [ ! -x "$ST" ]; then
@@ -61,7 +66,7 @@ same_tree "ADD -r: swift_tar archive extracts identically to system tar" \
           "$TMP/x_sw_add" "$TMP/x_ref_add"
 
 # entry set must contain exactly a,b,c / 項目集合須恰為 a,b,c
-got="$("$ST" -t -f "$TMP/sw.tar" | sort | tr '\n' ' ')"
+got="$("$ST" -t -f "$TMP/sw.tar" | tr -d '\r' | sort | tr '\n' ' ')"
 [ "$got" = "a.txt b.txt c.txt " ] && ok "ADD -r: entry list is a,b,c" \
                                    || bad "ADD -r: entry list wrong: [$got]"
 
@@ -100,7 +105,7 @@ cp "$SRC/a.txt" "$SRC/c.txt" "$SRC/d.txt" "$EXP/"
 "$ST" -c      -f "$TMP/sw_del.tar" -C "$SRC" a.txt b.txt c.txt d.txt
 "$ST" --delete -f "$TMP/sw_del.tar" b.txt    # in-place delete / 就地刪除
 
-got="$("$ST" -t -f "$TMP/sw_del.tar" | sort | tr '\n' ' ')"
+got="$("$ST" -t -f "$TMP/sw_del.tar" | tr -d '\r' | sort | tr '\n' ' ')"
 [ "$got" = "a.txt c.txt d.txt " ] && ok "DELETE --delete: b.txt removed, a,c,d remain" \
                                   || bad "DELETE --delete: entry list wrong: [$got]"
 

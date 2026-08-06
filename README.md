@@ -230,6 +230,9 @@ non-zero exit status; it never returns partial plaintext as if it were valid.
 The primitives are implemented from the specifications and checked against
 their published test vectors (RFC 8439, RFC 4231, RFC 7914, FIPS 180-4).
 Run them with `--crypto-selftest`, or the full suite with `./test_encrypt.sh`.
+On Windows/MSYS, `verifications/encrypt_windows_correctness.sh` reruns the
+self-test and a CLI smoke suite against `release/swift_tar.exe`; use
+`verifications/encrypt_mbps_win.sh` for Windows MB/s throughput.
 
 ### Append / update / delete
 

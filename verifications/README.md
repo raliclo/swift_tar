@@ -21,6 +21,48 @@ ROUNDS=3 ./encrypt_mbps_rss.sh ../../claw-code
 Runs use a keyfile so they stay non-interactive; `--keyfile` skips the scrypt
 KDF, so the numbers measure the AEAD itself rather than key derivation.
 
+For Windows/MSYS throughput, use `encrypt_mbps_win.sh`; it writes
+[`encrypt_mbps_win_output.txt`](encrypt_mbps_win_output.txt). It reports MB/s
+only. Peak working set is intentionally left to the existing Windows RSS
+scripts.
+
+```sh
+ROUNDS=1 ./encrypt_mbps_win.sh ../../claw-code
+```
+
+The 2026-08-06 Windows run used `release/swift_tar.exe` version
+`20260805-193735` on MSYS_NT-10.0-26200 with `claw-code` at 1.40 GB logical
+input. It passed `--crypto-selftest` (**44 PASS / 0 FAIL**) and the throughput
+script's correctness checks (**6 PASS / 0 FAIL**). Full tree `diff -r` is
+available with `VERIFY_TREE=1`, but is disabled by default because it dominates
+Windows wall time.
+
+| Codec | create | create + encrypt | extract | extract + decrypt |
+| --- | ---: | ---: | ---: | ---: |
+| plain tar | 178 MB/s | 147 MB/s | 99 MB/s | 81 MB/s |
+| gzip | 166 MB/s | 146 MB/s | 94 MB/s | 94 MB/s |
+| zstd | 198 MB/s | 181 MB/s | 106 MB/s | 97 MB/s |
+
+`--encrypt-only` ran at **253 MB/s** and `--decrypt-only` at **269 MB/s**. The
+decrypted output was verified byte-identical to the original archive; wrong-key
+and tampered-ciphertext inputs were rejected.
+
+### Windows correctness smoke test
+
+`encrypt_windows_correctness.sh` keeps a reusable Windows/MSYS correctness test
+for the release executable. It writes
+[`encrypt_windows_correctness_output.txt`](encrypt_windows_correctness_output.txt).
+
+```sh
+./encrypt_windows_correctness.sh
+```
+
+The 2026-08-06 run used `release/swift_tar.exe` version `20260805-193735` on
+MSYS_NT-10.0-26200. It passed `--crypto-selftest` (**44 PASS / 0 FAIL**) and the
+CLI subset (**6 PASS / 0 FAIL**): encrypted create/extract round-trips for
+plain tar, gzip and zstd, byte-for-byte `--encrypt-only` / `--decrypt-only`,
+wrong-key rejection, and tamper rejection.
+
 ### RSS regression found and fixed (2026-08-03)
 
 The first run exposed a real defect in the new layer, not just a measurement:
@@ -93,10 +135,12 @@ the same trade-off the codecs make.
 > Each phase now deletes its archives as soon as it is done, and the script
 > refuses to start without room for them.
 
-> **Status**: verified on Apple M4 only. Correctness is enforced rather than
-> assumed — the sweep aborts if any `-n` setting fails to round-trip to
-> identical bytes, and `--crypto-selftest` checks all 16 encrypt/decrypt `-n`
-> combinations across four payload shapes.
+> **Status**: macOS throughput/RSS numbers are verified on Apple M4. Windows
+> throughput MB/s is verified separately by `encrypt_mbps_win.sh`; Windows peak
+> working set is covered by the existing Windows RSS scripts. Correctness is
+> enforced rather than assumed — the macOS sweep aborts if any `-n` setting
+> fails to round-trip to identical bytes, and `--crypto-selftest` checks all 16
+> encrypt/decrypt `-n` combinations across four payload shapes.
 
 ## RGB1 container throughput by codec
 

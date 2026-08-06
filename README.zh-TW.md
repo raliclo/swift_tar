@@ -207,7 +207,9 @@ keyfile **沒有格式要求**：文字或二進位、任何長度皆可，位�
 
 密碼學原語依規範實作，並對照其公開測試向量驗證（RFC 8439、RFC 4231、
 RFC 7914、FIPS 180-4）。可用 `--crypto-selftest` 執行，完整測試套件則為
-`./test_encrypt.sh`。
+`./test_encrypt.sh`。Windows/MSYS 可用 `verifications/encrypt_windows_correctness.sh`
+針對 `release/swift_tar.exe` 重跑 self-test 與 CLI smoke suite；Windows MB/s
+吞吐量則使用 `verifications/encrypt_mbps_win.sh`。
 
 ### 追加／更新／刪除
 

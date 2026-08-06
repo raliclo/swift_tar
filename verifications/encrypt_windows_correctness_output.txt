@@ -1,0 +1,61 @@
+[Info] date: 2026-08-06 06:27:36 TST
+[Info] uname: MSYS_NT-10.0-26200 Ralic-W11 3.6.10-8fbd9808.x86_64 2026-07-31 07:26 UTC x86_64 Msys
+[Info] swift_tar: swift_tar 20260805-193735
+
+== crypto self-test ==
+PASS: ChaCha20 block (RFC 8439 2.3.2)
+PASS: ChaCha20 encrypt (RFC 8439 2.4.2)
+PASS: Poly1305 (RFC 8439 2.5.2)
+PASS: ChaCha20-Poly1305 tag (RFC 8439 2.8.2)
+PASS: ChaCha20-Poly1305 round-trip
+PASS: ChaCha20-Poly1305 rejects tampering
+PASS: SHA-256("abc")
+PASS: SHA-256("")
+PASS: HMAC-SHA256 (RFC 4231 case 2)
+PASS: PBKDF2-HMAC-SHA256 (c=1)
+PASS: PBKDF2-HMAC-SHA256 (c=4096)
+PASS: PBKDF2-HMAC-SHA256 (40-byte output, multi-block)
+PASS: constantTimeEqual: equal
+PASS: constantTimeEqual: differs in last byte
+PASS: constantTimeEqual: length mismatch
+PASS: scrypt (RFC 7914, N=16 r=1 p=1, empty)
+PASS: scrypt (RFC 7914, N=1024 r=8 p=16, "password")
+PASS: header: round-trip preserves fields
+PASS: header: bad magic rejected
+PASS: header: unsupported version rejected
+PASS: header: unknown KDF id rejected
+PASS: header: logN above cap rejected
+PASS: header: logN below floor rejected
+PASS: header: scrypt r=0 rejected
+PASS: header: scrypt p=0 rejected
+PASS: header: oversized chunk size rejected
+PASS: header: short buffer rejected
+PASS: container: empty payload round-trip
+PASS: container: 9 MiB multi-chunk round-trip
+PASS: container: 1 byte
+PASS: container: exactly one chunk
+PASS: container: one chunk minus 1
+PASS: container: one chunk plus 1
+PASS: container: exactly two chunks
+PASS: container: wrong passphrase rejected
+PASS: container: flipped ciphertext byte rejected
+PASS: container: tampered header (salt) rejected
+PASS: container: truncation rejected
+PASS: parallel: 9 MiB: 16 encrypt/decrypt -n combinations round-trip
+PASS: parallel: exactly two chunks: 16 encrypt/decrypt -n combinations round-trip
+PASS: parallel: single chunk: 16 encrypt/decrypt -n combinations round-trip
+PASS: parallel: empty: 16 encrypt/decrypt -n combinations round-trip
+PASS: container: keyfile round-trip
+PASS: container: wrong keyfile rejected
+-----------------------------------------
+crypto self-test — PASS: 44  FAIL: 0
+[Info] crypto self-test rc: 0
+
+== Windows CLI correctness subset ==
+PASS: plain encrypted create/extract round-trip
+PASS: gzip encrypted create/extract round-trip
+PASS: zstd encrypted create/extract round-trip
+PASS: encrypt-only/decrypt-only byte-for-byte
+PASS: wrong key is rejected
+PASS: tampered ciphertext is rejected
+SUMMARY: PASS=6 FAIL=0

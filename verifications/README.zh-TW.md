@@ -20,6 +20,44 @@ ROUNDS=3 ./encrypt_mbps_rss.sh ../../claw-code
 全程使用 keyfile 以維持非互動；`--keyfile` 不走 scrypt KDF，因此數字量的是
 AEAD 本身，而非金鑰衍生。
 
+Windows/MSYS 吞吐量使用 `encrypt_mbps_win.sh`，輸出寫入
+[`encrypt_mbps_win_output.txt`](encrypt_mbps_win_output.txt)。此腳本只回報
+MB/s；peak working set 仍由既有 Windows RSS 腳本負責。
+
+```sh
+ROUNDS=1 ./encrypt_mbps_win.sh ../../claw-code
+```
+
+2026-08-06 的 Windows 執行使用 MSYS_NT-10.0-26200 上的
+`release/swift_tar.exe` 版本 `20260805-193735`，語料為 logical input 1.40 GB
+的 `claw-code`。結果為 `--crypto-selftest` **44 PASS / 0 FAIL**，throughput
+腳本的正確性檢查 **6 PASS / 0 FAIL**。完整 tree `diff -r` 可用
+`VERIFY_TREE=1` 開啟，但預設關閉，因為它會主導 Windows wall time。
+
+| Codec | 建立 | 建立 + 加密 | 解出 | 解出 + 解密 |
+| --- | ---: | ---: | ---: | ---: |
+| 純 tar | 178 MB/s | 147 MB/s | 99 MB/s | 81 MB/s |
+| gzip | 166 MB/s | 146 MB/s | 94 MB/s | 94 MB/s |
+| zstd | 198 MB/s | 181 MB/s | 106 MB/s | 97 MB/s |
+
+`--encrypt-only` 為 **253 MB/s**，`--decrypt-only` 為 **269 MB/s**。解密輸出
+已驗證與原封存位元組一致；錯誤金鑰與竄改密文皆被拒絕。
+
+### Windows 正確性 smoke test
+
+`encrypt_windows_correctness.sh` 保留一個可重用的 Windows/MSYS 正確性測試，
+針對 release 執行檔執行，輸出寫入
+[`encrypt_windows_correctness_output.txt`](encrypt_windows_correctness_output.txt)。
+
+```sh
+./encrypt_windows_correctness.sh
+```
+
+2026-08-06 的執行使用 MSYS_NT-10.0-26200 上的 `release/swift_tar.exe`
+版本 `20260805-193735`。結果為 `--crypto-selftest` **44 PASS / 0 FAIL**，
+CLI 子集 **6 PASS / 0 FAIL**：plain tar、gzip、zstd 的加密建立／解出往返、
+`--encrypt-only`／`--decrypt-only` 位元組一致、錯誤金鑰拒絕與竄改拒絕。
+
 ### 發現並修正的 RSS 缺陷（2026-08-03）
 
 首次執行暴露的是新加密層的真實缺陷，而非量測誤差：加密 1.3 GB 語料時
@@ -83,7 +121,9 @@ peak RSS 51.48 MB；keyfile baseline 則為 6.13 MB。
 > 純粹是溫度造成的。各階段現在一完成即刪除自己的封存，且空間不足時腳本會拒絕
 > 開始。
 
-> **狀態**：僅於 Apple M4 驗證。正確性是強制檢查而非假設——sweep 在任一 `-n`
+> **狀態**：macOS 吞吐量／RSS 數字已於 Apple M4 驗證。Windows throughput
+> MB/s 另由 `encrypt_mbps_win.sh` 驗證；Windows peak working set 則由既有
+> Windows RSS 腳本覆蓋。正確性是強制檢查而非假設——macOS sweep 在任一 `-n`
 > 設定無法還原為相同位元組時即中止，且 `--crypto-selftest` 會對四種 payload
 > 形狀檢查全部 16 種加密／解密 `-n` 組合。
 

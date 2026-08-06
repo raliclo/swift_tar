@@ -1,0 +1,87 @@
+[Info] date / 日期: 2026-08-06 06:52:06 TST
+[Info] host / 主機: MSYS_NT-10.0-26200 Ralic-W11 3.6.10-8fbd9808.x86_64 2026-07-31 07:26 UTC x86_64 Msys
+[Info] swift_tar: /c/Users/lowei/proj/lzfse2/swift_tar/release/swift_tar.exe (swift_tar 20260805-193735)
+[Info] corpus / 語料: /c/Users/lowei/proj/lzfse2/claw-code
+[Info] regular files / 一般檔案: 5403
+[Info] logical input / 邏輯輸入: 1402916995 bytes (1402.92 MB)
+[Info] rounds / 輪數: 1 (median reported / 取中位數)
+[Info] verify tree / 完整 tree 比對: 0 (default 0 for Windows throughput / Windows 吞吐量預設關閉)
+[Info] key / 金鑰: 64-byte keyfile (no scrypt / 不含 scrypt KDF)
+
+== crypto self-test ==
+PASS: ChaCha20 block (RFC 8439 2.3.2)
+PASS: ChaCha20 encrypt (RFC 8439 2.4.2)
+PASS: Poly1305 (RFC 8439 2.5.2)
+PASS: ChaCha20-Poly1305 tag (RFC 8439 2.8.2)
+PASS: ChaCha20-Poly1305 round-trip
+PASS: ChaCha20-Poly1305 rejects tampering
+PASS: SHA-256("abc")
+PASS: SHA-256("")
+PASS: HMAC-SHA256 (RFC 4231 case 2)
+PASS: PBKDF2-HMAC-SHA256 (c=1)
+PASS: PBKDF2-HMAC-SHA256 (c=4096)
+PASS: PBKDF2-HMAC-SHA256 (40-byte output, multi-block)
+PASS: constantTimeEqual: equal
+PASS: constantTimeEqual: differs in last byte
+PASS: constantTimeEqual: length mismatch
+PASS: scrypt (RFC 7914, N=16 r=1 p=1, empty)
+PASS: scrypt (RFC 7914, N=1024 r=8 p=16, "password")
+PASS: header: round-trip preserves fields
+PASS: header: bad magic rejected
+PASS: header: unsupported version rejected
+PASS: header: unknown KDF id rejected
+PASS: header: logN above cap rejected
+PASS: header: logN below floor rejected
+PASS: header: scrypt r=0 rejected
+PASS: header: scrypt p=0 rejected
+PASS: header: oversized chunk size rejected
+PASS: header: short buffer rejected
+PASS: container: empty payload round-trip
+PASS: container: 9 MiB multi-chunk round-trip
+PASS: container: 1 byte
+PASS: container: exactly one chunk
+PASS: container: one chunk minus 1
+PASS: container: one chunk plus 1
+PASS: container: exactly two chunks
+PASS: container: wrong passphrase rejected
+PASS: container: flipped ciphertext byte rejected
+PASS: container: tampered header (salt) rejected
+PASS: container: truncation rejected
+PASS: parallel: 9 MiB: 16 encrypt/decrypt -n combinations round-trip
+PASS: parallel: exactly two chunks: 16 encrypt/decrypt -n combinations round-trip
+PASS: parallel: single chunk: 16 encrypt/decrypt -n combinations round-trip
+PASS: parallel: empty: 16 encrypt/decrypt -n combinations round-trip
+PASS: container: keyfile round-trip
+PASS: container: wrong keyfile rejected
+-----------------------------------------
+crypto self-test — PASS: 44  FAIL: 0
+
+== A) create/extract, plain vs encrypted ==
+codec            mode         real(s)       MB/s archive(bytes)
+plain-tar        create      7.862214     178.44     1407468032
+                 create+enc   9.553685     146.85     1407475157
+                 extract    14.200308      98.79              -
+                 extr+dec   17.388288      80.68              -
+PASS: plain-tar extracted file count matches source
+gzip             create      8.476663     165.50      491317354
+                 create+enc   9.602211     146.10      491319901
+                 extract    14.854775      94.44              -
+                 extr+dec   14.934718      93.94              -
+PASS: gzip extracted file count matches source
+zstd             create      7.100306     197.59      433604603
+                 create+enc   7.758126     180.83      433606856
+                 extract    13.232744     106.02              -
+                 extr+dec   14.437873      97.17              -
+PASS: zstd extracted file count matches source
+
+== B) --encrypt-only / --decrypt-only on an existing .tar ==
+phase               real(s)       MB/s  output(bytes)
+PASS: encrypt-only/decrypt-only byte-for-byte round 1
+encrypt-only       5.537705     253.34     1407475157
+decrypt-only       5.218508     268.83     1407468032
+[Info] size overhead / 大小開銷: 7125 bytes (0.0005%), = 48B header + 21B per 4 MiB chunk
+PASS: wrong key is rejected
+PASS: tampered ciphertext is rejected
+
+SUMMARY: PASS=6 FAIL=0
+[Done] output / 輸出: /c/Users/lowei/proj/lzfse2/swift_tar/verifications/encrypt_mbps_win_output.txt

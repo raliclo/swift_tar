@@ -18,8 +18,9 @@ compression engine and modeled on **libarchive**'s filter architecture.
   ZIP containers on macOS and Windows; ZIP64 is automatic or can be forced.
 - **Authenticated encryption**: ChaCha20-Poly1305 over 4 MiB chunks, sealed
   concurrently across `-n` like the codecs, layered outside the codec so any
-  archive can be encrypted. Tampering, reordering and truncation are all
-  detected. Pure Swift — no CryptoKit or OpenSSL.
+  archive can be encrypted. Reading detects and decrypts it automatically —
+  no flag needed. Tampering, reordering and truncation are all detected.
+  Pure Swift — no CryptoKit or OpenSSL.
 - **C libraries used the libarchive way**: `zlib` / `libbz2` / `liblzma` /
   `libzstd` / `liblz4` supply the compression primitive; the container
   framing is assembled by swift_tar. `compress`/LZW, uudecode and the RPM
@@ -101,13 +102,13 @@ swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat|--encrypt-only|--decrypt-only
 | Command | Meaning |
 |---------|---------|
 | `-c`    | Create an archive |
-| `-x`    | Extract an archive |
-| `-t`    | List archive contents |
+| `-x`    | Extract an archive (decrypts automatically if encrypted) |
+| `-t`    | List archive contents (decrypts automatically if encrypted) |
 | `-r`    | Append files to the end of an archive (uncompressed tar only) |
 | `-u`    | Append files newer than the archived copy, or not yet present (uncompressed tar only) |
 | `--delete` | Remove named members from an archive in place (uncompressed tar only; swift_tar-only — BSD tar has no `--delete`) |
 | `--identify` | Detect the compression format by magic bytes and print the filter chain (e.g. `gzip → tar`), then stop — no extraction. Works on any filename |
-| `--cat` | Decompress the filter chain only, raw payload to stdout (≈ `bsdcat`) |
+| `--cat` | Decrypt and decompress the filter chain only, raw payload to stdout (≈ `bsdcat`) |
 | `--encrypt-only` | Encrypt the `-f` file as-is (no tar, no codec) to stdout |
 | `--decrypt-only` | Strip only the encryption layer from `-f` to stdout; a compressed payload stays compressed |
 | `--rgb1-pack` / `--rgb1-info` / `--rgb1-raw` | RGB1 raw image container: wrap raw RGB bytes with a header, print its fields, or strip it back to the raw payload |
@@ -138,7 +139,7 @@ tar stream (magic `1f 8b`), not a ZIP container. Use `--zip` for a true ZIP;
 libarchive automatically emits ZIP64 when required, while `--zip64` forces
 ZIP64 records for compatibility testing or explicit format selection.
 
-### Encryption
+### Encryption and decryption
 
 `--encrypt` encrypts the archive with **ChaCha20-Poly1305**. The layer sits
 *outside* the compression codec, so any codec — or plain tar — can be
@@ -150,8 +151,19 @@ release/swift_tar -c --encrypt --gzip -f secret.tgz.enc src/   # encrypted .tar.
 release/swift_tar -c --keyfile k.bin  -f secret.tar.enc src/   # key from a file
 ```
 
-Reading needs no flag — the format is detected by magic and decrypted
-automatically. You are prompted for the passphrase, or pass `--keyfile`:
+#### Decrypting
+
+**There is no `--decrypt` flag, because none is needed.** Reading detects the
+encryption by magic and decrypts automatically, exactly like it auto-detects
+gzip or zstd. Supply the key and use whichever read mode you already wanted:
+
+| Command | What you get |
+|---------|--------------|
+| `-x` | Files extracted (decrypt → decompress → untar) |
+| `-t` | Entry listing |
+| `--cat` | Raw payload on stdout (decrypt **and** decompress) |
+| `--decrypt-only` | The still-compressed archive on stdout (decrypt only) |
+| `--identify` | The filter chain and tar/raw type; for encrypted input, decrypts only enough data to identify inner filters and payload type, without extracting files |
 
 ```sh
 release/swift_tar -x -f secret.tar.enc -C /tmp/out      # prompts for the passphrase
@@ -159,6 +171,11 @@ release/swift_tar -t --keyfile k.bin -f secret.tar.enc  # key from a file
 release/swift_tar --identify --keyfile k.bin -f secret.tgz.enc
 #   secret.tgz.enc: encrypted (ChaCha20-Poly1305) → gzip → tar
 ```
+
+A wrong key, tampering, or truncation makes the command fail with a non-zero
+exit status. Decryption is streaming: plaintext chunks that authenticated
+before a later failure may already have reached stdout or the extraction
+directory. Treat all output from a failed command as incomplete and discard it.
 
 #### Encrypting or decrypting without repacking
 

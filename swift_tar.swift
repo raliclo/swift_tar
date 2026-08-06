@@ -173,11 +173,11 @@ func eprint(_ message: String) {
 }
 #endif
 
-// Windows statically links the zlib submodule for in-process gzip. The other
-// non-LZFSE codecs still shell out to their CLI tools. The remaining C-library
+// Windows statically links zlib and zstd for in-process gzip and zstd. bzip2,
+// xz, lz4, and lzip still shell out to CLI tools. The remaining C-library
 // silgen declarations below are macOS/Linux-only.
-// Windows 靜態連結 zlib submodule，在程序內處理 gzip；其他非 LZFSE 引擎仍
-// 呼叫外部 CLI 工具。以下其餘 C 庫 silgen 宣告僅用於 macOS/Linux。
+// Windows 靜態連結 zlib 與 zstd，在程序內處理 gzip 與 zstd；bzip2、xz、lz4
+// 與 lzip 仍呼叫外部 CLI 工具。以下其餘 C 庫 silgen 宣告僅用於 macOS/Linux。
 #if !os(Windows)
 
 // =================================================================
@@ -398,9 +398,10 @@ private func posixRunCompress(exe: String, args: [String], input: Data) -> Data?
 // MARK: - Windows 版：外部程序壓縮引擎
 // =================================================================
 // Windows process backend for codecs that are not linked in-process
-// (bzip2/xz/zstd/lz4/lzip, available via scoop). gzip uses static zlib above.
+// (bzip2/xz/lz4/lzip, available via scoop). gzip and zstd use the static
+// libraries declared above.
 // Windows 外部程序 backend 用於未在程序內連結的 codec
-//（bzip2/xz/zstd/lz4/lzip，由 scoop 提供）；gzip 使用上方的靜態 zlib。
+//（bzip2/xz/lz4/lzip，由 scoop 提供）；gzip 與 zstd 使用上方宣告的靜態庫。
 #if os(Windows)
 
 /// Resolve an executable's full path by searching PATH (Process on Windows

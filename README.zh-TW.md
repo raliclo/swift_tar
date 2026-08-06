@@ -17,7 +17,8 @@
   標準 ZIP 容器；需要時自動使用 ZIP64，也可明確強制。
 - **認證加密**：以 ChaCha20-Poly1305 對 4 MiB 分塊加密，並如 codec 一般依
   `-n` 併發封裝；加密層疊在壓縮引擎之外，因此任何封存皆可加密；竄改、重排與
-  截斷都能偵測。純 Swift 實作——不使用 CryptoKit 或 OpenSSL。
+  截斷都能偵測；讀取時會自動偵測並解密，不需任何旗標。純 Swift 實作——
+  不使用 CryptoKit 或 OpenSSL。
 - **C 庫用法仿 libarchive**：`zlib` / `libbz2` / `liblzma` / `libzstd` /
   `liblz4` 只提供壓縮原語，容器框架由 swift_tar 自組；`compress`/LZW、
   uudecode 與 RPM 外包裝為 libarchive 內建 filter 的純 Swift 移植。
@@ -92,13 +93,13 @@ swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat|--encrypt-only|--decrypt-only
 | 指令 | 意義 |
 |------|------|
 | `-c`    | 建立封存檔 |
-| `-x`    | 解出封存檔 |
-| `-t`    | 列出封存內容 |
+| `-x`    | 解出封存檔（若已加密會自動解密） |
+| `-t`    | 列出封存內容（若已加密會自動解密） |
 | `-r`    | 將檔案追加到封存檔尾端（僅未壓縮 tar） |
 | `-u`    | 僅追加比封存副本新、或尚不存在的檔案（僅未壓縮 tar） |
 | `--delete` | 就地從封存移除指定項目（僅未壓縮 tar；swift_tar 獨有——BSD tar 無 `--delete`） |
 | `--identify` | 依 magic 位元組偵測壓縮格式並印出 filter 鏈（例如 `gzip → tar`）後即停，不解壓；任何檔名皆可 |
-| `--cat` | 僅解壓 filter 鏈、原始內容輸出至 stdout（等同 `bsdcat`） |
+| `--cat` | 解密並僅解壓 filter 鏈、原始內容輸出至 stdout（等同 `bsdcat`） |
 | `--encrypt-only` | 原樣加密 `-f` 指定的檔案（不做 tar、不壓縮）並輸出至 stdout |
 | `--decrypt-only` | 僅剝除 `-f` 的加密層並輸出至 stdout；壓縮內容維持壓縮 |
 | `--rgb1-pack` / `--rgb1-info` / `--rgb1-raw` | RGB1 原始影像容器：將 raw RGB bytes 包上標頭、印出標頭欄位，或移除標頭還原 raw payload |
@@ -125,7 +126,7 @@ tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # （或以管線�
 不是真正的 ZIP container。建立真實 ZIP 請使用 `--zip`；libarchive 會在需要時
 自動寫入 ZIP64，`--zip64` 則可強制寫入 ZIP64 記錄。
 
-### 加密
+### 加密與解密
 
 `--encrypt` 以 **ChaCha20-Poly1305** 加密封存。加密層位於壓縮引擎**之外**，
 因此任何 codec——或純 tar——都能加密，解開時內層的 codec 仍會自動偵測。
@@ -136,8 +137,18 @@ release/swift_tar -c --encrypt --gzip -f secret.tgz.enc src/   # 加密的 .tar.
 release/swift_tar -c --keyfile k.bin  -f secret.tar.enc src/   # 金鑰取自檔案
 ```
 
-讀取端不需任何旗標——依 magic 偵測格式並自動解密，僅提示輸入密語，
-或以 `--keyfile` 提供金鑰：
+#### 解密
+
+**沒有 `--decrypt` 旗標，因為不需要。** 讀取時會依 magic 偵測加密並自動解密，
+與自動偵測 gzip 或 zstd 完全一樣。只要提供金鑰，用你原本就要用的讀取模式即可：
+
+| 指令 | 得到什麼 |
+|------|---------|
+| `-x` | 解出檔案（解密 → 解壓 → 解 tar） |
+| `-t` | 項目清單 |
+| `--cat` | stdout 上的原始內容（解密**並**解壓） |
+| `--decrypt-only` | stdout 上仍為壓縮狀態的封存（僅解密） |
+| `--identify` | filter 鏈與 tar／raw 類型；加密輸入只解密足以辨識內層 filter 與 payload 類型的資料，不解出檔案 |
 
 ```sh
 release/swift_tar -x -f secret.tar.enc -C /tmp/out      # 提示輸入密語
@@ -145,6 +156,10 @@ release/swift_tar -t --keyfile k.bin -f secret.tar.enc  # 金鑰取自檔案
 release/swift_tar --identify --keyfile k.bin -f secret.tgz.enc
 #   secret.tgz.enc: encrypted (ChaCha20-Poly1305) → gzip → tar
 ```
+
+金鑰錯誤、遭竄改或被截斷時，指令會以非零狀態碼失敗。解密採串流處理；若較後的
+chunk 驗證失敗，先前已通過驗證的明文可能已寫入 stdout 或解出目錄。失敗指令的
+所有輸出都應視為不完整並丟棄。
 
 #### 不重新打包的加密與解密
 

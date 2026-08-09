@@ -880,7 +880,19 @@ enum KeyInput {
             throw TarCryptoError.io("cannot read terminal settings / 無法讀取終端機設定")
         }
         saved = term
-        term.c_lflag &= ~UInt(ECHO)
+        // tcflag_t, not UInt: POSIX only requires an unsigned integer type and
+        // the platforms differ -- Darwin uses unsigned long (64-bit under LP64),
+        // Linux/glibc uses unsigned int (32-bit even on aarch64, because
+        // struct termios crosses the ioctl ABI boundary and cannot change width).
+        // Naming the platform's own typedef is correct on both and also converts
+        // the imported ECHO macro, whose Swift type likewise differs.
+        // 使用 tcflag_t 而非 UInt：POSIX 只要求它是某種 unsigned integer type，
+        // 各平台實際寬度不同——Darwin 為 unsigned long（LP64 下 64-bit），
+        // Linux/glibc 為 unsigned int（即使在 aarch64 上仍為 32-bit，因為
+        // struct termios 跨越 ioctl ABI 邊界，寬度不可更動）。
+        // 直接採用平台自身的 typedef 在兩邊皆正確，並同時處理 ECHO 巨集
+        // 被匯入 Swift 後型別亦不同的問題。
+        term.c_lflag &= ~tcflag_t(ECHO)
         _ = tcsetattr(fileno(stdin), TCSAFLUSH, &term)
         defer { _ = tcsetattr(fileno(stdin), TCSAFLUSH, &saved) }
         guard let line = readLine(strippingNewline: true) else {

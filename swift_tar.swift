@@ -57,6 +57,21 @@ import zlib
 import ucrt
 #endif
 
+#if os(Linux)
+// autoreleasepool is an Objective-C runtime facility and exists only on
+// Darwin. The call sites below use it to bound peak memory while reading
+// chunks and building Data buffers; on Linux there is no autorelease pool to
+// drain, so this is a plain pass-through and the surrounding logic is
+// unchanged. Inlined, so it costs nothing at runtime.
+// autoreleasepool 屬於 Objective-C runtime，僅存在於 Darwin。下方各呼叫點以它
+// 限制逐塊讀取與建立 Data 時的尖峰記憶體；Linux 沒有 autorelease pool 需要
+// 排空，因此此處為單純直通，不改變周圍邏輯。標記 inline 故無執行期成本。
+@inline(__always)
+func autoreleasepool<Result>(invoking body: () throws -> Result) rethrows -> Result {
+    try body()
+}
+#endif
+
 // A narrow C ABI keeps libarchive's C types out of the Swift implementation
 // while sharing exactly the same ZIP/ZIP64 backend on macOS and Windows.
 // 使用精簡 C ABI 隔離 libarchive C 型別，讓 macOS 與 Windows 共用完全相同的
@@ -2058,7 +2073,15 @@ final class TarWriter {
         }
         let mode = UInt32(st.st_mode & 0o7777)
         let uid = UInt32(st.st_uid), gid = UInt32(st.st_gid)
+        // st_mtimespec is the Darwin spelling; POSIX/Linux uses st_mtim.
+        // Both are struct timespec, so only the member name differs.
+        // st_mtimespec 為 Darwin 的欄位名，POSIX/Linux 使用 st_mtim；
+        // 兩者型別同為 struct timespec，僅名稱不同。
+        #if os(Linux)
+        let mtime = UInt64(max(0, st.st_mtim.tv_sec))
+        #else
         let mtime = UInt64(max(0, st.st_mtimespec.tv_sec))
+        #endif
 
         // -u: skip non-directory entries that are not newer than the archived
         // copy. / -u：略過不比封存副本新的非目錄項目。

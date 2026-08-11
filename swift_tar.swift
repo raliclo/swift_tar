@@ -1758,15 +1758,89 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
     }
 }
 
-/// Extraction writer pool. Per-file cost on Windows is ~2ms of fixed
-/// kernel/filter-driver latency (OPTIMIZATION.md R43-Win §4), so N files in
-/// flight overlap it nearly linearly. Same idiom as ParallelChunkSink:
-/// concurrent queue + group + semaphore backpressure + locked first-failure.
-/// The semaphore also bounds memory: inflight × smallFileMax.
-/// 解壓寫入池。Windows 每檔約 2ms 固定 kernel/filter driver 延遲（見
-/// OPTIMIZATION.md R43-Win §4），N 檔並行可近乎線性重疊。與
+#endif // os(Windows)
+
+#if !os(Windows)
+/// Write one extracted regular file on POSIX; returns an error message on
+/// failure, nil on success. Called from FileWriterPool workers (distinct
+/// paths only, no shared state).
+///
+/// ONE open per file, against three on the inline path this replaces
+/// (`createFile`, then `FileHandle(forWritingAtPath:)`, then `setAttributes`).
+///
+/// `fchmod`/`futimens` act on the already-open descriptor rather than the
+/// path. That is not only cheaper -- it is also the correct choice here,
+/// because a path-based `chmod` after the fact would race with any other
+/// worker that has since replaced the file at that name. The mode must be
+/// applied explicitly rather than relying on `open`'s mode argument: that one
+/// is masked by umask and only honoured on creation, so an archive member
+/// marked 0755 would come out 0755 & ~umask, and would not be corrected at
+/// all when overwriting an existing file.
+///
+/// 在 POSIX 上寫出一個解壓檔案；失敗回傳錯誤訊息，成功回傳 nil。由
+/// FileWriterPool 的 worker 呼叫（路徑各自獨立，無共享狀態）。
+/// 每檔僅一次開檔，取代原 inline 路徑的三次（createFile、FileHandle、
+/// setAttributes）。fchmod/futimens 作用於已開啟的 fd 而非路徑：這不只較便宜，
+/// 在此更是正確的選擇——事後以路徑 chmod 會與「其間已把同名檔案換掉」的其他
+/// worker 競態。權限必須明確套用而不能依賴 open 的 mode 參數：後者受 umask
+/// 遮罩且僅在建立時生效，因此標記為 0755 的成員會變成 0755 & ~umask，覆蓋既有
+/// 檔案時更完全不會被修正。
+private func posixWriteFile(dest: String, data: Data, mtime: UInt64, mode: UInt32,
+                            restoreMtime: Bool) -> String? {
+    let fd = dest.withCString { open($0, O_WRONLY | O_CREAT | O_TRUNC, mode_t(mode)) }
+    guard fd >= 0 else {
+        return "cannot create '\(dest)' (errno \(errno)) / 無法建立 '\(dest)'"
+    }
+    defer { close(fd) }
+
+    var writeOK = true
+    data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+        guard let base = raw.baseAddress else { return }
+        var off = 0
+        while off < raw.count {
+            // write(2) may return a short count on a signal or a full pipe
+            // buffer; looping is required, not defensive.
+            // write(2) 可能因訊號或緩衝已滿而寫入不足，必須迴圈，這不是防禦性寫法。
+            let n = write(fd, base + off, raw.count - off)
+            if n <= 0 {
+                if errno == EINTR { continue }
+                writeOK = false
+                return
+            }
+            off += n
+        }
+    }
+    guard writeOK else { return "write failed for '\(dest)' / 寫入失敗 '\(dest)'" }
+
+    _ = fchmod(fd, mode_t(mode))
+    if restoreMtime {
+        var ts = [timespec(tv_sec: time_t(mtime), tv_nsec: 0),
+                  timespec(tv_sec: time_t(mtime), tv_nsec: 0)]
+        _ = futimens(fd, &ts)
+    }
+    return nil
+}
+#endif // !os(Windows)
+
+/// Extraction writer pool. The per-file cost it overlaps is fixed latency, so
+/// N files in flight overlap it nearly linearly. Same idiom as
+/// ParallelChunkSink: concurrent queue + group + semaphore backpressure +
+/// locked first-failure. The semaphore also bounds memory: inflight ×
+/// smallFileMax.
+///
+/// On Windows that fixed cost is ~2ms of kernel/filter-driver latency
+/// (OPTIMIZATION.md R43-Win §4). On macOS/Linux it is smaller but the shape is
+/// the same: extraction of many small files is syscall-bound, not CPU-bound --
+/// measured at sys 1390ms against user 280ms, with CPU/wall pinned at 1.01
+/// before this pool existed on POSIX. See verifications/extract_write_path.zsh.
+///
+/// 解壓寫入池。它重疊掉的是「每檔固定延遲」，故 N 檔並行可近乎線性重疊。與
 /// ParallelChunkSink 同一 idiom：concurrent queue + group + semaphore 反壓
 /// + 鎖保護 first-failure。semaphore 同時就是記憶體上限：inflight × 小檔上限。
+/// Windows 上該固定成本約 2ms（kernel/filter driver 延遲）。macOS/Linux 上較小，
+/// 但形狀相同：大量小檔的解壓是 syscall-bound 而非 CPU-bound——實測 sys 1390ms
+/// 對 user 280ms，且在 POSIX 尚無此池之前 CPU/wall 固定為 1.01。
+/// 見 verifications/extract_write_path.zsh。
 final class FileWriterPool {
     static let smallFileMax = 4 << 20        // ≤4 MiB buffered / 小檔緩衝上限
 
@@ -1792,14 +1866,24 @@ final class FileWriterPool {
         return state.failure
     }
 
-    func submit(dest: String, data: Data, mtime: UInt64) {
+    /// `mode` is ignored on Windows, which has no POSIX permission bits.
+    /// `mode` 在 Windows 上被忽略：該平台沒有 POSIX 權限位元。
+    func submit(dest: String, data: Data, mtime: UInt64, mode: UInt32) {
         sem.wait()                            // backpressure / 反壓
         group.enter()
-        let backend = self.backend
         let restoreMtime = self.restoreMtime
+#if os(Windows)
+        let backend = self.backend
+#endif
         queue.async { [self] in
-            if let err = winWriteFile(dest: dest, data: data, mtime: mtime, backend: backend,
-                                      restoreMtime: restoreMtime) {
+#if os(Windows)
+            let err = winWriteFile(dest: dest, data: data, mtime: mtime, backend: backend,
+                                   restoreMtime: restoreMtime)
+#else
+            let err = posixWriteFile(dest: dest, data: data, mtime: mtime, mode: mode,
+                                     restoreMtime: restoreMtime)
+#endif
+            if let err = err {
                 lock.lock()
                 state.failure = state.failure ?? err
                 lock.unlock()
@@ -1813,8 +1897,6 @@ final class FileWriterPool {
     /// 屏障：等待所有已排入的寫入完成。
     func drain() { group.wait() }
 }
-
-#endif // os(Windows)
 
 /// Extraction write backend, selected by -write_foundation / -write_ucrt.
 /// Only affects Windows extraction; other platforms keep the POSIX path.
@@ -2246,15 +2328,23 @@ final class TarReader {
         // Deferred directory mtimes (children would bump them) / 目錄 mtime 延後套用
         var dirTimes: [(path: String, mtime: UInt64)] = []
         let fm = FileManager.default
-#if os(Windows)
         // Parallel small-file writer pool + dests already handed to it (for
         // ordering barriers: duplicate paths, hardlink targets).
+        //
+        // The pool runs on every platform. It used to be Windows-only because
+        // that is where the per-file latency was first measured, but the cost
+        // is syscall latency rather than anything Windows-specific, and
+        // POSIX extraction was confirmed single-threaded (CPU/wall 1.01 with
+        // any -n) before this changed.
+        //
         // 平行小檔寫入池＋已交付路徑集合（供順序屏障用：重複路徑、硬連結目標）。
+        // 此池在所有平台皆啟用。它原本僅限 Windows，是因為每檔延遲最早在該平台
+        // 量到；但那個成本是 syscall 延遲而非 Windows 特有，且在此改動之前已確認
+        // POSIX 解壓為單執行緒（不論 -n 為何，CPU/wall 皆為 1.01）。
         let pool: FileWriterPool? = options.extract
             ? FileWriterPool(backend: options.writeBackend, inflight: options.inflight,
                              restoreMtime: options.restoreMtime) : nil
         var submitted = Set<String>()
-#endif
 
         func skipData(_ size: UInt64) throws {
             var remaining = Int((size + UInt64(TAR_BLOCK) - 1) / UInt64(TAR_BLOCK)) * TAR_BLOCK
@@ -2388,11 +2478,14 @@ final class TarReader {
 #endif
                 dirTimes.append((dest, mtime))
             case UInt8(ascii: "2"):
-#if os(Windows)
-                // A queued write to the same name must land before removeItem.
-                // 同名寫入若仍在佇列，須先落地才能 removeItem。
+                // A queued write to the same name must land before removeItem,
+                // or the worker would recreate the file after the symlink was
+                // put there. Platform-independent: the hazard is the queue, not
+                // the filesystem.
+                // 同名寫入若仍在佇列，須先落地才能 removeItem，否則 worker 會在
+                // 符號連結建立之後又把檔案寫回去。與平台無關：危險來自佇列本身，
+                // 不是檔案系統。
                 if submitted.contains(dest) { pool?.drain() }
-#endif
                 try? fm.removeItem(atPath: dest)
 #if os(Windows)
                 winCreateSymlink(dest: dest, target: linkname)
@@ -2408,13 +2501,12 @@ final class TarReader {
                     continue
                 }
                 let target = options.destDir.isEmpty ? strippedLink : options.destDir + "/" + strippedLink
-#if os(Windows)
-                // The link target may still be queued in the pool — barrier
-                // before linking (hardlinks are rare; the drain is cheap).
-                // 連結目標可能仍在寫入池佇列——建連結前先屏障（硬連結稀少，
-                // drain 成本低）。
+                // The link target may still be queued in the pool -- barrier
+                // before linking, or link(2) fails with ENOENT on a target that
+                // is about to exist. Hardlinks are rare, so the drain is cheap.
+                // 連結目標可能仍在寫入池佇列——建連結前先屏障，否則 link(2) 會對
+                // 一個「即將存在」的目標回 ENOENT。硬連結稀少，drain 成本低。
                 pool?.drain()
-#endif
                 try? fm.removeItem(atPath: dest)
 #if os(Windows)
                 winCreateHardlink(dest: dest, target: target)
@@ -2429,12 +2521,15 @@ final class TarReader {
                     dirTimes.append((dest, mtime))
                     continue
                 }
-#if os(Windows)
+                // Small files go to the pool, large ones stream inline. The
+                // split is not about speed alone: the pool buffers each file
+                // whole, so its memory ceiling is inflight × smallFileMax and a
+                // multi-gigabyte member must not go through it.
+                // 小檔交給寫入池，大檔 inline 串流。這個分界不只為了速度：池會把
+                // 每個檔案整份緩衝，記憶體上限為 inflight × smallFileMax，因此
+                // 數 GB 的成員絕不能走它。
+                var wroteViaPool = false
                 if let pool = pool, size <= UInt64(FileWriterPool.smallFileMax) {
-                    // Small file: buffer fully, hand to the pool; the ~2ms
-                    // per-file fixed cost overlaps across inflight workers.
-                    // 小檔：整檔緩衝交給寫入池，讓每檔約 2ms 的固定成本在
-                    // inflight 個 worker 間重疊。
                     var data = Data()
                     if size > 0 {
                         guard let d = readExactly(Int(size)) else {
@@ -2450,12 +2545,14 @@ final class TarReader {
                         // （tar 的覆蓋語意）。
                         pool.drain()
                     }
-                    pool.submit(dest: dest, data: data, mtime: mtime)
+                    pool.submit(dest: dest, data: data, mtime: mtime, mode: mode)
+                    wroteViaPool = true
                 } else {
-                    // Large file (or list mode): inline streaming, one open,
-                    // mtime via the selected backend's policy kept simple —
-                    // write stream then setAttributes (amortized by size).
-                    // 大檔（或列出模式）：inline 串流寫入，成本被檔案大小攤提。
+                    // Large file (or list mode): inline streaming. A queued
+                    // write to this same name must land first, otherwise the
+                    // worker overwrites what is streamed here.
+                    // 大檔（或列出模式）：inline 串流。同名的佇列中寫入必須先落地，
+                    // 否則 worker 會覆蓋掉此處串流出來的內容。
                     if submitted.contains(dest) { pool?.drain() }
                     _ = fm.createFile(atPath: dest, contents: nil)
                     guard let out = FileHandle(forWritingAtPath: dest) else {
@@ -2463,46 +2560,41 @@ final class TarReader {
                     }
                     var remaining = size
                     while remaining > 0 {
-                        let n = Int(min(remaining, UInt64(DECODE_CHUNK)))
-                        guard let part = readExactly(n) else {
-                            throw TarError.format("truncated file data / 檔案資料不完整")
+                        // autoreleasepool: per-chunk extract writes are autoreleased.
+                        // autoreleasepool：逐塊解壓寫出為 autoreleased。
+                        try autoreleasepool {
+                            let n = Int(min(remaining, UInt64(DECODE_CHUNK)))
+                            guard let part = readExactly(n) else {
+                                throw TarError.format("truncated file data / 檔案資料不完整")
+                            }
+                            try out.write(contentsOf: part)
+                            remaining -= UInt64(n)
                         }
-                        try out.write(contentsOf: part)
-                        remaining -= UInt64(n)
                     }
                     try? out.close()
+#if os(Windows)
                     if options.restoreMtime {
                         try? fm.setAttributes([.modificationDate:
                             Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
                     }
-                }
-#else
-                _ = fm.createFile(atPath: dest, contents: nil)
-                guard let out = FileHandle(forWritingAtPath: dest) else {
-                    throw TarError.io("cannot create '\(dest)' / 無法建立 '\(dest)'")
-                }
-                var remaining = size
-                while remaining > 0 {
-                    // autoreleasepool: per-chunk extract writes are autoreleased.
-                    // autoreleasepool：逐塊解壓寫出為 autoreleased。
-                    try autoreleasepool {
-                        let n = Int(min(remaining, UInt64(DECODE_CHUNK)))
-                        guard let part = readExactly(n) else {
-                            throw TarError.format("truncated file data / 檔案資料不完整")
-                        }
-                        try out.write(contentsOf: part)
-                        remaining -= UInt64(n)
-                    }
-                }
-                try? out.close()
 #endif
+                }
                 let rem = Int(size % UInt64(TAR_BLOCK))
                 if rem != 0 { _ = readExactly(TAR_BLOCK - rem) }
 #if !os(Windows)
-                chmod(dest, mode_t(mode))
-                if options.restoreMtime {
-                    try? fm.setAttributes([.modificationDate:
-                        Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+                // Only for the inline path. Applying these here for a pooled
+                // file would be both redundant and WRONG: the write may not
+                // have happened yet, and by the time it does these path-based
+                // calls could be acting on a different file.
+                // 僅適用於 inline 路徑。對已入池的檔案在此套用不只多餘，而且是
+                // 錯的：該寫入可能尚未發生，而等它發生時，這些以路徑為準的呼叫
+                // 可能已作用在另一個檔案上。
+                if !wroteViaPool {
+                    chmod(dest, mode_t(mode))
+                    if options.restoreMtime {
+                        try? fm.setAttributes([.modificationDate:
+                            Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+                    }
                 }
 #endif
             default:
@@ -2517,15 +2609,17 @@ final class TarReader {
             ((try? input.read(upToCount: DECODE_CHUNK))?.isEmpty == false)
         }) {}
 
-#if os(Windows)
         // All file writes must land before directory mtimes are applied
-        // (each write bumps its parent directory's mtime).
+        // (each write bumps its parent directory's mtime). This drain is also
+        // what surfaces a worker failure: without it, extraction could return
+        // success while a write was still in flight or had already failed.
         // 所有檔案寫入須先完成，才能套用目錄 mtime（寫檔會更動父目錄 mtime）。
+        // 這個 drain 同時是 worker 失敗的浮現點：少了它，解壓可能在寫入仍在途中
+        // 或早已失敗的情況下回報成功。
         if let pool = pool {
             pool.drain()
             if let f = pool.failure { throw TarError.io(f) }
         }
-#endif
 
         // Directory mtimes last, deepest first / 目錄 mtime 最後套用、先深後淺
         if options.restoreMtime {

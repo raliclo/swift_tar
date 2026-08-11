@@ -316,3 +316,193 @@ and `swift_tar -x` both succeeded. Use `.tgz` or `.tar.gz` for this output.
 - The current `swift_tar -test -debug` passes all seven checks, including
   create-side `-C`, native ZSTD, both Windows write backends and bidirectional
   system-tar interoperability.
+
+## Extraction: where the time goes, and whether `-n` does anything (2026-08-11)
+
+`verifications/extract_write_path.zsh` → `extract_write_path_output.txt`
+
+macOS 27.0.0 arm64, 10 cores (4P+6E), APFS, 256 MiB per corpus, swift_tar
+20260810-170353 vs bsdtar 3.5.3. Three independent runs; the ratios below
+reproduced as 1.7/1.9/1.7, 1.1/0.9/1.1, 0.6/0.6/0.6.
+
+### 1. Extraction cost is per-file, and swift_tar WINS on small files
+
+Total bytes held constant, only the file count varies:
+
+| corpus | files | avg size | bsdtar -c | bsdtar -x | swift -c | swift -x | x ratio |
+|---|---|---|---|---|---|---|---|
+| few  | 8    | 32 MiB | 2142ms | 121ms  | **404ms** | 234ms  | 1.9x slower |
+| mid  | 512  | 512 KiB| 2308ms | 288ms  | **401ms** | 309ms  | 1.1x |
+| many | 8192 | 32 KiB | 4540ms | 2456ms | **459ms** | **1545ms** | **0.6x — faster** |
+
+Two things fall out of this table:
+
+- **Creation is 4–10x faster than bsdtar in every corpus.** The chunked
+  parallel gzip is doing real work.
+- **Extraction gets relatively BETTER as files get smaller.** swift_tar loses
+  on a handful of huge files and wins on thousands of small ones.
+
+The second point contradicts the hypothesis that motivated this script
+(per-file overhead in Foundation). It is bsdtar whose per-file cost dominates
+here: 2456ms for 8192 files versus swift_tar's 1545ms.
+
+**Practical consequence:** whether swift_tar or bsdtar is faster depends
+entirely on the archive's shape. For a Swift toolchain tarball (few, large
+files) bsdtar wins. For a source tree or a rootfs, swift_tar wins.
+
+### 2. The write path is ~90% of extraction for small files
+
+`-t` decodes the whole archive and writes nothing; `-x` decodes and writes.
+
+| corpus | files | swift -t | swift -x | write path | bsdtar -t | bsdtar -x | write path |
+|---|---|---|---|---|---|---|---|
+| few  | 8    | 120ms | 207ms  | 87ms   | 32ms  | 265ms  | 233ms  |
+| many | 8192 | 214ms | 1644ms | 1430ms | 226ms | 2929ms | 2703ms |
+
+Decoding 256 MiB costs ~200ms and is essentially the same for both tools.
+Everything else is file I/O.
+
+### 3. Extraction is single-threaded, and `-n` has no effect on it
+
+| operation | wall | user | sys | CPU/wall |
+|---|---|---|---|---|
+| swift -x (default -n) | 1650ms | 280ms | 1390ms | **1.01** |
+| swift -x -n 1 | 1560ms | 270ms | 1310ms | **1.01** |
+| swift -x -n 8 | 1540ms | 270ms | 1300ms | **1.02** |
+| swift -t (decode only) | 210ms | 170ms | 40ms | 1.00 |
+| bsdtar -x | 2450ms | 240ms | 2190ms | 0.99 |
+
+CPU/wall of 1.0 means one core, all three times. **`-n` changes nothing on the
+extract path** — 1650 / 1560 / 1540ms is run-to-run noise, not scaling.
+
+This matches the source: the `FileWriterPool` that batches small-file writes
+across threads is inside `#if os(Windows)` (`swift_tar.swift:2432`). macOS and
+Linux take the `#else` branch, a sequential `createFile` → `FileHandle` →
+`write` → `close` loop.
+
+Note also `sys` ≫ `user` (1390 vs 280ms): extraction is **syscall-bound, not
+CPU-bound**. Adding compute threads cannot help something that is waiting on
+the filesystem.
+
+### Would a parallel write path on macOS/Linux be worth building?
+
+From the numbers above, honestly: **it would help the case that is already
+winning, and not the case that is losing.**
+
+- **Many small files** — the write path is 1430 of 1644ms, and it is
+  syscall-bound, so overlapping it across cores has real headroom. But
+  swift_tar is already 1.6x faster than bsdtar here. This buys a bigger lead,
+  not a fix.
+- **Few large files** — the write path is 87 of 207ms, and it is a handful of
+  large sequential writes. There is nothing to parallelise, and this is
+  precisely the case where swift_tar trails bsdtar (1.9x). **Parallel writing
+  would not close that gap.**
+
+So the gap on large files is somewhere else — in the read/decode plumbing
+feeding the writes, not in the writes. `-t` is 120ms vs bsdtar's 32ms on the
+`few` corpus, which is where that 1.9x actually comes from and where a fix
+would have to start.
+
+On **compression** the question does not arise: creation is already 4–10x
+faster than bsdtar across every corpus tested.
+
+### 4. `--gzip` really does emit one member per 4 MiB — and `gzip -l` cannot see it
+
+| archive | members | uncompressed per member |
+|---|---|---|
+| bsdtar `-czf` | 1 | 268,520,960 |
+| swift_tar `--gzip` | 65 | min 17,920 / **max 4,194,304** |
+
+4,194,304 is exactly 4 MiB. The pigz-style chunking works as documented.
+
+**`gzip -l` cannot verify this and must not be used to try.** It reads the
+first member's header and the last 4 bytes of the file for ISIZE, so its
+output is always two lines regardless of member count — a single-member and a
+65-member archive look identical. The stream has to be walked member by member
+(the script does this with `zlib.decompressobj` and `unused_data`).
+
+A corollary worth remembering: for the same reason, `gzip -l` reports the
+wrong uncompressed size for any multi-member archive.
+
+## Parallel extraction on macOS and Linux (2026-08-11)
+
+`verifications/parallel_extract_correctness.zsh` → `parallel_extract_correctness_output.txt`
+
+The `FileWriterPool` that batches small-file writes across threads was
+`#if os(Windows)` only. It now runs on every platform, with a POSIX writer
+(`posixWriteFile`) alongside the existing `winWriteFile`.
+
+### What changed
+
+- **One open per file instead of three.** The inline path did `createFile`,
+  then `FileHandle(forWritingAtPath:)`, then `setAttributes` for mtime.
+  `posixWriteFile` does a single `open` and then `fchmod`/`futimens` on that
+  same descriptor.
+- **`fchmod`, not a later path-based `chmod`.** Cheaper, and correct: a
+  path-based call after the fact would race with any other worker that has
+  since replaced the file at that name. The mode cannot come from `open`'s
+  mode argument either — that is masked by umask and only honoured on
+  creation, so 0755 would land as `0755 & ~umask`.
+- **The ordering barriers are now platform-independent**, because the hazard
+  was never the filesystem — it is the queue. A queued write to a name must
+  land before a symlink replaces it, `link(2)` needs its target to exist, and
+  a duplicate path must let the LAST entry win.
+
+### Result: extraction of 8192 small files (256 MiB total)
+
+| | before | after |
+|---|---|---|
+| wall | 1528ms | **631ms** |
+| write path (`-x` minus `-t`) | 1345ms | **397ms** |
+| CPU/wall | 1.01 | **6.40** |
+| vs bsdtar (2405ms) | 1.6x faster | **3.8x faster** |
+
+512 files of 512 KiB: 227ms → 133ms.
+
+**Large files are unchanged, by design and in measurement.** Anything above
+`smallFileMax` (4 MiB) still streams inline, because the pool buffers each
+file whole and its memory ceiling is inflight × smallFileMax. Five runs of
+8 × 32 MiB: 169-185ms before, 169-174ms after.
+
+That also means this does **not** close the gap on few-large-file archives,
+where swift_tar still trails bsdtar. That gap is in the read/decode plumbing,
+not the writes — `-t` alone is 120ms against bsdtar's 32ms.
+
+### Correctness
+
+12/12 on both platforms, across `-n` 1/2/8/16 with repeats — ordering bugs do
+not fail every run, so a single pass proves nothing.
+
+| | macOS 27.0.0 arm64 | Linux aarch64 (Buildroot guest) |
+|---|---|---|
+| tree identical to reference | PASS | PASS |
+| modes 0755 / 0600 / 0644 | PASS | PASS |
+| symlink not overwritten by a queued write | PASS | PASS |
+| hardlink shares its target's inode | PASS | PASS |
+| mtime restored by the worker | PASS | PASS |
+| 6 MiB inline file byte-identical | PASS | PASS |
+| duplicate path: last entry wins | PASS | PASS |
+| unwritable destination fails loudly | PASS | PASS |
+
+### Four harness bugs this shook out, all of which faked a product failure
+
+Worth recording, because each produced a confident wrong answer:
+
+1. **`tar -rf` on the guest** silently produced a ONE-member archive (busybox
+   has no append), so the duplicate-path case compared against an input that
+   did not contain a duplicate — and reported 8/8 failures. Now built with
+   swift_tar's own `-r`, and the member count is asserted before the case runs.
+2. **No `stat` on the guest.** The permission and hardlink cases read empty
+   strings and failed, while the full fingerprint comparison — which also
+   covers modes — passed. A measurement tool that disagrees with itself is the
+   tool's bug. Now uses zsh's `zsh/stat`.
+3. **`07777` is decimal 7777 in zsh.** zsh does not treat a leading zero as
+   octal, so the permission mask silently turned 0754 into 0140. Use `8#7777`.
+4. **No `diff` on the guest**, and `diff | while read` puts the loop in a
+   subshell so appends to the report vanish. The report printed bare "DIFF"
+   headers with nothing under them — losing the only evidence a failure
+   produces. Now compared in zsh.
+
+A fifth, in the perf harness: two concurrent runs sharing one scratch
+directory produced a 512 MiB extraction "taking" 8ms. Both scripts now use
+`mktemp -d`.

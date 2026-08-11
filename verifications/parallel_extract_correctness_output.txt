@@ -1,0 +1,66 @@
+# swift_tar parallel extraction: correctness
+date      : 2026-08-11T02:51:21Z
+swift_tar : swift_tar 20260811-100854
+host      : Darwin 27.0.0 arm64
+-n values : 1 2 8 16   repeats: 3
+umask     : 022   (modes must survive it -- see the modes case)
+## 1. tree fingerprint matches the reference, at every -n, every repeat
+reference : /usr/bin/tar (independent implementation)
+Path, type, permission bits and content hash for every entry.
+每個項目的路徑、型別、權限位元與內容雜湊。
+  [PASS] identical to the reference across 4 -n values x 3 repeats -- 0 mismatching runs
+## 2. permission bits survive the pool
+The pool applies mode with fchmod on the write descriptor. open()'s mode
+argument alone would be masked by umask, so this is the case that catches
+a regression to umask defaults.
+池以 fchmod 在寫入 fd 上套用權限。單靠 open() 的 mode 參數會被 umask 遮罩，
+因此本案例正是用來抓「退化為 umask 預設」的回歸。
+  ./a.txt -> 755 (want 755)
+  [PASS] mode preserved: ./a.txt
+  ./sub/b.txt -> 600 (want 600)
+  [PASS] mode preserved: ./sub/b.txt
+  ./sub/deep/c.txt -> 644 (want 644)
+  [PASS] mode preserved: ./sub/deep/c.txt
+## 3. symlink and hardlink
+  [PASS] symlink points at its target -- got 'a.txt'
+  [PASS] symlink was not overwritten by a queued write -- must still be a symlink, not a regular file
+  [PASS] hardlink shares an inode with its target -- inodes 164793845 / 164793845
+## 4. mtime is restored by the worker (futimens), not the main thread
+  a.txt mtime 1577905445 (source 1577905445)
+  [PASS] mtime preserved through the pool
+## 5. large file (inline path) alongside 400 pooled small files
+  [PASS] 6 MiB file is byte-identical
+  [PASS] all 400 small files present -- found 400
+## 6. duplicate path -- tar overwrite semantics
+Two members with the same name. Sequential extraction gets this for free;
+concurrent writes do not, which is why submit() drains on a repeat path.
+兩個同名成員。序列解壓天生正確；並行寫入不然——這正是 submit() 在遇到重複
+路徑時要 drain 的原因。
+  [PASS] last duplicate entry wins, all runs -- 0 wrong
+## 7. a failing write must produce a non-zero exit
+Errors happen on a worker thread. Without the drain-then-check at the end
+of extraction, they would be discarded and the run would report success.
+錯誤發生在 worker 執行緒上。若解壓結尾沒有「先 drain 再檢查」，這些錯誤會被
+丟棄，而該次執行會回報成功。
+The archive here must NOT contain a './' member. The main corpus does (it
+was built with '-C src .'), and extracting that member restores the
+DESTINATION directory's own mode -- correct tar behaviour that silently
+undoes the read-only precondition. Archive a named file instead.
+此處的封存不可含有 './' 成員。主語料含有（以 '-C src .' 建立），而解開該成員
+會還原「目的目錄本身」的權限——這是正確的 tar 行為，卻會靜默地解除唯讀前提。
+改為只封存具名檔案。
+  extracting into a read-only directory -> exit 1
+  [PASS] unwritable destination fails loudly -- exit was 1
+## summary: 12/12 passed
+  PASS  identical to the reference across 4 -n values x 3 repeats
+  PASS  mode preserved: ./a.txt
+  PASS  mode preserved: ./sub/b.txt
+  PASS  mode preserved: ./sub/deep/c.txt
+  PASS  symlink points at its target
+  PASS  symlink was not overwritten by a queued write
+  PASS  hardlink shares an inode with its target
+  PASS  mtime preserved through the pool
+  PASS  6 MiB file is byte-identical
+  PASS  all 400 small files present
+  PASS  last duplicate entry wins, all runs
+  PASS  unwritable destination fails loudly

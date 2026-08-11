@@ -1,0 +1,46 @@
+# swift_tar extraction: where the time goes
+date      : 2026-08-11T01:50:48Z
+swift_tar : swift_tar 20260810-170353
+bsdtar    : bsdtar 3.5.3 - libarchive 3.7.4 zlib/1.2.12 liblzma/5.4.3 bz2lib/1.0.8 
+host      : Darwin 27.0.0 arm64, 10 cores
+total     : 256 MiB per corpus
+## 1. per-file cost (total bytes held constant)
+corpus     files  avg size |  bsdtar -c  bsdtar -x |  swift -c   swift -x   x ratio
+---------------------------------------------------------------------------------
+few            8    32768K |      2142ms       121ms |      404ms       234ms      1.9x
+mid          512      512K |      2308ms       288ms |      401ms       309ms      1.1x
+many        8192       32K |      4540ms      2456ms |      459ms      1545ms      0.6x
+If the ratio grows as files get smaller, the cost is per-FILE, not per-byte.
+若比值隨檔案變小而上升，成本就在「每個檔案」而非「每位元組」。
+## 2. how much of extraction is the write path
+-t decodes the whole archive and writes nothing. -x does the same decode
+plus the file creation. The difference is the write path, and it is the
+ceiling on what parallel writing could ever recover.
+-t 解開整個封存但不寫任何檔；-x 是同樣的解碼再加上建檔。兩者之差即為寫檔
+路徑的成本，也是平行寫檔所能回收的上限。
+corpus     files |   swift -t   swift -x  write path | bsdtar -t bsdtar -x  write path
+--------------------------------------------------------------------------------------
+few            8 |       120ms       207ms        87ms |      32ms      265ms       233ms
+many        8192 |       214ms      1644ms      1430ms |     226ms     2929ms      2703ms
+## 3. is more than one core actually used
+CPU/wall near 1.0 means single-threaded regardless of what -n was set to.
+CPU/wall 接近 1.0 表示實際為單執行緒，與 -n 設定無關。
+operation                  wall     user      sys   CPU/wall
+-------------------------------------------------------------
+swift -x (default -n)      1650ms    280ms   1390ms     1.01
+swift -x -n 1              1560ms    270ms   1310ms     1.01
+swift -x -n 8              1540ms    270ms   1300ms     1.02
+swift -t (decode only)      210ms    170ms     40ms     1.00
+bsdtar -x                  2450ms    240ms   2190ms     0.99
+## 4. does --gzip really emit one member per 4 MiB
+gzip -l CANNOT answer this: it reads the first header and the trailing 4
+bytes only, so its output is always 2 lines no matter how many members
+there are. The stream has to be walked member by member.
+gzip -l 無法回答這個問題：它只讀第一個 header 與結尾 4 bytes，輸出永遠是
+兩行，與成員數無關。必須逐一走訪整個串流。
+  mem.bsd.tgz        members=    1  uncompressed/member: min=268,520,960 max=268,520,960
+  mem.sw.tgz         members=   65  uncompressed/member: min=17,920 max=4,194,304
+4 MiB = 4,194,304. A max of exactly that across many members is the
+pigz-style chunking working as documented.
+4 MiB = 4,194,304。多個成員的最大值正好是這個數字，即代表 pigz 式分塊如
+文件所述正常運作。

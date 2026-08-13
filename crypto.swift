@@ -595,6 +595,20 @@ enum TarCrypto {
                     done = true; return
                 }
                 let idx = index
+                // The nonce is seed ‖ index, so a wrapped index would repeat a
+                // nonce — catastrophic for ChaCha20-Poly1305, and silent. The
+                // bound is 2^32 chunks (16 PiB at 4 MiB each), unreachable in
+                // practice, so refusing costs nothing and removes the failure
+                // mode entirely.
+                // nonce 為 seed ‖ index，索引回繞即代表 nonce 重複——對
+                // ChaCha20-Poly1305 是災難性且靜默的。上限為 2^32 個 chunk
+                // （每個 4 MiB，即 16 PiB），實務不可達，故直接拒絕不付出任何
+                // 代價，卻能完全消除此失效模式。
+                guard idx < UInt32.max else {
+                    throw TarCryptoError.io(
+                        "stream exceeds \(UInt32.max) chunks; a further chunk would reuse a nonce"
+                        + " / 串流超過 \(UInt32.max) 個 chunk，再加一塊將重複使用 nonce")
+                }
                 index &+= 1
                 if !pipeline.reserveSlot() {
                     done = true

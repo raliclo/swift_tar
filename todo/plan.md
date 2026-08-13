@@ -189,12 +189,12 @@ the comparison cost. The extra 6.2 MB allocation and copy per 1080p frame
 **Note**: `comparison.csv` has not been regenerated since A appeared, so the
 committed numbers are still clean. Fix first, then run — no back-fill needed.
 
-## Phase 2 — 潛在崩潰 / Latent crash  ▸ 程式碼已改,混雜尺寸測試待補
+## Phase 2 — 潛在崩潰 / Latent crash  ▸ ✅ 已完成 2026-08-14
 
 - [x] **C** — 已於呼叫端（`:842` 附近）補上與 `encodeBand:620` 鏡像的尺寸守門。
       目前僅因 sampler 產出的影格尺寸一致而未爆發;DOE 接受任意檔案清單,
       尺寸混雜時編碼端跳過差分而解碼端照做 → 重建錯誤,前一格較小則越界崩潰。
-- [ ] 驗證(待做):以刻意混雜尺寸的兩格語料執行 `--delta --verify`,確認不崩潰且
+- [x] 驗證:以刻意混雜尺寸的兩格語料執行 `--delta --verify`,確認不崩潰且
       要嘛正確重建、要嘛明確失敗(不得靜默產出錯誤結果)。
 
 ## Phase 3 — 量測方法論 / Measurement methodology
@@ -211,11 +211,11 @@ committed numbers are still clean. Fix first, then run — no back-fill needed.
 **This one needs a direction from you before any edit**, because (a) changes
 published conclusions.
 
-## Phase 4 — 次要 / Minor
+## Phase 4 — 次要 / Minor  ▸ ✅ 已完成 2026-08-14
 
-- [ ] `crypto.swift`:`index` 為 `UInt32` 且以 `&+=` 遞增,理論上 2^32 chunks
+- [x] `crypto.swift`:`index` 為 `UInt32` 且以 `&+=` 遞增,理論上 2^32 chunks
       (4 MiB × 2^32 = 16 PiB 單一封存)會回繞造成 nonce 重用——對
       ChaCha20-Poly1305 是嚴重問題,但門檻實務不可達。可加上限檢查以策安全。
-- [ ] `test_strip_components.sh` 檔案模式為 `100644`,其餘測試皆 `100755`;
+- [x] `test_strip_components.sh` 檔案模式為 `100644`,其餘測試皆 `100755`;
       clone 後無法直接 `./test_strip_components.sh` 執行,需 `bash` 前綴。
       `git update-index --chmod=+x` 即可。

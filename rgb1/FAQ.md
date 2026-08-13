@@ -224,30 +224,56 @@ budget**. Measured per-frame encode cost on the same clip:
 |---|---:|---:|---|
 | RGB24 raw | 2986 | 0 | bandwidth fails |
 | NV12 raw | 1493 | 0 | bandwidth fails |
-| **NV12 + zstd** | **122** | **9.0** | **both pass** |
-| RGB24 + zstd | 211 | 9.0 | bandwidth marginal |
-| frame delta + zstd | 196 | ~9+ | bandwidth marginal |
-| FFV1 | 115 | 22.8 | **over budget** |
-| x264 lossless | — | 64.2 | **over budget** |
+| **NV12 + zstd-3** | **689** | **9.0** | **1 GbE at 86%** |
+| RGB24 + zstd-3 | 1469 | 9.0 | **exceeds 1 GbE** |
+| RGB1 predictive + zstd-3 | 809 | 15.1 enc / 9.8 dec | 1 GbE at 101%, needs 2.5 GbE |
+| FFV1 | 565 | 22.8 | over compute budget |
+| x264 lossless | — | 64.2 | over compute budget |
 | hardware lossy (VideoToolbox / VP9) | ~2-10 | see note | the only internet-capable option |
 
-**On a LAN (1 GbE or better): NV12 + zstd.** It is the only general-purpose
-compressor that satisfies both constraints, it is lossless, and it adds no
-codec latency (no B-frames, no reordering). RGB1 is not the right choice here —
-it costs 73% more bandwidth in exchange for metadata alone, since the RGBA
-conversion advantage turned out to be noise.
+> **Corrected 2026-08-14, and the conclusion moved with it.** This table first
+> read NV12 + zstd at 122 Mbps and RGB24 at 211 Mbps. Those came from 8 frames
+> taken at t=0, and the opening of the source clip is a fade from black — a
+> region the measuring script's own header warns about. Re-measured from
+> mid-video, NV12 is **689 Mbps and RGB24 is 1469 Mbps**, 5.6x and 7.0x higher.
+> Raised in review by the Windows-side reader.
+>
+> The reviewer also expected a second error, that compressing 8 frames as one
+> zstd stream deduplicates across frames and understates a per-frame bitrate.
+> Measured directly with `batch_vs_per_frame.zsh`: the penalty is **-0.0%**.
+> zstd-3's window is smaller than a single 6.2 MB frame, so by the time the
+> encoder reaches frame 2, frame 1 has already left the window and cross-frame
+> matching cannot happen at all. Batched and per-frame are the same number.
+>
+> **2026-08-14 更正，結論亦隨之改變。** 本表原記 NV12 + zstd 為 122 Mbps、
+> RGB24 為 211 Mbps。該數字取自 t=0 的 8 格影格，而來源影片開頭是自黑畫面淡入
+> ——量測腳本自身的檔頭已對此提出警告。改自影片中段重測後，NV12 為 **689 Mbps、
+> RGB24 為 1469 Mbps**，分別高出 5.6 倍與 7.0 倍。此問題由 Windows 端讀者於
+> review 中提出。
+>
+> 該讀者另預期存在第二項錯誤：8 格壓成單一 zstd 串流會跨影格去重，因而低估每格
+> 位元率。以 `batch_vs_per_frame.zsh` 直接量測，懲罰為 **-0.0%**。zstd-3 的視窗
+> 小於單張 6.2 MB 影格，編碼器讀到第 2 格時第 1 格早已離開視窗，跨影格匹配根本
+> 無從發生。批次與逐格是同一個數字。
 
-**區域網路（1 GbE 以上）：NV12 + zstd。** 它是唯一同時滿足兩個約束的通用
-壓縮器，且無損、不引入 codec 延遲（無 B-frame、無重排）。RGB1 在此並不合適
-——多付 73% 頻寬，只換到 metadata，因為 RGBA 轉換的優勢已證實是雜訊。
+**On a LAN: NV12 + zstd-3 at 689 Mbps, and 1 GbE is no longer comfortable** —
+that is 86% of a practical gigabit link for a single stream, where the earlier
+122 Mbps figure implied a link could carry several. RGB24 + zstd-3 at 1469 Mbps
+does not fit 1 GbE at all. RGB1's predictive stack lands at 809 Mbps, between
+them, and needs 2.5 GbE for any headroom.
+
+**區域網路：NV12 + zstd-3 為 689 Mbps，1 GbE 已不再寬裕** —— 單一串流即佔實務
+gigabit 連線的 86%，而先前的 122 Mbps 會讓人以為一條線路可承載數條。RGB24 +
+zstd-3 的 1469 Mbps 則完全塞不進 1 GbE。RGB1 的預測式堆疊落在兩者之間的
+809 Mbps，要有餘裕需 2.5 GbE。
 
 **Over the internet: a lossy encoder is mandatory.** The source clip's own VP9
-track runs at 2 Mbps against zstd's 122 Mbps — a 60x difference; no lossless path
+track runs at 2 Mbps against zstd's 689 Mbps — a 345x difference; no lossless path
 fits a typical connection. swift_tar's role there is container and transport, not
 compression.
 
 **跨網際網路：必須使用有損編碼器。** 來源影片自身的 VP9 軌為 2 Mbps，對比 zstd
-的 122 Mbps 相差 60 倍；沒有任何無損路徑能塞進一般連線。此時 swift_tar 的角色是
+的 689 Mbps 相差 345 倍；沒有任何無損路徑能塞進一般連線。此時 swift_tar 的角色是
 容器與傳輸層，而非壓縮。
 
 > **Note on the h264_videotoolbox row**: its 41 ms/frame measurement includes

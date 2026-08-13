@@ -1,0 +1,24 @@
+[Info] date / 日期: 2026-08-14 01:23:36 CST
+[Info] source / 來源: 20260803 回到神面前 讓神來醫治 [恩典365 - 時代先知 ： 耶利米 系列] [d-t779PY_S0].webm  1920x1080
+[Info] consecutive frames taken from t=121.2s, not t=0 — the opening of
+       this clip is a fade from black and compresses ~5x better than real
+       content, which is what made an earlier sweep land at 7%.
+       連續影格取自 t=121.2s 而非 t=0——本片開頭是自黑畫面淡入，較真實內容
+       易壓縮約 5 倍，先前掃描落在 7% 即肇因於此。
+
+== Batched vs per-frame at zstd -3 / 批次與逐格對比 ==
+source        format    batched(B/f) per-frame(B/f)   penalty   60fps Mbps
+------------- ------- -------------- -------------- --------- ------------
+consecutive   nv12           1435666        1435110     -0.0%          689
+consecutive   rgb24          3061343        3060377     -0.0%         1469
+sampled       nv12           1287797        1286999     -0.1%          618
+sampled       rgb24          2717880        2719077      0.0%         1305
+
+== Verdict / 結論 ==
+  The penalty column is what the FAQ's per-frame figures were missing.
+  A streamer cannot buffer 8 frames (133 ms at 60 fps), so the per-frame
+  column is the honest one and the batched column understates the wire cost.
+  penalty 欄即 FAQ 的每格數字所遺漏的部分。串流器無法緩衝 8 格（60 fps 下為
+  133 ms），故 per-frame 欄才是誠實的數字，batched 欄低估了線路成本。
+
+[Done] output / 輸出: /Users/raliclo/proj/lzfse2/swift_tar/verifications/rgb1/batch_vs_per_frame_output.txt

@@ -1018,3 +1018,173 @@ is a much larger undertaking than the transforms and can be decided separately.
 **這確立了什麼。** 此堆疊值得實作：相較現行格式可縮減 payload 40.8%，代價僅是兩個
 整數變換與不同的位元組排列。要補上最後的 16.5% 則需自行實作 range coder，其工程量
 遠大於這些變換，可另行決定。
+
+## Does directional similarity (zero the RGB when a neighbour matches) help?
+
+## 方向相似性（與鄰居相同時 RGB 寫零）有幫助嗎？
+
+**Q: Test each pixel against its directional neighbours. On a match, write RGB as
+zero and record the direction in a flag. Zeros compress to almost nothing, and
+keeping the payload full-length preserves O(1) row addressing.**
+**Q: 逐像素與方向鄰居比對。相同時 RGB 寫零，方向記於旗標。零幾乎壓縮到不存在，
+且 payload 維持完整長度可保住 O(1) 列定址。**
+
+**The addressing argument is right — writing zeros rather than omitting bytes is
+the correct choice. The compression argument does not survive measurement.**
+Measured with `../verifications/rgb1/swift_tar_DOE --dirsim`, round-trip
+verified, 3-bit flags over four directions (left, above, upper-left,
+upper-right):
+
+**定址論點正確 —— 寫零而非省略位元組確實是對的選擇。壓縮論點則通不過量測。**
+以 `../verifications/rgb1/swift_tar_DOE --dirsim` 實測，通過往返驗證，四個方向
+（左、上、左上、右上）以 3-bit 旗標編碼：
+
+| arm | of raw |
+|---|---:|
+| **dirsim** | **53.50%** |
+| dirsim + YCoCg-R + planar | 54.35% |
+| raw + zstd-3 (do nothing) | 49.82% |
+| YCoCg-R + MED + planar | **27.10%** |
+
+**It is worse than doing nothing.** zstd's LZ match-finder already locates exact
+byte repeats — telling it "this pixel equals its left neighbour" restates
+information it extracts anyway, while the flag stream is new cost: 3 bits per
+pixel is 0.375 B/px, or 12.5% on top of a 3 B/px payload.
+
+**它比什麼都不做更差。** zstd 的 LZ match-finder 本來就在尋找完全重複的位元組
+——告訴它「這個像素等於左鄰」是在重述它本就會提取的資訊，而旗標串流是新增成本：
+每像素 3 bits 即 0.375 B/px，相當於在 3 B/px 的 payload 上再加 12.5%。
+
+MED wins for the same reason the colour map lost: **it stores differences, not a
+binary same/different.** On a gradient every pixel differs slightly, so exact
+matching finds nothing while MED turns the whole region into near-zero
+residuals. The recurring lesson across all three rejected proposals — palette,
+flag byte, directional similarity — is that **duplicating what the compressor
+already does costs more than it saves; feeding it something more compressible is
+what pays.**
+
+MED 勝出的理由與調色盤落敗的理由相同：**它儲存的是差值，而非「相同／不同」的
+二元判斷。** 漸層上每個像素都略有差異，完全比對一無所獲，MED 卻能把整個區域轉為
+接近零的殘差。三個被否決的提案——調色盤、旗標位元組、方向相似性——反覆指向同一
+個教訓：**重複壓縮器已在做的事，代價高於收益；餵給它更好壓的東西才有回報。**
+
+## Can RGB1 get NV12's zero-copy upload advantage?
+
+## RGB1 能拿到 NV12 的零拷貝上傳優勢嗎？
+
+**Q: NV12 can be wrapped as Metal textures with no CPU copy. RGB1 has to be
+padded to RGBA first, since Metal has no 24-bit texture format. Is that gap
+unavoidable?**
+**Q: NV12 可以零拷貝包成 Metal texture。RGB1 則必須先補成 RGBA，因為 Metal 沒有
+24-bit 的 texture 格式。這個差距無法避免嗎？**
+
+**No — the planar layout adopted for compression turns out to remove it.** The
+predictive stack already stores the payload as RRR...GGG...BBB..., which is
+exactly what a three-plane upload wants: three `r8Unorm` textures assembled in a
+fragment shader, the same technique NV12 uses for its Y and UV planes.
+
+**可以避免——為壓縮而採用的 planar 排列恰好消除了此差距。** 預測式堆疊已將
+payload 儲存為 RRR…GGG…BBB…，這正是三平面上傳所需：三個 `r8Unorm` texture，於
+fragment shader 組合，與 NV12 處理其 Y 與 UV 平面的手法相同。
+
+Measured with `P6-DOE.swift` on an Apple M4, 1920x1080, best of 60, both paths
+read back and compared pixel for pixel:
+
+以 `P6-DOE.swift` 在 Apple M4 上實測，1920x1080，取 60 次最佳，兩條路徑皆讀回並
+逐像素比對：
+
+| path | cpu ms | upload+gpu ms | total |
+|---|---:|---:|---:|
+| A  RGBA interleave + 1 texture (P6 today) | 1.74 | 1.35 | 3.10 |
+| **B  3 plane textures (planar)** | **0.00** | **1.34** | **1.34** |
+
+**Both render identical pixels; B saves 1.76 ms/frame (56.9%).** Two results
+were not expected. First, **three samples are not more expensive on the GPU**
+(1.34 vs 1.35 ms) — the upload drops from 4 B/px to 3 B/px, and that bandwidth
+saving covers the extra sampling. Second, **the alpha expansion costs 1.74 ms,
+not the ~8 ms estimated earlier** in this FAQ from an old single-threaded ffmpeg
+figure that included unrelated conversion work.
+
+**兩條路徑渲染結果完全相同；B 省下 1.76 ms/frame（56.9%）。** 其中兩項結果出乎
+意料。其一，**三次取樣在 GPU 上並不更貴**（1.34 對 1.35 ms）——上傳量從 4 B/px
+降為 3 B/px，該頻寬節省足以覆蓋額外取樣的成本。其二，**補 alpha 的成本是
+1.74 ms，而非本 FAQ 先前估計的約 8 ms**，那個數字源自一份含有無關轉換工作的舊
+單執行緒 ffmpeg 量測。
+
+With that, the client-side budget closes:
+
+據此，客戶端預算得以收斂：
+
+| client work / 客戶端工作 | ms/frame |
+|---|---:|
+| zstd decode + inverse transform (slices=20, -n 20) | 9.8 |
+| three-plane upload + GPU render | 1.3 |
+| **total** | **11.1** |
+
+**60 fps budget is 16.67 ms — it fits, with 33% to spare.** Note this changes
+only the consumer side; the RGB1 container itself is untouched.
+
+**60 fps 預算為 16.67 ms——通過，尚餘 33%。** 注意這僅改變消費端；RGB1 容器本身
+未受任何變動。
+
+## Should the RGB1 payload be stored as ffmpeg's `gbrp` instead of interleaved?
+
+## RGB1 payload 該改存 ffmpeg 的 `gbrp` 而非交錯排列嗎？
+
+**Q: The predictive stack already produces planar data, and a three-plane GPU
+upload wants planar. Storing the payload as `gbrp` would make both free.**
+**Q: 預測式堆疊本來就產出 planar 資料，三平面 GPU 上傳也需要 planar。把 payload
+存成 `gbrp` 可讓兩者都免費。**
+
+**Implemented, measured, and reverted: the original interleaved definition
+stands.** Direct compression of the container is materially worse in planar, and
+the cost grows with the level:
+
+**實作、量測後回退：維持原本的交錯定義。** 直接壓縮容器時 planar 明顯較差，且
+代價隨等級上升：
+
+| zstd | rgb24 interleaved | gbrp planar | planar cost |
+|---|---:|---:|---:|
+| -1 | 3,459,994 (55.61%) | 3,938,416 (63.30%) | +13.8% |
+| -3 | 2,984,389 (47.97%) | 3,686,531 (59.25%) | +23.5% |
+| -9 | 2,644,767 (42.51%) | 3,337,981 (53.65%) | +26.2% |
+| **-19** | **2,315,357 (37.21%)** | 3,042,759 (48.91%) | **+31.4%** |
+
+Measured on 48 containers — 24 frames emitted in both layouts from one decode,
+so the two arms are pixel-identical by construction.
+
+以 48 個容器實測 —— 24 格由同一次解碼產出兩種版面，故兩組從構造上即完全相同。
+
+**Why interleaving wins here.** Within one pixel, R, G and B are strongly
+correlated: a grey pixel has R≈G≈B, and interleaved those three bytes are
+adjacent, so an LZ matcher finds them within a few bytes. Planar separates them
+by `width * height` — 2.07 MB at 1080p, far beyond any practical match window.
+Longer windows at higher levels exploit that adjacency more, which is exactly why
+the planar penalty grows from 13.8% to 31.4% rather than shrinking.
+
+**交錯排列為何在此勝出。** 單一像素內的 R、G、B 高度相關：灰色像素 R≈G≈B，交錯
+排列下這三個位元組相鄰，LZ 匹配器在數個位元組內即可找到。planar 則將它們拉開
+`width * height`——1080p 為 2.07 MB，遠超任何實用的匹配視窗。高等級的較長視窗更能
+利用這份相鄰性，這正是 planar 的懲罰從 13.8% 增至 31.4%（而非縮小）的原因。
+
+**This does not contradict the earlier `+planar -2.5%` result.** That was
+measured *after* MED, where every byte is a near-zero residual; grouping by
+channel then puts similar-magnitude runs together and the entropy stage benefits.
+**Planar helps after prediction and hurts before it** — the two measurements
+describe different inputs and both hold.
+
+**這與先前 `+planar -2.5%` 的結果並不矛盾。** 該結果量測於 MED **之後**，當時每個
+位元組都是接近零的殘差；按通道分組會把相似量級的長串聚在一起，熵編碼階段因而
+獲益。**planar 在預測之後有幫助，在預測之前有害** —— 兩份量測描述的是不同的輸入，
+且皆成立。
+
+**What survives the revert.** The streaming path is unaffected: it applies
+`YCoCg-R -> MED -> planar` regardless of what the container stores, so the
+809 Mbps figure does not move. `P6-DOE` path C still demonstrates that ffmpeg's
+`gbrp` byte order feeds a three-plane upload with no byte movement — that
+interop holds at the GPU layer whatever the container does.
+
+**回退後仍然成立的部分。** 串流路徑不受影響：無論容器儲存什麼，它都會套用
+`YCoCg-R → MED → planar`，故 809 Mbps 這個數字不變。`P6-DOE` 的路徑 C 仍然證明
+ffmpeg 的 `gbrp` 位元組順序可零搬移地餵入三平面上傳 —— 該互通性在 GPU 層成立，
+與容器如何儲存無關。

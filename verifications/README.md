@@ -506,3 +506,45 @@ Worth recording, because each produced a confident wrong answer:
 A fifth, in the perf harness: two concurrent runs sharing one scratch
 directory produced a 512 MiB extraction "taking" 8ms. Both scripts now use
 `mktemp -d`.
+
+## QoS class and what `Thread.qualityOfService` does not do (2026-08-13)
+
+`qos-DOE.swift` — run bare for usage; `--skip-timing` for the exact part alone.
+Raw output in `qos-DOE_output.txt`.
+
+Written because the RGB1 bench reported speed-ups that exceeded the core count,
+and pinning QoS was one of the hypotheses. It settles what each API does:
+
+| api | changes `qos_class_self()` |
+| --- | --- |
+| `Thread.current.qualityOfService = X` on a **running** thread | **no** |
+| `thread.qualityOfService = X` **before** `start()` | yes |
+| `pthread_set_qos_class_self_np(X, 0)` | yes |
+
+`Thread.qualityOfService` behaves as documented — it is a creation-time
+attribute, not a live control. The trap is that assigning it to an
+already-running thread is a **silent no-op**: no error, no warning, and
+`qos_class_self()` is unchanged. **The main thread is always already running**,
+so it can never be configured through the property; `pthread_set_qos_class_self_np`
+is the only option there.
+
+The class is not cosmetic. Interleaved over 5 rounds, same loop:
+
+| class | median | vs userInitiated |
+| --- | ---: | ---: |
+| userInitiated | 4.7 ms | 1.0x |
+| utility | 7.9 ms | 1.7x |
+| background | 539.5 ms | **113.9x** |
+
+Two consequences for this repo. A benchmark that sets the property on the main
+thread and assumes it took effect is comparing threads it believes are equal but
+are not — `swift_tar_DOE` did exactly that until it moved to the pthread call.
+And `taskpolicy -c background` is not a mild hint: it is a two-orders-of-magnitude
+penalty, so it must never wrap a timed run.
+
+> **Note on why the timing section is interleaved.** Running each class to
+> completion in turn gave `pthread_set(userInitiated)` 196.1 ms in one position
+> and 32.0 ms in another — the same call, 6x apart, because a ten-second
+> `background` arm leaves the machine in a different state than it found it.
+> Sequential sweeps of anything scheduler- or thermal-sensitive are not
+> trustworthy; the arms are interleaved and the median reported.

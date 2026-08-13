@@ -1,0 +1,59 @@
+== 1. Reported class after each API / 各 API 呼叫後所回報的類別 ==
+   Exact observation via qos_class_self(); no timing involved.
+   以 qos_class_self() 精確觀察，不涉及計時。
+
+api                                               before          after           changed
+--------------------------------------------------------------------------------------------
+Thread.current.qualityOfService = .utility        userInteractive userInteractive NO
+Thread.current.qualityOfService = .background     userInteractive userInteractive NO
+Thread.current.qualityOfService = .userInitiated  userInteractive userInteractive NO
+pthread_set_qos_class_self_np(UTILITY)            userInteractive utility         yes
+pthread_set_qos_class_self_np(USER_INITIATED)     utility         userInitiated   yes
+
+   On a secondary Thread, set from inside the running thread /
+   於次要 Thread 內部設定:
+     launched=default  afterThreadProperty=default  afterPthread=utility
+
+   On a secondary Thread, set BEFORE start() — the documented usage /
+   於次要 Thread 啟動前設定 —— 文件所載用法:
+     set .utility before start() -> qos_class_self = utility   (takes effect / 生效)
+
+== 2. Throughput per class / 各類別的吞吐量 ==
+   Arms are interleaved across 5 rounds, not run end to end: a
+   sequential sweep lets one arm's thermal and scheduler aftermath land
+   on the next. Median is reported; the min of a contaminated series is
+   not obviously the honest value.
+   各組於 5 輪中交錯執行而非各自跑完：循序掃描會讓某一組的熱與排程
+   後效落在下一組上。回報中位數；受污染序列的最小值未必是誠實的值。
+
+class                median ms      min ms      max ms
+--------------------------------------------------------
+userInitiated              4.7         3.5         5.7   1.0x
+utility                    7.9         3.2        88.7   1.7x
+background               539.5       285.8      1901.5   113.9x
+
+== Verdict / 結論 ==
+  Thread.qualityOfService on a RUNNING thread changes qos_class_self(): NO
+  Thread.qualityOfService set BEFORE start():                          yes
+  pthread_set_qos_class_self_np:                                       yes
+
+  Thread.qualityOfService works as documented: it is a creation-time
+  attribute, effective when set before start(). It is not a live
+  control, and assigning it to an already-running thread is a silent
+  no-op with no error and no warning.
+
+  The main thread is always already running, so it cannot be
+  configured through this property at all; pthread_set_qos_class_self_np
+  is the only option there. Code that sets it on the main thread and
+  assumes it took effect is measuring or scheduling something other
+  than what it believes.
+
+  Thread.qualityOfService 的行為與文件一致：它是建立時的屬性，於
+  start() 之前設定即生效。它不是即時控制，對已在執行的執行緒賦值
+  是靜默的無操作，既不報錯也不警告。
+  主執行緒永遠處於執行中，故完全無法透過該屬性設定；該處唯一的選項
+  是 pthread_set_qos_class_self_np。在主執行緒上設定它並假設已生效的
+  程式，其量測或排程的對象與它所以為的並不相同。
+
+  swift: >=5.0  cores: 10
+  macOS: Version 27.0 (Build 26A5406e)

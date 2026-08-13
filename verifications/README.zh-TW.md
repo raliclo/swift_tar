@@ -380,3 +380,40 @@ CPU-bound**。對一個在等檔案系統的工作增加運算執行緒沒有幫
 
 順帶一提的推論：基於同樣的原因，`gzip -l` 對任何多成員封存回報的解壓後大小
 都是錯的。
+
+## QoS class 與 `Thread.qualityOfService` 做不到的事（2026-08-13）
+
+`qos-DOE.swift` —— 不帶旗標執行即印出用法；`--skip-timing` 僅執行精確部分。
+原始輸出見 `qos-DOE_output.txt`。
+
+之所以寫這支程式，是因為 RGB1 量測回報了超過核心數的加速比，而「釘死 QoS」是當時
+的假設之一。它釐清了各 API 的實際行為：
+
+| api | 是否改變 `qos_class_self()` |
+| --- | --- |
+| 對**執行中**執行緒設 `Thread.current.qualityOfService = X` | **否** |
+| 於 `start()` **之前**設 `thread.qualityOfService = X` | 是 |
+| `pthread_set_qos_class_self_np(X, 0)` | 是 |
+
+`Thread.qualityOfService` 的行為與文件一致 —— 它是建立時的屬性，不是即時控制。
+陷阱在於：對已在執行的執行緒賦值是**靜默的無操作**，既不報錯也不警告，
+`qos_class_self()` 完全不變。**主執行緒永遠處於執行中**，故無法透過該屬性設定；
+該處唯一的選項是 `pthread_set_qos_class_self_np`。
+
+該類別並非僅具裝飾性。相同迴圈交錯執行 5 輪：
+
+| class | 中位數 | 相對 userInitiated |
+| --- | ---: | ---: |
+| userInitiated | 4.7 ms | 1.0x |
+| utility | 7.9 ms | 1.7x |
+| background | 539.5 ms | **113.9x** |
+
+對本專案有兩項後果。其一，在主執行緒上設定該屬性並假設已生效的量測程式，是在比較
+它以為相同、實則不同的執行緒 —— `swift_tar_DOE` 在改用 pthread 呼叫之前正是如此。
+其二，`taskpolicy -c background` 不是溫和的提示，而是兩個數量級的懲罰，絕不可套用
+在計時的執行上。
+
+> **計時一節為何採交錯執行。** 各類別依序跑完的話，`pthread_set(userInitiated)`
+> 在某個位置為 196.1 ms、另一個位置為 32.0 ms —— 同一個呼叫相差 6 倍，因為跑了
+> 十秒的 `background` 組會讓機器停在與開始時不同的狀態。任何對排程或熱敏感的項目，
+> 循序掃描皆不可信；故各組交錯執行並回報中位數。

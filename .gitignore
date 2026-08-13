@@ -34,3 +34,4 @@ tmp_review_codecs
 # DOE corpora — regenerate with rgb1_sampler, never commit the frames
 # DOE 語料 —— 以 rgb1_sampler 重新產生，不提交影格本身
 /verifications/rgb1/sample/
+/verifications/qos-DOE

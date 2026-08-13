@@ -553,6 +553,12 @@ func bands(height: Int, slices: Int) -> [(Int, Int)] {
     return stride(from: 0, to: height, by: rows).map { ($0, min($0 + rows, height)) }
 }
 
+/// The QoS every arm of the bench runs at. Fixed rather than inherited so the
+/// sequential and concurrent arms are scheduled alike; see parallelMap.
+/// 本量測所有組別共用的 QoS。刻意固定而非沿用繼承值，使序列與並行兩組得到相同的
+/// 排程待遇；詳見 parallelMap。
+let benchQoS: DispatchQoS.QoSClass = .userInitiated
+
 /// Run `work` over `count` items, at most `threads` at a time, preserving order.
 /// Mirrors swift_tar's -n: a semaphore bounds concurrency rather than letting
 /// concurrentPerform take every core regardless of what was asked for.
@@ -560,17 +566,30 @@ func bands(height: Int, slices: Int) -> [(Int, Int)] {
 /// semaphore 限制並行度，而非讓 concurrentPerform 無視設定佔滿所有核心。
 func parallelMap<T>(_ count: Int, threads: Int,
                     _ work: @escaping (Int) -> T?) -> [T]? {
-    if threads <= 1 || count <= 1 {
-        var out = [T](); out.reserveCapacity(count)
-        for i in 0..<count { guard let v = work(i) else { return nil }; out.append(v) }
-        return out
-    }
+    // There is deliberately no separate sequential branch. An earlier version
+    // special-cased threads == 1 with a plain loop on the calling thread, and
+    // that arm ran ~6x slower than the same work dispatched to a queue with a
+    // semaphore of 1 — so every reported speed-up was measuring the difference
+    // between two implementations, not the effect of concurrency. With one path,
+    // -n 1 is the same code as -n 20 with the gate closed.
+    // 此處刻意不設獨立的序列分支。先前版本對 threads == 1 特別處理，在呼叫端執行
+    // 緒上直接迴圈；該組比「同樣工作以 semaphore 為 1 派送到佇列」慢約 6 倍——
+    // 於是所有回報的加速比量到的都是兩份實作之間的差異，而非並行的效果。統一為
+    // 單一路徑後，-n 1 就是把閘門關到 1 的 -n 20，程式碼完全相同。
     var slots = [T?](repeating: nil, count: count)
     let lock = NSLock(), sem = DispatchSemaphore(value: threads)
     let group = DispatchGroup()
     for i in 0..<count {
         sem.wait()
-        DispatchQueue.global().async(group: group) {
+        // Pinned to the same QoS the sequential path runs at. Without an
+        // explicit class the two arms are scheduled differently: a
+        // single-threaded run is parked on the E-cores while a concurrent one
+        // recruits the P-cores, which on a 4P+6E machine reports a ~16x speed-up
+        // from 10 cores. That is a scheduling artefact, not parallel efficiency.
+        // 與序列路徑釘在相同的 QoS。若不明確指定類別，兩條路徑會得到不同的排程：
+        // 單執行緒執行會被安置在 E-core，而並行執行則徵用 P-core，於 4P+6E 的機器
+        // 上造成「10 核卻加速約 16 倍」的假象。那是排程產物，不是平行效率。
+        DispatchQueue.global(qos: benchQoS).async(group: group) {
             let v = autoreleasepool { work(i) }
             lock.lock(); slots[i] = v; lock.unlock()
             sem.signal()
@@ -851,6 +870,11 @@ func report(_ results: [Result], opt: Options, rawBytes: Int) {
 }
 
 do {
+    // The sequential arm runs on this thread, so it needs the same class the
+    // worker queue uses; otherwise the comparison measures the scheduler.
+    // 序列組在此執行緒上執行，故需與 worker queue 使用相同類別，否則比較量到的
+    // 是排程器而非程式碼。
+    Thread.current.qualityOfService = .userInitiated
     let opt = try parse(Array(CommandLine.arguments.dropFirst()))
     let results = try run(opt)
     let rawBytes = try opt.files.reduce(0) { $0 + (try Frame(contentsOf: $1).payload.count) }

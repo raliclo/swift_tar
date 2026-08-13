@@ -1,0 +1,40 @@
+[Info] date / 日期: 2026-08-13 08:34:37 CST
+[Info] machine / 機器: arm64, Apple M4
+[Info] os / 系統: macOS 27.0 (26A5406e)
+[Info] swift_tar: swift_tar 20260811-184213
+[Info] source / 來源: 20260803 回到神面前 讓神來醫治 [恩典365 - 時代先知 ： 耶利米 系列] [d-t779PY_S0].webm  1920x1080, 8 frames
+[Info] render prep = conversion to RGBA (what P6 feeds Metal); excludes GPU shader time
+[Info] render prep = 轉成 RGBA（P6 交給 Metal 的格式）；不含 GPU shader 時間
+
+== Raw frame sizes / 原始影格大小 ==
+  nv12         24883200 bytes   1.50 B/px  YUV 4:2:0
+  rgb24        49766400 bytes   3.00 B/px  RGB1 payload (+876 B header per frame)
+  rgba         66355200 bytes   4.00 B/px  what P6 hands to Metal
+
+== Transfer size and streaming cost / 傳輸大小與串流成本 ==
+format  codec      transfer(B)   of raw     enc(s)     dec(s)
+------- -------- ------------- -------- ---------- ----------
+nv12    none          24884736  100.01%      0.030      0.030
+nv12    zstd           2040441    8.20%      0.039      0.051
+nv12    gzip           1974514    7.94%      0.132      0.074
+nv12    lz4            3511405   14.11%      0.038      0.058
+nv12    xz             1409388    5.66%      3.024      0.397
+rgb24   none          49767936  100.00%      0.043      0.043
+rgb24   zstd           3521027    7.08%      0.045      0.084
+rgb24   gzip           3351184    6.73%      0.244      0.104
+rgb24   lz4            6002134   12.06%      0.032      0.094
+rgb24   xz             2351780    4.73%      2.874      0.743
+
+[OK] every codec round-tripped to identical bytes / 每個 codec 皆還原為相同位元組
+
+== Render prep: convert to RGBA / 轉換成 RGBA ==
+format     time(s)         MB/s           note
+nv12         0.061       1087.8 YUV->RGB matrix
+rgb24        0.068        975.8 add alpha channel
+
+== Verdict / 結論 ==
+  zstd transfer: NV12 2,040,441 B vs RGB1 3,521,027 B
+  -> NV12 transfers 1,480,586 B less (42.0% smaller)
+  RGB1 needs 1.73x the bytes of NV12 on the wire
+
+[Done] output / 輸出: /Users/raliclo/proj/lzfse2/swift_tar/verifications/rgb1/nv12_vs_rgb1_streaming_output.txt

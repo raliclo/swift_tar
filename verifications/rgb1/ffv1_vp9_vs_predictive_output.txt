@@ -1,0 +1,54 @@
+[Info] date / 日期: 2026-08-13 10:03:39 CST
+[Info] os / 系統: macOS 27.0 (26A5406e)
+[Info] samples / 樣本: 24 frames, 1920x1080, intra-only
+[Info] ffmpeg: ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers
+
+frame                  raw(B)      ffv1(B)    vp9-ll(B)
+---------------- ------------ ------------ ------------
+t000000s.rgb1         6220800         3932         1290
+t000010s.rgb1         6220800      1261851      1959347
+t000020s.rgb1         6220800      1205281      2334719
+t000030s.rgb1         6220800      1250582      2366146
+t000040s.rgb1         6220800      1202048      2301602
+t000050s.rgb1         6220800      1218855      2324216
+t000060s.rgb1         6220800      1213786      2294879
+t000070s.rgb1         6220800      1204366      2320719
+t000080s.rgb1         6220800      1200395      2281182
+t000090s.rgb1         6220800      1231364      2334858
+t000100s.rgb1         6220800      1193645      2290918
+t000110s.rgb1         6220800      1231916      2347194
+t000120s.rgb1         6220800      1222174      2344515
+t000130s.rgb1         6220800      1206687      2314753
+t000140s.rgb1         6220800      1260158      2385997
+t000150s.rgb1         6220800      1232323      2337774
+t000160s.rgb1         6220800      1273576      2439310
+t000170s.rgb1         6220800      1282579      2427277
+t000180s.rgb1         6220800      1197095      2295516
+t000190s.rgb1         6220800      1202903      2303351
+t000200s.rgb1         6220800      1251229      2397872
+t000210s.rgb1         6220800      1213686      2298678
+t000220s.rgb1         6220800      1236441      2361199
+t000230s.rgb1         6220800      1254779      2374725
+
+[OK] every FFV1 and VP9 frame decoded back to identical bytes
+[OK] 每個 FFV1 與 VP9 影格皆解回相同位元組
+
+== YCoCg-R + MED + planar + zstd-19 ==
+variant,frames,stored_bytes,compressed_bytes,pct_of_raw,seconds,codec,level
+raw,24,149320224,55586962,37.2319,131.966,zstd,19
+ycocg-r+med+planar,24,149320224,32912433,22.0446,288.045,zstd,19
+
+== Average per frame / 每格平均 ==
+arm                                        bytes    of raw     vs FFV1
+----------------------------------------------------------------------
+raw payload + zstd-19                  2,316,123    37.23%       1.97x
+YCoCg-R + MED + planar + zstd-19       1,371,351    22.04%       1.16x
+VP9 -lossless (intra)                  2,226,585    35.79%       1.89x
+FFV1 level 3 (intra)                   1,177,152    18.92%       1.00x
+
+== Verdict / 結論 ==
+  ours vs FFV1 : +16.5%  (86% of FFV1's efficiency / 達 FFV1 效率的 86%)
+  ours vs VP9  : -38.4%
+  FFV1 vs VP9  : -47.1%
+
+[Done] output / 輸出: /Users/raliclo/proj/lzfse2/swift_tar/verifications/rgb1/ffv1_vp9_vs_predictive_output.txt

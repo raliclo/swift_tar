@@ -197,19 +197,30 @@ committed numbers are still clean. Fix first, then run — no back-fill needed.
 - [x] 驗證:以刻意混雜尺寸的兩格語料執行 `--delta --verify`,確認不崩潰且
       要嘛正確重建、要嘛明確失敗(不得靜默產出錯誤結果)。
 
-## Phase 3 — 量測方法論 / Measurement methodology
+## Phase 3 — 量測方法論 / Measurement methodology  ▸ ✅ 已完成 2026-08-14
 
-- [ ] **#2** — `nv12_vs_rgb1_streaming.zsh:81-82` 的 8 格批次壓縮外推成每格
-      位元率。需決定方向:(a) 改為逐格壓縮再取平均,或 (b) 保留批次但把
-      `FAQ.md:175` 的 `independent frames + zstd` 標示改為名實相符,並在
-      引用該數字處註明其含跨格去重紅利。
-- [ ] 若選 (a),`FAQ.md:227/238/259` 的 689 Mbps 與「1 GbE 不再寬裕」結論需
-      連帶重算——2026-08-14 的更正只改了取樣位置(靜態開頭 → 影片中段),
-      未改批次或逐格。
+- [x] **#2** — 結論:**疑慮不成立,無需改動已發布數字。**
+- [x] 更正一則先前的判斷:review 稱「這項沒有動」,實際上 `0e528ec` 已新增
+      `batch_vs_per_frame.zsh` 專測此事(該 commit message 未提及,故被漏看)。
 
-**此項需你決定方向後才動手**,因為 (a) 會改變已發布的結論數字。
-**This one needs a direction from you before any edit**, because (a) changes
-published conclusions.
+1080p 下批次不會灌大每格位元率,因為單格 3.1 MB(NV12)/6.2 MB(RGB24)已超出
+zstd、gzip、lz4 的回看視窗,它們根本無法參照前一格。兩支腳本互相印證:
+`batch_vs_per_frame.zsh` 以 zstd -3 對兩種來源量得 −0.1%～0.0%;本次為
+`nv12_vs_rgb1_streaming.zsh` 新增 `--batch`／`--per-frame`／`--both`,把比較延伸
+到全部五種 codec,最大僅 +0.34%(rgb24／xz,字典最大者差距最大,符合視窗假說),
+其中約 0.04% 還只是每格 tar header。
+
+At 1080p, batching does not inflate the per-frame bitrate: a frame is larger
+than zstd/gzip/lz4 can look back across, so they never reference the previous
+one. Two scripts agree — `batch_vs_per_frame.zsh` at zstd -3 across two sources
+(−0.1% to 0.0%), and the new `--batch`/`--per-frame`/`--both` modes here across
+all five codecs (at most +0.34%, on rgb24/xz — the largest dictionary, exactly
+as the window hypothesis predicts).
+
+FAQ.md 已加註雙語說明並同時引用兩支腳本;若解析度低到單格能放進 codec 視窗,
+須重新檢查。
+FAQ.md now carries a bilingual note citing both scripts, with the caveat that a
+low enough resolution would require re-checking.
 
 ## Phase 4 — 次要 / Minor  ▸ ✅ 已完成 2026-08-14
 

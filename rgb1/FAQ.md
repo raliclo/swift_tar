@@ -179,6 +179,34 @@ RGB24 實測：
 | FFV1 level 3 | 1,922,856 | 3.86% | lossless |
 | VP9 (same 8 frames, 2300k) | 31,519 | 0.06% | **lossy** |
 
+> **"independent frames" really is independent, verified 2026-08-14.** These
+> rows come from compressing the 8 frames as one stream, which in principle
+> lets the codec dedup across frames — a bonus no real-time sender could claim,
+> since it cannot wait for eight frames or reference one it has not sent yet.
+Two scripts measure this. `batch_vs_per_frame.zsh` covers zstd -3 across
+> two frame sources (consecutive and 10 s-sampled) and reports a penalty of
+> **−0.1% to 0.0%**; `nv12_vs_rgb1_streaming.zsh --both` extends the same
+> comparison to all five codecs and finds **at most 0.34%** (rgb24/xz — the
+> largest dictionary, hence the largest gap; zstd stays within ±0.18%). About
+> 0.04% of even that is per-frame tar headers rather than compression. The reason is window size — one 1080p
+> frame is 3.1 MB (NV12) or 6.2 MB (RGB24), more than zstd, gzip or lz4 can look
+> back across, so they never reference the previous frame at all. The batch
+> figures above and the bitrates below are therefore safe as per-frame numbers.
+> This would need re-checking at a resolution low enough for a frame to fit
+> inside a codec's window.
+>
+> **「independent frames」確實獨立，2026-08-14 實測確認。** 上表各列是把 8 格壓成
+> 單一串流所得，原則上讓 codec 有機會跨格去重——而那是任何即時傳送端都無法主張的
+> 紅利，因為它不可能等滿八格，也無法參照尚未送出的影格。
+有兩支腳本量測此事：`batch_vs_per_frame.zsh` 以 zstd -3 涵蓋兩種影格來源
+> （連續與相隔 10 秒取樣），回報 penalty 為 **−0.1% 至 0.0%**；
+> `nv12_vs_rgb1_streaming.zsh --both` 則把同一比較延伸到全部五種 codec，
+> 實測**最多 0.34%**（rgb24／xz——字典最大，差距因而最大；zstd 維持在 ±0.18%
+> 內）。且其中約 0.04% 還只是每格的 tar header，與壓縮無關。原因在視窗大小——單張 1080p
+> 影格為 3.1 MB（NV12）或 6.2 MB（RGB24），超出 zstd、gzip、lz4 的回看範圍，因此
+> 它們根本不曾參照前一格。故上表的批次數字與下文的位元率，作為每格數值皆可安心
+> 引用。若解析度低到單格能放進 codec 視窗，則須重新檢查。
+
 A byte-wise delta against the previous frame costs a few dozen lines, but on this
 source it only saves **7.1%** (3,509,790 -> 3,260,525). An earlier measurement on
 a different clip showed 25%, so the benefit is highly content-dependent: it pays

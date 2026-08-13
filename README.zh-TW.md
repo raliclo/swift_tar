@@ -294,7 +294,7 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 | `-f <path>` | 封存檔路徑（`-` 表標準輸入／輸出；預設 `-`） |
 | `-C <dir>`  | 建立前切換輸入目錄；讀取時解出至此目錄 |
 | `--strip-components <N>` | （僅 `-x` tar 解出）寫入前移除成員路徑前 N 層；也接受 `--strip-components=N` |
-| `-n <N>`    | 平行在途分塊數（預設 2 × 核心數） |
+| `-n <N>`    | 平行在途分塊數（預設每核一個，上限 4 × 核心數） |
 | `-v`        | 詳細輸出（列出項目／顯示套用的 filter 鏈） |
 | `--encrypt` | （僅 `-c`）以 ChaCha20-Poly1305 加密，並提示輸入密語 |
 | `--keyfile <path>` | 以檔案位元組作為金鑰材料取代密語（建立與讀取皆適用；stdin 非終端機時為必要） |

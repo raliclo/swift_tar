@@ -874,7 +874,15 @@ do {
     // worker queue uses; otherwise the comparison measures the scheduler.
     // 序列組在此執行緒上執行，故需與 worker queue 使用相同類別，否則比較量到的
     // 是排程器而非程式碼。
-    Thread.current.qualityOfService = .userInitiated
+    // pthread, not Thread.current.qualityOfService: assigning that property on a
+    // thread that is already running is a silent no-op, and the main thread is
+    // always already running. Verified by ../qos-DOE.swift, which reads
+    // qos_class_self() before and after each API. The earlier version of this
+    // line did nothing.
+    // 使用 pthread 而非 Thread.current.qualityOfService：對已在執行的執行緒賦值該
+    // 屬性是靜默的無操作，而主執行緒永遠處於執行中。已由 ../qos-DOE.swift 驗證，
+    // 該程式在每個 API 前後讀取 qos_class_self()。此行的先前版本毫無作用。
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0)
     let opt = try parse(Array(CommandLine.arguments.dropFirst()))
     let results = try run(opt)
     let rawBytes = try opt.files.reduce(0) { $0 + (try Frame(contentsOf: $1).payload.count) }

@@ -323,7 +323,7 @@ the same behavior as a libarchive built without lzo support.
 | `-f <path>` | Archive file (`-` = stdin/stdout; default `-`) |
 | `-C <dir>`  | Change input directory before create; extract into it when reading |
 | `--strip-components <N>` | (`-x` tar extraction only) Remove N leading path components before writing entries; also accepts `--strip-components=N` |
-| `-n <N>`    | In-flight parallel chunks (default 2 × cores) |
+| `-n <N>`    | In-flight parallel chunks (default: one per core, capped at 4 × cores) |
 | `-v`        | Verbose (list entries / show the applied filter chain) |
 | `--encrypt` | (`-c` only) Encrypt with ChaCha20-Poly1305; prompts for a passphrase |
 | `--keyfile <path>` | Use the file's bytes as key material instead of a passphrase (create and read; required when stdin is not a terminal) |

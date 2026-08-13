@@ -1,0 +1,8 @@
+step,side,ms_per_frame,budget_ms,headroom_pct,bytes_in,bytes_out,MB_per_s,max_fps_capacity,fits,limited_by,note
+1 source frame (RGB1 in memory),server,0.00,16.67,n/a,0,6221676,373.3,inf,yes,capture rate,"uncompressed, 3 B/px / 未壓縮"
+2 transform + zstd-3 encode,server,15.07,16.67,9.6,6221676,1685800,101.1,66,yes,"CPU, 20 slices at -n 20",YCoCg-R -> MED -> planar -> zstd / 依序套用
+3 wire transfer,network,0.00,16.67,n/a,1685800,1685800,101.1,70,yes,link 118 MB/s,the binding constraint / 真正的約束
+4 zstd-3 decode + inverse,client,9.77,16.67,41.4,1685800,6220800,373.2,102,yes,"CPU, 20 slices at -n 20","emits planar, ready to upload / 輸出 planar，可直接上傳"
+5 three-plane upload + render,client,1.41,16.67,91.5,6220800,6220800,373.2,709,yes,GPU / PCIe-equivalent,"3x r8Unorm, no alpha expansion / 三個 r8Unorm，免補 alpha"
+TOTAL server,server,15.07,16.67,9.6,,,,66,yes,CPU,sum of server steps / server 各步驟總和
+TOTAL client,client,11.18,16.67,32.9,,,,89,yes,CPU + GPU,sum of client steps / client 各步驟總和

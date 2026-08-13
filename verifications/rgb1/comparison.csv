@@ -1,0 +1,11 @@
+variant,frames,stored_bytes,compressed_bytes,pct_of_raw,encode_ms_per_frame,decode_ms_per_frame,codec,level,slices,threads,total_ms_per_frame,fits_30fps_decode,fits_60fps_decode
+raw,3,18665028,9297314,49.8184,43.22,24.12,zstd,3,1,1,67.34,yes,no
+ycocg-r+med+planar,3,18665028,5082692,27.2349,217.87,194.46,zstd,3,1,1,412.33,no,no
+slice20,3,18665028,9566855,51.2627,35.29,40.33,zstd,3,20,1,75.62,no,no
+ycocg-r+med+planar+slice20,3,18665028,5057402,27.0994,211.46,195.91,zstd,3,20,1,407.37,no,no
+slice10,3,18665028,9426878,50.5127,6.22,1.97,zstd,3,10,10,8.19,yes,yes
+ycocg-r+med+planar+slice10,3,18665028,5057903,27.1021,12.05,10.14,zstd,3,10,10,22.19,yes,yes
+slice20,3,18665028,9566855,51.2627,7.10,1.27,zstd,3,20,20,8.37,yes,yes
+ycocg-r+med+planar+slice20,3,18665028,5057402,27.0994,15.07,9.77,zstd,3,20,20,24.84,yes,yes
+slice40,3,18665028,9656362,51.7423,5.14,1.67,zstd,3,40,20,6.81,yes,yes
+ycocg-r+med+planar+slice40,3,18665028,5283251,28.3096,13.21,9.25,zstd,3,40,20,22.46,yes,yes

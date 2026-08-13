@@ -1,0 +1,59 @@
+[Info] date / 日期: 2026-08-13 14:06:12 CST
+[Info] os / 系統: macOS 27.0 (26A5406e)
+[Info] cores / 核心: 4P + 6E = 10 logical
+[Info] codec: zstd -3, in-process libzstd
+[Info] timing frames / 計時影格: 3, corpus / 語料: 24
+
+[Run] preset=raw slices=1 -n=1
+[Run] preset=predictive slices=1 -n=1
+[Run] preset=raw slices=20 -n=1
+[Run] preset=predictive slices=20 -n=1
+[Run] preset=raw slices=10 -n=10
+[Run] preset=predictive slices=10 -n=10
+[Run] preset=raw slices=20 -n=20
+[Run] preset=predictive slices=20 -n=20
+[Run] preset=raw slices=40 -n=20
+[Run] preset=predictive slices=40 -n=20
+== Per-frame cost / 每格成本 ==
+variant                        slices  -n   enc ms   dec ms   of raw
+--------------------------------------------------------------------
+raw                                 1   1    43.22    24.12   49.82%
+ycocg-r+med+planar                  1   1   217.87   194.46   27.23%
+slice20                            20   1    35.29    40.33   51.26%
+ycocg-r+med+planar+slice20         20   1   211.46   195.91   27.10%
+slice10                            10  10     6.22     1.97   50.51%
+ycocg-r+med+planar+slice10         10  10    12.05    10.14   27.10%
+slice20                            20  20     7.10     1.27   51.26%
+ycocg-r+med+planar+slice20         20  20    15.07     9.77   27.10%
+slice40                            40  20     5.14     1.67   51.74%
+ycocg-r+med+planar+slice40         40  20    13.21     9.25   28.31%
+
+== Against the frame budget / 對照影格預算 ==
+   encode is the server's cost, decode the client's; each is judged alone
+   編碼為伺服器成本、解碼為客戶端成本；兩者各自判定
+variant                         -n    60 fps (16.67)    30 fps (33.33)
+----------------------------------------------------------------------
+ycocg-r+med+planar               1   FAIL (194.5 ms)   FAIL (194.5 ms)
+slice20                          1    FAIL (40.3 ms)    FAIL (40.3 ms)
+ycocg-r+med+planar+slice20       1   FAIL (195.9 ms)   FAIL (195.9 ms)
+slice10                         10     PASS (2.0 ms)     PASS (2.0 ms)
+ycocg-r+med+planar+slice10      10    PASS (10.1 ms)    PASS (10.1 ms)
+slice20                         20     PASS (1.3 ms)     PASS (1.3 ms)
+ycocg-r+med+planar+slice20      20     PASS (9.8 ms)     PASS (9.8 ms)
+slice40                         20     PASS (1.7 ms)     PASS (1.7 ms)
+ycocg-r+med+planar+slice40      20     PASS (9.2 ms)     PASS (9.2 ms)
+
+== Concurrency speed-up vs the same slicing at -n 1 / 相同切片下的並行加速 ==
+  slice10                        -n 10  encode   5.7x  decode  20.5x
+  ycocg-r+med+planar+slice10     -n 10  encode  17.5x  decode  19.3x
+  slice20                        -n 20  encode   5.0x  decode  31.8x
+  ycocg-r+med+planar+slice20     -n 20  encode  14.0x  decode  20.1x
+  slice40                        -n 20  encode   6.9x  decode  24.1x
+  ycocg-r+med+planar+slice40     -n 20  encode  16.0x  decode  21.2x
+
+== Round-trip verification / 往返驗證 ==
+  slices=20 -n=20 : PASS — 24 frames byte-identical / 影格位元組完全一致
+  slices=40 -n=20 : PASS — 24 frames byte-identical / 影格位元組完全一致
+
+[Done] csv / 表格: /Users/raliclo/proj/lzfse2/swift_tar/verifications/rgb1/comparison.csv
+[Done] output / 輸出: /Users/raliclo/proj/lzfse2/swift_tar/verifications/rgb1/streaming_budget_benchmark_output.txt

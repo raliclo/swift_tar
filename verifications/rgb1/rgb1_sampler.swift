@@ -81,8 +81,10 @@ argv.removeAll { $0.hasPrefix("--") }
 
 guard cleanOnly || !argv.isEmpty else {
     fail("""
-    Usage: rgb1_sampler [--clean|--clean-only] <video> [interval-seconds] [output-dir]
-    用法： rgb1_sampler [--clean|--clean-only] <影片> [間隔秒數] [輸出目錄]
+    Usage: rgb1_sampler [--clean|--clean-only] [--out DIR]
+                        <video> [interval-seconds] [output-dir]
+    用法： rgb1_sampler [--clean|--clean-only] [--out 目錄]
+                        <影片> [間隔秒數] [輸出目錄]
       interval defaults to 10, output-dir defaults to ./sample
       間隔預設 10 秒，輸出目錄預設 ./sample
       --clean       remove existing *.rgb1 from the output dir first

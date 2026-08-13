@@ -840,14 +840,42 @@ func run(_ base: Options) throws -> [Result] {
             var decodedPrev: [UInt8]? = nil
             for (fi, frame) in frames.enumerated() {
                 let bs = bands(height: frame.height, slices: opt.slices)
-                let prev = decodedPrev
+                // Mirror encodeBand's guard (prev.count == payload.count): it
+                // skips the delta when the previous frame is a different size,
+                // so decode has to skip it too. Checked here because decodeBand
+                // sees only its own band and cannot know the frame size. Without
+                // this, a mixed-size corpus — the DOE accepts any file list —
+                // would rebuild wrongly, and a smaller previous frame would run
+                // off the end of prev[base + i].
+                // 鏡像 encodeBand 的守門（prev.count == payload.count）：前一格
+                // 尺寸不同時它會跳過差分，解碼端也必須跳過。在此檢查是因為
+                // decodeBand 只看得到自己那條 band，無從得知整格大小。若缺少
+                // 此檢查，尺寸混雜的語料（DOE 接受任意檔案清單）會重建錯誤，
+                // 且前一格較小時會在 prev[base + i] 越界。
+                let frameBytes = frame.width * frame.height * 3
+                let prev = decodedPrev?.count == frameBytes ? decodedPrev : nil
                 guard let out = parallelMap(bs.count, threads: opt.threads, { i in
                     decodeBand(encoded[fi][i], previous: prev, width: frame.width,
                                y0: bs[i].0, rows: bs[i].1 - bs[i].0, opt: opt)
                 }) else { throw Err("decode failed / 解碼失敗") }
-                decodedPrev = Array(out.joined())
+                // Flatten at most once per frame, and only when something needs
+                // it: --delta uses it as the next frame's reference, --verify
+                // uses it for the comparison. Doing it unconditionally put a
+                // 6.2 MB allocation and copy per 1080p frame inside the timed
+                // region — roughly 0.5-1 ms against a ~9-10 ms decode and a
+                // 16.67 ms budget, inflating the number that decides PASS/FAIL
+                // even under --no-verify, which the budget scan uses precisely
+                // to avoid that cost.
+                // 每格最多攤平一次，且僅在有需要時才做：--delta 用它作下一格的
+                // 參考，--verify 用它作比對。原本無條件執行，使 1080p 每格在
+                // 計時區內多付 6.2 MB 配置與複製——約 0.5-1 ms，對照解碼
+                // ~9-10 ms 與 16.67 ms 預算，灌大了判定 PASS/FAIL 的數字，
+                // 連 --no-verify 也擋不掉，而 budget 掃描正是靠它避開此成本。
+                let decodedFrame: [UInt8]? =
+                    (opt.delta || opt.verify) ? Array(out.joined()) : nil
+                if opt.delta { decodedPrev = decodedFrame }
                 if opt.verify {
-                    guard Array(out.joined()) == frame.payload else {
+                    guard decodedFrame == frame.payload else {
                         throw Err("round-trip mismatch on \(opt.label) / 往返結果不符")
                     }
                 }

@@ -118,7 +118,24 @@ R43-Win §4 已實測僅 ~2%。Step 1 驗證通過後可順手加 5 行(parser �
 
 ## 候選後續 / Follow-up candidates
 
-### R46-Mac(候選):POSIX 版平行寫入池 + 單次開檔
+### ✅ R46-Mac(已完成 2026-08-11,swift_tar 16cd98e):POSIX 版平行寫入池 + 單次開檔
+
+下方候選已實作為「Extract small files in parallel on macOS and Linux」,並於
+R48-Mac 一輪(`-swift_tar -power-test`)完成量測:
+
+- **llama.cpp 解壓 27/27 組全部變快,中位數 +171%**(min +50%、max +256%),
+  解壓時間普遍由 9–10 秒降至 3–4 秒。
+- **收益遠超原先「預期收益有限」的評估。** 原評估以「Mac 每檔固定成本 ~0.23ms」
+  推論,低估了 40k 檔級距的累積效果:llama.cpp 有 41,576 檔、96% 小於 64 KB,
+  正是此手法的最佳場景。claw-code(5,402 檔、71% 小檔)提升較小且波動大。
+- **所有格式皆受惠,不只 TGZ**:`-swift_tar` 模式下 zshrc 中每種格式的解壓都以
+  `| tar -xf -` 收尾(連 LZFSE 家族亦然),故平行小檔解出惠及全部格式。
+- 正確性:新增 `verifications/parallel_extract_correctness.zsh`(10 項),涵蓋
+  symlink 不被排隊寫入覆蓋、重複項目最後者勝、hardlink 共用 inode、mode 與
+  mtime 保留;已納入 `run_round.command` 守門。
+- 風險「動到 macOS 行為」已實現但受控:回歸 124 項全過。
+
+### R46-Mac(原候選內容,保留供對照):POSIX 版平行寫入池 + 單次開檔
 
 把 R45-Win 的兩個手法搬到 macOS/POSIX 分支,做成獨立一輪:
 
@@ -126,3 +143,79 @@ R43-Win §4 已實測僅 ~2%。Step 1 驗證通過後可順手加 5 行(parser �
 - **單次開檔後端**:`open(O_WRONLY|O_CREAT|O_TRUNC)` → `write` → `futimens(fd)`(同一 fd 設 mtime)→ `close`,取代現行 `createFile`+`FileHandle`+`setAttributes` 三次呼叫;`chmod` 可併入 `open` 的 mode 參數或 `fchmod(fd)`。
 - **預期收益有限**:Mac 每檔固定成本 ~0.23ms(Windows 是 2–3.8ms),APFS 無 filter-driver 稅;僅對 40k+ 小檔資料集可能有感。需以 Mac 基準(R43-Mac:llama.cpp ~130 MB/s、claw-code ~500–600 MB/s)另行前後對比驗證,不可沿用 Windows 數據推論。
 - **風險**:動到 macOS 行為(R45-Win 刻意零改動);需重跑 macOS self-test 與 benchmark pipeline(`run_round.command`)確認無回歸。
+
+---
+
+# RGB1 DOE 量測正確性計畫 / RGB1 DOE Measurement-Integrity Plan
+
+2026-08-14 review 提出四項,加上兩項先前發現但未追蹤的次要問題。分階段處理,
+順序依「是否污染已入版數據」而非依修改難度排列。
+Raised in the 2026-08-14 review, plus two minor items found earlier and never
+tracked. Ordered by whether an issue contaminates committed data, not by how
+hard it is to fix.
+
+詳細成因與行號見 [../rgb1/todo.md](../rgb1/todo.md) 的「Known issues」章節。
+Full diagnosis and line numbers live in the "Known issues" section of
+[../rgb1/todo.md](../rgb1/todo.md).
+
+## Phase 1 — 計時正確性 / Timing integrity  ▸ ✅ 已完成 2026-08-14
+
+**實測結果**:掃描實際使用的組合(`predictive` preset + `--no-verify`,兩個
+preset 皆不含 `--delta`)修正後完全不再攤平。交錯 5 輪取 best-of:解碼由
+**16.27 ms/f 降至 9.51 ms/f(−41.5%)**,遠大於原估的 5–10%——6 格 1080p 的
+攤平成本疊加,且 `predictive` 解碼本身較快,比例上更顯著。單筆波動大
+(9.5–26 ms),故以交錯執行取 best-of 比較。
+**Measured**: with the combination the scan actually uses (`predictive` preset
+plus `--no-verify`; neither scanned preset enables `--delta`), the flatten is
+now skipped entirely. Interleaved best-of-5: decode fell from **16.27 to
+9.51 ms/f, −41.5%**, well beyond the 5–10% estimate.
+
+**為何優先**:A 讓 `--no-verify` 失去意義,而 budget 掃描正是靠它避開比對成本。
+1080p 每格多 6.2 MB 配置加複製(約 0.5–1 ms)落在計時區內,對照解碼 ~9–10 ms
+與 16.67 ms 預算,約灌水 5–10%——直接影響 PASS/FAIL 判定。
+**Why first**: A defeats `--no-verify`, which the budget scan relies on to avoid
+the comparison cost. The extra 6.2 MB allocation and copy per 1080p frame
+(~0.5–1 ms) sits inside the timed region, inflating a ~9–10 ms decode against a
+16.67 ms budget by roughly 5–10% — it moves the PASS/FAIL line itself.
+
+- [x] **A** — `swift_tar_DOE.swift:848`:改為僅在需要時攤平
+      (`--delta` 需要它作下一格參考,`--verify` 需要它作比對)。
+- [x] **B** — 同段落 `:848`/`:850` 重複運算:存區域變數重用。
+- [x] 驗證:`--no-verify` 與 `--verify` 兩種模式各跑一次,確認結果一致且
+      `--no-verify` 的解碼時間下降;`comparison.csv` 重跑前後對比。
+
+**注意**:`comparison.csv` 自 A 出現後尚未重跑,故目前入版數字仍乾淨;灌水會在
+下次執行才發生。修完再跑,不必回溯既有資料。
+**Note**: `comparison.csv` has not been regenerated since A appeared, so the
+committed numbers are still clean. Fix first, then run — no back-fill needed.
+
+## Phase 2 — 潛在崩潰 / Latent crash  ▸ 程式碼已改,混雜尺寸測試待補
+
+- [x] **C** — 已於呼叫端（`:842` 附近）補上與 `encodeBand:620` 鏡像的尺寸守門。
+      目前僅因 sampler 產出的影格尺寸一致而未爆發;DOE 接受任意檔案清單,
+      尺寸混雜時編碼端跳過差分而解碼端照做 → 重建錯誤,前一格較小則越界崩潰。
+- [ ] 驗證(待做):以刻意混雜尺寸的兩格語料執行 `--delta --verify`,確認不崩潰且
+      要嘛正確重建、要嘛明確失敗(不得靜默產出錯誤結果)。
+
+## Phase 3 — 量測方法論 / Measurement methodology
+
+- [ ] **#2** — `nv12_vs_rgb1_streaming.zsh:81-82` 的 8 格批次壓縮外推成每格
+      位元率。需決定方向:(a) 改為逐格壓縮再取平均,或 (b) 保留批次但把
+      `FAQ.md:175` 的 `independent frames + zstd` 標示改為名實相符,並在
+      引用該數字處註明其含跨格去重紅利。
+- [ ] 若選 (a),`FAQ.md:227/238/259` 的 689 Mbps 與「1 GbE 不再寬裕」結論需
+      連帶重算——2026-08-14 的更正只改了取樣位置(靜態開頭 → 影片中段),
+      未改批次或逐格。
+
+**此項需你決定方向後才動手**,因為 (a) 會改變已發布的結論數字。
+**This one needs a direction from you before any edit**, because (a) changes
+published conclusions.
+
+## Phase 4 — 次要 / Minor
+
+- [ ] `crypto.swift`:`index` 為 `UInt32` 且以 `&+=` 遞增,理論上 2^32 chunks
+      (4 MiB × 2^32 = 16 PiB 單一封存)會回繞造成 nonce 重用——對
+      ChaCha20-Poly1305 是嚴重問題,但門檻實務不可達。可加上限檢查以策安全。
+- [ ] `test_strip_components.sh` 檔案模式為 `100644`,其餘測試皆 `100755`;
+      clone 後無法直接 `./test_strip_components.sh` 執行,需 `bash` 前綴。
+      `git update-index --chmod=+x` 即可。

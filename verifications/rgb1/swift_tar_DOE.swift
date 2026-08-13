@@ -11,11 +11,14 @@
 //  實驗變動頻繁，絕不可干擾正式容器程式碼。它以自帶的精簡標頭解析器讀取 RGB1
 //  檔案，並依旗標所指定的任意組合套用 payload 變換。
 //
-//  Every transform is lossless and has an inverse. --verify (on by default)
-//  round-trips each one before any size is reported: a transform that cannot
-//  reconstruct the frame is not a compression result.
-//  每項變換皆為無損且具反變換。--verify（預設開啟）會在回報任何大小前先做往返
-//  驗證：無法還原影格的變換不算壓縮結果。
+//  Transforms are lossless and --verify (on by default) round-trips them before
+//  any size is reported: a transform that cannot reconstruct the frame is not a
+//  compression result. Two exceptions, both marked in --help: --palette and
+//  --flag-byte rewrite the whole frame and have no decoder here, so their sizes
+//  are reported unverified.
+//  各變換皆為無損，且 --verify（預設開啟）會在回報任何大小前先做往返驗證：無法
+//  還原影格的變換不算壓縮結果。有兩個例外，皆已於 --help 標明：--palette 與
+//  --flag-byte 會重寫整張影格且此處無對應解碼器，故其大小為未經驗證的數值。
 //
 //  Build / 建置:
 //    swiftc -O swift_tar_DOE.swift -o swift_tar_DOE
@@ -35,7 +38,6 @@ import Foundation
 /// RGB1 標頭大小與 geo 欄位範圍，依 rgb1/rgb1-format.md。
 let headerSize = 876
 let geoRange = 16..<32          // lat_e7, lng_e7, height_mm, geo_datum_code
-let flagsOffset = 12
 
 struct Frame {
     let width: Int
@@ -599,12 +601,26 @@ func parallelMap<T>(_ count: Int, threads: Int,
     return slots.contains(where: { $0 == nil }) ? nil : slots.map { $0! }
 }
 
-/// One band: colour transform, prediction, planar layout, then compression.
-/// 單一列帶：色彩變換、預測、planar 排列，最後壓縮。
-func encodeBand(_ payload: [UInt8], width: Int, y0: Int, y1: Int,
+/// One band: inter-frame delta, colour transform, prediction, planar layout,
+/// then compression.
+/// 單一列帶：影格間差分、色彩變換、預測、planar 排列，最後壓縮。
+///
+/// `previous` is the prior frame's full payload, sliced to the same band. It was
+/// missing here while `--delta` was only implemented on the whole-frame path,
+/// which meant `--delta` alone produced byte-identical output to `raw` and still
+/// labelled it "delta" — a silently wrong result rather than a failure.
+/// `previous` 為前一影格的完整 payload，切取相同列帶。此處原本缺少該參數，而
+/// `--delta` 僅實作於整格路徑，導致單獨使用 `--delta` 產生與 `raw` 完全相同的
+/// 位元組卻仍標記為「delta」——是靜默的錯誤結果，而非失敗。
+func encodeBand(_ payload: [UInt8], previous: [UInt8]?, width: Int, y0: Int, y1: Int,
                 opt: Options) -> [UInt8]? {
     let rows = y1 - y0
-    var buf = Array(payload[(y0 * width * 3)..<(y1 * width * 3)])
+    let range = (y0 * width * 3)..<(y1 * width * 3)
+    var buf = Array(payload[range])
+    if opt.delta, let prev = previous, prev.count == payload.count {
+        let pb = Array(prev[range])
+        for i in 0..<buf.count { buf[i] = UInt8((Int(buf[i]) &- Int(pb[i])) & 0xFF) }
+    }
     if opt.dirSim { buf = dirSimForward(buf, width: width, height: rows).blob }
     if opt.ycocg { buf = ycocgForward(buf) }
     if opt.med || opt.sub {
@@ -616,7 +632,8 @@ func encodeBand(_ payload: [UInt8], width: Int, y0: Int, y1: Int,
 
 /// The exact inverse, in reverse order. This is the client-side cost.
 /// 完全對應的反向流程，順序相反。這就是客戶端要付的成本。
-func decodeBand(_ blob: [UInt8], width: Int, rows: Int, opt: Options) -> [UInt8]? {
+func decodeBand(_ blob: [UInt8], previous: [UInt8]?, width: Int, y0: Int, rows: Int,
+                opt: Options) -> [UInt8]? {
     var raw = rows * width * 3
     if opt.dirSim { raw += (rows * width * dirBits + 7) / 8 }
     var buf: [UInt8]
@@ -631,6 +648,15 @@ func decodeBand(_ blob: [UInt8], width: Int, rows: Int, opt: Options) -> [UInt8]
     }
     if opt.ycocg { buf = ycocgInverse(buf) }
     if opt.dirSim { buf = dirSimInverse(buf, width: width, height: rows) }
+    // Undoes the delta last, mirroring encodeBand's order. --verify compares the
+    // reconstruction against the original payload, so a delta without this would
+    // fail loudly rather than quietly report the wrong size.
+    // 最後還原差分，與 encodeBand 的順序相對。--verify 會將重建結果與原始 payload
+    // 比對，故若差分缺少此步會明確失敗，而非靜默回報錯誤的大小。
+    if opt.delta, let prev = previous {
+        let base = y0 * width * 3
+        for i in 0..<buf.count { buf[i] = UInt8((Int(buf[i]) &+ Int(prev[base + i])) & 0xFF) }
+    }
     return buf
 }
 
@@ -650,15 +676,23 @@ Payload transforms (composable) / payload 變換（可組合）:
   --med            MED spatial prediction (FFV1/JPEG-LS) / MED 空間預測
   --sub            Sub filter, left neighbour only (MED baseline) / 僅取左鄰，MED 基準
   --planar         plane-separated layout / 平面分離排列
-  --palette        colour map + bit-packed pointers / 色彩對照表 + 緊密指標
-  --flag-byte      2-bit per-pixel neighbour-match flags / 每像素 2-bit 鄰居相同旗標
+  --palette        colour map + bit-packed pointers (no decoder; size is
+                   reported unverified) / 色彩對照表 + 緊密指標（無解碼器，
+                   其大小為未驗證數值）
+  --flag-byte      2-bit per-pixel neighbour-match flags (no decoder; size is
+                   reported unverified) / 每像素 2-bit 鄰居相同旗標（無解碼器，
+                   其大小為未驗證數值）
   --dirsim         zero the RGB where a pixel matches a directional neighbour,
                    keeping the payload fixed-length / 與方向鄰居相同者 RGB 寫零，
                    payload 維持固定長度
   --delta          inter-frame delta vs the previous file / 對前一檔的影格間差分
 
 Container / 容器:
-  --strip-geo      drop the 16 geo bytes, clear flags bit 0 / 移除 16 B geo 並清旗標
+  --strip-geo      account for the header without its 16 geo bytes. It adjusts
+                   the reported size only; it does not rewrite the header, and
+                   the measured saving was 12.4 B/frame
+                   僅以「扣除 16 B geo」計算標頭大小；不改寫標頭本身，實測節省
+                   為每格 12.4 B
   --slices N       split into N independent row bands / 切成 N 條獨立列帶
   -n N             run N bands concurrently, as swift_tar's -n / 並行 N 條列帶
 
@@ -778,12 +812,15 @@ func run(_ base: Options) throws -> [Result] {
                     stored += buf.count + head; compressed += c.count + head
                 }
             } else {
+                var previous: [UInt8]? = nil
                 for frame in frames {
                     let bs = bands(height: frame.height, slices: opt.slices)
+                    let prev = previous
                     guard let parts = parallelMap(bs.count, threads: opt.threads, { i in
-                        encodeBand(frame.payload, width: frame.width,
+                        encodeBand(frame.payload, previous: prev, width: frame.width,
                                    y0: bs[i].0, y1: bs[i].1, opt: opt)
                     }) else { throw Err("codec \(opt.codec) unavailable / 找不到編碼器") }
+                    previous = frame.payload
                     encoded.append(parts)
                     stored += frame.payload.count + head
                     // Each band stores its own length so the decoder can split.
@@ -795,12 +832,20 @@ func run(_ base: Options) throws -> [Result] {
 
             guard !wholeFrame, opt.codec == "none" || opt.codec == "zstd" else { continue }
             let t1 = Date()
+            // The decoder walks frames in order because a delta frame needs the
+            // frame before it already reconstructed — the same constraint a real
+            // decoder has.
+            // 解碼端依序走訪影格，因為差分影格需要前一格已重建完成——這與真實
+            // 解碼器面對的約束相同。
+            var decodedPrev: [UInt8]? = nil
             for (fi, frame) in frames.enumerated() {
                 let bs = bands(height: frame.height, slices: opt.slices)
+                let prev = decodedPrev
                 guard let out = parallelMap(bs.count, threads: opt.threads, { i in
-                    decodeBand(encoded[fi][i], width: frame.width,
-                               rows: bs[i].1 - bs[i].0, opt: opt)
+                    decodeBand(encoded[fi][i], previous: prev, width: frame.width,
+                               y0: bs[i].0, rows: bs[i].1 - bs[i].0, opt: opt)
                 }) else { throw Err("decode failed / 解碼失敗") }
+                decodedPrev = Array(out.joined())
                 if opt.verify {
                     guard Array(out.joined()) == frame.payload else {
                         throw Err("round-trip mismatch on \(opt.label) / 往返結果不符")
@@ -885,7 +930,16 @@ do {
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0)
     let opt = try parse(Array(CommandLine.arguments.dropFirst()))
     let results = try run(opt)
-    let rawBytes = try opt.files.reduce(0) { $0 + (try Frame(contentsOf: $1).payload.count) }
+    // Derived from the sizes already on disk rather than by parsing every frame
+    // a second time: run() has loaded the corpus once, and re-reading 6 MB per
+    // frame to recover a byte count is not free.
+    // 由磁碟上已知的檔案大小推算，而非再次解析每個影格：run() 已載入語料一次，
+    // 為取得位元組數而重讀每格 6 MB 並非零成本。
+    let rawBytes = opt.files.reduce(0) { total, path in
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int)
+            .flatMap { $0 } ?? 0
+        return total + max(0, size - headerSize)
+    }
     report(results, opt: opt, rawBytes: rawBytes)
 } catch let e as Err {
     FileHandle.standardError.write(Data(("[Error] " + e.description + "\n").utf8))

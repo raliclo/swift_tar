@@ -70,7 +70,14 @@ echo
 # 掃描。-n 1 各列為序列基準，加速比以其為分母。
 # ---------------------------------------------------------------------
 echo "variant,frames,stored_bytes,compressed_bytes,pct_of_raw,encode_ms_per_frame,decode_ms_per_frame,codec,level,slices,threads" > "$CSV"
-for spec in 1:1 20:1 10:10 20:20 40:20; do
+# Every concurrent configuration has a matching -n 1 row at the same slice count.
+# Without 10:1 and 40:1 the speed-ups for slices=10 and slices=40 were divided by
+# the slices=20 serial baseline, folding the effect of slicing back into a figure
+# whose whole purpose was to exclude it.
+# 每個並行組態都有相同 slice 數的 -n 1 對照列。缺少 10:1 與 40:1 時，slices=10 與
+# slices=40 的加速比會被除以 slices=20 的序列基準，等於把切片效果摻回一個本意就是
+# 要排除它的數值裡。
+for spec in 1:1 10:1 20:1 40:1 10:10 20:20 40:20; do
     slices="${spec%%:*}"; threads="${spec##*:}"
     for preset in raw predictive; do
         echo "[Run] preset=$preset slices=$slices -n=$threads" >&2
@@ -120,16 +127,28 @@ for r in rows:
 # Speed-up is reported against the same slice count run sequentially, so it
 # isolates concurrency from the effect of slicing itself.
 # 加速比以相同 slice 數的序列執行為分母，藉此把並行效果與切片本身的影響分開。
-base = {r["variant"].replace("+slice20", "").replace("slice20", "raw"): r
-        for r in rows if r["threads"] == "1" and "slice20" in r["variant"]}
+# Pair on (preset, slice count). The earlier version normalised slice10, slice20
+# and slice40 onto one key, so every concurrent row divided by whichever serial
+# row happened to be present. A row with no exact match is skipped rather than
+# silently paired with the wrong denominator.
+# 以 (preset, slice 數) 配對。先前版本把 slice10、slice20、slice40 正規化為同一個
+# key，導致每個並行列都除以碰巧存在的那個序列列。找不到精確配對的列會略過，而非
+# 靜默地與錯誤的分母配對。
+def arm_key(row):
+    v = row["variant"]
+    preset = "predictive" if v.startswith("ycocg") else "raw"
+    return (preset, row["slices"])
+
+base = {arm_key(r): r for r in rows if r["threads"] == "1"}
 print()
 print("== Concurrency speed-up vs the same slicing at -n 1 / 相同切片下的並行加速 ==")
 for r in rows:
-    key = r["variant"].replace("+slice20", "").replace("+slice10", "") \
-                      .replace("+slice40", "").replace("slice10", "raw") \
-                      .replace("slice20", "raw").replace("slice40", "raw")
-    b = base.get(key)
-    if not b or r["threads"] == "1":
+    if r["threads"] == "1":
+        continue
+    b = base.get(arm_key(r))
+    if not b:
+        print(f"  {r['variant']:<30} -n {r['threads']:<3} "
+              f"no -n 1 row at slices={r['slices']} / 缺對照，略過")
         continue
     se = float(b["encode_ms_per_frame"]) / float(r["encode_ms_per_frame"])
     sd = float(b["decode_ms_per_frame"]) / float(r["decode_ms_per_frame"])

@@ -1095,21 +1095,45 @@ read back and compared pixel for pixel:
 
 | path | cpu ms | upload+gpu ms | total |
 |---|---:|---:|---:|
-| A  RGBA interleave + 1 texture (P6 today) | 1.74 | 1.35 | 3.10 |
-| **B  3 plane textures (planar)** | **0.00** | **1.34** | **1.34** |
+| A  RGBA interleave + 1 texture (P6 today) | 1.08 | ~1.04 | **2.12** |
+| **B  3 plane textures, RGB order** | **0.00** | **~1.01** | **1.01** |
+| **C  3 plane textures, ffmpeg `gbrp` order** | **0.00** | **~1.01** | **1.01** |
 
-**Both render identical pixels; B saves 1.76 ms/frame (56.9%).** Two results
-were not expected. First, **three samples are not more expensive on the GPU**
-(1.34 vs 1.35 ms) — the upload drops from 4 B/px to 3 B/px, and that bandwidth
-saving covers the extra sampling. Second, **the alpha expansion costs 1.74 ms,
-not the ~8 ms estimated earlier** in this FAQ from an old single-threaded ffmpeg
-figure that included unrelated conversion work.
+Median of five runs at 200 iterations each; the GPU column varied by up to 60%
+between runs at lower iteration counts and is quoted approximately for that
+reason.
 
-**兩條路徑渲染結果完全相同；B 省下 1.76 ms/frame（56.9%）。** 其中兩項結果出乎
-意料。其一，**三次取樣在 GPU 上並不更貴**（1.34 對 1.35 ms）——上傳量從 4 B/px
-降為 3 B/px，該頻寬節省足以覆蓋額外取樣的成本。其二，**補 alpha 的成本是
-1.74 ms，而非本 FAQ 先前估計的約 8 ms**，那個數字源自一份含有無關轉換工作的舊
-單執行緒 ffmpeg 量測。
+五次執行、每次 200 次迭代的中位數；GPU 欄位在較低迭代數時各次之間相差可達 60%，
+故以近似值標示。
+
+**All three render identical pixels; the plane paths save 1.11 ms/frame (52%).**
+Two results were not expected. First, **three samples are not more expensive on
+the GPU** — the upload drops from 4 B/px to 3 B/px and that bandwidth saving
+covers the extra sampling. B and C are indistinguishable, so ffmpeg's `gbrp`
+plane order costs nothing. Second, **the alpha expansion costs 1.08 ms, not the
+~8 ms estimated earlier** in this FAQ from an old single-threaded ffmpeg figure
+that included unrelated conversion work.
+
+**三條路徑渲染結果完全相同；平面路徑省下 1.11 ms/frame（52%）。** 其中兩項結果
+出乎意料。其一，**三次取樣在 GPU 上並不更貴**——上傳量從 4 B/px 降為 3 B/px，該
+頻寬節省足以覆蓋額外取樣的成本。B 與 C 無從區分，故 ffmpeg 的 `gbrp` 平面順序
+不需付出任何代價。其二，**補 alpha 的成本是 1.08 ms，而非本 FAQ 先前估計的約
+8 ms**，那個數字源自一份含有無關轉換工作的舊單執行緒 ffmpeg 量測。
+
+> **Corrected 2026-08-14.** This table first read A 3.40 ms / B 1.45 ms, saving
+> 1.76 ms (56.9%). Path A was reallocating an 8 MB staging buffer every frame,
+> which `rgba_vs_rgb1.md` explicitly advises against — so the arm being measured
+> was not the one that document tells you to write, and A was overstated by 60%.
+> Reusing the buffer through a local pointer (indexing it as a global was slower
+> still, because Swift checks exclusive access on every global subscript) brings
+> A to 1.08 ms. The conclusion holds; the margin was inflated. Raised in review
+> by the Windows-side reader.
+>
+> **2026-08-14 更正。** 本表最初為 A 3.40 ms / B 1.45 ms、節省 1.76 ms（56.9%）。
+> 路徑 A 每格都重新配置 8 MB 暫存緩衝區，而 `rgba_vs_rgb1.md` 明確建議不要如此
+> ——即所量測的組別並非該文件所教的寫法，A 因而高估六成。改以區域指標重用緩衝區
+> （直接以全域索引更慢，因 Swift 對每次全域下標都會檢查獨佔存取）後，A 降至
+> 1.08 ms。結論不變，但差距被誇大了。此問題由 Windows 端讀者於 review 中提出。
 
 With that, the client-side budget closes:
 

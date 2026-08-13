@@ -128,14 +128,36 @@ func loadRGB1(_ path: String) -> (w: Int, h: Int, payload: [UInt8]) {
 /// Metal has no 24-bit texture format, so this cannot be skipped for path A.
 /// 路徑 A 必須在 CPU 上做的事：交錯並補成每像素 4 位元組。Metal 沒有 24-bit 的
 /// texture 格式，故路徑 A 無法省略此步。
-func interleaveToRGBA(_ planar: [UInt8], pixels n: Int) -> [UInt8] {
-    var out = [UInt8](repeating: 255, count: n * 4)
-    for i in 0..<n {
-        out[i*4]     = planar[i]
-        out[i*4 + 1] = planar[n + i]
-        out[i*4 + 2] = planar[2*n + i]
+/// Writes into a staging buffer allocated once, because rgba_vs_rgb1.md advises
+/// reusing the output buffer and path A should be measured as that document says
+/// to implement it. Allocating 8 MB per frame would charge path A for work a
+/// real player does once.
+/// 寫入僅配置一次的暫存緩衝區，因為 rgba_vs_rgb1.md 建議重用輸出緩衝區，而路徑 A
+/// 應以該文件所述的方式量測。每格配置 8 MB 等於讓路徑 A 承擔真實播放器只做一次
+/// 的工作。
+var rgbaStaging = [UInt8](repeating: 255, count: 1)
+
+func interleaveToRGBA(_ planar: [UInt8], pixels n: Int) {
+    if rgbaStaging.count != n * 4 {
+        rgbaStaging = [UInt8](repeating: 255, count: n * 4)
     }
-    return out
+    // The write loop goes through a local buffer pointer rather than indexing the
+    // global directly. Swift checks exclusive access on every global subscript,
+    // and in a loop over 8 MB that cost exceeded the per-frame allocation this
+    // reuse was meant to remove — the first attempt at reuse made path A slower,
+    // not faster.
+    // 寫入迴圈透過區域緩衝區指標進行，而非直接索引全域變數。Swift 對每次全域下標
+    // 都會檢查獨佔存取，在 8 MB 的迴圈中該成本超過了此重用原本要消除的每格配置
+    // 成本——第一次嘗試重用反而讓路徑 A 變慢。
+    rgbaStaging.withUnsafeMutableBufferPointer { out in
+        planar.withUnsafeBufferPointer { src in
+            for i in 0..<n {
+                out[i*4]     = src[i]
+                out[i*4 + 1] = src[n + i]
+                out[i*4 + 2] = src[2*n + i]
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -225,8 +247,7 @@ enum Path { case rgba, planes, gbrp }
 
 func runFrame(_ mode: Path) -> (cpu: Double, gpu: Double) {
     let t0 = Date()
-    var staged: [UInt8] = []
-    if mode == .rgba { staged = interleaveToRGBA(planar, pixels: pixels) }
+    if mode == .rgba { interleaveToRGBA(planar, pixels: pixels) }
     let cpu = Date().timeIntervalSince(t0)
 
     let t1 = Date()
@@ -240,7 +261,7 @@ func runFrame(_ mode: Path) -> (cpu: Double, gpu: Double) {
             }
         }
     } else {
-        staged.withUnsafeBytes { p in
+        rgbaStaging.withUnsafeBytes { p in
             rgbaTexture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0,
                                 withBytes: p.baseAddress!, bytesPerRow: width * 4)
         }
@@ -272,7 +293,28 @@ func runFrame(_ mode: Path) -> (cpu: Double, gpu: Double) {
     return (cpu, Date().timeIntervalSince(t1))
 }
 
+/// Synchronises the render target before reading it back. On Apple silicon the
+/// default storage mode is .shared and this is a no-op, which is why the
+/// comparison passed without it. On an Intel or AMD Mac the default is .managed,
+/// where reading a GPU-written texture without a blit synchronize returns
+/// undefined contents — the pixel comparison would report thousands of
+/// mismatches and the run would look like a correctness failure rather than a
+/// missing barrier.
+/// 讀回前先同步 render target。Apple silicon 的預設儲存模式為 .shared，此步為無
+/// 操作，這也是先前未加它仍能通過比對的原因。於 Intel 或 AMD Mac 上預設為
+/// .managed，未經 blit 同步即讀取 GPU 寫入的 texture 會取得未定義內容——逐像素
+/// 比對將回報數千處不符，使該次執行看起來像正確性失敗，而非缺少屏障。
+func synchronizeTarget() {
+    guard let cb = queue.makeCommandBuffer(),
+          let blit = cb.makeBlitCommandEncoder() else { return }
+    blit.synchronize(resource: target)
+    blit.endEncoding()
+    cb.commit()
+    cb.waitUntilCompleted()
+}
+
 func readback() -> [UInt8] {
+    synchronizeTarget()
     var out = [UInt8](repeating: 0, count: pixels * 4)
     out.withUnsafeMutableBytes { p in
         target.getBytes(p.baseAddress!, bytesPerRow: width * 4,

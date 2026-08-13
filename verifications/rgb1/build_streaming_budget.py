@@ -6,10 +6,10 @@
 # swift_tar → P6 管線的每個步驟一列。
 #
 # Nothing here is hand-typed. Timings come from comparison.csv (produced by
-# streaming_budget_benchmark.sh) and from running P6-DOE, so the table cannot
+# streaming_budget_benchmark.zsh) and from running P6-DOE, so the table cannot
 # drift away from the measurements it claims to summarise.
 # 此處沒有任何手動填入的數字。計時取自 comparison.csv（由
-# streaming_budget_benchmark.sh 產生）與實際執行 P6-DOE，故本表不會與其所摘要的
+# streaming_budget_benchmark.zsh 產生）與實際執行 P6-DOE，故本表不會與其所摘要的
 # 量測結果脫節。
 #
 # Usage / 用法:
@@ -41,8 +41,8 @@ def measured_codec():
     編碼／解碼毫秒數與線路位元組，取自 benchmark 自身產生的 CSV。"""
     path = os.path.join(HERE, "comparison.csv")
     if not os.path.exists(path):
-        sys.exit("comparison.csv missing — run streaming_budget_benchmark.sh first\n"
-                 "缺少 comparison.csv —— 請先執行 streaming_budget_benchmark.sh")
+        sys.exit("comparison.csv missing — run streaming_budget_benchmark.zsh first\n"
+                 "缺少 comparison.csv —— 請先執行 streaming_budget_benchmark.zsh")
     for r in csv.DictReader(open(path)):
         if r["variant"] == VARIANT and r["threads"] == THREADS:
             n = int(r["frames"])

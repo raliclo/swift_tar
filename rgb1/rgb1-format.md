@@ -131,11 +131,11 @@ RGB1 本身不壓縮。等級取決於影格是要封存還是串流，兩者並
 Level 9 was recommended here previously; measurement retired it. At 1080p it
 costs 168 ms/frame, which overruns even a 30 fps budget (33.3 ms), while giving
 up only a few percent of size against `-3`. See
-`../verifications/rgb1/streaming_budget_benchmark.sh`.
+`../verifications/rgb1/streaming_budget_benchmark.zsh`.
 
 此處先前建議 level 9，量測後已淘汰該建議。1080p 下它要 168 ms/frame，連 30 fps
 的預算（33.3 ms）都塞不下，而相對 `-3` 只換到數個百分點的體積。詳見
-`../verifications/rgb1/streaming_budget_benchmark.sh`。
+`../verifications/rgb1/streaming_budget_benchmark.zsh`。
 
 ```sh
 zstd -3 frame.rgb1 -o frame.rgb1.zst      # stream / 串流
@@ -181,13 +181,13 @@ NV12 壓縮後的傳輸量確實小 1.73 倍，但該優勢唯有走硬體視訊
 - Planar data can be uploaded as **three `r8Unorm` plane textures** and assembled
   in a fragment shader, the same technique NV12 uses for its Y and UV planes,
   removing the RGB->RGBA alpha expansion from the client path. Measured at
-  1.31 ms/frame versus 3.40 ms for the interleaved-plus-alpha path, rendering
+  1.01 ms/frame versus 2.12 ms for the interleaved-plus-alpha path, rendering
   identical pixels (`P6-DOE`). Note this applies to the **streaming** path,
   whose decoder already emits planar; the container itself stores interleaved
   R,G,B, and reading one straight from disk still needs a de-interleave first.
   planar 資料可以**三個 `r8Unorm` 平面 texture** 上傳，於 fragment shader 組合，
   與 NV12 處理 Y 與 UV 平面的手法相同，可將 RGB→RGBA 的 alpha 擴張移出客戶端
-  路徑。實測為 1.31 ms/frame，對比交錯加補 alpha 的 3.40 ms，且渲染像素完全相同
+  路徑。實測為 1.01 ms/frame，對比交錯加補 alpha 的 2.12 ms，且渲染像素完全相同
   （`P6-DOE`）。注意此適用於**串流**路徑，其解碼器本就輸出 planar；容器本身儲存
   交錯 R,G,B，直接從磁碟讀取仍須先解交錯。
 - Storing the payload as `gbrp` was implemented, measured and reverted: it costs

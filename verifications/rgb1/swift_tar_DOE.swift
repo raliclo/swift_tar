@@ -294,6 +294,72 @@ func flagEncode(_ p: [UInt8], width: Int, height: Int) -> (blob: [UInt8], hits: 
 }
 
 // ---------------------------------------------------------------------
+// MARK: - Directional similarity / 方向相似性
+// ---------------------------------------------------------------------
+
+/// Neighbours tested, in priority order. Only already-decoded positions are
+/// eligible, which in raster scan means left, above, upper-left, upper-right.
+/// 依優先序測試的鄰居。只有已解碼的位置可用，光柵掃描下即左、上、左上、右上。
+let dirOffsets: [(dx: Int, dy: Int)] = [(-1, 0), (0, -1), (-1, -1), (1, -1)]
+let dirBits = 3                                  // 0 = literal, 1...4 = direction
+
+/// If a pixel exactly matches a directional neighbour, its RGB is written as
+/// zero and the direction is recorded in a side stream. The payload keeps its
+/// full width * height * 3 length, so `876 + N * width * 3` still addresses row
+/// N in O(1) — that is the point of writing zeros rather than omitting bytes.
+/// 若像素與某個方向鄰居完全相同，其 RGB 寫為零，方向記於旁路串流。payload 維持
+/// 完整的 width * height * 3 長度，故 `876 + N * width * 3` 仍能 O(1) 定址到第
+/// N 列 —— 這正是寫零而非省略位元組的用意。
+func dirSimForward(_ p: [UInt8], width: Int, height: Int) -> (blob: [UInt8], hits: Int) {
+    var payload = p
+    var flags = [UInt8](); flags.reserveCapacity((width * height * dirBits + 7) / 8)
+    var acc: UInt64 = 0, held = 0, hits = 0
+
+    for y in 0..<height {
+        for x in 0..<width {
+            let i = (y * width + x) * 3
+            var code = 0
+            for (k, d) in dirOffsets.enumerated() {
+                let nx = x + d.dx, ny = y + d.dy
+                guard nx >= 0, nx < width, ny >= 0 else { continue }
+                let j = (ny * width + nx) * 3
+                if p[i] == p[j], p[i+1] == p[j+1], p[i+2] == p[j+2] { code = k + 1; break }
+            }
+            if code != 0 {
+                payload[i] = 0; payload[i+1] = 0; payload[i+2] = 0
+                hits += 1
+            }
+            acc = (acc << UInt64(dirBits)) | UInt64(code); held += dirBits
+            while held >= 8 { held -= 8; flags.append(UInt8((acc >> UInt64(held)) & 0xFF)) }
+        }
+    }
+    if held > 0 { flags.append(UInt8((acc << UInt64(8 - held)) & 0xFF)) }
+    return (flags + payload, hits)
+}
+
+func dirSimInverse(_ blob: [UInt8], width: Int, height: Int) -> [UInt8] {
+    let flagBytes = (width * height * dirBits + 7) / 8
+    var out = Array(blob[flagBytes...])
+    var acc: UInt64 = 0, held = 0, cursor = 0
+
+    for y in 0..<height {
+        for x in 0..<width {
+            while held < dirBits {
+                acc = (acc << 8) | UInt64(cursor < flagBytes ? blob[cursor] : 0)
+                cursor += 1; held += 8
+            }
+            held -= dirBits
+            let code = Int((acc >> UInt64(held)) & ((1 << UInt64(dirBits)) - 1))
+            guard code != 0 else { continue }
+            let d = dirOffsets[code - 1]
+            let i = (y * width + x) * 3, j = ((y + d.dy) * width + (x + d.dx)) * 3
+            out[i] = out[j]; out[i+1] = out[j+1]; out[i+2] = out[j+2]
+        }
+    }
+    return out
+}
+
+// ---------------------------------------------------------------------
 // MARK: - Codec / 編碼器
 // ---------------------------------------------------------------------
 
@@ -305,15 +371,56 @@ func which(_ tool: String) -> String? {
     return nil
 }
 
+// zstd is called in-process through the same libzstd swift_tar links against
+// (-lzstd, @_silgen_name), not by spawning the CLI. Spawning cost ~5-10 ms per
+// call, which is the same order as the 33 ms frame budget being measured — it
+// would have dominated every timing here.
+// zstd 以行程內方式呼叫 swift_tar 所連結的同一份 libzstd（-lzstd、
+// @_silgen_name），而非啟動 CLI。行程啟動成本約 5-10 ms，與此處量測的 33 ms
+// 影格預算同一數量級，會主導所有計時結果。
+@_silgen_name("ZSTD_compressBound")
+func ZSTD_compressBound(_ srcSize: Int) -> Int
+@_silgen_name("ZSTD_compress")
+func ZSTD_compress(_ dst: UnsafeMutableRawPointer, _ dstCap: Int,
+                   _ src: UnsafeRawPointer, _ srcSize: Int, _ level: Int32) -> Int
+@_silgen_name("ZSTD_decompress")
+func ZSTD_decompress(_ dst: UnsafeMutableRawPointer, _ dstCap: Int,
+                     _ src: UnsafeRawPointer, _ srcSize: Int) -> Int
+@_silgen_name("ZSTD_isError")
+func ZSTD_isError(_ code: Int) -> UInt32
+
+func zstdCompress(_ input: [UInt8], level: Int) -> [UInt8]? {
+    let bound = ZSTD_compressBound(input.count)
+    var out = [UInt8](repeating: 0, count: bound)
+    let n = out.withUnsafeMutableBytes { d in
+        input.withUnsafeBytes { s in
+            ZSTD_compress(d.baseAddress!, bound, s.baseAddress!, input.count, Int32(level))
+        }
+    }
+    guard ZSTD_isError(n) == 0 else { return nil }
+    return Array(out[0..<n])
+}
+
+func zstdDecompress(_ input: [UInt8], capacity: Int) -> [UInt8]? {
+    var out = [UInt8](repeating: 0, count: capacity)
+    let n = out.withUnsafeMutableBytes { d in
+        input.withUnsafeBytes { s in
+            ZSTD_decompress(d.baseAddress!, capacity, s.baseAddress!, input.count)
+        }
+    }
+    guard ZSTD_isError(n) == 0 else { return nil }
+    return Array(out[0..<n])
+}
+
 /// Compress through the external tool, the same way swift_tar shells out.
 /// Returns nil when the tool is absent so a sweep can skip rather than abort.
 /// 以外部工具壓縮，與 swift_tar 的呼叫方式一致。工具不存在時回傳 nil，讓掃描
 /// 得以略過而非中止。
 func compress(_ input: [UInt8], codec: String, level: Int) -> [UInt8]? {
     if codec == "none" { return input }
+    if codec == "zstd" { return zstdCompress(input, level: level) }
     let spec: (String, [String])
     switch codec {
-    case "zstd": spec = ("zstd", ["-\(level)", "-c", "-"])
     case "gzip": spec = ("gzip", ["-\(min(level, 9))", "-c"])
     case "lz4":  spec = ("lz4",  ["-\(min(level, 12))", "-c"])
     case "xz":   spec = ("xz",   ["-\(min(level, 9))", "-c"])
@@ -348,9 +455,10 @@ func compress(_ input: [UInt8], codec: String, level: Int) -> [UInt8]? {
 
 struct Options {
     var ycocg = false, med = false, sub = false, planar = false
-    var palette = false, flagByte = false, delta = false
+    var palette = false, flagByte = false, delta = false, dirSim = false
     var stripGeo = false
     var slices = 1
+    var threads = 1
     var codec = "zstd"
     var level = 19
     var verify = true
@@ -366,6 +474,7 @@ struct Options {
         if delta { parts.append("delta") }
         if palette { parts.append("palette") }
         if flagByte { parts.append("flagbyte") }
+        if dirSim { parts.append("dirsim") }
         if ycocg { parts.append("ycocg-r") }
         if med { parts.append("med") } else if sub { parts.append("sub") }
         if planar { parts.append("planar") }
@@ -429,25 +538,81 @@ func transform(_ frame: Frame, previous: [UInt8]?, opt: Options) throws -> [UInt
     return buf
 }
 
-/// Compressed size, optionally as N independent slices so rows can be decoded
-/// in parallel. Independent slices cost size because each resets the
-/// compressor's state and loses cross-slice correlation.
-/// 壓縮後大小；可選擇切成 N 條獨立 slice 以便平行解碼。獨立 slice 會付出體積
-/// 代價，因為每條都重置壓縮器狀態並喪失跨 slice 的相關性。
-func compressedSize(_ buf: [UInt8], opt: Options) -> Int? {
-    guard opt.slices > 1 else {
-        return compress(buf, codec: opt.codec, level: opt.level)?.count
+// ---------------------------------------------------------------------
+// MARK: - Slice pipeline / Slice 管線
+// ---------------------------------------------------------------------
+
+/// Horizontal row bands. Slicing by rows rather than by byte offset is what
+/// makes a band independently decodable: MED never reaches outside its own band,
+/// so bands can be transformed and inverted in parallel.
+/// 水平列帶。以列而非位元組位移切分，才能讓每帶可獨立解碼：MED 不會越出自身
+/// 帶界，故各帶的變換與反變換皆可平行執行。
+func bands(height: Int, slices: Int) -> [(Int, Int)] {
+    let n = max(1, min(slices, height))
+    let rows = (height + n - 1) / n
+    return stride(from: 0, to: height, by: rows).map { ($0, min($0 + rows, height)) }
+}
+
+/// Run `work` over `count` items, at most `threads` at a time, preserving order.
+/// Mirrors swift_tar's -n: a semaphore bounds concurrency rather than letting
+/// concurrentPerform take every core regardless of what was asked for.
+/// 以最多 `threads` 個並行執行 `work`，並保持順序。與 swift_tar 的 -n 一致：以
+/// semaphore 限制並行度，而非讓 concurrentPerform 無視設定佔滿所有核心。
+func parallelMap<T>(_ count: Int, threads: Int,
+                    _ work: @escaping (Int) -> T?) -> [T]? {
+    if threads <= 1 || count <= 1 {
+        var out = [T](); out.reserveCapacity(count)
+        for i in 0..<count { guard let v = work(i) else { return nil }; out.append(v) }
+        return out
     }
-    let chunk = (buf.count + opt.slices - 1) / opt.slices
-    var total = 0
-    for start in stride(from: 0, to: buf.count, by: chunk) {
-        let end = min(start + chunk, buf.count)
-        guard let c = compress(Array(buf[start..<end]), codec: opt.codec, level: opt.level) else {
-            return nil
+    var slots = [T?](repeating: nil, count: count)
+    let lock = NSLock(), sem = DispatchSemaphore(value: threads)
+    let group = DispatchGroup()
+    for i in 0..<count {
+        sem.wait()
+        DispatchQueue.global().async(group: group) {
+            let v = autoreleasepool { work(i) }
+            lock.lock(); slots[i] = v; lock.unlock()
+            sem.signal()
         }
-        total += c.count + 4          // each slice needs a stored length / 每條需存長度
     }
-    return total
+    group.wait()
+    return slots.contains(where: { $0 == nil }) ? nil : slots.map { $0! }
+}
+
+/// One band: colour transform, prediction, planar layout, then compression.
+/// 單一列帶：色彩變換、預測、planar 排列，最後壓縮。
+func encodeBand(_ payload: [UInt8], width: Int, y0: Int, y1: Int,
+                opt: Options) -> [UInt8]? {
+    let rows = y1 - y0
+    var buf = Array(payload[(y0 * width * 3)..<(y1 * width * 3)])
+    if opt.dirSim { buf = dirSimForward(buf, width: width, height: rows).blob }
+    if opt.ycocg { buf = ycocgForward(buf) }
+    if opt.med || opt.sub {
+        buf = predictForward(buf, width: width, height: rows, useMED: opt.med)
+    }
+    if opt.planar { buf = toPlanar(buf) }
+    return compress(buf, codec: opt.codec, level: opt.level)
+}
+
+/// The exact inverse, in reverse order. This is the client-side cost.
+/// 完全對應的反向流程，順序相反。這就是客戶端要付的成本。
+func decodeBand(_ blob: [UInt8], width: Int, rows: Int, opt: Options) -> [UInt8]? {
+    var raw = rows * width * 3
+    if opt.dirSim { raw += (rows * width * dirBits + 7) / 8 }
+    var buf: [UInt8]
+    if opt.codec == "none" { buf = blob }
+    else if opt.codec == "zstd" {
+        guard let d = zstdDecompress(blob, capacity: raw) else { return nil }
+        buf = d
+    } else { return nil }        // external codecs are encode-only here
+    if opt.planar { buf = fromPlanar(buf) }
+    if opt.med || opt.sub {
+        buf = predictInverse(buf, width: width, height: rows, useMED: opt.med)
+    }
+    if opt.ycocg { buf = ycocgInverse(buf) }
+    if opt.dirSim { buf = dirSimInverse(buf, width: width, height: rows) }
+    return buf
 }
 
 // ---------------------------------------------------------------------
@@ -468,11 +633,15 @@ Payload transforms (composable) / payload 變換（可組合）:
   --planar         plane-separated layout / 平面分離排列
   --palette        colour map + bit-packed pointers / 色彩對照表 + 緊密指標
   --flag-byte      2-bit per-pixel neighbour-match flags / 每像素 2-bit 鄰居相同旗標
+  --dirsim         zero the RGB where a pixel matches a directional neighbour,
+                   keeping the payload fixed-length / 與方向鄰居相同者 RGB 寫零，
+                   payload 維持固定長度
   --delta          inter-frame delta vs the previous file / 對前一檔的影格間差分
 
 Container / 容器:
   --strip-geo      drop the 16 geo bytes, clear flags bit 0 / 移除 16 B geo 並清旗標
-  --slices N       compress as N independent slices / 切成 N 條獨立 slice 壓縮
+  --slices N       split into N independent row bands / 切成 N 條獨立列帶
+  -n N             run N bands concurrently, as swift_tar's -n / 並行 N 條列帶
 
 Codec / 編碼器:
   --codec NAME     none|zstd|gzip|lz4|xz          (default zstd)
@@ -517,9 +686,11 @@ func parse(_ argv: [String]) throws -> Options {
         case "--planar": o.planar = true
         case "--palette": o.palette = true
         case "--flag-byte": o.flagByte = true
+        case "--dirsim": o.dirSim = true
         case "--delta": o.delta = true
         case "--strip-geo": o.stripGeo = true
         case "--slices": o.slices = Int(try next(a)) ?? 1
+        case "-n": o.threads = max(1, Int(try next(a)) ?? 1)
         case "--codec": o.codec = try next(a)
         case "--level": o.level = Int(try next(a)) ?? 19
         case "--repeat": o.repeats = max(1, Int(try next(a)) ?? 1)
@@ -545,7 +716,8 @@ func parse(_ argv: [String]) throws -> Options {
 }
 
 struct Result {
-    let label: String, stored: Int, compressed: Int, seconds: Double, frames: Int
+    let label: String, stored: Int, compressed: Int
+    let encode: Double, decode: Double, frames: Int
 }
 
 func run(_ base: Options) throws -> [Result] {
@@ -554,44 +726,90 @@ func run(_ base: Options) throws -> [Result] {
         guard let flags = presetFlags[name] else { throw Err("unknown preset \(name)") }
         var v = try parse(flags + base.files)
         v.codec = base.codec; v.level = base.level
+        v.dirSim = base.dirSim
         v.verify = base.verify; v.slices = base.slices
         v.stripGeo = base.stripGeo; v.repeats = base.repeats
+        v.threads = base.threads
         return v
     }
 
     var results: [Result] = []
     for opt in variants {
-        var stored = 0, compressed = 0, best = Double.infinity
+        // --palette and --flag-byte rewrite the whole frame, so they have no
+        // band decomposition and no inverse-timing path here.
+        // --palette 與 --flag-byte 會重寫整張影格，故無列帶分解，此處也不量反向。
+        let wholeFrame = opt.palette || opt.flagByte
+        var stored = 0, compressed = 0
+        var bestEnc = Double.infinity, bestDec = Double.infinity
+
         for _ in 0..<opt.repeats {
             stored = 0; compressed = 0
+            var encoded: [[[UInt8]]] = []
+            let head = opt.stripGeo ? headerSize - geoRange.count : headerSize
+
             let t0 = Date()
-            var previous: [UInt8]? = nil
-            for frame in frames {
-                let buf = try transform(frame, previous: previous, opt: opt)
-                previous = frame.payload
-                guard let size = compressedSize(buf, opt: opt) else {
-                    throw Err("codec \(opt.codec) unavailable / 找不到編碼器")
+            if wholeFrame {
+                var previous: [UInt8]? = nil
+                for frame in frames {
+                    let buf = try transform(frame, previous: previous, opt: opt)
+                    previous = frame.payload
+                    guard let c = compress(buf, codec: opt.codec, level: opt.level) else {
+                        throw Err("codec \(opt.codec) unavailable / 找不到編碼器")
+                    }
+                    stored += buf.count + head; compressed += c.count + head
                 }
-                let head = opt.stripGeo ? headerSize - geoRange.count : headerSize
-                stored += buf.count + head
-                compressed += size + head
+            } else {
+                for frame in frames {
+                    let bs = bands(height: frame.height, slices: opt.slices)
+                    guard let parts = parallelMap(bs.count, threads: opt.threads, { i in
+                        encodeBand(frame.payload, width: frame.width,
+                                   y0: bs[i].0, y1: bs[i].1, opt: opt)
+                    }) else { throw Err("codec \(opt.codec) unavailable / 找不到編碼器") }
+                    encoded.append(parts)
+                    stored += frame.payload.count + head
+                    // Each band stores its own length so the decoder can split.
+                    // 每帶各自儲存長度，供解碼端切分。
+                    compressed += parts.reduce(0) { $0 + $1.count + 4 } + head
+                }
             }
-            best = min(best, Date().timeIntervalSince(t0))
+            bestEnc = min(bestEnc, Date().timeIntervalSince(t0))
+
+            guard !wholeFrame, opt.codec == "none" || opt.codec == "zstd" else { continue }
+            let t1 = Date()
+            for (fi, frame) in frames.enumerated() {
+                let bs = bands(height: frame.height, slices: opt.slices)
+                guard let out = parallelMap(bs.count, threads: opt.threads, { i in
+                    decodeBand(encoded[fi][i], width: frame.width,
+                               rows: bs[i].1 - bs[i].0, opt: opt)
+                }) else { throw Err("decode failed / 解碼失敗") }
+                if opt.verify {
+                    guard Array(out.joined()) == frame.payload else {
+                        throw Err("round-trip mismatch on \(opt.label) / 往返結果不符")
+                    }
+                }
+            }
+            bestDec = min(bestDec, Date().timeIntervalSince(t1))
         }
-        results.append(Result(label: opt.label, stored: stored,
-                              compressed: compressed, seconds: best, frames: frames.count))
+        results.append(Result(label: opt.label, stored: stored, compressed: compressed,
+                              encode: bestEnc,
+                              decode: bestDec.isFinite ? bestDec : 0,
+                              frames: frames.count))
     }
     return results
 }
 
 func report(_ results: [Result], opt: Options, rawBytes: Int) {
     if opt.csv {
-        print("variant,frames,stored_bytes,compressed_bytes,pct_of_raw,seconds,codec,level")
+        print("variant,frames,stored_bytes,compressed_bytes,pct_of_raw,"
+              + "encode_ms_per_frame,decode_ms_per_frame,codec,level,slices,threads")
         for r in results {
             let pct = 100.0 * Double(r.compressed) / Double(rawBytes)
+            let f = Double(max(1, r.frames))
             print("\(r.label),\(r.frames),\(r.stored),\(r.compressed),"
                   + String(format: "%.4f", pct) + ","
-                  + String(format: "%.3f", r.seconds) + ",\(opt.codec),\(opt.level)")
+                  + String(format: "%.2f", r.encode / f * 1000) + ","
+                  + String(format: "%.2f", r.decode / f * 1000)
+                  + ",\(opt.codec),\(opt.level),\(opt.slices),\(opt.threads)")
         }
         return
     }
@@ -599,8 +817,7 @@ func report(_ results: [Result], opt: Options, rawBytes: Int) {
     stamp.dateFormat = "yyyy-MM-dd HH:mm:ss"
     print("[Info] date / 日期: \(stamp.string(from: Date()))")
     print("[Info] frames / 影格: \(results.first?.frames ?? 0)")
-    print("[Info] codec: \(opt.codec) -\(opt.level)"
-          + (opt.slices > 1 ? ", \(opt.slices) slices" : "")
+    print("[Info] codec: \(opt.codec) -\(opt.level), \(opt.slices) slice(s), -n \(opt.threads)"
           + (opt.verify ? ", round-trip verified" : ", NOT verified"))
     print("")
     // String(format:) does not pad Swift strings, so columns are laid out here.
@@ -611,14 +828,16 @@ func report(_ results: [Result], opt: Options, rawBytes: Int) {
     func rpad(_ s: String, _ w: Int) -> String {
         s.count >= w ? s : String(repeating: " ", count: w - s.count) + s
     }
-    print(pad("variant", 26) + rpad("stored (B)", 14) + rpad("+codec (B)", 14)
-          + rpad("of raw", 10) + rpad("sec", 10))
-    print(String(repeating: "-", count: 74))
+    print(pad("variant", 26) + rpad("+codec (B)", 14) + rpad("of raw", 9)
+          + rpad("enc ms/f", 11) + rpad("dec ms/f", 11))
+    print(String(repeating: "-", count: 71))
     for r in results {
         let pct = 100.0 * Double(r.compressed) / Double(rawBytes)
-        print(pad(r.label, 26) + rpad("\(r.stored)", 14) + rpad("\(r.compressed)", 14)
-              + rpad(String(format: "%.2f%%", pct), 10)
-              + rpad(String(format: "%.3f", r.seconds), 10))
+        let f = Double(max(1, r.frames))
+        print(pad(r.label, 26) + rpad("\(r.compressed)", 14)
+              + rpad(String(format: "%.2f%%", pct), 9)
+              + rpad(String(format: "%.1f", r.encode / f * 1000), 11)
+              + rpad(r.decode > 0 ? String(format: "%.1f", r.decode / f * 1000) : "-", 11))
     }
     if let baseline = results.first(where: { $0.label == "raw" }), results.count > 1 {
         print("")

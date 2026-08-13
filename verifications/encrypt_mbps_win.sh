@@ -129,7 +129,12 @@ if (( FREE_KB < NEED_KB )); then
     exit 1
 fi
 
+# The OS build, not just the product version, identifies the environment:
+# macOS 27.0 build 26A5388g reported CPU Power 0 mW where 26A5406e did not.
+# 辨識環境要看 OS build 而非僅產品版本：macOS 27.0 的 26A5388g 回報
+# CPU Power 0 mW，26A5406e 則否。
 echo "[Info] date / 日期: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+echo "[Info] os: $(command -v sw_vers >/dev/null 2>&1 && echo "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))" || uname -sr)"
 echo "[Info] host / 主機: $(uname -a)"
 VERSION_LINE="$("$SWIFT_TAR_BIN" --version 2>&1 | tr -d '\r')"
 echo "[Info] swift_tar: $SWIFT_TAR_BIN ($VERSION_LINE)"

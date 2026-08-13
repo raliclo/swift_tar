@@ -159,7 +159,12 @@ bench_base=""   # plain-tar size, used as the ratio baseline / 純 tar 大小，
 # 吞吐量為每秒處理的 RGB1 容器大小（MB = 10^6 bytes）：建立時讀 .rgb1 寫封存，
 # 解出時寫回 .rgb1。
 mbps() { awk -v bytes="$1" -v t="$2" 'BEGIN{ if (t>0) printf "%.1f", bytes/(1000.0*t); else printf "n/a"; }'; }
+# The OS build, not just the product version, identifies the environment:
+# macOS 27.0 build 26A5388g reported CPU Power 0 mW where 26A5406e did not.
+# 辨識環境要看 OS build 而非僅產品版本：macOS 27.0 的 26A5388g 回報
+# CPU Power 0 mW，26A5406e 則否。
 emit "[Info] date: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+emit "[Info] os: $(command -v sw_vers >/dev/null 2>&1 && echo "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))" || uname -sr)"
 emit "[Info] host: $(uname -srm)"
 emit "[Info] swift_tar: $ST"
 emit "[Info] version: $("$ST" --version 2>/dev/null | head -1)"

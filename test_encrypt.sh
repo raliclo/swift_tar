@@ -36,7 +36,12 @@ TMP="$(mktemp -d "$HERE/.test_encrypt.XXXXXX")"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
+# The OS build, not just the product version, identifies the environment:
+# macOS 27.0 build 26A5388g reported CPU Power 0 mW where 26A5406e did not.
+# 辨識環境要看 OS build 而非僅產品版本：macOS 27.0 的 26A5388g 回報
+# CPU Power 0 mW，26A5406e 則否。
 echo "[Info] date: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+echo "[Info] os: $(command -v sw_vers >/dev/null 2>&1 && echo "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))" || uname -sr)"
 echo "[Info] swift_tar: $ST"
 echo "[Info] skip slow xz: $SKIP_SLOW_XZ"
 

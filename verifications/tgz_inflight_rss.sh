@@ -77,6 +77,11 @@ if [[ ! -e "$CORPUS" ]]; then
 fi
 
 echo "[Info] corpus: $CORPUS ($(du -sh "$CORPUS" | awk '{print $1}'))"
+# The OS build, not just the product version, identifies the environment:
+# macOS 27.0 build 26A5388g reported CPU Power 0 mW where 26A5406e did not.
+# 辨識環境要看 OS build 而非僅產品版本：macOS 27.0 的 26A5388g 回報
+# CPU Power 0 mW，26A5406e 則否。
+echo "[Info] os: $(command -v sw_vers >/dev/null 2>&1 && echo "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))" || uname -sr)"
 echo "[Info] swift_tar: $SWIFT_TAR_BIN"
 echo
 

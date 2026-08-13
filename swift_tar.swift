@@ -3396,10 +3396,16 @@ struct SwiftTarMain {
             return .passphrase(try KeyInput.promptPassphrase("Passphrase / 密語: "))
         }
 
-        // in-flight chunk budget, same policy as lzfse CLI / 在途分塊數，政策同 lzfse CLI
+        // In-flight chunk budget. One per core, not two: measured on a 4P+6E M4,
+        // -n 20 beat -n 10 by 2.7% on the RGB1 bench, which is inside the noise,
+        // while doubling the peak memory held by in-flight chunks. The gain from
+        // oversubscription flattens once every core has work.
+        // 在途分塊數。每核一個而非兩個：於 4P+6E 的 M4 上實測，-n 20 相對 -n 10
+        // 僅快 2.7%（在雜訊範圍內），卻使在途分塊佔用的峰值記憶體加倍。核心都有
+        // 工作之後，過度訂閱帶來的收益即趨於平坦。
         let inflightN: Int = {
             let cores = max(1, ProcessInfo.processInfo.activeProcessorCount)
-            var n = cores * 2
+            var n = cores
             if let raw = optValue("-n") {          // reject non-integer, same as lzfse2 CLI / 非整數報錯，同 lzfse2 CLI
                 guard let v = Int(raw) else {
                     eprint("Error: -n expects an integer. / 錯誤：-n 需要整數。")

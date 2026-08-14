@@ -148,19 +148,46 @@ RESULTS="$HERE/verifications/rgb1_container_mbps_output-$(swift_tar_platform).tx
 : > "$RESULTS"
 emit() { echo "$1"; echo "$1" >> "$RESULTS"; }
 
-# 3 MiB payload with a 4 KiB redundancy period: compressible, but rewards larger
-# windows (zstd/xz) over gzip. Size == 1024*1024*3 exactly. / 3 MiB payload，4 KiB
-# 週期冗餘：可壓縮，且大視窗（zstd/xz）優於 gzip。大小恰為 1024*1024*3。
-BLOCK="$TMP/block"; head -c 4096 /dev/urandom > "$BLOCK"
-BIGRAW="$TMP/big.rgb"; : > "$BIGRAW"
-for _ in $(seq 768); do cat "$BLOCK"; done > "$BIGRAW"   # 768*4096 = 3145728 = 1024*1024*3
-[ "$(wc -c < "$BIGRAW" | tr -d ' ')" -eq 3145728 ] || { echo "internal: BIGRAW size wrong"; exit 2; }
-
-BIGSRC="$TMP/bigsrc"; mkdir -p "$BIGSRC"
-"$ST" --rgb1-pack --width 1024 --height 1024 --lat 25 --lng 121 --height-m 1 \
-      --title big --country TW --creator-email a@b.co --right R \
-      --created-ms 1700000000000 -f "$BIGSRC/big.rgb1" "$BIGRAW"
-BIG_BYTES="$(wc -c < "$BIGSRC/big.rgb1" | tr -d ' ')"   # 3145728 + 876 header
+# A real sampled video frame, not a synthetic pattern. This used to be a 4 KiB
+# random block repeated 768 times, which is perfectly periodic: every codec with
+# a window of 4 KiB or more finds an exact match at once and the table reported
+# zstd at a ratio of 0.001 -- a thousandth of raw, where a real 1080p frame
+# compresses to about half. The numbers were not wrong for what they measured;
+# they were measuring a pattern, not an image, while the row was labelled
+# "RGB1 container". The block was also re-randomised every run, so the record
+# could not be compared across runs or platforms: the mac/win difference of
+# 7 bytes once read as a library difference was only a different corpus.
+# 使用真實取樣的視訊影格，而非合成圖案。此處原本是把 4 KiB 隨機區塊重複 768 次，其週期
+# 完全規律：任何視窗達 4 KiB 以上的 codec 都會立刻找到完全匹配，於是表格把 zstd 記為
+# 壓縮比 0.001——原始大小的千分之一，而真實 1080p 影格約為一半。那些數字就其所量測的
+# 對象而言並沒有錯，錯在它量的是「圖案」而非「影像」，該列卻標示為「RGB1 container」。
+# 該區塊每次執行還會重新隨機，故紀錄無法跨執行或跨平台比較：先前 mac 與 win 相差 7
+# 位元組一度被讀成函式庫差異，其實只是語料不同。
+#
+# No synthetic fallback. A record from the wrong corpus is worse than no record,
+# and the corpus is one command away (make_consecutive_corpus.zsh).
+# 不提供合成備援。來自錯誤語料的紀錄比沒有紀錄更糟，而該語料只差一道指令即可產生
+# （make_consecutive_corpus.zsh）。
+BIGSRC=""
+for d in "$HERE/verifications/rgb1/sample_consecutive" "$HERE/verifications/rgb1/sample"; do
+  for f in "$d"/*.rgb1; do
+    [ -f "$f" ] || continue
+    BIGSRC="$TMP/bigsrc"; mkdir -p "$BIGSRC"
+    cp "$f" "$BIGSRC/big.rgb1"
+    CORPUS_FRAME="${f#$HERE/}"
+    break 2
+  done
+done
+if [ -z "$BIGSRC" ]; then
+  echo "SKIP: codec table needs a sampled frame; run verifications/rgb1/make_consecutive_corpus.zsh"
+  echo "SKIP：codec 比較表需要取樣影格，請先執行 verifications/rgb1/make_consecutive_corpus.zsh"
+  echo
+  echo "PASS: $pass  FAIL: $fail"
+  [ "$fail" -eq 0 ]
+  exit $?
+fi
+BIG_BYTES="$(wc -c < "$BIGSRC/big.rgb1" | tr -d ' ')"
+BIG_PAYLOAD="$("$ST" --rgb1-info -f "$BIGSRC/big.rgb1" | grep '^payload_bytes=' | cut -d= -f2)"
 
 bench_base=""   # plain-tar size, used as the ratio baseline / 純 tar 大小，作為比率基準
 # Throughput is the RGB1 container size handled per second (MB = 10^6 bytes):
@@ -177,7 +204,7 @@ emit "[Info] os: $(command -v sw_vers >/dev/null 2>&1 && echo "macOS $(sw_vers -
 emit "[Info] host: $(uname -srm)"
 emit "[Info] swift_tar: $ST"
 emit "[Info] version: $("$ST" --version 2>/dev/null | head -1)"
-emit "[Info] corpus: synthetic RGB1 1024x1024 (3 MiB payload + 876B header = $BIG_BYTES B)"
+emit "[Info] corpus: sampled video frame $CORPUS_FRAME ($BIG_BYTES B incl. 876 B header)"
 emit "[Info] MB/s = container bytes / time (MB = 10^6); times are the mean of 3 runs"
 emit ""
 emit "== RGB1 container: size / time / throughput by codec =="
@@ -224,11 +251,21 @@ bench() { # label codec-flags archive-name
   emit "$(printf '%-16s %12s %7s %11s %9s %11s %9s' "$label" "$size" "$ratio" "$ctime" "$cmbps" "$xtime" "$xmbps")"
   # integrity: extracted big.rgb1 must match the source byte-for-byte and still
   # decode / 完整性：解出的 big.rgb1 須與來源位元組一致且仍可解析
+  # The expected payload size comes from the source frame, not a constant. It was
+  # hardcoded to 3145728 for the old 1024x1024 synthetic corpus, so switching to a
+  # 1920x1080 sampled frame made every codec -- including plain tar, which does
+  # not compress at all -- report "round-trip corrupted" while cmp said the bytes
+  # were identical. A test that cries corruption at intact data costs as much
+  # trust as one that misses real corruption.
+  # 期望的 payload 大小取自來源影格，而非常數。它原本為舊的 1024x1024 合成語料寫死為
+  # 3145728，故改用 1920x1080 的取樣影格後，每一個 codec——包括完全不壓縮的 plain
+  # tar——都回報「round-trip corrupted」，而 cmp 明明判定位元組完全相同。一個對完好
+  # 資料喊損毀的測試，損失的信任與漏掉真實損毀一樣多。
   if cmp -s "$BIGSRC/big.rgb1" "$out/big.rgb1" \
-     && [ "$("$ST" --rgb1-info -f "$out/big.rgb1" | grep '^payload_bytes=' | cut -d= -f2)" = "3145728" ]; then
-    ok "codec $label: 3 MiB .rgb1 round-trip intact"
+     && [ "$("$ST" --rgb1-info -f "$out/big.rgb1" | grep '^payload_bytes=' | cut -d= -f2)" = "$BIG_PAYLOAD" ]; then
+    ok "codec $label: sampled .rgb1 round-trip intact"
   else
-    bad "codec $label: 3 MiB .rgb1 round-trip corrupted"
+    bad "codec $label: sampled .rgb1 round-trip corrupted"
   fi
 }
 

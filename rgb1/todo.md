@@ -474,6 +474,70 @@ New DOE, 2026-08-15 / 新增 DOE:
   quietly become a best case at high frame counts. The interval is now a fixed
   5 s and the clip length caps the study, visibly.
 
+Corpus audit, 2026-08-15 / 語料稽核:
+
+- **Every rgb1 study uses real sampled video except one, and that one produced a
+  committed record.** `test_swift_tar_rgb1.sh`'s codec table built its corpus
+  from a 4 KiB `/dev/urandom` block repeated 768 times. That is perfectly
+  periodic: any codec with a window of 4 KiB or more matches immediately, and
+  the table reported **zstd at a ratio of 0.001** where a real 1080p frame gives
+  **0.443** — off by a factor of 450, under a row labelled "RGB1 container". The
+  project's own FAQ warns about exactly this ("synthetic patterns compress to
+  ~3% and make both formats look equally compressible"). The block was also
+  re-randomised on every run, so the record was never comparable across runs or
+  platforms — the 7-byte mac/win difference once read as a library difference
+  was only a different corpus.
+
+  Now uses a sampled frame from `sample_consecutive/`, and **skips rather than
+  falls back**: a record from the wrong corpus is worse than no record, and the
+  corpus is one command away. No Swift helper was added — the corpus files are
+  already RGB1 containers, and writing a generator would have re-created the
+  synthetic problem in a new file.
+
+  The new figures cross-check against three independent scripts: 44.3% here at
+  zstd-9 whole-frame, 49.7% in `consecutive_bitrate.zsh` at zstd-3 whole-frame,
+  51.2% in `comparison.csv` at zstd-3 over 20 bands — level and slicing account
+  for the spread in the right directions. LZFSE became measurable for the first
+  time: `bvx3-optimal` at 0.416 beats zstd-9's 0.443 on real image data, which
+  the synthetic corpus could not have shown.
+
+  Switching the corpus exposed a second defect. The integrity check compared
+  `payload_bytes` against a hardcoded **3145728**, the old 1024x1024 frame, so
+  every codec — including plain tar, which does not compress — reported
+  "round-trip corrupted" while `cmp` said the bytes were identical. The expected
+  size is derived from the source frame now. A test that cries corruption at
+  intact data costs as much trust as one that misses real corruption.
+
+  Left synthetic on purpose: `test_encrypt.sh`, `encrypt_windows_correctness.sh`
+  and `mixed_size_delta.zsh` assert round-trip equality, where content is
+  irrelevant. `encrypt_mbps_rss.sh` uses `/dev/urandom` only for its 64-byte
+  keyfile; its corpus is the real `claw-code` tree.
+- **rgb1 各研究皆使用真實取樣視訊，唯一的例外卻產出了入版紀錄。**
+  `test_swift_tar_rgb1.sh` 的 codec 比較表以 4 KiB `/dev/urandom` 區塊重複 768 次作為
+  語料。該資料週期完全規律：任何視窗達 4 KiB 以上的 codec 都立即匹配，於是表格把
+  **zstd 記為壓縮比 0.001**，而真實 1080p 影格為 **0.443**——相差 450 倍，且該列標示為
+  「RGB1 container」。本專案自己的 FAQ 正好警告過這件事。該區塊每次執行還會重新隨機，
+  故紀錄從未能跨執行或跨平台比較——先前 mac 與 win 相差 7 位元組一度被讀成函式庫差異，
+  其實只是語料不同。
+
+  現改用 `sample_consecutive/` 的取樣影格，且**找不到就跳過而非退回合成**：來自錯誤語料
+  的紀錄比沒有紀錄更糟，而該語料只差一道指令。未新增 Swift 輔助程式——語料檔本身已是
+  RGB1 容器，另寫產生器只會把合成語料的問題換個檔案重現一次。
+
+  新數字與三支獨立腳本互相吻合：本表 zstd-9 整格 44.3%、`consecutive_bitrate.zsh`
+  zstd-3 整格 49.7%、`comparison.csv` zstd-3 切 20 帶 51.2%——等級與切片各自把差距推向
+  正確的方向。LZFSE 也首次成為可量測對象：`bvx3-optimal` 的 0.416 在真實影像資料上勝過
+  zstd-9 的 0.443，這是合成語料不可能顯示出來的。
+
+  更換語料同時暴露第二個缺陷。完整性檢查把 `payload_bytes` 與寫死的 **3145728**（舊的
+  1024x1024 影格）比對，故每一個 codec——包括完全不壓縮的 plain tar——都回報
+  「round-trip corrupted」，而 `cmp` 明明判定位元組完全相同。期望值現由來源影格導出。
+  一個對完好資料喊損毀的測試，損失的信任與漏掉真實損毀一樣多。
+
+  刻意維持合成語料者：`test_encrypt.sh`、`encrypt_windows_correctness.sh` 與
+  `mixed_size_delta.zsh` 斷言的是往返一致，內容無關緊要。`encrypt_mbps_rss.sh` 的
+  `/dev/urandom` 僅用於 64 位元組金鑰檔，其語料是真實的 `claw-code` 檔案樹。
+
 Follow-up / 後續:
 
 - Compile and smoke-test the RGB1 CLI operations.

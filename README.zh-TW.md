@@ -68,16 +68,21 @@ compile_tar-win.bat
 
 `build_zlib-win.sh` 與 `build_zstd-win.sh` 是相依套件維護步驟：各自同步固定的
 gitlink、重建靜態庫（`zs.lib`／`zstd_static.lib`），並將精確的 tag、commit 與
-連結方式寫入 `version.txt`。首次 clone 或變更任一 submodule 後才需執行；平常的
+連結方式寫入 `version-win.txt`。首次 clone 或變更任一 submodule 後才需執行；平常的
 `compile_tar-win.bat` 會增量重建 libarchive 後端並重用既有 zlib/zstd 靜態庫。
-建置版本產生流程會在 `version.txt` 保留 `zlib_*`、`zstd_*` 與 `libarchive_*`
-provenance 欄位，封裝步驟也會將
-該檔案放入 Windows ZIP，供 release 驗證。
+建置版本產生流程會在 `version-win.txt` 保留 `zlib_*`、`zstd_*` 與 `libarchive_*`
+provenance 欄位，封裝步驟也會將該檔案以 `version.txt` 之名放入 Windows ZIP，供
+release 驗證。
+
+版本戳檔案依平台加後綴——`version-mac.txt`、`version-linux.txt`、
+`version-win.txt`——因為它記錄的是*本次*建置實際連結到哪些函式庫。共用單一檔案時，
+最後建置的那個平台會覆寫掉另一個平台的 provenance。
 
 其餘外部 codec（bzip2、xz、lz4、lzip）仍需要對應的 Scoop CLI 工具；
 `build_tool_install-win.sh` 可安裝完整工具鏈。
 
-Windows ZIP 包含靜態連結的執行檔、Swift runtime DLL、`version.txt`、
+Windows ZIP 包含靜態連結的執行檔、Swift runtime DLL、`version.txt`（由
+`version-win.txt` 放入）、
 `zlib-LICENSE.txt`、`zstd-LICENSE.txt` 與 `libarchive-COPYING.txt`。
 `zs.lib`、`zstd_static.lib`、headers 與
 CMake build tree 屬於開發產物，並非 runtime dependency，因此不放入 release。

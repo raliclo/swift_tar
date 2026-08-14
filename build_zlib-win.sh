@@ -36,8 +36,11 @@ fi
 zlib_version=$(git -C zlib describe --tags --exact-match 2>/dev/null || \
     git -C zlib describe --tags --always)
 zlib_commit=$(git -C zlib rev-parse HEAD)
-swift_tar_version=$(sed -n 's/^swift_tar_version=//p' version.txt 2>/dev/null | sed -n '1p')
-tmp_version="version.txt.tmp"
+# These builders only ever run on Windows, so the target file is fixed rather
+# than detected. / 這些建置腳本僅在 Windows 上執行，故目標檔案直接寫死而非偵測。
+version_file="version-win.txt"
+swift_tar_version=$(sed -n 's/^swift_tar_version=//p' "$version_file" 2>/dev/null | sed -n '1p')
+tmp_version="$version_file.tmp"
 {
     [ -n "$swift_tar_version" ] && echo "swift_tar_version=$swift_tar_version"
     echo "zlib_version=$zlib_version"
@@ -45,9 +48,9 @@ tmp_version="version.txt.tmp"
     echo "zlib_linkage=static"
     # Preserve dependency provenance written by the other backend builders.
     # 保留其他後端建置腳本寫入的相依套件 provenance。
-    grep -E '^(zstd|libarchive)_(version|commit|linkage)=' version.txt 2>/dev/null || true
+    grep -E '^(zstd|libarchive)_(version|commit|linkage)=' "$version_file" 2>/dev/null || true
 } > "$tmp_version"
-mv "$tmp_version" version.txt
+mv "$tmp_version" "$version_file"
 
 echo "[OK] Built zlib $zlib_version ($zlib_commit) / 已建置 zlib 靜態庫"
-echo "[OK] Updated version.txt / 已更新 version.txt"
+echo "[OK] Updated $version_file / 已更新 $version_file"

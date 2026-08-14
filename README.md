@@ -75,18 +75,24 @@ compile_tar-win.bat
 
 `build_zlib-win.sh` and `build_zstd-win.sh` are dependency-maintenance steps:
 each syncs its pinned gitlink, rebuilds the static library (`zs.lib` /
-`zstd_static.lib`), and writes the exact tag/commit/linkage to `version.txt`.
+`zstd_static.lib`), and writes the exact tag/commit/linkage to
+`version-win.txt`.
 Run them after cloning or changing either submodule. Normal
 `compile_tar-win.bat` rebuilds the incremental libarchive backend and reuses the
 existing zlib/zstd libraries. Build-version generation preserves the `zlib_*`, `zstd_*`, and `libarchive_*`
-provenance fields in `version.txt`, and the packaging step copies that file
-into the Windows ZIP for release verification.
+provenance fields in `version-win.txt`, and the packaging step copies that file
+into the Windows ZIP as `version.txt` for release verification.
+
+The stamp file is suffixed by platform — `version-mac.txt`, `version-linux.txt`,
+`version-win.txt` — because it records which libraries *this* build linked
+against. A single shared file meant whichever platform built last overwrote the
+other's provenance.
 
 The remaining external codecs (bzip2, xz, lz4, lzip) require their corresponding
 Scoop CLI tools; `build_tool_install-win.sh` installs the complete toolchain.
 
 The Windows ZIP contains the statically linked executable, Swift runtime DLLs,
-`version.txt`, `zlib-LICENSE.txt`, `zstd-LICENSE.txt`, and
+`version.txt` (staged from `version-win.txt`), `zlib-LICENSE.txt`, `zstd-LICENSE.txt`, and
 `libarchive-COPYING.txt`. It intentionally
 excludes `zs.lib`, `zstd_static.lib`, headers, and the CMake build trees
 because they are development artifacts, not runtime dependencies.

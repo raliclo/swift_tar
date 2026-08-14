@@ -40,13 +40,14 @@ fi
 
 libarchive_version=$(git -C libarchive describe --tags --always)
 libarchive_commit=$(git -C libarchive rev-parse HEAD)
-tmp_version="version.txt.tmp"
+version_file="version-win.txt"
+tmp_version="$version_file.tmp"
 {
-    grep -vE '^libarchive_(version|commit|linkage)=' version.txt 2>/dev/null || true
+    grep -vE '^libarchive_(version|commit|linkage)=' "$version_file" 2>/dev/null || true
     echo "libarchive_version=$libarchive_version"
     echo "libarchive_commit=$libarchive_commit"
     echo "libarchive_linkage=static"
 } > "$tmp_version"
-mv "$tmp_version" version.txt
+mv "$tmp_version" "$version_file"
 
 echo "[OK] Built libarchive $libarchive_version ($libarchive_commit) / 已建置 libarchive 靜態庫"

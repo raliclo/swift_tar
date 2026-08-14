@@ -135,7 +135,21 @@ ms()  { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f", (b-a)*1000}'; }
 # codec 比較表另存一份到 verifications/ 的 .txt（會入版），與其他量測腳本
 # （*_output.txt）慣例相同；完整 PASS/FAIL log 留在 test_swift_tar_rgb1.log
 # （被 *.log 忽略）。
-RESULTS="$HERE/verifications/rgb1_container_mbps_output.txt"
+#
+# Suffixed by platform. A single shared file made this a trap: the committed
+# table was recorded on Windows, and one run of this script on macOS silently
+# replaced it with macOS numbers — the loss showing up only as an unexplained
+# diff. Each platform now owns its own file and they can all be committed.
+# 依平台加後綴。共用單一檔案會造成陷阱：入版的表格錄自 Windows，而本腳本在 macOS
+# 上跑一次就會靜默地把它換成 macOS 的數字——只留下一個沒人解釋得清的 diff。現在每個
+# 平台各自擁有一個檔案，三者可同時入版。
+case "$(uname -s)" in
+    Darwin)               PLATFORM=mac ;;
+    Linux)                PLATFORM=linux ;;
+    MINGW*|MSYS*|CYGWIN*) PLATFORM=win ;;
+    *)                    PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]') ;;
+esac
+RESULTS="$HERE/verifications/rgb1_container_mbps_output-$PLATFORM.txt"
 : > "$RESULTS"
 emit() { echo "$1"; echo "$1" >> "$RESULTS"; }
 

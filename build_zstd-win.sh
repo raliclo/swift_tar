@@ -65,17 +65,18 @@ zstd_version=$(git -C zstd describe --tags --exact-match 2>/dev/null || \
     git -C zstd describe --tags --always)
 zstd_commit=$(git -C zstd rev-parse HEAD)
 
-# Preserve every other line in version.txt (e.g. swift_tar_version, zlib_*);
-# only refresh the zstd_* keys. / 保留 version.txt 其他所有行（如
+# Preserve every other line in version-win.txt (e.g. swift_tar_version, zlib_*);
+# only refresh the zstd_* keys. / 保留 version-win.txt 其他所有行（如
 # swift_tar_version、zlib_*），只更新 zstd_* 鍵。
-tmp_version="version.txt.tmp"
+version_file="version-win.txt"
+tmp_version="$version_file.tmp"
 {
-    grep -vE '^zstd_(version|commit|linkage)=' version.txt 2>/dev/null || true
+    grep -vE '^zstd_(version|commit|linkage)=' "$version_file" 2>/dev/null || true
     echo "zstd_version=$zstd_version"
     echo "zstd_commit=$zstd_commit"
     echo "zstd_linkage=static"
 } > "$tmp_version"
-mv "$tmp_version" version.txt
+mv "$tmp_version" "$version_file"
 
 echo "[OK] Built zstd $zstd_version ($zstd_commit) / 已建置 zstd 靜態庫"
-echo "[OK] Updated version.txt / 已更新 version.txt"
+echo "[OK] Updated $version_file / 已更新 $version_file"

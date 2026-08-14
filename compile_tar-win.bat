@@ -55,8 +55,8 @@ if not exist zstd\build\lib\Release\zstd_static.lib (
     pause
     exit /b 1
 )
-if not exist version.txt (
-    echo [FAIL] version.txt not found. Run: zsh ./build_zlib-win.sh
+if not exist version-win.txt (
+    echo [FAIL] version-win.txt not found. Run: zsh ./build_zlib-win.sh
     pause
     exit /b 1
 )

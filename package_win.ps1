@@ -8,7 +8,8 @@
 # gzip, zstd, and the ZIP backend are statically linked from the zlib, zstd,
 # and libarchive submodules. Other
 # non-LZFSE codecs (bzip2/xz/lz4/lzip) still shell out to external CLI tools on
-# PATH. The package includes version.txt and the zlib + zstd + libarchive
+# PATH. The package includes version-win.txt, staged as version.txt, and the
+# zlib + zstd + libarchive
 # licenses, but not development .lib/header/build files because no runtime
 # file is required.
 #
@@ -25,8 +26,8 @@ if (-not (Test-Path $ExePath)) {
     Write-Error "Not found: $ExePath (build it first, e.g. via compile_tar-win.bat)"
     exit 1
 }
-if (-not (Test-Path "version.txt")) {
-    Write-Error "version.txt not found (run zsh ./build_zlib-win.sh)"
+if (-not (Test-Path "version-win.txt")) {
+    Write-Error "version-win.txt not found (run zsh ./build_zlib-win.sh)"
     exit 1
 }
 if (-not (Test-Path "zlib\LICENSE")) {
@@ -63,7 +64,11 @@ if (Test-Path $stageRoot) { Remove-Item -Recurse -Force $stageRoot }
 New-Item -ItemType Directory -Path $stageDir | Out-Null
 Copy-Item $ExePath -Destination $stageDir
 Copy-Item (Join-Path $rtBin "*.dll") -Destination $stageDir
-Copy-Item "version.txt" -Destination $stageDir
+# Staged under the plain name: inside a Windows-only package the suffix would
+# be noise, and the packaged layout stays as documented.
+# 以無後綴的名稱放入：在僅含 Windows 的套件內，後綴只是雜訊，且套件版面維持與文件
+# 所述一致。
+Copy-Item "version-win.txt" -Destination (Join-Path $stageDir "version.txt")
 Copy-Item "zlib\LICENSE" -Destination (Join-Path $stageDir "zlib-LICENSE.txt")
 Copy-Item "zstd\LICENSE" -Destination (Join-Path $stageDir "zstd-LICENSE.txt")
 Copy-Item "libarchive\COPYING" -Destination (Join-Path $stageDir "libarchive-COPYING.txt")

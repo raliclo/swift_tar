@@ -125,12 +125,51 @@ VP9 + Opus 的 8 格），腳本為 `../verifications/rgb1/nv12_vs_rgb1_streamin
 | lz4 | 3,511,405 | 6,002,134 | **12.06%** | 14.11% |
 | xz | 1,409,388 | 2,351,780 | **4.73%** | 5.66% |
 
+> **This table is still t=0, and both conclusions below fail on real content.
+> Flagged 2026-08-14.** The 7% ratios are the tell — the same fade-from-black
+> opening that put 122 Mbps in the bitrate table. `nv12_vs_rgb1_streaming.zsh`
+> has not yet been re-run with mid-video sampling, so these rows were missed when
+> the bitrate table was corrected. Recomputed from `batch_vs_per_frame_output.txt`
+> (t=121.2 s) and the raw frame sizes 1920x1080x1.5 and x3:
+>
+> | source | NV12 ratio | RGB1 ratio | RGB1 / NV12 |
+> |---|---:|---:|---:|
+> | t=0 (this table) | 8.20% | **7.08%** | 1.73x |
+> | consecutive, mid-video | **46.16%** | 49.21% | **2.13x** |
+> | sampled, 10 s apart | **41.40%** | 43.71% | **2.11x** |
+>
+> **The ordering reverses.** On real content NV12 compresses *better* than RGB1
+> (46.16% vs 49.21%), so "RGB1 wins under every codec" is an artifact of the
+> fade, and the statement it was cited as refuting — that a general-purpose
+> compressor gets less out of raw RGB — was right after all. The wire gap is
+> **2.13x, not 1.73x**: the ratio does not narrow the 2.00x starting gap, it
+> widens it.
+>
+> Only zstd -3 has mid-video data. **The gzip, lz4 and xz rows should not be
+> quoted** until the script is re-run. Raised in review by the Windows-side
+> reader.
+>
+> **本表仍為 t=0，其下兩項結論在真實內容上皆不成立。2026-08-14 標記。**
+> 7% 的壓縮率就是線索——正是那段把 122 Mbps 送進位元率表的自黑畫面淡入。
+> `nv12_vs_rgb1_streaming.zsh` 尚未以中段取樣重跑，故位元率表更正時漏掉了這幾列。
+> 以 `batch_vs_per_frame_output.txt`（t=121.2 秒）與原始影格大小
+> 1920x1080x1.5、x3 重算，結果如上表。
+>
+> **高下順序反轉。** 在真實內容上 NV12 壓得*比* RGB1 好（46.16% 對 49.21%），
+> 故「RGB1 在每個 codec 下都較好」是淡入造成的假象；而它所推翻的那句話——通用
+> 壓縮器對 raw RGB 得不到同樣效益——反而才是對的。線路上的差距是 **2.13 倍而非
+> 1.73 倍**：較佳的壓縮率並未縮小 2.00 倍的起點差距，而是把它拉大。
+>
+> 目前僅 zstd -3 有中段數據。**gzip、lz4、xz 三列在腳本重跑之前不應引用。**
+> 此問題由 Windows 端讀者於 review 中提出。
+
 RGB1 compresses *better than* NV12 under **every** codec tested (7.08% vs 8.20%
 for zstd; the same holds for gzip, lz4 and xz), so the earlier claim above that
 "general-purpose compressors don't get the same win from raw RGB" is not
 accurate — the opposite is true. But RGB1 starts at 2x the size, so after
 compression it still needs **1.73x the bytes on the wire**; the better ratio
 narrows the gap from 2.00x but does not close it.
+*(Superseded — holds only at t=0. 本段已被上方取代，僅在 t=0 成立。)*
 
 在測試的**每一個** codec 下，RGB1 的壓縮率都**優於** NV12（zstd 為 7.08% 對
 8.20%，gzip、lz4、xz 亦然），因此上文「通用壓縮器對 raw RGB 得不到同樣效益」
@@ -473,15 +512,15 @@ requirement**:
 
 因此決策並非「以大小比較 RGB1 與 NV12」，而是**是否必須逐格記錄 geo**：
 
-- **Geo not needed** -> NV12 + zstd. RGB1 costs 73% more bandwidth for metadata
+- **Geo not needed** -> NV12 + zstd. RGB1 costs 113% more bandwidth for metadata
   that is never read.
-  **不需要 geo** → NV12 + zstd。RGB1 多付 73% 頻寬，換到的 metadata 卻從未被
+  **不需要 geo** → NV12 + zstd。RGB1 多付 113% 頻寬，換到的 metadata 卻從未被
   讀取。
-- **Geo needed, on a LAN** -> RGB1 is reasonable. The geo itself is 0.2% of the
-  stream; the real cost is the 73% pixel-format premium, paid in exchange for
+- **Geo needed, on a LAN** -> RGB1 is reasonable. The geo itself is 0.03% of the
+  stream; the real cost is the 113% pixel-format premium, paid in exchange for
   not having to build and synchronise a separate metadata channel.
-  **需要 geo，且在區網** → RGB1 合理。geo 本身僅佔串流 0.2%；真正的代價是像素
-  格式貴 73%，換來的是不必自行建立並同步一條獨立的 metadata 通道。
+  **需要 geo，且在區網** → RGB1 合理。geo 本身僅佔串流 0.03%；真正的代價是像素
+  格式貴 113%，換來的是不必自行建立並同步一條獨立的 metadata 通道。
 - **Geo needed, over the internet** -> do not use RGB1 as the wire format. Send
   lossy video (VP9/H.264) and carry geo on a side-channel; at 2 Mbps the same
   876 B/frame would be 21% of the stream, and RGB1's raw pixels are impossible

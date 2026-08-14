@@ -16,9 +16,11 @@
   `--rgb1-pack`, `--rgb1-info`, and `--rgb1-raw`.
 - 目前 CLI operation：
   `--rgb1-pack`、`--rgb1-info`、`--rgb1-raw`。
-- RGB1 itself is uncompressed; storage/transport compression remains zstd
-  level 9 by default.
-- RGB1 本身不壓縮；儲存與傳輸壓縮層預設仍為 zstd level 9。
+- RGB1 itself is uncompressed. The storage/transport level is `-3` for streaming
+  and `-19` for archiving; level 9 was recommended here until measurement retired
+  it. See [rgb1-format.md](rgb1-format.md) — Zstd Usage.
+- RGB1 本身不壓縮。儲存與傳輸壓縮等級為串流 `-3`、封存 `-19`；此處原本建議
+  level 9，量測後已淘汰。詳見 [rgb1-format.md](rgb1-format.md) 的 Zstd Usage 一節。
 - Full format spec:
   [rgb1-format.md](rgb1-format.md)
 - 完整格式規格：
@@ -72,7 +74,9 @@ swift_tar 25e1759 and the per-frame flags in the commit that follows it.
   across frames, inflating a per-frame bitrate. It does not, at 1080p: one frame
   is 3.1 MB (NV12) or 6.2 MB (RGB24), larger than zstd, gzip or lz4 can look
   back across, so they never reference the previous frame. `batch_vs_per_frame.zsh`
-  (added in 0e528ec, which the review overlooked) measured −0.1% to 0.0% for
+  (added in 0e528ec, 40 min after the commit that review was written against —
+  `git ls-tree fd48496` shows it absent, so it was not overlooked) measured
+  −0.1% to 0.0% for
   zstd -3 across two frame sources; `nv12_vs_rgb1_streaming.zsh --both` extends
   it to all five codecs and finds at most +0.34% (rgb24/xz, the largest
   dictionary), of which ~0.04% is per-frame tar headers. The batch figures — and
@@ -81,8 +85,9 @@ swift_tar 25e1759 and the per-frame flags in the commit that follows it.
 - **#2 — 2026-08-14 解決；該疑慮經量測不成立。**
   原本擔心把 8 格壓成單一串流會讓 codec 跨格去重，因而灌大每格位元率。1080p 下
   並非如此：單格為 3.1 MB（NV12）或 6.2 MB（RGB24），超出 zstd、gzip、lz4 的回看
-  範圍，它們根本不曾參照前一格。`batch_vs_per_frame.zsh`（0e528ec 已加入，該次
-  review 未察覺）以 zstd -3 對兩種影格來源量得 −0.1% 至 0.0%；
+  範圍，它們根本不曾參照前一格。`batch_vs_per_frame.zsh`（由 0e528ec 加入，時間
+  在該則 review 所依據的提交之後 40 分鐘——`git ls-tree fd48496` 顯示當時該檔尚
+  不存在，故並非未察覺）以 zstd -3 對兩種影格來源量得 −0.1% 至 0.0%；
   `nv12_vs_rgb1_streaming.zsh --both` 將其延伸至全部五種 codec，最大為 +0.34%
   （rgb24／xz，字典最大），其中約 0.04% 還是每格的 tar header。批次數字與
   689 Mbps 的結論皆成立。若日後解析度低到單格能放進 codec 視窗，須重新檢查。

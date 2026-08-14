@@ -200,8 +200,13 @@ committed numbers are still clean. Fix first, then run — no back-fill needed.
 ## Phase 3 — 量測方法論 / Measurement methodology  ▸ ✅ 已完成 2026-08-14
 
 - [x] **#2** — 結論:**疑慮不成立,無需改動已發布數字。**
-- [x] 更正一則先前的判斷:review 稱「這項沒有動」,實際上 `0e528ec` 已新增
-      `batch_vs_per_frame.zsh` 專測此事(該 commit message 未提及,故被漏看)。
+- [x] ~~更正一則先前的判斷:review 稱「這項沒有動」,實際上 `0e528ec` 已新增
+      `batch_vs_per_frame.zsh` 專測此事(該 commit message 未提及,故被漏看)。~~
+      **撤回:時序不支持。** `git ls-tree fd48496` 顯示該檔在該則 review 所依據的
+      提交(`fd48496`,08-14 00:51)尚不存在;它由 40 分鐘後的 `0e528ec`(01:31)
+      加入。後續涵蓋 `0e528ec` 的 review 已認可該腳本並自承跨格去重的假設有誤。
+      Withdrawn — the timeline does not support it: the file did not exist at the
+      commit that review was written against, and was added 40 minutes later.
 
 1080p 下批次不會灌大每格位元率,因為單格 3.1 MB(NV12)/6.2 MB(RGB24)已超出
 zstd、gzip、lz4 的回看視窗,它們根本無法參照前一格。兩支腳本互相印證:

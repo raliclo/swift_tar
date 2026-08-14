@@ -119,14 +119,29 @@ with
 不能，反而拉大。以真實視訊影格實測（1920x1080，取自 P6 測試程式真實節目樣本
 VP9 + Opus 的 t=121.2 秒起 48 格連續影格），腳本為 `../verifications/rgb1/nv12_vs_rgb1_streaming.zsh`：
 
-| codec | NV12 | RGB1 payload | NV12 ratio | RGB1 ratio | RGB1 / NV12 on the wire |
-|---|---:|---:|---:|---:|---:|
-| none | 149,300,736 | 298,599,936 | 100.00% | 100.00% | 2.00x |
-| zstd | 69,481,931 | 148,623,226 | **46.54%** | 49.77% | 2.14x |
-| gzip | 65,033,049 | 145,407,312 | **43.56%** | 48.70% | 2.24x |
-| lz4 | 93,310,011 | 194,984,127 | **62.50%** | 65.30% | 2.09x |
-| xz † | 41,573,252 | 106,140,244 | 27.85% | 35.55% | 2.55x |
-| xz, per-frame † | 50,415,968 | 106,342,328 | **33.77%** | 35.61% | 2.11x |
+| codec | NV12 ratio | RGB1 ratio | RGB1 / NV12 on the wire |
+|---|---:|---:|---:|
+| none | 100.00% | 100.00% | 2.00x |
+| zstd | **46.54%** | 49.77% | 2.14x |
+| gzip | **43.56%** | 48.70% | 2.24x |
+| lz4 | **62.50%** | 65.30% | 2.09x |
+| xz † | 27.85% | 35.55% | 2.55x |
+| xz, per-frame † | **33.77%** | 35.61% | 2.11x |
+
+Ratios rather than byte counts, deliberately. Repeated runs of the script
+reproduce every percentage above to the digit, but the underlying byte totals
+move by about 1 byte for zstd and gzip and a few hundred for xz — under 5 parts
+per million, and not traced to a cause: `ffmpeg` extraction is bit-identical
+across runs, and neither file mtime nor xz threading reproduces the drift on
+synthetic input. Transcribing byte counts here would mean the document goes
+stale on every re-run for a difference that changes nothing; the exact totals
+live in `nv12_vs_rgb1_streaming_output.txt`, which is regenerated as a unit.
+
+此處刻意採用比率而非位元組數。腳本重複執行時，上表每個百分比都逐位重現，但其底層的
+位元組總量會變動：zstd 與 gzip 約 1 位元組，xz 為數百位元組——低於百萬分之五，且尚未
+追出成因（`ffmpeg` 抽取在多次執行間位元完全相同，而檔案 mtime 與 xz 執行緒數在合成
+資料上皆無法重現該漂移）。在此抄錄位元組數，只會讓文件因一個毫無影響的差異而在每次
+重跑後過期；確切總量請見 `nv12_vs_rgb1_streaming_output.txt`，該檔為整體重新產生。
 
 Re-measured 2026-08-14 on 48 consecutive frames from t=121.2 s — the same
 footage as every other table here. NV12 compresses **better** than RGB1 under all

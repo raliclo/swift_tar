@@ -45,7 +45,18 @@ cd "$(dirname "$0")"
 . ./platform.sh
 
 die() { print -u2 -- "[swift_tar-linux] ERROR / 錯誤：$*"; exit 1; }
-log() { print -- "[swift_tar-linux] $*"; }
+# log_msg, not log: `log` is a zsh builtin. A function shadows it only from the
+# point of definition, so a call placed above this line silently resolves to the
+# builtin, which rejects any argument with "zsh:log:1: too many arguments" and
+# returns 1 -- under the `set -e` above, that aborts the build with a message
+# pointing at zsh rather than at the missing definition. Nothing here calls it
+# early today; the rename removes the trap rather than documenting it.
+# 命名為 log_msg 而非 log：`log` 是 zsh 的 builtin。函式只從定義處起遮蔽它，故位於
+# 本行之上的呼叫會靜默地解析到 builtin，而 builtin 收到任何參數都會以
+# 「zsh:log:1: too many arguments」拒絕並回傳 1——在上方的 `set -e` 下，這會讓建置
+# 中止，而訊息指向 zsh 而非「函式尚未定義」。目前並無任何提前呼叫；此處改名是為了
+# 移除該陷阱，而不是替它寫註解。
+log_msg() { print -- "[swift_tar-linux] $*"; }
 
 # The appliance layout first, then the system one. Probed rather than assumed so
 # the same script serves both without a flag.
@@ -72,8 +83,8 @@ CLANG="$SWIFT_PREFIX/bin/clang"
 [[ -x "$SWIFTC" ]] || die "找不到 swiftc / no swiftc at: $SWIFTC"
 [[ -x "$CLANG"  ]] || CLANG=$(whence -p clang) || die "找不到 clang / no clang found"
 
-log "swift prefix: $SWIFT_PREFIX"
-log "sysroot:      $SYSROOT"
+log_msg "swift prefix: $SWIFT_PREFIX"
+log_msg "sysroot:      $SYSROOT"
 
 # Name the missing header rather than letting the compiler emit a wall of
 # errors that all trace back to one absent package.
@@ -97,19 +108,19 @@ if [[ -f lzfse2/lzfse-cli.swift ]]; then
     grep -v "^runCLI()$" lzfse2/lzfse-cli.swift > "$TEMP_CLI"
     CLI_SRC=("$TEMP_CLI")
     SWIFT_DEFINES=()
-    log "lzfse2 present; building WITH the LZFSE engine / 含 LZFSE 引擎"
+    log_msg "lzfse2 present; building WITH the LZFSE engine / 含 LZFSE 引擎"
 else
-    log "no lzfse2 checkout; building with -DEXCLUDE_LZFSE / 不含 LZFSE 引擎"
+    log_msg "no lzfse2 checkout; building with -DEXCLUDE_LZFSE / 不含 LZFSE 引擎"
 fi
 
 mkdir -p build release
 TEMP_VERSION="build/swift_tar_version.swift"
 trap 'rm -f "$TEMP_CLI"' EXIT
 
-log "Generate version constants / 產生版本常數"
+log_msg "Generate version constants / 產生版本常數"
 sh ./generate_version.sh "$TEMP_VERSION"
 
-log "Compile the libarchive ZIP bridge / 編譯 libarchive ZIP bridge"
+log_msg "Compile the libarchive ZIP bridge / 編譯 libarchive ZIP bridge"
 "$CLANG" -O2 -fPIC -I"$SYSROOT/include" \
     -c libarchive_zip_bridge.c -o build/libarchive_zip_bridge.o
 
@@ -139,7 +150,7 @@ MODMAP
 # "error while loading shared libraries"。
 SWIFT_RUNTIME_DIR="$SWIFT_PREFIX/lib/swift/linux"
 
-log "Build swift_tar / 建置 swift_tar"
+log_msg "Build swift_tar / 建置 swift_tar"
 "$SWIFTC" -O "${SWIFT_DEFINES[@]}" \
     "$TEMP_VERSION" "${CLI_SRC[@]}" swift_tar.swift rgb1.swift crypto.swift \
     build/libarchive_zip_bridge.o \
@@ -152,14 +163,14 @@ log "Build swift_tar / 建置 swift_tar"
     -Xlinker -rpath -Xlinker "$SYSROOT/lib" \
     -o release/swift_tar
 
-log "Built ./release/swift_tar / 已建置 ./release/swift_tar"
+log_msg "Built ./release/swift_tar / 已建置 ./release/swift_tar"
 
 # An RPATH that failed to apply looks identical to one that worked, until the
 # binary is first started from a clean environment.
 # 未生效的 RPATH 與正常的無從區分，直到執行檔第一次在乾淨環境下被啟動為止。
 if command -v readelf >/dev/null 2>&1; then
     readelf -d release/swift_tar 2>/dev/null | grep -E 'RUNPATH|RPATH' \
-        || log "WARNING: no RUNPATH recorded / 警告：未記錄 RUNPATH"
+        || log_msg "WARNING: no RUNPATH recorded / 警告：未記錄 RUNPATH"
 fi
 
 # Record what the binary actually links, read back from the binary. The macOS
@@ -211,8 +222,8 @@ record_provenance() {
         record_linked libarchive 'libarchive\.so'
     } > "$tmp_version"
     mv "$tmp_version" "$version_file"
-    log "Recorded linked libraries in $version_file / 已將連結的函式庫記入 $version_file"
+    log_msg "Recorded linked libraries in $version_file / 已將連結的函式庫記入 $version_file"
 }
-record_provenance || log "WARNING: could not record linkage provenance / 警告：無法記錄連結來源"
+record_provenance || log_msg "WARNING: could not record linkage provenance / 警告：無法記錄連結來源"
 
 ./release/swift_tar --version 2>&1 | head -3 || true

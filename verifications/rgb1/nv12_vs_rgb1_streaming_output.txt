@@ -1,12 +1,11 @@
-[Info] date / 日期: 2026-08-14 19:18:46 CST
+[Info] date / 日期: 2026-08-14 20:00:55 CST
 [Info] machine / 機器: arm64, Apple M4
 [Info] os / 系統: macOS 27.0 (26A5406e)
 [Info] swift_tar: swift_tar 20260814-190500
 [Info] source / 來源: 20260803 回到神面前 讓神來醫治 [恩典365 - 時代先知 ： 耶利米 系列] [d-t779PY_S0].webm  1920x1080, 48 frames
+[Info] start / 起點: t=121.2s (mid-video; t=0 is a fade from black / 中段取樣)
 [Info] render prep = conversion to RGBA (what P6 feeds Metal); excludes GPU shader time
 [Info] render prep = 轉成 RGBA（P6 交給 Metal 的格式）；不含 GPU shader 時間
-
-[Info] start / 起點: t=121.2s (mid-video; t=0 is a fade from black / 中段取樣)
 
 == Raw frame sizes / 原始影格大小 ==
   nv12        149299200 bytes   1.50 B/px  YUV 4:2:0
@@ -16,16 +15,16 @@
 == Transfer size and streaming cost / 傳輸大小與串流成本 ==
 format  codec      transfer(B)   of raw     enc(s)     dec(s)
 ------- -------- ------------- -------- ---------- ----------
-nv12    none         149300736  100.00%      0.040      0.066
-nv12    zstd          69481931   46.54%      0.098      0.204
-nv12    gzip          65033049   43.56%      0.549      0.269
-nv12    lz4           93310011   62.50%      0.053      0.126
-nv12    xz            41573252   27.85%      5.032      1.604
-rgb24   none         298599936  100.00%      0.079      0.156
-rgb24   zstd         148623226   49.77%      0.184      0.383
-rgb24   gzip         145407312   48.70%      0.692      0.532
-rgb24   lz4          194984127   65.30%      0.072      0.229
-rgb24   xz           106140244   35.55%      7.399      3.542
+nv12    none         149300736  100.00%      0.047      0.066
+nv12    zstd          69481931   46.54%      0.100      0.209
+nv12    gzip          65033049   43.56%      0.549      0.270
+nv12    lz4           93310011   62.50%      0.057      0.134
+nv12    xz            41573024   27.85%      5.042      1.639
+rgb24   none         298599936  100.00%      0.069      0.114
+rgb24   zstd         148623225   49.77%      0.181      0.397
+rgb24   gzip         145407311   48.70%      0.717      0.530
+rgb24   lz4          194984127   65.30%      0.077      0.239
+rgb24   xz           106140352   35.55%      7.395      3.575
 
 [OK] every codec round-tripped to identical bytes / 每個 codec 皆還原為相同位元組
 
@@ -34,14 +33,14 @@ format  codec     per-frame(B)   of raw      batch(B) batch adv.
 ------- -------- ------------- -------- ------------- ----------
 nv12    none         149372928  100.05%     149300736     +0.05%
 nv12    zstd          69444476   46.51%      69481931     -0.05%
-nv12    gzip          65016886   43.55%      65033049     -0.02%
+nv12    gzip          65016883   43.55%      65033049     -0.02%
 nv12    lz4           93308038   62.50%      93310011     -0.00%
-nv12    xz            50415968   33.77%      41573252    +21.27%
+nv12    xz            50415556   33.77%      41573024    +21.27%
 rgb24   none         298672128  100.02%     298599936     +0.02%
-rgb24   zstd         148507868   49.73%     148623226     -0.08%
-rgb24   gzip         145376490   48.69%     145407312     -0.02%
+rgb24   zstd         148507844   49.73%     148623225     -0.08%
+rgb24   gzip         145376429   48.69%     145407311     -0.02%
 rgb24   lz4          194978003   65.30%     194984127     -0.00%
-rgb24   xz           106342328   35.61%     106140244     +0.19%
+rgb24   xz           106342264   35.61%     106140352     +0.19%
 
 'batch adv.' is how much larger the per-frame total is than the batch
 figure -- i.e. the cross-frame dedup a real-time sender cannot use.
@@ -66,12 +65,12 @@ per-frame column for those.
 
 == Render prep: convert to RGBA / 轉換成 RGBA ==
 format     time(s)         MB/s           note
-nv12         0.109       3652.6 YUV->RGB matrix
-rgb24        0.130       3062.5 add alpha channel
+nv12         0.112       3554.7 YUV->RGB matrix
+rgb24        0.187       2129.0 add alpha channel
 
 == Verdict / 結論 ==
-  zstd transfer: NV12 69,481,931 B vs RGB1 148,623,226 B
-  -> NV12 transfers 79,141,295 B less (53.2% smaller)
+  zstd transfer: NV12 69,481,931 B vs RGB1 148,623,225 B
+  -> NV12 transfers 79,141,294 B less (53.2% smaller)
   RGB1 needs 2.14x the bytes of NV12 on the wire
 
 [Done] output / 輸出: /Users/raliclo/proj/lzfse2/swift_tar/verifications/rgb1/nv12_vs_rgb1_streaming_output.txt

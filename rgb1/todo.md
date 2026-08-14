@@ -286,6 +286,39 @@ review 未提出:
   的大小，並指出哪幾列能重用鄰格。舊文字斷言「最大 0.34%」與「批次數字可安心引用」，
   而在量到 +21.27% 的那次執行中，兩句依然被原樣印出。
 
+Defensive hygiene, 2026-08-14 / 防禦性衛生:
+
+- **`log()` shadowed a zsh builtin in `compile_tar-linux.sh`; renamed to
+  `log_msg()`.** `log` is a zsh builtin, and a function shadows it only from the
+  point of definition — a call placed above the definition resolves to the
+  builtin, which rejects any argument with `zsh:log:1: too many arguments` and
+  returns 1. Under that script's `set -euo pipefail` this aborts the build with
+  a message pointing at zsh rather than at the missing definition. All eleven
+  call sites were already below the definition, so nothing was broken; the
+  rename removes the trap rather than documenting it. Verified by rebuilding in
+  the VM: `BUILD_RC=0`, no `too many arguments`. No other script in the tree
+  defines `log()`, and `die()` is not a builtin.
+- **`compile_tar-linux.sh` 的 `log()` 遮蔽了 zsh builtin，已改名為 `log_msg()`。**
+  `log` 是 zsh 的 builtin，而函式只從定義處起遮蔽它——位於定義之上的呼叫會解析到
+  builtin，後者收到任何參數都會以 `zsh:log:1: too many arguments` 拒絕並回傳 1。在該
+  腳本的 `set -euo pipefail` 下，這會讓建置中止，且訊息指向 zsh 而非「函式尚未定義」。
+  11 個呼叫點原本都在定義之下，故並未實際出錯；改名是為了移除陷阱，而非替它寫註解。
+  已於 VM 重新建置驗證：`BUILD_RC=0`，無 `too many arguments`。程式庫中沒有其他腳本
+  定義 `log()`，而 `die` 並非 builtin。
+- **`nv12_vs_rgb1_streaming.zsh` truncated its committed record before knowing
+  the run was viable.** `exec > >(tee "$OUTPUT")` sat near the top, so the output
+  file was emptied at startup and any early failure destroyed the previous
+  measurement. Found while testing the new frame-count guard: one deliberately
+  bad `START` replaced a 77-line record with a 12-line error log. The redirect
+  now happens after the frame-count check, so the record is only opened for a run
+  that has the frames it asked for. Verified both paths: a bad `START` errors and
+  leaves the committed file byte-identical.
+- **`nv12_vs_rgb1_streaming.zsh` 會在確認執行可行之前就截斷入版紀錄。**
+  `exec > >(tee "$OUTPUT")` 原本位於檔案上方，故輸出檔在啟動時即被清空，任何早期失敗
+  都會毀掉上一份量測。此問題於測試新增的影格數守門時發現：一次刻意設錯的 `START` 就把
+  77 行的紀錄換成 12 行的錯誤訊息。重導現已改至影格數檢查之後，故只有取得所要求影格數的
+  執行才會開啟該紀錄。兩條路徑皆已驗證：錯誤的 `START` 會報錯，且入版檔案位元組完全未變。
+
 Follow-up / 後續:
 
 - Compile and smoke-test the RGB1 CLI operations.

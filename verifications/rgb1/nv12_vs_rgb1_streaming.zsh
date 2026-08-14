@@ -88,19 +88,22 @@ done
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/rgb1doe.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT INT TERM
-exec > >(tee "$OUTPUT") 2>&1
+
+# The committed record is not opened until the run is known to be viable; see
+# the exec below the frame-count check. Redirecting onto $OUTPUT here truncated
+# it at startup, so any early failure -- a START too close to the end of the
+# clip, a missing tool -- destroyed the previous good measurement before this
+# run had produced anything to replace it with. Observed while testing the
+# frame-count guard: one deliberately bad START replaced a 77-line record with
+# a 12-line error log.
+# 在確認本次執行可行之前，不會開啟入版的紀錄檔；見影格數檢查之後的 exec。若在此處
+# 直接重導到 $OUTPUT，會在啟動時就把它截斷，於是任何早期失敗——START 太接近片尾、
+# 缺少工具——都會在本次執行還沒產出任何可替換的內容之前，先毀掉上一份良好的量測。
+# 此問題正是在測試影格數守門時發現：一次刻意設錯的 START 就把 77 行的紀錄換成了
+# 12 行的錯誤訊息。
 
 W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width  -of csv=p=0 "$SRC")
 H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$SRC")
-
-echo "[Info] date / 日期: $(date '+%Y-%m-%d %H:%M:%S %Z')"
-echo "[Info] machine / 機器: $(uname -m), $(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)"
-echo "[Info] os / 系統: macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
-echo "[Info] swift_tar: $("$ST" --version)"
-echo "[Info] source / 來源: ${SRC:t}  ${W}x${H}, ${FRAMES} frames"
-echo "[Info] render prep = conversion to RGBA (what P6 feeds Metal); excludes GPU shader time"
-echo "[Info] render prep = 轉成 RGBA（P6 交給 Metal 的格式）；不含 GPU shader 時間"
-echo
 
 # ---------------------------------------------------------------------
 # Extract the SAME frames in both formats so the comparison is like-for-like.
@@ -120,9 +123,6 @@ echo
 # 使三者落在同一段影片上。
 DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$SRC")
 START="${START:-$(python3 -c "print(f'{float('$DUR')/2:.1f}')")}"
-echo "[Info] start / 起點: t=${START}s (mid-video; t=0 is a fade from black / 中段取樣)"
-echo
-
 ffmpeg -v error -ss "$START" -i "$SRC" -frames:v "$FRAMES" -pix_fmt nv12  -f rawvideo "$TMP/f.nv12"  -y
 ffmpeg -v error -ss "$START" -i "$SRC" -frames:v "$FRAMES" -pix_fmt rgb24 -f rawvideo "$TMP/f.rgb24" -y
 
@@ -137,9 +137,47 @@ RGB_RAW=$(stat -f '%z' "$TMP/f.rgb24")
 # the total would say no for every codec at any frame count.
 # 單格大小，非整批。codec 能否參照前一格，取決於其字典相對「單格」的大小；若拿總和
 # 來比，任何 codec 在任何影格數下都會得出「不能」。
-NV12_FB=$(( NV12_RAW / FRAMES ))
-RGB_FB=$(( RGB_RAW / FRAMES ))
+#
+# Derived from the geometry, never from raw/FRAMES. ffmpeg returns fewer frames
+# than asked whenever START leaves less than FRAMES of footage, and the -s test
+# above passes on a short file because it only checks for non-empty. Dividing by
+# the requested count would then understate the frame size and, through the
+# dictionary table below, invert the cross-frame-reuse verdict this script
+# exists to produce. Measured: START at duration-0.5s yields 14 of 48 frames and
+# a frame size 70.8% too small.
+# 由幾何推導，絕不用 raw/FRAMES。只要 START 之後的素材不足 FRAMES 格，ffmpeg 取回的
+# 格數就會少於要求，而上方的 -s 測試僅檢查非空，短檔案照樣通過。此時以「要求的格數」
+# 相除會低估單格大小，並經由下方的字典表反轉本腳本要產出的「能否跨格重用」判定。
+# 實測：START 取 duration-0.5s 時，48 格只取得 14 格，單格大小偏小 70.8%。
+NV12_FB=$(( W * H * 3 / 2 ))
+RGB_FB=$(( W * H * 3 ))
+for spec in "nv12:$NV12_RAW:$NV12_FB" "rgb24:$RGB_RAW:$RGB_FB"; do
+    fmt="${spec%%:*}"; rest="${spec#*:}"; raw="${rest%%:*}"; fb="${rest##*:}"
+    (( raw % fb == 0 )) || { echo "[Error] $fmt: $raw B is not a whole number of ${fb} B frames / 不是整數格" >&2; exit 1 }
+    (( raw / fb == FRAMES )) || {
+        echo "[Error] $fmt: got $(( raw / fb )) frames at t=${START}s, asked for $FRAMES — pick an earlier START or fewer frames" >&2
+        echo "        $fmt：t=${START}s 只取得 $(( raw / fb )) 格，要求 $FRAMES 格——請提早 START 或減少格數" >&2
+        exit 1
+    }
+done
 RGBA_BYTES=$(( W * H * 4 * FRAMES ))
+
+# Everything above prints to the terminal only. From here the run is known to
+# have the frames it asked for, so the committed record is opened and the header
+# written into it.
+# 以上所有輸出只送到終端機。至此已確認本次執行取得了所要求的影格數，才開啟入版的
+# 紀錄檔並將檔頭寫入其中。
+exec > >(tee "$OUTPUT") 2>&1
+
+echo "[Info] date / 日期: $(date '+%Y-%m-%d %H:%M:%S %Z')"
+echo "[Info] machine / 機器: $(uname -m), $(sysctl -n machdep.cpu.brand_string 2>/dev/null || true)"
+echo "[Info] os / 系統: macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+echo "[Info] swift_tar: $("$ST" --version)"
+echo "[Info] source / 來源: ${SRC:t}  ${W}x${H}, ${FRAMES} frames"
+echo "[Info] start / 起點: t=${START}s (mid-video; t=0 is a fade from black / 中段取樣)"
+echo "[Info] render prep = conversion to RGBA (what P6 feeds Metal); excludes GPU shader time"
+echo "[Info] render prep = 轉成 RGBA（P6 交給 Metal 的格式）；不含 GPU shader 時間"
+echo
 
 echo "== Raw frame sizes / 原始影格大小 =="
 printf "  %-8s %12s bytes  %5.2f B/px  %s\n" "nv12"  "$NV12_RAW" \

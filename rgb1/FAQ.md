@@ -222,7 +222,7 @@ RGB24 實測：
 > rows come from compressing the 8 frames as one stream, which in principle
 > lets the codec dedup across frames — a bonus no real-time sender could claim,
 > since it cannot wait for eight frames or reference one it has not sent yet.
-Two scripts measure this. `batch_vs_per_frame.zsh` covers zstd -3 across
+> Two scripts measure this. `batch_vs_per_frame.zsh` covers zstd -3 across
 > two frame sources (consecutive and 10 s-sampled) and reports a penalty of
 > **−0.1% to 0.0%**; `nv12_vs_rgb1_streaming.zsh --both` extends the same
 > comparison to all five codecs and finds **at most 0.34%** (rgb24/xz — the
@@ -237,7 +237,7 @@ Two scripts measure this. `batch_vs_per_frame.zsh` covers zstd -3 across
 > **「independent frames」確實獨立，2026-08-14 實測確認。** 上表各列是把 8 格壓成
 > 單一串流所得，原則上讓 codec 有機會跨格去重——而那是任何即時傳送端都無法主張的
 > 紅利，因為它不可能等滿八格，也無法參照尚未送出的影格。
-有兩支腳本量測此事：`batch_vs_per_frame.zsh` 以 zstd -3 涵蓋兩種影格來源
+> 有兩支腳本量測此事：`batch_vs_per_frame.zsh` 以 zstd -3 涵蓋兩種影格來源
 > （連續與相隔 10 秒取樣），回報 penalty 為 **−0.1% 至 0.0%**；
 > `nv12_vs_rgb1_streaming.zsh --both` 則把同一比較延伸到全部五種 codec，
 > 實測**最多 0.34%**（rgb24／xz——字典最大，差距因而最大；zstd 維持在 ±0.18%

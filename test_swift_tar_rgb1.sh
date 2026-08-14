@@ -143,13 +143,8 @@ ms()  { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f", (b-a)*1000}'; }
 # 依平台加後綴。共用單一檔案會造成陷阱：入版的表格錄自 Windows，而本腳本在 macOS
 # 上跑一次就會靜默地把它換成 macOS 的數字——只留下一個沒人解釋得清的 diff。現在每個
 # 平台各自擁有一個檔案，三者可同時入版。
-case "$(uname -s)" in
-    Darwin)               PLATFORM=mac ;;
-    Linux)                PLATFORM=linux ;;
-    MINGW*|MSYS*|CYGWIN*) PLATFORM=win ;;
-    *)                    PLATFORM=$(uname -s | tr '[:upper:]' '[:lower:]') ;;
-esac
-RESULTS="$HERE/verifications/rgb1_container_mbps_output-$PLATFORM.txt"
+. "$HERE/platform.sh"
+RESULTS="$HERE/verifications/rgb1_container_mbps_output-$(swift_tar_platform).txt"
 : > "$RESULTS"
 emit() { echo "$1"; echo "$1" >> "$RESULTS"; }
 

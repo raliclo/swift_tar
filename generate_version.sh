@@ -15,42 +15,20 @@ SCRIPT_DIR=${SWIFT_TAR_SOURCE_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
 output_swift=${1:?Usage: generate_version.sh <output-swift-file>}
 build_version=$(date +%Y%m%d-%H%M%S)
 
-case "$(uname -s)" in
-    Darwin)               platform=mac ;;
-    Linux)                platform=linux ;;
-    MINGW*|MSYS*|CYGWIN*) platform=win ;;
-    *)                    platform=$(uname -s | tr '[:upper:]' '[:lower:]') ;;
-esac
-version_file="$SCRIPT_DIR/version-$platform.txt"
+. "$SCRIPT_DIR/platform.sh"
+version_file="$SCRIPT_DIR/version-$(swift_tar_platform).txt"
 
-value() {
-    key=$1
-    if [ -f "$version_file" ]; then
-        sed -n "s/^${key}=//p" "$version_file" | sed -n '1p'
-    fi
-}
-
-zlib_version=$(value zlib_version)
-zlib_commit=$(value zlib_commit)
-zlib_linkage=$(value zlib_linkage)
-zstd_version=$(value zstd_version)
-zstd_commit=$(value zstd_commit)
-zstd_linkage=$(value zstd_linkage)
-libarchive_version=$(value libarchive_version)
-libarchive_commit=$(value libarchive_commit)
-libarchive_linkage=$(value libarchive_linkage)
-
+# Refresh the build stamp and keep every other line as the builders left it.
+# This used to enumerate the nine zlib/zstd/libarchive keys by name, which meant
+# any key a builder added later was silently dropped on the next build — the
+# macOS dynamic-linkage records added alongside this change would have vanished
+# on the following compile.
+# 更新版本戳，其餘各行原樣保留建置腳本寫入的內容。此處原本逐一列舉 zlib／zstd／
+# libarchive 那九個鍵，導致建置腳本日後新增的任何鍵，都會在下次建置時被靜默丟棄
+# ——與本次一併加入的 macOS 動態連結紀錄，下一次編譯就會消失。
 {
     echo "swift_tar_version=$build_version"
-    [ -n "$zlib_version" ] && echo "zlib_version=$zlib_version"
-    [ -n "$zlib_commit" ] && echo "zlib_commit=$zlib_commit"
-    [ -n "$zlib_linkage" ] && echo "zlib_linkage=$zlib_linkage"
-    [ -n "$zstd_version" ] && echo "zstd_version=$zstd_version"
-    [ -n "$zstd_commit" ] && echo "zstd_commit=$zstd_commit"
-    [ -n "$zstd_linkage" ] && echo "zstd_linkage=$zstd_linkage"
-    [ -n "$libarchive_version" ] && echo "libarchive_version=$libarchive_version"
-    [ -n "$libarchive_commit" ] && echo "libarchive_commit=$libarchive_commit"
-    [ -n "$libarchive_linkage" ] && echo "libarchive_linkage=$libarchive_linkage"
+    grep -v '^swift_tar_version=' "$version_file" 2>/dev/null || true
 } > "$version_file.tmp"
 mv "$version_file.tmp" "$version_file"
 

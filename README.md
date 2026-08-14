@@ -33,8 +33,13 @@ Requires the Xcode toolchain (`swiftc`) and a few Homebrew libraries:
 ```sh
 brew install lz4 xz zstd      # liblz4 / liblzma / libzstd
 git submodule update --init   # fetch lzfse2 + libarchive + zlib
-./compile_tar.sh              # → release/swift_tar
+./build.sh                    # → release/swift_tar
 ```
+
+`build.sh` detects the platform with `uname` and runs that platform's build —
+`compile_tar.sh` on macOS, `compile_tar-win.bat` on Windows — so the same command
+works on either. `./build.sh --platform` prints the detected name without
+building. Calling the platform script directly still works.
 
 The build reuses `lzfse2/lzfse-cli.swift` as a library (its top-level
 `runCLI()` entry point is stripped, then both files are compiled together)
@@ -347,7 +352,10 @@ compiled, for example `swift_tar 20260712-143015`. The same value is stored as
 swift_tar.swift    tar writer/reader + codecs + libarchive-style filters
 crypto.swift       ChaCha20-Poly1305 / scrypt + the encrypted container
 rgb1.swift         RGB1 raw image container
-compile_tar.sh     build script → release/swift_tar
+build.sh           platform-detecting entry point → the build below
+compile_tar.sh     macOS build script → release/swift_tar
+platform.sh        sourced: the one place the platform suffix is decided
+version-mac.txt / version-win.txt   per-platform build stamp + linkage provenance
 build_libarchive.sh / build_libarchive-win.sh  static ZIP backend builds
 libarchive_zip_bridge.c  shared macOS/Windows ZIP C ABI
 build_zlib-win.sh  sync/rebuild the pinned Windows static zlib dependency

@@ -30,8 +30,12 @@
 ```sh
 brew install lz4 xz zstd      # liblz4 / liblzma / libzstd
 git submodule update --init   # 取得 lzfse2 + libarchive + zlib
-./compile_tar.sh              # → release/swift_tar
+./build.sh                    # → release/swift_tar
 ```
+
+`build.sh` 以 `uname` 偵測平台並執行該平台的建置——macOS 用 `compile_tar.sh`、
+Windows 用 `compile_tar-win.bat`——故同一道指令在兩者皆可用。`./build.sh --platform`
+只印出偵測到的平台名稱而不建置。直接呼叫各平台腳本仍然可行。
 
 建置時將 `lzfse2/lzfse-cli.swift` 當函式庫重用（剝除其頂層 `runCLI()`
 進入點後兩檔合併編譯），並連結 `-lz -lbz2 -llz4 -llzma -lzstd` 與內附的
@@ -317,7 +321,10 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 swift_tar.swift    tar 寫入／讀取 + 壓縮引擎 + libarchive 式 filter
 crypto.swift       ChaCha20-Poly1305 / scrypt 與加密容器
 rgb1.swift         RGB1 原始影像容器
-compile_tar.sh     建置腳本 → release/swift_tar
+build.sh           會偵測平台的進入點 → 下方對應的建置腳本
+compile_tar.sh     macOS 建置腳本 → release/swift_tar
+platform.sh        供 source：決定平台後綴的唯一來源
+version-mac.txt / version-win.txt   各平台的建置版本戳與連結來源
 build_libarchive.sh / build_libarchive-win.sh  靜態 ZIP 後端建置
 libarchive_zip_bridge.c  macOS/Windows 共用 ZIP C ABI
 build_zlib-win.sh  同步／重建 Windows 固定版本的 zlib 靜態相依套件

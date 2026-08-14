@@ -19,6 +19,7 @@
 # =====================================================================
 set -e
 cd "$(dirname "$0")"
+. ./platform.sh
 
 # Optional: --no-lzfse builds the public/distributable binary that ships NONE of
 # the private LZFSE engine — lzfse-cli.swift is not compiled in, and the binary
@@ -79,6 +80,46 @@ swiftc -O $SWIFT_DEFINES $CLI_SRC "$TEMP_VERSION" swift_tar.swift rgb1.swift cry
     -o release/swift_tar -lz -lbz2 -L"$BREW_LIB" -llz4 -llzma -lzstd
 
 echo "Built ./release/swift_tar / 已建置 ./release/swift_tar"
+
+# Record what the binary actually links, read back from the binary itself. otool
+# names the dylib that will be loaded at run time, which is the only version a
+# provenance record can honestly mean — a header or a `brew list` can describe
+# something the linker did not pick. libarchive is absent here because it is
+# static; build_libarchive.sh records it from the submodule's own gitlink, the
+# same way the Windows builders do.
+# 記錄執行檔實際連結了什麼，且直接自執行檔讀回。otool 指出的是執行時會載入的 dylib，
+# 那是 provenance 紀錄唯一能誠實表達的版本——標頭檔或 `brew list` 描述的可能是連結器
+# 根本沒選用的那一份。此處沒有 libarchive，因為它是靜態連結；build_libarchive.sh 會
+# 依 submodule 自身的 gitlink 記錄它，與 Windows 建置腳本作法相同。
+#
+# The version recorded is the Mach-O "current version" of the dylib, hence the
+# key name. For zlib, bzip2, lz4 and zstd it happens to equal the upstream
+# release; for liblzma it does not — xz 5.x ships a dylib numbered 14.3.0. Naming
+# the field after what it actually is keeps that from reading as a wrong xz
+# version. The path is the identifying half of the record anyway.
+# 所記錄的版本是該 dylib 的 Mach-O「current version」，鍵名即據此命名。zlib、bzip2、
+# lz4 與 zstd 恰好與上游發行版號相同，liblzma 則否——xz 5.x 的 dylib 版號為 14.3.0。
+# 依欄位的實際含意命名，可避免它被誤讀為錯誤的 xz 版本。何況真正用於辨識的是路徑。
+record_linked() {        # key  first-field pattern / 鍵名 與 第一欄比對樣式
+    otool -L release/swift_tar | awk -v k="$1" -v pat="$2" '
+        $1 ~ pat {
+            v = $0; sub(/.*current version /, "", v); sub(/\).*/, "", v)
+            printf "%s_dylib_version=%s\n%s_path=%s\n%s_linkage=dynamic\n", k, v, k, $1, k
+            exit
+        }'
+}
+version_file="version-$(swift_tar_platform).txt"
+tmp_version="$version_file.tmp"
+{
+    grep -vE '^(zlib|bzip2|lz4|xz|zstd)_(dylib_version|path|linkage)=' "$version_file" 2>/dev/null || true
+    record_linked zlib  'libz\.'
+    record_linked bzip2 'libbz2\.'
+    record_linked lz4   'liblz4\.'
+    record_linked xz    'liblzma\.'
+    record_linked zstd  'libzstd\.'
+} > "$tmp_version"
+mv "$tmp_version" "$version_file"
+echo "Recorded linked libraries in $version_file / 已將連結的函式庫記入 $version_file"
 
 mkdir -p /opt/homebrew/bin
 cp ./release/swift_tar /opt/homebrew/bin/swift_tar

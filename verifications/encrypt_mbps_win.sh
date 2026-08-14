@@ -154,23 +154,29 @@ echo "== A) create/extract, plain vs encrypted =="
 printf "%-16s %-9s %10s %10s %14s\n" "codec" "mode" "real(s)" "MB/s" "archive(bytes)"
 
 run_pair() {
+    # $2 is split into words so a codec can pin its own level; see the same
+    # change in encrypt_mbps_rss.sh. swift_tar's default zstd level moved from 3
+    # to 9 on 2026-08-14, so a bare --zstd silently changed what this measures.
+    # $2 會被拆成多個詞，使 codec 得以釘住自身等級；同樣的改動見 encrypt_mbps_rss.sh。
+    # swift_tar 的 zstd 預設等級已於 2026-08-14 由 3 改為 9，故裸 --zstd 會靜默改變本
+    # 腳本所量測的對象。
     local label="$1"
-    local flag="$2"
+    local -a flag; flag=(${=2})
     local clear="$TMP_DIR/a_$label.clear"
     local enc="$TMP_DIR/a_$label.enc"
     local -a create_t enc_t extract_t dec_t
     local round
 
     for round in $(seq 1 "$ROUNDS"); do
-        if [[ -n "$flag" ]]; then
-            measure "$SWIFT_TAR_BIN" -c "$flag" -f "$clear" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
+        if (( ${#flag[@]} )); then
+            measure "$SWIFT_TAR_BIN" -c "${flag[@]}" -f "$clear" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
         else
             measure "$SWIFT_TAR_BIN" -c -f "$clear" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
         fi
         create_t+=("$MEASURE_REAL")
 
-        if [[ -n "$flag" ]]; then
-            measure "$SWIFT_TAR_BIN" -c "$flag" --keyfile "$KEYFILE" -f "$enc" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
+        if (( ${#flag[@]} )); then
+            measure "$SWIFT_TAR_BIN" -c "${flag[@]}" --keyfile "$KEYFILE" -f "$enc" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
         else
             measure "$SWIFT_TAR_BIN" -c --keyfile "$KEYFILE" -f "$enc" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
         fi
@@ -222,7 +228,7 @@ run_pair() {
 
 run_pair "plain-tar" ""
 run_pair "gzip" "--gzip"
-run_pair "zstd" "--zstd"
+run_pair "zstd" "--zstd --zstd-level 9"
 
 echo
 echo "== B) --encrypt-only / --decrypt-only on an existing .tar =="

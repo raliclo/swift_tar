@@ -183,11 +183,19 @@ emit ""
 emit "== RGB1 container: size / time / throughput by codec =="
 emit "$(printf '%-16s %12s %7s %11s %9s %11s %9s' "codec" "size(B)" "ratio" "create(ms)" "cr(MB/s)" "extract(ms)" "ex(MB/s)")"
 emit "$(printf '%-16s %12s %7s %11s %9s %11s %9s' "----------------" "------------" "-------" "-----------" "---------" "-----------" "---------")"
-bench() { # label codec-flag archive-name
-  local label="$1" flag="$2" arc="$TMP/$3" out="$TMP/xb_$3"
+bench() { # label codec-flags archive-name
+  # $2 is split into words, so a codec can carry its own options. It used to be
+  # a single quoted argument, which meant a level could not be pinned and every
+  # zstd row silently followed swift_tar's default -- that default moved from 3
+  # to 9 on 2026-08-14 and would have re-based this table without saying so.
+  # $2 會被拆成多個詞，使 codec 得以夾帶自身選項。原本它是單一引號參數，導致無法釘住
+  # 等級，每一列 zstd 都靜默沿用 swift_tar 的預設值——而該預設已於 2026-08-14 由 3 改為
+  # 9，會在不聲明的情況下改變本表的基準。
+  local label="$1" arc="$TMP/$3" out="$TMP/xb_$3"
+  local -a flag; read -r -a flag <<< "$2"
   # create: skip this codec if unsupported (e.g. missing CLI) / 建立：不支援則略過
-  if [ -n "$flag" ]; then
-    if ! "$ST" -c "$flag" -f "$arc" -C "$BIGSRC" big.rgb1 >/dev/null 2>&1; then
+  if [ ${#flag[@]} -gt 0 ]; then
+    if ! "$ST" -c "${flag[@]}" -f "$arc" -C "$BIGSRC" big.rgb1 >/dev/null 2>&1; then
       emit "$(printf '%-16s %12s' "$label" "SKIP(unsupported)")"; return
     fi
   else
@@ -196,7 +204,7 @@ bench() { # label codec-flag archive-name
   # average create time over 3 runs / 建立耗時取 3 次平均
   local i s e sum=0
   for i in 1 2 3; do
-    s=$(now); { [ -n "$flag" ] && "$ST" -c "$flag" -f "$arc" -C "$BIGSRC" big.rgb1 >/dev/null 2>&1 || "$ST" -c -f "$arc" -C "$BIGSRC" big.rgb1; } ; e=$(now)
+    s=$(now); { [ ${#flag[@]} -gt 0 ] && "$ST" -c "${flag[@]}" -f "$arc" -C "$BIGSRC" big.rgb1 >/dev/null 2>&1 || "$ST" -c -f "$arc" -C "$BIGSRC" big.rgb1; } ; e=$(now)
     sum=$(awk -v s="$sum" -v d="$(ms "$s" "$e")" 'BEGIN{print s+d}')
   done
   local ctime; ctime=$(awk -v s="$sum" 'BEGIN{printf "%.1f", s/3}')
@@ -228,7 +236,7 @@ bench "plain"  ""        "big.tar"
 bench "gzip"   "--gzip"  "big.tar.gz"
 bench "bzip2"  "--bzip2" "big.tar.bz2"
 bench "xz"     "--xz"    "big.tar.xz"
-bench "zstd"   "--zstd"  "big.tar.zst"
+bench "zstd"   "--zstd --zstd-level 9"  "big.tar.zst"
 bench "lz4"    "--lz4"   "big.tar.lz4"
 bench "zip"    "--zip"   "big.zip"
 # LZFSE-family codecs exist only in the full build. In the --no-lzfse build the

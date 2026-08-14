@@ -353,6 +353,68 @@ Defensive hygiene, 2026-08-14 / 防禦性衛生:
   `bsdtar_compat.sh`、`test_no_lzfse.sh`、`test_encrypt.sh`。正確性測試不受等級影響；
   `encrypt_mbps_rss.sh` 回報的是 MB/s，會隨之變動。本次未處理。
 
+- **Test scripts aligned with zstd -9 (2026-08-15).** With the default at 9, a
+  bare `--zstd` already produces level 9 — the problem was that nothing said so,
+  and the committed numbers had been recorded at 3. `test_swift_tar_rgb1.sh`,
+  `encrypt_mbps_rss.sh` and `encrypt_mbps_win.sh` now pass `--zstd-level 9`
+  explicitly. All three took the codec flag as a single quoted argument, so each
+  helper was changed to split it into an array first (`read -r -a` in bash,
+  `${=2}` in zsh); a level cannot be pinned otherwise.
+
+  Re-measured. `test_swift_tar_rgb1.sh`: the zstd row goes 4,567 -> 4,555 B.
+  `encrypt_mbps_rss.sh` on the 1.4 GB corpus: **433,753,307 -> 401,152,357 B, a
+  7.52% reduction**.
+
+  Throughput is *not* attributable to the level: zstd create reads 1541.76 ->
+  531.44 MB/s across the two runs, but plain-tar create also moved 550.20 ->
+  1389.11 MB/s in the same pair, and plain tar has no zstd in it at all. The
+  previous record is from 2026-08-05 on a binary ten days older; only the archive
+  sizes isolate the level cleanly.
+
+  One near-miss worth recording. `bench()` in `test_swift_tar_rgb1.sh` uses
+  `flag` twice, and the first pass only fixed the creation call. The timing loop
+  is `... && "$ST" -c "$flag" ... || "$ST" -c -f ...`, so a malformed argument
+  would have fallen through to plain tar and reported plain-tar timings under the
+  zstd label. Caught because 4,555 B is not 3,148,288 B.
+
+  Left alone deliberately: `test_encrypt.sh`, `test_no_lzfse.sh`,
+  `bsdtar_compat.sh` and `encrypt_windows_correctness.sh` assert round-trip
+  equality, which no level changes. `nv12_vs_rgb1_streaming.zsh` stays pinned at
+  **3**, because its two companion scripts call the zstd CLI at -3 and the FAQ
+  section it feeds concludes "-3 for streaming, -19 for archiving"; moving that
+  one study to 9 would contradict its own argument and needs all three scripts
+  plus the FAQ moved together.
+
+  `encrypt_mbps_win_output.txt` still holds level-3 numbers. The script is pinned
+  but only the Windows side can re-run it, so the gap is now explicit rather than
+  silent.
+- **測試腳本對齊 zstd -9（2026-08-15）。** 預設已是 9，故裸 `--zstd` 本來就會產生等級
+  9——問題在於沒有任何地方載明，而入版數字是在等級 3 下錄的。`test_swift_tar_rgb1.sh`、
+  `encrypt_mbps_rss.sh` 與 `encrypt_mbps_win.sh` 現皆明確傳入 `--zstd-level 9`。三者
+  原本都把 codec 旗標當作單一引號參數，故各自的 helper 都改為先拆成陣列（bash 用
+  `read -r -a`，zsh 用 `${=2}`）；否則根本無法釘住等級。
+
+  已重新量測。`test_swift_tar_rgb1.sh`：zstd 列由 4,567 變為 4,555 B。
+  `encrypt_mbps_rss.sh` 於 1.4 GB 語料：**433,753,307 → 401,152,357 B，減少 7.52%**。
+
+  吞吐量*不可*歸因於等級：兩次執行間 zstd create 由 1541.76 變為 531.44 MB/s，但同一
+  組對照中 plain-tar create 也由 550.20 變為 1389.11 MB/s，而純 tar 根本不含 zstd。
+  前一份紀錄錄於 2026-08-05、二進位早了十天；能乾淨隔離出等級影響的只有封存大小。
+
+  一個值得記下的險些出錯。`test_swift_tar_rgb1.sh` 的 `bench()` 用到 `flag` 兩次，而
+  第一次只改了建立那處。計時迴圈寫作 `... && "$ST" -c "$flag" ... || "$ST" -c -f ...`，
+  參數格式錯誤會落到 `||` 而以純 tar 執行，並把純 tar 的計時掛在 zstd 標籤下回報。
+  之所以發現，是因為 4,555 B 不是 3,148,288 B。
+
+  刻意未動：`test_encrypt.sh`、`test_no_lzfse.sh`、`bsdtar_compat.sh` 與
+  `encrypt_windows_correctness.sh` 斷言的是往返一致，任何等級都不影響。
+  `nv12_vs_rgb1_streaming.zsh` 維持釘在 **3**，因為其兩支姊妹腳本以 `-3` 呼叫 zstd CLI，
+  且它所支撐的 FAQ 一節結論正是「串流用 -3、封存用 -19」；單獨把該研究改成 9 會與其
+  自身論證矛盾，需三支腳本連同 FAQ 一併調整。
+
+  `encrypt_mbps_win_output.txt` 仍是等級 3 的數字。腳本已釘住，但只有 Windows 端能重跑，
+  故該落差現在是明確可見而非靜默存在。
+
 Follow-up / 後續:
 
 - Compile and smoke-test the RGB1 CLI operations.

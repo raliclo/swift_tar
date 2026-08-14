@@ -135,20 +135,28 @@ echo
 echo "== A) create/extract, plain vs encrypted =="
 printf "%-16s %-9s %10s %10s %12s %14s\n" "codec" "mode" "real(s)" "MB/s" "peakRSS(MB)" "archive(bytes)"
 
-run_pair() { # label codec-flag
-    local label="$1" flag="$2"
+run_pair() { # label codec-flags
+    # $2 is split into words so a codec can pin its own level. As a single
+    # quoted argument the zstd row silently followed swift_tar's default, which
+    # moved from 3 to 9 on 2026-08-14 -- the committed MB/s figures would have
+    # changed level without the table saying so.
+    # $2 會被拆成多個詞，使 codec 得以釘住自身等級。作為單一引號參數時，zstd 那列會
+    # 靜默沿用 swift_tar 的預設值，而該預設已於 2026-08-14 由 3 改為 9——入版的 MB/s
+    # 數字會在表格毫無說明的情況下換了等級。
+    local label="$1"
+    local -a flag; flag=(${=2})
     local clear="$TMP_DIR/a_$label.clear" enc="$TMP_DIR/a_$label.enc"
     local -a t_c t_e r_c r_e
 
     for round in $(seq 1 "$ROUNDS"); do
-        if [[ -n "$flag" ]]; then
-            measure "$SWIFT_TAR_BIN" -c "$flag" -f "$clear" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
+        if (( ${#flag[@]} )); then
+            measure "$SWIFT_TAR_BIN" -c "${flag[@]}" -f "$clear" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
         else
             measure "$SWIFT_TAR_BIN" -c -f "$clear" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
         fi
         t_c+=("$MEASURE_REAL"); r_c+=("$MEASURE_RSS")
-        if [[ -n "$flag" ]]; then
-            measure "$SWIFT_TAR_BIN" -c "$flag" --keyfile "$KEYFILE" -f "$enc" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
+        if (( ${#flag[@]} )); then
+            measure "$SWIFT_TAR_BIN" -c "${flag[@]}" --keyfile "$KEYFILE" -f "$enc" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
         else
             measure "$SWIFT_TAR_BIN" --keyfile "$KEYFILE" -c -f "$enc" -C "$CORPUS_PARENT" "$CORPUS_LEAF"
         fi
@@ -183,7 +191,7 @@ run_pair() { # label codec-flag
 
 run_pair "plain-tar" ""
 run_pair "gzip"      "--gzip"
-run_pair "zstd"      "--zstd"
+run_pair "zstd"      "--zstd --zstd-level 9"
 
 # ---------------------------------------------------------------------
 # B) The encryption layer on its own, over an existing archive.

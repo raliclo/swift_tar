@@ -1,0 +1,48 @@
+[Info] date / 日期: 2026-08-15 00:55:29 CST
+[Info] os: macOS 27.0 (26A5406e)
+[Info] source / 來源: 20260803 回到神面前 讓神來醫治 [恩典365 - 時代先知 ： 耶利米 系列] [d-t779PY_S0].webm  1920x1080
+[Info] continuous / 連續: 48 frames from t=121.2s
+[Info] cut-every-frame / 每格皆切換: 48 frames sampled every 5s / 每 5 秒取樣一格
+[Info] codec: zstd -3 (CLI, whole frame, no slicing / 整格、不切片)
+[Info] ffmpeg: ffmpeg version 8.1.2
+
+== A+B. Inter-frame transform by format and corpus / 依格式與語料的影格間變換 ==
+   ratios are of that format's own raw size; B/frame is what goes on the wire
+   壓縮比以該格式自身的原始大小為基準；B/frame 才是實際上線的量
+
+corpus      format  transform          bytes   of raw     B/frame
+-----------------------------------------------------------------
+cont        nv12    none          69,413,765   46.49%   1,446,120
+cont        nv12    delta         18,929,720   12.68%     394,369
+cont        nv12    xor           21,040,085   14.09%     438,335
+cont        rgb24   none         148,232,130   49.64%   3,088,169
+cont        rgb24   delta         42,477,151   14.23%     884,941
+cont        rgb24   xor           50,248,859   16.83%   1,046,851
+
+cut         nv12    none          65,461,774   43.85%   1,363,787
+cut         nv12    delta         66,263,573   44.38%   1,380,491
+cut         nv12    xor           71,901,381   48.16%   1,497,945
+cut         rgb24   none         139,281,914   46.65%   2,901,707
+cut         rgb24   delta        150,679,579   50.46%   3,139,158
+cut         rgb24   xor          166,926,144   55.90%   3,477,628
+
+== Verdict / 結論 ==
+  continuous / 連續:
+    delta saves nv12  72.7%   rgb24  71.3%
+    rgb24/nv12 on the wire  intra 2.14x   delta 2.24x
+    xor vs delta on rgb24   +18.3%  (worse)
+  cut every frame / 每格皆切換:
+    delta saves nv12  -1.2%   rgb24  -8.2%
+    rgb24/nv12 on the wire  intra 2.13x   delta 2.27x
+    xor vs delta on rgb24   +10.8%  (worse)
+
+== C. Withdrawn rows, re-measured / 撤下各列的重測 ==
+   x264 is lossless (qp 0); VP9 is the lossy 2300k setting the FAQ quoted
+   x264 為無損（qp 0）；VP9 為 FAQ 所引用的有損 2300k 設定
+
+method                            bytes    of raw kind
+------------------------ -------------- --------- ----
+x264 lossless (qp 0)         16,078,914     5.38% lossless
+VP9 lossy (2300k)               408,035     0.14% lossy
+
+[Done] output / 輸出: /Users/raliclo/proj/lzfse2/swift_tar/verifications/rgb1/test_interframe_output.txt

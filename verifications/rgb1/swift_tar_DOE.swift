@@ -458,6 +458,15 @@ func compress(_ input: [UInt8], codec: String, level: Int) -> [UInt8]? {
 struct Options {
     var ycocg = false, med = false, sub = false, planar = false
     var palette = false, flagByte = false, delta = false, dirSim = false
+    // XOR against the previous frame instead of subtracting it. Same shape as
+    // delta -- same reference, same guards -- so the two are directly
+    // comparable, which is the point: the FAQ once recorded XOR as worse than
+    // subtraction on a t=0 corpus and that row was withdrawn when the corpus
+    // was corrected. Self-inverse, so encode and decode run the same operation.
+    // 對前一格取 XOR 而非相減。形狀與 delta 相同——同一份參考、同一組守門——故兩者可
+    // 直接比較，而這正是重點：FAQ 曾在 t=0 語料上記錄 XOR 劣於相減，語料更正後該列已
+    // 撤下。XOR 為自反運算，故編碼與解碼執行同一個操作。
+    var xorPrev = false
     var stripGeo = false
     var slices = 1
     var threads = 1
@@ -474,6 +483,7 @@ struct Options {
     var label: String {
         var parts: [String] = []
         if delta { parts.append("delta") }
+        if xorPrev { parts.append("xor") }
         if palette { parts.append("palette") }
         if flagByte { parts.append("flagbyte") }
         if dirSim { parts.append("dirsim") }
@@ -500,6 +510,9 @@ func transform(_ frame: Frame, previous: [UInt8]?, opt: Options) throws -> [UInt
 
     if opt.delta, let prev = previous, prev.count == buf.count {
         for i in 0..<buf.count { buf[i] = UInt8((Int(buf[i]) &- Int(prev[i])) & 0xFF) }
+    }
+    if opt.xorPrev, let prev = previous, prev.count == buf.count {
+        for i in 0..<buf.count { buf[i] ^= prev[i] }
     }
     if opt.palette {
         let (blob, _, _) = paletteEncode(buf)
@@ -629,6 +642,10 @@ func encodeBand(_ payload: [UInt8], previous: [UInt8]?, width: Int, y0: Int, y1:
         let pb = Array(prev[range])
         for i in 0..<buf.count { buf[i] = UInt8((Int(buf[i]) &- Int(pb[i])) & 0xFF) }
     }
+    if opt.xorPrev, let prev = previous {
+        let pb = Array(prev[range])
+        for i in 0..<buf.count { buf[i] ^= pb[i] }
+    }
     if opt.dirSim { buf = dirSimForward(buf, width: width, height: rows).blob }
     if opt.ycocg { buf = ycocgForward(buf) }
     if opt.med || opt.sub {
@@ -664,6 +681,14 @@ func decodeBand(_ blob: [UInt8], previous: [UInt8]?, width: Int, rows: Int,
     if opt.delta, let prev = previous {
         for i in 0..<buf.count { buf[i] = UInt8((Int(buf[i]) &+ Int(prev[i])) & 0xFF) }
     }
+    // XOR is its own inverse, so this is the same loop encodeBand ran. Applied
+    // after the delta so that --delta --xor together invert in the right order,
+    // though measuring them together is not the intended use.
+    // XOR 為自反運算，故此處與 encodeBand 執行的是同一個迴圈。置於差分之後，使
+    // --delta --xor 併用時能以正確順序還原——但同時使用並非本旗標的預期用法。
+    if opt.xorPrev, let prev = previous {
+        for i in 0..<buf.count { buf[i] ^= prev[i] }
+    }
     return buf
 }
 
@@ -693,6 +718,9 @@ Payload transforms (composable) / payload 變換（可組合）:
                    keeping the payload fixed-length / 與方向鄰居相同者 RGB 寫零，
                    payload 維持固定長度
   --delta          inter-frame delta vs the previous file / 對前一檔的影格間差分
+  --xor            inter-frame XOR vs the previous file; same reference and
+                   guards as --delta, so the two are directly comparable /
+                   對前一檔取 XOR；參考與守門皆與 --delta 相同，故兩者可直接比較
 
 Container / 容器:
   --strip-geo      account for the header without its 16 geo bytes. It adjusts
@@ -748,6 +776,7 @@ func parse(_ argv: [String]) throws -> Options {
         case "--flag-byte": o.flagByte = true
         case "--dirsim": o.dirSim = true
         case "--delta": o.delta = true
+        case "--xor": o.xorPrev = true
         case "--strip-geo": o.stripGeo = true
         case "--slices": o.slices = Int(try next(a)) ?? 1
         case "-n": o.threads = max(1, Int(try next(a)) ?? 1)

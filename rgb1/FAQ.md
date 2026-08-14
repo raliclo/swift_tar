@@ -260,16 +260,62 @@ other table here:
 | **frame delta + zstd -3** | **42,520,301** | **885,840** | **14.24%** | lossless |
 | FFV1 level 3 (intra) | 58,689,456 | 1,222,697 | 19.65% | lossless |
 | VP9 -lossless (intra) | 111,778,032 | 2,328,709 | 37.43% | lossless |
-| frame XOR + zstd † | — | — | — | lossless |
-| x264 lossless (qp 0) † | — | — | — | lossless |
-| VP9 lossy (2300k) † | — | — | — | **lossy** |
+| frame XOR + zstd -3 | 50,291,944 | 1,047,749 | 16.84% | lossless |
+| x264 lossless (qp 0) † | 16,078,914 | 334,977 | 5.38% | lossless |
+| VP9 lossy (2300k) † | 408,035 | 8,501 | 0.14% | **lossy** |
 
-† Not yet re-measured on this corpus; the t=0 figures they carried were
-withdrawn rather than quoted, since every other row moved by more than an order
-of magnitude.
+† From ffmpeg on the raw rgb24 frames rather than through swift_tar, so these
+two are whole-clip encodes with no 4 MiB chunking and no band slicing. The four
+rows above them are swift_tar_DOE at 1 slice. Measured by
+`test_interframe.zsh`.
 
-† 尚未於本語料重測；其原本承載的 t=0 數字已撤下而非續用，因為其餘每一列的變動都
-超過一個數量級。
+**The delta does not make RGB1 competitive with NV12, and it has a worst case.**
+Two things the table above cannot show, both measured by `test_interframe.zsh`
+with one code path over both formats:
+
+| corpus | NV12 saved by delta | RGB1 saved by delta | RGB1/NV12 intra | RGB1/NV12 with delta |
+|---|---:|---:|---:|---:|
+| 48 consecutive frames | 72.7% | 71.3% | 2.14x | **2.24x** |
+| 48 frames, 5 s apart | −1.2% | −8.2% | 2.13x | **2.27x** |
+
+NV12 benefits from a delta slightly *more* than RGB1 does, so the wire gap
+widens rather than closes — 2.14x becomes 2.24x. An RGB1 delta measured against
+an NV12 intra figure looks like it closes the gap, but that compares inter-frame
+against intra and is the same error, reversed, as the one the t=0 correction was
+about.
+
+On content where every frame is a cut, the delta **costs** 1.2% (NV12) to 8.2%
+(RGB1): the residual of two unrelated frames is noisier than either frame. Any
+use of this needs a per-frame decision that falls back to intra when the
+residual does not compress better, which is what a keyframe interval is for.
+
+**差分不會使 RGB1 追上 NV12，且它有最壞情況。** 上表看不出來的兩件事，皆由
+`test_interframe.zsh` 以同一條程式路徑對兩種格式量得：
+
+| 語料 | NV12 差分省下 | RGB1 差分省下 | 純 intra 線路比 | 加上差分後 |
+|---|---:|---:|---:|---:|
+| 48 格連續 | 72.7% | 71.3% | 2.14x | **2.24x** |
+| 48 格、每 5 秒一格 | −1.2% | −8.2% | 2.13x | **2.27x** |
+
+NV12 從差分獲得的效益略**高於** RGB1，故線路差距是被拉大而非弭平——2.14x 變成 2.24x。
+若拿 RGB1 的差分結果去對照 NV12 的純 intra 數字，看起來像是追上了，但那是拿影格間對照
+intra，與 t=0 更正所針對的錯誤是同一個，只是方向相反。
+
+在每格皆為鏡頭切換的內容上，差分反而**增加** 1.2%（NV12）到 8.2%（RGB1）：兩張無關影格
+的殘差比任一張原圖都更雜亂。實際採用時必須逐格判斷，殘差壓不贏就退回 intra——那正是
+keyframe 間隔的用途。
+
+**XOR is worse than subtraction**, by 18% here — the direction the t=0 table
+recorded, at a magnitude that table could not have seen. x264 lossless beats
+everything lossless on this corpus because it does motion compensation; it is
+also 64.2 ms/frame, four times the 16.67 ms budget.
+
+† 由 ffmpeg 直接對原始 rgb24 影格編碼，未經 swift_tar，故此二列為整段編碼、無 4 MiB
+分塊亦無列帶切片。其上四列則為 swift_tar_DOE、1 slice。由 `test_interframe.zsh` 量測。
+
+**XOR 劣於相減**，此處差 18%——方向與 t=0 表格所記一致，但量級是那份表格不可能看出來的。
+x264 lossless 在本語料上勝過所有無損選項，因為它做了 motion compensation；但它同時是
+64.2 ms/frame，為 16.67 ms 預算的四倍。
 
 > **"independent frames" is independent for zstd, gzip and lz4 — but not for
 > xz. Corrected 2026-08-14.** These rows compress the batch as one stream, which

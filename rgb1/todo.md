@@ -415,6 +415,65 @@ Defensive hygiene, 2026-08-14 / 防禦性衛生:
   `encrypt_mbps_win_output.txt` 仍是等級 3 的數字。腳本已釘住，但只有 Windows 端能重跑，
   故該落差現在是明確可見而非靜默存在。
 
+New DOE, 2026-08-15 / 新增 DOE:
+
+- **`--xor` added to `swift_tar_DOE`; `test_interframe.zsh` added.** The 2026-08-14
+  corpus correction left three questions open and the new script answers all
+  three on the 48-frame corpus, sizes only — timing belongs to
+  `streaming_budget_benchmark.zsh` because the 16.67 ms budget constrains the
+  macOS/Metal client. Sizes need one platform: zstd -3 and -9 on one 1080p frame
+  are byte-identical on macOS and aarch64 Linux (3,055,046 and 2,713,905 both).
+
+  **A. NV12 with a delta — the gap that mattered.** NV12 benefits slightly more
+  than RGB1 (72.7% vs 71.3%), so the wire ratio *widens* from 2.14x to 2.24x.
+  Comparing an RGB1 delta against an NV12 intra figure suggests the opposite;
+  that is inter-frame against intra, the same error as the t=0 correction with
+  the sign flipped.
+
+  **B. The delta's worst case is negative.** On frames 5 s apart it costs 1.2%
+  (NV12) to 8.2% (RGB1) — the residual of two unrelated frames is noisier than
+  either. A keyframe interval is not an optimisation here, it is what keeps the
+  delta from losing.
+
+  **C. The withdrawn rows are back.** XOR 16.84% (worse than subtraction by 18%,
+  the direction the t=0 table had right), x264 lossless 5.38%, VP9 lossy 0.14%.
+
+  NV12 deliberately did not get a DOE flag. The DOE slices bands by rows at
+  3 bytes per pixel; NV12 is a Y plane plus a half-height interleaved UV plane,
+  so row slicing crosses a plane boundary. Measuring both formats through numpy
+  and the zstd CLI in the script is not a workaround — it is the stronger
+  guarantee that the two went through identical code.
+- **`swift_tar_DOE` 新增 `--xor`；新增 `test_interframe.zsh`。** 2026-08-14 的語料
+  更正留下三個未決問題，新腳本在 48 格語料上一次回答，且僅量體積——計時屬於
+  `streaming_budget_benchmark.zsh`，因為 16.67 ms 預算約束的是 macOS/Metal 客戶端。
+  體積只需單一平台：同一張 1080p 影格經 zstd -3 與 -9 在 macOS 與 aarch64 Linux 上
+  位元組完全相同（3,055,046 與 2,713,905）。
+
+  **A. NV12 加上差分——真正關鍵的缺口。** NV12 獲益略高於 RGB1（72.7% 對 71.3%），
+  故線路比是被*拉大*，由 2.14x 變成 2.24x。若拿 RGB1 的差分結果對照 NV12 的純 intra
+  數字會得出相反結論；那是拿影格間對照 intra，與 t=0 更正是同一個錯誤，只是符號相反。
+
+  **B. 差分的最壞情況是負的。** 相隔 5 秒的影格上，差分反而增加 1.2%（NV12）到
+  8.2%（RGB1）——兩張無關影格的殘差比任一張原圖都更雜亂。keyframe 間隔在此不是最佳化，
+  而是讓差分不至於倒賠的必要條件。
+
+  **C. 撤下的三列已填回。** XOR 16.84%（劣於相減 18%，方向與 t=0 表格一致）、
+  x264 lossless 5.38%、VP9 lossy 0.14%。
+
+  NV12 刻意未加 DOE 旗標。DOE 以「每像素 3 位元組、逐列」切分列帶；NV12 是 Y 平面加上
+  半高交錯的 UV 平面，逐列切分會跨越平面邊界。在腳本內以 numpy 與 zstd CLI 量測兩種格式
+  並非權宜之計——它反而更能保證兩者走過完全相同的程式碼。
+
+  兩個自找的坑，都記在腳本註解裡：`enc()` 第一版把類別標籤當成最後一個位置參數傳給
+  ffmpeg，導致每次編碼都失敗卻回報「encoder unavailable」；「切換」語料的間隔第一版由
+  格數推導，格數一高間隔就縮到不再算切換，最壞情況的上界會悄悄變成最好情況——現固定
+  為 5 秒，改由片長限制格數並明確報錯。
+  Two self-inflicted traps, both recorded in the script: enc() passed the kind
+  label to ffmpeg and reported "encoder unavailable" for encoders that existed;
+  and deriving the cut interval from the frame count let the worst-case corpus
+  quietly become a best case at high frame counts. The interval is now a fixed
+  5 s and the clip length caps the study, visibly.
+
 Follow-up / 後續:
 
 - Compile and smoke-test the RGB1 CLI operations.

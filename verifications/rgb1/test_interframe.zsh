@@ -178,8 +178,10 @@ print -- ""
 # C. 於 t=0 數字退役時自 rgb1/FAQ.md 撤下的那幾列。
 # ---------------------------------------------------------------------
 print -- "== C. Withdrawn rows, re-measured / 撤下各列的重測 =="
-print -- "   x264 is lossless (qp 0); VP9 is the lossy 2300k setting the FAQ quoted"
-print -- "   x264 為無損（qp 0）；VP9 為 FAQ 所引用的有損 2300k 設定"
+print -- "   x264 is lossless (qp 0). The VP9 rows are a bitrate sweep: a rate-targeted"
+print -- "   encode returns what it was asked for, so its size is an input, not a result."
+print -- "   x264 為無損（qp 0）。VP9 各列為位元率掃描：以位元率為目標的編碼會回傳你所要求"
+print -- "   的量，故其大小是輸入而非結果。"
 print -- ""
 printf "%-24s %14s %9s %s\n" "method" "bytes" "of raw" "kind"
 printf "%-24s %14s %9s %s\n" "------------------------" "--------------" "---------" "----"
@@ -203,7 +205,21 @@ enc() { # label kind ffmpeg-args... ; reads cont.rgb24
         "$(python3 -c "print(100*$n/$RGB_TOTAL)")" "$kind"
 }
 enc "x264 lossless (qp 0)" "lossless" -c:v libx264 -qp 0 -f matroska
-enc "VP9 lossy (2300k)"    "lossy"    -c:v libvpx-vp9 -b:v 2300k -f webm
+
+# Three bitrates, because one would be read as a measurement. A rate-targeted
+# lossy encode returns roughly what it was asked for -- the size is an input,
+# not a result -- and printing a single row next to lossless ratios invites the
+# reader to conclude that VP9 "achieves" it. The spread makes that visible.
+# Note also that rate control cannot average over a clip this short: at 48
+# frames and 60 fps this is 0.8 s, and the opening keyframe dominates, so the
+# realised bitrate overshoots the target by roughly 1.8x.
+# 用三個位元率，因為只印一個會被當成量測結果。以位元率為目標的有損編碼大致會回傳你所
+# 要求的量——大小是輸入而非結果——若只印一列並排在無損壓縮比旁邊，會引導讀者以為那是
+# VP9「達成」的。列出區間即可讓這件事現形。另須注意，如此短的片段無法讓 rate control
+# 取得平均：48 格、60 fps 僅 0.8 秒，開頭的 keyframe 佔比極大，實際位元率約超出目標 1.8 倍。
+for b in 500k 2300k 8000k; do
+    enc "VP9 lossy ($b)" "lossy, size requested" -c:v libvpx-vp9 -b:v "$b" -f webm
+done
 
 print -- ""
 print -- "[Done] output / 輸出: $OUTPUT"

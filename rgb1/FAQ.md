@@ -262,7 +262,9 @@ other table here:
 | VP9 -lossless (intra) | 111,778,032 | 2,328,709 | 37.43% | lossless |
 | frame XOR + zstd -3 | 50,291,944 | 1,047,749 | 16.84% | lossless |
 | x264 lossless (qp 0) † | 16,078,914 | 334,977 | 5.38% | lossless |
-| VP9 lossy (2300k) † | 408,035 | 8,501 | 0.14% | **lossy** |
+| VP9 lossy, 500k ‡ | 114,564 | 2,387 | 0.04% | **lossy** |
+| VP9 lossy, 2300k ‡ | 408,035 | 8,501 | 0.14% | **lossy** |
+| VP9 lossy, 8000k ‡ | 1,170,582 | 24,387 | 0.39% | **lossy** |
 
 † From ffmpeg on the raw rgb24 frames rather than through swift_tar, so these
 two are whole-clip encodes with no 4 MiB chunking and no band slicing. The four
@@ -304,6 +306,21 @@ intra，與 t=0 更正所針對的錯誤是同一個，只是方向相反。
 在每格皆為鏡頭切換的內容上，差分反而**增加** 1.2%（NV12）到 8.2%（RGB1）：兩張無關影格
 的殘差比任一張原圖都更雜亂。實際採用時必須逐格判斷，殘差壓不贏就退回 intra——那正是
 keyframe 間隔的用途。
+
+‡ **The VP9 sizes are inputs, not results.** A rate-targeted encode returns
+roughly what it was asked for, which is why three rows are shown: the output
+tracks `-b:v` almost linearly, so any single row would be read as something VP9
+achieved rather than something we chose. Comparing 0.14% against the lossless
+rows says nothing about VP9's efficiency; it says we asked for 2300k. What the
+spread does show is the floor a lossy path can reach at all, which no lossless
+row can approach. Rate control also cannot average over 0.8 s of video, so the
+realised bitrate overshoots the target by about 1.8x.
+
+‡ **VP9 的大小是輸入而非結果。** 以位元率為目標的編碼大致會回傳你所要求的量，故此處
+列出三列：輸出幾乎與 `-b:v` 成線性關係，只列一列會被讀成「VP9 達成了」而非「我們選了」。
+拿 0.14% 去對照無損各列，說明不了 VP9 的效率，只說明我們要求了 2300k。這組區間真正
+顯示的是「有損路徑能到的下限」，而那是任何無損列都碰不到的。此外 0.8 秒的片段無法讓
+rate control 取得平均，實際位元率約超出目標 1.8 倍。
 
 **XOR is worse than subtraction**, by 18% here — the direction the t=0 table
 recorded, at a magnitude that table could not have seen. x264 lossless beats

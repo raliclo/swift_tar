@@ -1,4 +1,4 @@
-[Info] date / 日期: 2026-08-15 00:55:29 CST
+[Info] date / 日期: 2026-08-15 01:01:37 CST
 [Info] os: macOS 27.0 (26A5406e)
 [Info] source / 來源: 20260803 回到神面前 讓神來醫治 [恩典365 - 時代先知 ： 耶利米 系列] [d-t779PY_S0].webm  1920x1080
 [Info] continuous / 連續: 48 frames from t=121.2s
@@ -37,12 +37,16 @@ cut         rgb24   xor          166,926,144   55.90%   3,477,628
     xor vs delta on rgb24   +10.8%  (worse)
 
 == C. Withdrawn rows, re-measured / 撤下各列的重測 ==
-   x264 is lossless (qp 0); VP9 is the lossy 2300k setting the FAQ quoted
-   x264 為無損（qp 0）；VP9 為 FAQ 所引用的有損 2300k 設定
+   x264 is lossless (qp 0). The VP9 rows are a bitrate sweep: a rate-targeted
+   encode returns what it was asked for, so its size is an input, not a result.
+   x264 為無損（qp 0）。VP9 各列為位元率掃描：以位元率為目標的編碼會回傳你所要求
+   的量，故其大小是輸入而非結果。
 
 method                            bytes    of raw kind
 ------------------------ -------------- --------- ----
 x264 lossless (qp 0)         16,078,914     5.38% lossless
-VP9 lossy (2300k)               408,035     0.14% lossy
+VP9 lossy (500k)                114,564     0.04% lossy, size requested
+VP9 lossy (2300k)               408,035     0.14% lossy, size requested
+VP9 lossy (8000k)             1,170,582     0.39% lossy, size requested
 
 [Done] output / 輸出: /Users/raliclo/proj/lzfse2/swift_tar/verifications/rgb1/test_interframe_output.txt

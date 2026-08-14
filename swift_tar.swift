@@ -338,6 +338,8 @@ private struct ZSTDOutBuffer {                // ZSTD_outBuffer
     var pos: Int = 0
 }
 
+@_silgen_name("ZSTD_maxCLevel")
+private func ZSTD_maxCLevel() -> Int32
 @_silgen_name("ZSTD_compressBound")
 private func ZSTD_compressBound(_ srcSize: Int) -> Int
 @_silgen_name("ZSTD_compress")
@@ -656,7 +658,21 @@ func lzipCompressStream(_ input: Data, level: Int32 = 6) -> Data? {
 
 /// One complete zstd frame per chunk (frames concatenate per spec).
 /// 每分塊一個完整 zstd frame（依規格可串接）。
-func zstdCompressFrame(_ input: Data, level: Int32 = 3) -> Data? {
+/// zstd compression level, set once by `--zstd-level` during CLI parsing and
+/// read-only from then on, so the concurrent chunk compressors all see the same
+/// value. Default 3 matches zstd's own default. The upper bound comes from
+/// `ZSTD_maxCLevel()` (22 with libzstd 1.5.x) rather than a literal, so it
+/// tracks the linked library. Note the zstd CLI silently caps at 19 unless
+/// `--ultra` is passed; the C API has no such gate, so `--zstd-level 22` here
+/// really is 22.
+/// zstd 壓縮等級，於 CLI 解析時由 `--zstd-level` 設定一次，其後唯讀，因此並發的
+/// 分塊壓縮器都看到同一個值。預設 3 與 zstd 自身的預設相同。上限取自
+/// `ZSTD_maxCLevel()`（libzstd 1.5.x 為 22）而非寫死的常數，以隨連結的函式庫變動。
+/// 注意 zstd CLI 未加 `--ultra` 時會靜默降到 19；C API 無此限制，故此處的
+/// `--zstd-level 22` 確實是 22。
+var zstdCompressionLevel: Int32 = 3
+
+func zstdCompressFrame(_ input: Data, level: Int32 = zstdCompressionLevel) -> Data? {
     let bound = ZSTD_compressBound(input.count)
     var out = Data(count: bound)
     let n: Int = input.withUnsafeBytes { s in
@@ -3326,6 +3342,18 @@ struct SwiftTarMain {
         if args.contains("--xz") || args.contains("-J")    { codec = .xz;    codecCount += 1 }
         if args.contains("--lzip")           { codec = .lzip;                  codecCount += 1 }
         if args.contains("--zstd")           { codec = .zstd;                  codecCount += 1 }
+        if let li = args.firstIndex(of: "--zstd-level") {
+            guard li + 1 < args.count, let lv = Int32(args[li + 1]) else {
+                FileHandle.standardError.write(Data("swift_tar: --zstd-level needs a number / --zstd-level 需要一個數字\n".utf8))
+                exit(2)
+            }
+            let maxLv = ZSTD_maxCLevel()
+            guard lv >= 1 && lv <= maxLv else {
+                FileHandle.standardError.write(Data("swift_tar: --zstd-level must be 1...\(maxLv) / --zstd-level 必須介於 1 至 \(maxLv)\n".utf8))
+                exit(2)
+            }
+            zstdCompressionLevel = lv
+        }
         if args.contains("--lz4")            { codec = .lz4;                   codecCount += 1 }
         let explicitZip = args.contains("--zip")
         let forceZip64 = args.contains("--zip64")
@@ -3459,7 +3487,7 @@ struct SwiftTarMain {
         var skipNext = true   // args[0] is the binary path / args[0] 是執行檔路徑
         for a in args {
             if skipNext { skipNext = false; continue }
-            if a == "-f" || a == "-C" || a == "-n" || a == "--keyfile" || a == "--strip-components" { skipNext = true; continue }
+            if a == "-f" || a == "-C" || a == "-n" || a == "--keyfile" || a == "--strip-components" || a == "--zstd-level" { skipNext = true; continue }
             if a.hasPrefix("-") { continue }
             files.append(a)
         }

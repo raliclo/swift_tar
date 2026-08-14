@@ -37,6 +37,9 @@ case "$platform" in
     mac)
         exec ./compile_tar.sh "$@"
         ;;
+    linux)
+        exec ./compile_tar-linux.sh "$@"
+        ;;
     win)
         # compile_tar-win.bat needs cmd.exe: it loads the MSVC environment
         # through vcvars64.bat, which only exists as a batch script.
@@ -49,15 +52,16 @@ case "$platform" in
         exec cmd.exe //c compile_tar-win.bat
         ;;
     *)
-        # Not a stub and not a silent fallback to the macOS path: compile_tar.sh
-        # hardcodes /opt/homebrew and reads linkage back with otool, so running
-        # it here would fail somewhere less obvious than this line.
-        # 此處既非佔位實作，也不會靜默退回 macOS 路徑：compile_tar.sh 寫死了
-        # /opt/homebrew，並以 otool 讀回連結資訊，在此執行只會在比這一行更難察覺的
-        # 地方失敗。
-        echo "[Error] no build path for '$platform' yet / 尚無 '$platform' 的建置路徑" >&2
-        echo "        macOS uses compile_tar.sh, Windows uses compile_tar-win.bat." >&2
-        echo "        macOS 使用 compile_tar.sh，Windows 使用 compile_tar-win.bat。" >&2
+        # Not a stub and not a silent fallback to one of the three: each build
+        # script hardcodes its platform's paths and reads linkage back with that
+        # platform's tool, so running the wrong one fails somewhere less obvious
+        # than this line.
+        # 此處既非佔位實作，也不會靜默退回上述三者之一：每支建置腳本都寫死了該平台的
+        # 路徑，並以該平台的工具讀回連結資訊，跑錯一支只會在比這一行更難察覺的地方
+        # 失敗。
+        echo "[Error] no build path for '$platform' / 尚無 '$platform' 的建置路徑" >&2
+        echo "        mac → compile_tar.sh, linux → compile_tar-linux.sh," >&2
+        echo "        win → compile_tar-win.bat" >&2
         exit 1
         ;;
 esac

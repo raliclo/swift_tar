@@ -34,8 +34,24 @@ git submodule update --init   # 取得 lzfse2 + libarchive + zlib
 ```
 
 `build.sh` 以 `uname` 偵測平台並執行該平台的建置——macOS 用 `compile_tar.sh`、
-Windows 用 `compile_tar-win.bat`——故同一道指令在兩者皆可用。`./build.sh --platform`
-只印出偵測到的平台名稱而不建置。直接呼叫各平台腳本仍然可行。
+Linux 用 `compile_tar-linux.sh`、Windows 用 `compile_tar-win.bat`——故同一道指令在
+三者皆可用。`./build.sh --platform` 只印出偵測到的平台名稱而不建置。直接呼叫各平台
+腳本仍然可行。
+
+### Linux
+
+`compile_tar-linux.sh` 需要 Swift 工具鏈與各 codec 的 header 與共享函式庫。兩者皆以
+探測而非假設決定：存在時使用 `/workspace/opt/swift` 與 `/workspace/sysroot`（即
+`sos/linux_kernal_vm_interactive` 下的 buildroot aarch64 設備），否則改用 `PATH` 上的
+`swiftc` 與 `/usr`。可用 `SWIFT_PREFIX` 與 `SYSROOT` 覆寫。
+
+與 macOS 版有兩點不同。libarchive 改以 sysroot 的共享庫連結，因為本腳本首次驗證所在
+的設備沒有 cmake；在有 cmake 的發行版上可設定 `LIBARCHIVE_STATIC=1` 改建內附的靜態
+版本。另外，未 checkout `lzfse2/` 時會自動套用 `-DEXCLUDE_LZFSE`，使同一支腳本無需
+旗標即可服務完整 clone 與純原始碼投放兩種情況。
+
+已於 QEMU 下的 aarch64 Linux（buildroot、glibc、Swift 6.3.3）驗證：建置無誤、正確記錄
+RPATH，並將所連結的函式庫寫入 `version-linux.txt`。
 
 建置時將 `lzfse2/lzfse-cli.swift` 當函式庫重用（剝除其頂層 `runCLI()`
 進入點後兩檔合併編譯），並連結 `-lz -lbz2 -llz4 -llzma -lzstd` 與內附的
@@ -323,8 +339,9 @@ crypto.swift       ChaCha20-Poly1305 / scrypt 與加密容器
 rgb1.swift         RGB1 原始影像容器
 build.sh           會偵測平台的進入點 → 下方對應的建置腳本
 compile_tar.sh     macOS 建置腳本 → release/swift_tar
+compile_tar-linux.sh  Linux 建置腳本 → release/swift_tar
 platform.sh        供 source：決定平台後綴的唯一來源
-version-mac.txt / version-win.txt   各平台的建置版本戳與連結來源
+version-mac.txt / version-linux.txt / version-win.txt   各平台的建置版本戳與連結來源
 build_libarchive.sh / build_libarchive-win.sh  靜態 ZIP 後端建置
 libarchive_zip_bridge.c  macOS/Windows 共用 ZIP C ABI
 build_zlib-win.sh  同步／重建 Windows 固定版本的 zlib 靜態相依套件

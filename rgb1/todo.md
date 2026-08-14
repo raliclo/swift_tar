@@ -122,24 +122,58 @@ See round 2 item 5 below.
   (the review cited 135) now states which path its figures came from.
 - **3.2 — ✅ 已處理，但推理已更正。** `rgb1-format.md:141`（review 引為 135）現已載明
   其數字出自哪一條路徑。
-- **2.2 — ❌ rejected. The "structural" argument is wrong and its extrapolation
-  is backwards.** The review argued that cross-frame matching is structurally
+- **2.2 — ⚠️ partly right; my first reply said "rejected" and that was too
+  absolute.** The review argued that cross-frame matching is structurally
   impossible because swift_tar emits one zstd frame per 4 MiB chunk, and
-  concluded the negative result therefore also holds at `zstd-19`. Neither
-  measurement goes through that path: `batch_vs_per_frame.zsh:84,91` calls the
-  `zstd` CLI directly and `swift_tar_DOE` compresses per row band
-  (`encodeBand:630`) — `TAR_CHUNK_SIZE` (`swift_tar.swift:180`) is the tar
-  streaming path and is not involved. The extrapolation runs the wrong way:
-  `zstd-19`'s 8 MiB window is *larger* than a 6.2 MB RGB24 frame, so on the CLI
-  path cross-frame matching becomes possible there. The window-size argument in
-  `0e528ec` remains the only one that holds.
-- **2.2 — ❌ 不採納。「結構性」論證有誤，其外推方向亦相反。** 該 review 主張跨影格匹配
-  在結構上不可能，理由是 swift_tar 每 4 MiB 分塊產生一個 zstd frame，並據此推論該否定
-  結果在 `zstd-19` 同樣成立。兩項量測都沒走那條路徑：`batch_vs_per_frame.zsh:84,91`
-  直接呼叫 `zstd` CLI，而 `swift_tar_DOE` 是逐列帶壓縮（`encodeBand:630`）；
-  `TAR_CHUNK_SIZE`（`swift_tar.swift:180`）屬 tar 串流路徑，與此無關。外推方向也相反：
-  `zstd-19` 的 8 MiB 視窗*大於* 6.2 MB 的 RGB24 影格，故在 CLI 路徑上跨影格匹配於該
-  等級反而變得可能。`0e528ec` 的視窗論證仍是唯一成立的理由。
+  concluded the negative result therefore also holds at `zstd-19`.
+
+  Three scripts are in play, not two, and they do not share a pipeline. Two do
+  not go through swift_tar at all: `batch_vs_per_frame.zsh:84,91` calls the
+  `zstd` CLI directly, and `swift_tar_DOE` compresses per row band
+  (`encodeBand:630`). But `nv12_vs_rgb1_streaming.zsh:168` archives the whole
+  batch with `swift_tar -c --zstd`, which does chunk at `TAR_CHUNK_SIZE`
+  (`swift_tar.swift:180`) and does emit one reset-window zstd frame per chunk.
+  For that script the mechanism the review named is the operative one, and my
+  "not involved" was wrong.
+
+  It still does not give "structurally impossible", for a reason neither side
+  raised: 4 MiB chunks are not aligned to frame boundaries and an NV12 frame is
+  **smaller** than a chunk (3,110,400 B vs 4,194,304 B), so one chunk holds a
+  whole frame plus a quarter of the next and can match across them. RGB24 at
+  1.48 chunks per frame straddles boundaries too. Per-chunk framing *bounds*
+  cross-frame reuse to what co-occurs inside one chunk; it does not remove it.
+
+  The extrapolation is the one part that is simply wrong, and only on the CLI
+  path: `zstd-19`'s 8 MiB window is *larger* than a 6.2 MB RGB24 frame, so there
+  cross-frame matching becomes more available at -19, not less. On the swift_tar
+  path the bound holds at any level, since the window resets per chunk.
+
+  Net: the window-size argument in `0e528ec` is the one that covers the measured
+  -0.0%, because that number came from `batch_vs_per_frame.zsh`. The framing
+  argument is real but applies to a different script and bounds rather than
+  forbids.
+- **2.2 — ⚠️ 部分成立；我第一次回覆寫「不採納」，下得太絕對。** 該 review 主張跨影格
+  匹配在結構上不可能，理由是 swift_tar 每 4 MiB 分塊產生一個 zstd frame，並據此推論
+  該否定結果在 `zstd-19` 同樣成立。
+
+  牽涉的是三支腳本而非兩支，且它們並不共用同一條管線。其中兩支完全不經過 swift_tar：
+  `batch_vs_per_frame.zsh:84,91` 直接呼叫 `zstd` CLI，`swift_tar_DOE` 則是逐列帶壓縮
+  （`encodeBand:630`）。但 `nv12_vs_rgb1_streaming.zsh:168` 是以
+  `swift_tar -c --zstd` 封存整批，它確實會依 `TAR_CHUNK_SIZE`（`swift_tar.swift:180`）
+  分塊，也確實每塊產生一個視窗重置的 zstd frame。對該腳本而言，review 所指出的機制正是
+  作用中的那個，我寫的「與此無關」是錯的。
+
+  但這仍然不足以得出「結構上不可能」，理由是雙方都沒提到的一點：4 MiB 分塊並未對齊影格
+  邊界，而 NV12 影格**小於**一個分塊（3,110,400 B 對 4,194,304 B），故單一分塊內含一整格
+  再加下一格的四分之一，跨影格匹配得以發生。RGB24 每格 1.48 個分塊，同樣會跨越邊界。
+  逐塊分幀只是把跨影格重用**限縮**在單一分塊內共同出現的範圍，並未消除它。
+
+  真正單純錯誤的只有外推那一段，且僅限 CLI 路徑：`zstd-19` 的 8 MiB 視窗*大於* 6.2 MB 的
+  RGB24 影格，故在該路徑上，-19 反而讓跨影格匹配更容易而非更難。在 swift_tar 路徑上，
+  由於視窗逐塊重置，該限縮在任何等級都成立。
+
+  結論：涵蓋實測 -0.0% 的是 `0e528ec` 的視窗論證，因為那個數字出自
+  `batch_vs_per_frame.zsh`。分幀論證確有其事，但適用於另一支腳本，且作用是限縮而非禁止。
 - **3.3, 4 — ✅ confirmed, no action.** The nonce bound and the `(( ++pass ))`
   observation were both re-derived and are correct. One addition: the new `throw`
   skips `pipeline.finish()`, leaving in-flight workers holding `output`. Same

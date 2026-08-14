@@ -37,9 +37,29 @@ git submodule update --init   # fetch lzfse2 + libarchive + zlib
 ```
 
 `build.sh` detects the platform with `uname` and runs that platform's build —
-`compile_tar.sh` on macOS, `compile_tar-win.bat` on Windows — so the same command
-works on either. `./build.sh --platform` prints the detected name without
-building. Calling the platform script directly still works.
+`compile_tar.sh` on macOS, `compile_tar-linux.sh` on Linux,
+`compile_tar-win.bat` on Windows — so the same command works on all three.
+`./build.sh --platform` prints the detected name without building. Calling the
+platform script directly still works.
+
+### Linux
+
+`compile_tar-linux.sh` needs a Swift toolchain and the codec headers and shared
+libraries. Both are probed rather than assumed: it uses `/workspace/opt/swift`
+and `/workspace/sysroot` when they exist (the buildroot aarch64 appliance under
+`sos/linux_kernal_vm_interactive`), otherwise `swiftc` from `PATH` and `/usr`.
+Override with `SWIFT_PREFIX` and `SYSROOT`.
+
+Two differences from the macOS build. libarchive is linked shared from the
+sysroot, because the appliance it was first proven on has no cmake; set
+`LIBARCHIVE_STATIC=1` on a distro that does to build the bundled static copy
+instead. And `-DEXCLUDE_LZFSE` is applied automatically when `lzfse2/` is not
+checked out, so the same script serves a full clone and a source drop without a
+flag.
+
+Verified on aarch64 Linux (buildroot, glibc, Swift 6.3.3) under QEMU: builds
+clean, records its RPATH, and reports its linked libraries in
+`version-linux.txt`.
 
 The build reuses `lzfse2/lzfse-cli.swift` as a library (its top-level
 `runCLI()` entry point is stripped, then both files are compiled together)
@@ -354,8 +374,9 @@ crypto.swift       ChaCha20-Poly1305 / scrypt + the encrypted container
 rgb1.swift         RGB1 raw image container
 build.sh           platform-detecting entry point → the build below
 compile_tar.sh     macOS build script → release/swift_tar
+compile_tar-linux.sh  Linux build script → release/swift_tar
 platform.sh        sourced: the one place the platform suffix is decided
-version-mac.txt / version-win.txt   per-platform build stamp + linkage provenance
+version-mac.txt / version-linux.txt / version-win.txt   per-platform build stamp + linkage provenance
 build_libarchive.sh / build_libarchive-win.sh  static ZIP backend builds
 libarchive_zip_bridge.c  shared macOS/Windows ZIP C ABI
 build_zlib-win.sh  sync/rebuild the pinned Windows static zlib dependency

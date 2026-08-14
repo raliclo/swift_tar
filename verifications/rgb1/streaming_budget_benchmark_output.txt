@@ -1,4 +1,4 @@
-[Info] date / 日期: 2026-08-14 08:43:44 CST
+[Info] date / 日期: 2026-08-15 01:10:17 CST
 [Info] os / 系統: macOS 27.0 (26A5406e)
 [Info] cores / 核心: 4P + 6E = 10 logical
 [Info] codec: zstd -3, in-process libzstd
@@ -6,62 +6,110 @@
 
 [Run] preset=raw slices=1 -n=1
 [Run] preset=predictive slices=1 -n=1
+[Run] preset=delta slices=1 -n=1
+[Run] preset=delta+predictive slices=1 -n=1
 [Run] preset=raw slices=10 -n=1
 [Run] preset=predictive slices=10 -n=1
+[Run] preset=delta slices=10 -n=1
+[Run] preset=delta+predictive slices=10 -n=1
 [Run] preset=raw slices=20 -n=1
 [Run] preset=predictive slices=20 -n=1
+[Run] preset=delta slices=20 -n=1
+[Run] preset=delta+predictive slices=20 -n=1
 [Run] preset=raw slices=40 -n=1
 [Run] preset=predictive slices=40 -n=1
+[Run] preset=delta slices=40 -n=1
+[Run] preset=delta+predictive slices=40 -n=1
 [Run] preset=raw slices=10 -n=10
 [Run] preset=predictive slices=10 -n=10
+[Run] preset=delta slices=10 -n=10
+[Run] preset=delta+predictive slices=10 -n=10
 [Run] preset=raw slices=20 -n=20
 [Run] preset=predictive slices=20 -n=20
+[Run] preset=delta slices=20 -n=20
+[Run] preset=delta+predictive slices=20 -n=20
 [Run] preset=raw slices=40 -n=20
 [Run] preset=predictive slices=40 -n=20
+[Run] preset=delta slices=40 -n=20
+[Run] preset=delta+predictive slices=40 -n=20
 == Per-frame cost / 每格成本 ==
 variant                        slices  -n   enc ms   dec ms   of raw
 --------------------------------------------------------------------
-raw                                 1   1    16.65     4.77   49.69%
-ycocg-r+med+planar                  1   1    37.83    28.30   27.38%
-slice10                            10   1    15.82     4.66   50.42%
-ycocg-r+med+planar+slice10         10   1    36.88    27.99   27.24%
-slice20                            20   1    15.20     4.72   51.18%
-ycocg-r+med+planar+slice20         20   1    36.54    28.24   27.24%
-slice40                            40   1    15.96     5.15   51.65%
-ycocg-r+med+planar+slice40         40   1    37.63    29.11   28.45%
-slice10                            10  10     3.83     0.87   50.42%
-ycocg-r+med+planar+slice10         10  10     6.56     4.69   27.24%
-slice20                            20  20     3.23     0.82   51.18%
-ycocg-r+med+planar+slice20         20  20     6.52     4.61   27.24%
-slice40                            40  20     2.75     0.77   51.65%
-ycocg-r+med+planar+slice40         40  20     6.00     4.51   28.45%
+raw                                 1   1    16.04     4.62   49.69%
+ycocg-r+med+planar                  1   1    36.16    27.28   27.38%
+delta                               1   1     6.12     2.04   14.24%
+delta+ycocg-r+med+planar            1   1    23.28    20.20   10.71%
+slice10                            10   1    15.30     4.54   50.42%
+ycocg-r+med+planar+slice10         10   1    35.47    27.12   27.24%
+delta+slice10                      10   1     5.74     2.16   14.34%
+delta+ycocg-r+med+planar+slice10     10   1    22.72    19.86   10.59%
+slice20                            20   1    14.88     4.61   51.18%
+ycocg-r+med+planar+slice20         20   1    35.34    27.37   27.24%
+delta+slice20                      20   1     5.76     2.32   14.44%
+delta+ycocg-r+med+planar+slice20     20   1    22.94    20.95   10.55%
+slice40                            40   1    16.39     5.31   51.65%
+ycocg-r+med+planar+slice40         40   1    38.65    28.92   28.45%
+delta+slice40                      40   1     6.46     2.79   14.74%
+delta+ycocg-r+med+planar+slice40     40   1    23.50    20.71   11.04%
+slice10                            10  10     3.61     0.87   50.42%
+ycocg-r+med+planar+slice10         10  10     6.53     4.69   27.24%
+delta+slice10                      10  10     1.62     0.46   14.34%
+delta+ycocg-r+med+planar+slice10     10  10     4.59     3.45   10.59%
+slice20                            20  20     3.24     0.82   51.18%
+ycocg-r+med+planar+slice20         20  20     6.49     4.61   27.24%
+delta+slice20                      20  20     1.30     0.42   14.44%
+delta+ycocg-r+med+planar+slice20     20  20     4.16     3.37   10.55%
+slice40                            40  20     2.74     0.79   51.65%
+ycocg-r+med+planar+slice40         40  20     5.97     4.51   28.45%
+delta+slice40                      40  20     1.17     0.44   14.74%
+delta+ycocg-r+med+planar+slice40     40  20     3.71     3.25   11.04%
 
 == Against the frame budget / 對照影格預算 ==
    encode is the server's cost, decode the client's; each is judged alone
    編碼為伺服器成本、解碼為客戶端成本；兩者各自判定
 variant                         -n    60 fps (16.67)    30 fps (33.33)
 ----------------------------------------------------------------------
-ycocg-r+med+planar               1    FAIL (28.3 ms)    PASS (28.3 ms)
-slice10                          1     PASS (4.7 ms)     PASS (4.7 ms)
-ycocg-r+med+planar+slice10       1    FAIL (28.0 ms)    PASS (28.0 ms)
-slice20                          1     PASS (4.7 ms)     PASS (4.7 ms)
-ycocg-r+med+planar+slice20       1    FAIL (28.2 ms)    PASS (28.2 ms)
-slice40                          1     PASS (5.2 ms)     PASS (5.2 ms)
-ycocg-r+med+planar+slice40       1    FAIL (29.1 ms)    PASS (29.1 ms)
+ycocg-r+med+planar               1    FAIL (27.3 ms)    PASS (27.3 ms)
+delta                            1     PASS (2.0 ms)     PASS (2.0 ms)
+delta+ycocg-r+med+planar         1    FAIL (20.2 ms)    PASS (20.2 ms)
+slice10                          1     PASS (4.5 ms)     PASS (4.5 ms)
+ycocg-r+med+planar+slice10       1    FAIL (27.1 ms)    PASS (27.1 ms)
+delta+slice10                    1     PASS (2.2 ms)     PASS (2.2 ms)
+delta+ycocg-r+med+planar+slice10   1    FAIL (19.9 ms)    PASS (19.9 ms)
+slice20                          1     PASS (4.6 ms)     PASS (4.6 ms)
+ycocg-r+med+planar+slice20       1    FAIL (27.4 ms)    PASS (27.4 ms)
+delta+slice20                    1     PASS (2.3 ms)     PASS (2.3 ms)
+delta+ycocg-r+med+planar+slice20   1    FAIL (20.9 ms)    PASS (20.9 ms)
+slice40                          1     PASS (5.3 ms)     PASS (5.3 ms)
+ycocg-r+med+planar+slice40       1    FAIL (28.9 ms)    PASS (28.9 ms)
+delta+slice40                    1     PASS (2.8 ms)     PASS (2.8 ms)
+delta+ycocg-r+med+planar+slice40   1    FAIL (20.7 ms)    PASS (20.7 ms)
 slice10                         10     PASS (0.9 ms)     PASS (0.9 ms)
 ycocg-r+med+planar+slice10      10     PASS (4.7 ms)     PASS (4.7 ms)
+delta+slice10                   10     PASS (0.5 ms)     PASS (0.5 ms)
+delta+ycocg-r+med+planar+slice10  10     PASS (3.5 ms)     PASS (3.5 ms)
 slice20                         20     PASS (0.8 ms)     PASS (0.8 ms)
 ycocg-r+med+planar+slice20      20     PASS (4.6 ms)     PASS (4.6 ms)
+delta+slice20                   20     PASS (0.4 ms)     PASS (0.4 ms)
+delta+ycocg-r+med+planar+slice20  20     PASS (3.4 ms)     PASS (3.4 ms)
 slice40                         20     PASS (0.8 ms)     PASS (0.8 ms)
 ycocg-r+med+planar+slice40      20     PASS (4.5 ms)     PASS (4.5 ms)
+delta+slice40                   20     PASS (0.4 ms)     PASS (0.4 ms)
+delta+ycocg-r+med+planar+slice40  20     PASS (3.2 ms)     PASS (3.2 ms)
 
 == Concurrency speed-up vs the same slicing at -n 1 / 相同切片下的並行加速 ==
-  slice10                        -n 10  encode   4.1x  decode   5.4x
-  ycocg-r+med+planar+slice10     -n 10  encode   5.6x  decode   6.0x
-  slice20                        -n 20  encode   4.7x  decode   5.8x
-  ycocg-r+med+planar+slice20     -n 20  encode   5.6x  decode   6.1x
-  slice40                        -n 20  encode   5.8x  decode   6.7x
-  ycocg-r+med+planar+slice40     -n 20  encode   6.3x  decode   6.5x
+  slice10                        -n 10  encode   6.3x  decode  22.8x
+  ycocg-r+med+planar+slice10     -n 10  encode   5.4x  decode   5.8x
+  delta+slice10                  -n 10  encode  14.0x  decode  43.2x
+  delta+ycocg-r+med+planar+slice10 -n 10  encode   4.9x  decode   5.8x
+  slice20                        -n 20  encode   7.1x  decode  25.5x
+  ycocg-r+med+planar+slice20     -n 20  encode   5.4x  decode   5.9x
+  delta+slice20                  -n 20  encode  17.6x  decode  49.9x
+  delta+ycocg-r+med+planar+slice20 -n 20  encode   5.5x  decode   6.2x
+  slice40                        -n 20  encode   8.6x  decode  26.2x
+  ycocg-r+med+planar+slice40     -n 20  encode   6.5x  decode   6.4x
+  delta+slice40                  -n 20  encode  20.1x  decode  47.1x
+  delta+ycocg-r+med+planar+slice40 -n 20  encode   6.3x  decode   6.4x
 
 == Round-trip verification / 往返驗證 ==
   slices=20 -n=20 : PASS — 48 frames byte-identical / 影格位元組完全一致

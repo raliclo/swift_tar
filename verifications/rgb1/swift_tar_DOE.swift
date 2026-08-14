@@ -750,10 +750,19 @@ Presets / 預設組合:
   best         predictive, currently the smallest measured / 目前實測最小者
 """
 
+// delta and delta+predictive are presets so the budget sweep reaches them. It
+// sweeps presets only, so while --delta was a bare flag the whole streaming
+// budget rested on the predictive stack -- which delta beats on both axes at
+// 1 slice: 14.24% of raw against 27.24%, and a fifth of the encode time.
+// delta 與 delta+predictive 列為 preset，budget 掃描才碰得到它們。該掃描只跑 preset，
+// 故在 --delta 還只是裸旗標的期間，整個串流預算都建立在預測式堆疊上——而在 1 slice 下
+// delta 在兩個軸上都勝過它：壓到原始的 14.24% 對 27.24%，編碼時間只需五分之一。
 let presetFlags: [String: [String]] = [
     "raw": [],
     "palette": ["--palette"],
     "predictive": ["--ycocg", "--med", "--planar"],
+    "delta": ["--delta"],
+    "delta+predictive": ["--delta", "--ycocg", "--med", "--planar"],
     "best": ["--ycocg", "--med", "--planar"],
 ]
 
@@ -784,7 +793,7 @@ func parse(_ argv: [String]) throws -> Options {
         case "--level": o.level = Int(try next(a)) ?? 19
         case "--repeat": o.repeats = max(1, Int(try next(a)) ?? 1)
         case "--preset": o.presets.append(try next(a))
-        case "--all": o.presets = ["raw", "palette", "predictive"]
+        case "--all": o.presets = ["raw", "palette", "predictive", "delta", "delta+predictive"]
         case "--no-verify": o.verify = false
         case "--verify": o.verify = true
         case "--csv": o.csv = true

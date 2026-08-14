@@ -81,7 +81,7 @@ echo "variant,frames,stored_bytes,compressed_bytes,pct_of_raw,encode_ms_per_fram
 # 要排除它的數值裡。
 for spec in 1:1 10:1 20:1 40:1 10:10 20:20 40:20; do
     slices="${spec%%:*}"; threads="${spec##*:}"
-    for preset in raw predictive; do
+    for preset in raw predictive delta delta+predictive; do
         echo "[Run] preset=$preset slices=$slices -n=$threads" >&2
         "$DOE" --preset "$preset" --codec zstd --level "$LEVEL" \
                --slices "$slices" -n "$threads" --repeat 3 --no-verify --csv \
@@ -95,11 +95,26 @@ import csv, sys
 
 BUDGET = {"60 fps": 1000 / 60, "30 fps": 1000 / 30}
 rows = list(csv.DictReader(open(sys.argv[1])))
+# Space, time and speed in one row each. The wire rate is derived rather than
+# left for the reader: bytes and milliseconds answer different questions, and
+# the decision this table exists for -- what fits a 60 fps link and budget --
+# needs both at once. MB/s uses 10^6, matching the rest of the study.
+# 每一列同時給出空間、時間與速度。線路速率由此處導出而非留給讀者自行換算：位元組與
+# 毫秒回答的是不同問題，而本表所服務的決策——什麼能同時塞進 60 fps 的線路與預算——需要
+# 兩者並陳。MB/s 以 10^6 計，與本研究其餘部分一致。
+FPS = 60.0
 for r in rows:
     e, d = float(r["encode_ms_per_frame"]), float(r["decode_ms_per_frame"])
+    per_frame = int(r["compressed_bytes"]) / max(1, int(r["frames"]))
     r["total_ms_per_frame"] = f"{e + d:.2f}"
+    r["wire_bytes_per_frame"] = f"{per_frame:.0f}"
+    r["wire_mbps_at_60fps"] = f"{per_frame * 8 * FPS / 1e6:.1f}"
+    r["wire_MB_per_s"] = f"{per_frame * FPS / 1e6:.1f}"
     r["fits_30fps_decode"] = "yes" if d <= BUDGET["30 fps"] else "no"
     r["fits_60fps_decode"] = "yes" if d <= BUDGET["60 fps"] else "no"
+    # 118 MB/s is the practical-gigabit figure build_streaming_budget.py uses.
+    # 118 MB/s 為 build_streaming_budget.py 所採用的實務 gigabit 值。
+    r["fits_1gbe"] = "yes" if per_frame * FPS / 1e6 <= 118.0 else "no"
 
 w = csv.DictWriter(open(sys.argv[1], "w", newline=""), fieldnames=list(rows[0].keys()))
 w.writeheader(); w.writerows(rows)

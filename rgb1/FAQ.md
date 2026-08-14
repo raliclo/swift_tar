@@ -429,6 +429,39 @@ budget**. Measured per-frame encode cost on the same clip:
 | x264 lossless | — | — | 64.2 | over compute budget |
 | hardware lossy (VideoToolbox / VP9) | ~2-10 | <1% | see note | the only internet-capable option |
 
+> **Space, time and speed together: `verifications/rgb1/comparison.csv`.** The
+> table below answers bandwidth; the budget question needs the compute cost beside
+> it, and until 2026-08-15 the two lived in different files with the delta arm in
+> neither. That CSV now carries 28 rows — four presets across seven slice/thread
+> configurations — with `pct_of_raw`, `encode_ms_per_frame`,
+> `decode_ms_per_frame`, `wire_mbps_at_60fps`, `fits_60fps_decode` and
+> `fits_1gbe` on every row. At 20 slices and `-n 20`, zstd -3:
+>
+> | arm | of raw | enc ms | dec ms | Mbps @60 | fits 1 GbE |
+> |---|---:|---:|---:|---:|---|
+> | raw | 51.18% | 3.24 | 0.82 | 1528 | no |
+> | predictive | 27.24% | 6.49 | 4.61 | 813 | yes |
+> | **delta** | 14.44% | **1.30** | **0.42** | **431** | yes |
+> | delta + predictive | **10.55%** | 4.16 | 3.37 | **315** | yes |
+>
+> **The delta dominates the predictive stack on all three axes** — half the
+> bytes, a fifth of the encode, a tenth of the decode. The streaming budget was
+> built on `predictive` because the sweep only ran presets and `--delta` was a
+> bare flag; it is a preset now. Adding the predictive stack on top of the delta
+> still pays in space (14.44% to 10.55%) but costs 3.2x the encode time, which is
+> a trade to make deliberately rather than by default.
+>
+> **空間、時間與速度並列於 `verifications/rgb1/comparison.csv`。** 下表回答的是頻寬，
+> 但預算問題必須連同計算成本一起看，而在 2026-08-15 之前兩者分散於不同檔案，且 delta
+> 那一組兩邊都沒有。該 CSV 現有 28 列——四個 preset × 七種 slice／thread 組態——每列皆含
+> `pct_of_raw`、`encode_ms_per_frame`、`decode_ms_per_frame`、`wire_mbps_at_60fps`、
+> `fits_60fps_decode` 與 `fits_1gbe`。上表為 20 slices、`-n 20`、zstd -3 的結果。
+>
+> **差分在三個軸上全面勝過預測式堆疊**——體積減半、編碼時間五分之一、解碼時間十分之一。
+> 串流預算之所以建立在 `predictive` 上，是因為掃描只跑 preset 而 `--delta` 當時只是裸
+> 旗標；現已列為 preset。在差分之上再疊預測式堆疊，空間仍有收益（14.44% → 10.55%），
+> 但編碼時間變成 3.2 倍——這個取捨應該是刻意選的，而不是預設就發生的。
+
 Every row above is measured on the **same 48 consecutive frames from t=121.2 s**
 of the source clip (`verifications/rgb1/sample_consecutive`, built by
 `make_consecutive_corpus.zsh`). Provenance by column: bandwidth for the two zstd

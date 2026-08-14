@@ -212,15 +212,22 @@ committed numbers are still clean. Fix first, then run — no back-fill needed.
 zstd、gzip、lz4 的回看視窗,它們根本無法參照前一格。兩支腳本互相印證:
 `batch_vs_per_frame.zsh` 以 zstd -3 對兩種來源量得 −0.1%～0.0%;本次為
 `nv12_vs_rgb1_streaming.zsh` 新增 `--batch`／`--per-frame`／`--both`,把比較延伸
-到全部五種 codec,最大僅 +0.34%(rgb24／xz,字典最大者差距最大,符合視窗假說),
-其中約 0.04% 還只是每格 tar header。
+到全部五種 codec。**該次延伸的結論已於 2026-08-14 推翻**:當時量測落在片頭的自黑
+畫面淡入(腳本缺少 -ss),所有 codec 都壓到約 5%,差距看不出來,故記為最大 +0.34%。
+改自中段取 48 格重跑後,zstd／gzip／lz4 維持在 −0.08%～+0.05%,但 **xz 對 NV12 為
++21.27%**——xz 的 8 MiB 字典大於 3.11 MB 的單格(可容納 2.70 格),視窗假說從一開始
+就不適用於它。詳見 rgb1/todo.md 的 #10。
 
 At 1080p, batching does not inflate the per-frame bitrate: a frame is larger
 than zstd/gzip/lz4 can look back across, so they never reference the previous
 one. Two scripts agree — `batch_vs_per_frame.zsh` at zstd -3 across two sources
 (−0.1% to 0.0%), and the new `--batch`/`--per-frame`/`--both` modes here across
-all five codecs (at most +0.34%, on rgb24/xz — the largest dictionary, exactly
-as the window hypothesis predicts).
+all five codecs. **That extension was overturned on 2026-08-14**: it had been
+measured on the clip's fade-from-black opening (the script had no -ss), where
+every codec compressed to ~5% and the gap was invisible, giving +0.34%. Re-run
+from mid-video over 48 frames, zstd/gzip/lz4 hold at −0.08% to +0.05% but
+**xz on NV12 is +21.27%** — its 8 MiB dictionary exceeds a 3.11 MB frame, so the
+window hypothesis never applied to it. See rgb1/todo.md #10.
 
 FAQ.md 已加註雙語說明並同時引用兩支腳本;若解析度低到單格能放進 codec 視窗,
 須重新檢查。

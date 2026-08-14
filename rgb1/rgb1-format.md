@@ -210,12 +210,12 @@ streaming integration.
 ### Resolved: the display path stays RGB / 已決議：顯示路徑維持 RGB
 
 The open question "does the long-term display path remain RGB or move to
-YUV/NV12" is closed: **RGB1 stays RGB.** NV12 does transfer 2.13x smaller after
+YUV/NV12" is closed: **RGB1 stays RGB.** NV12 does transfer 2.14x smaller after
 compression, but that advantage is only collectable by going through a hardware
 video decoder, which means giving up RGB1 entirely. Measurements behind this:
 
 「長期顯示路徑維持 RGB 或改走 YUV/NV12」此一未決問題已收斂：**RGB1 維持 RGB。**
-NV12 壓縮後的傳輸量確實小 2.13 倍，但該優勢唯有走硬體視訊解碼器才拿得到，而那
+NV12 壓縮後的傳輸量確實小 2.14 倍，但該優勢唯有走硬體視訊解碼器才拿得到，而那
 等同完全放棄 RGB1。支持此決議的量測：
 
 - Channel order is already correct for the GPU. P6 uploads to a `.rgba8Unorm`

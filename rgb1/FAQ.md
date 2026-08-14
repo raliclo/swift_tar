@@ -230,76 +230,102 @@ shader 時間；若 YUV→RGB 矩陣移進 fragment shader（見上文），NV12
 **Q: Could the converter compress across frames like VP9 does?**
 **Q: converter 能像 VP9 那樣做影格間壓縮嗎？**
 
-A simple frame delta is cheap and helps a little; matching VP9 is not realistic.
-Measured on the same 8 RGB24 frames:
+A simple frame delta is cheap and turns out to be the single biggest lossless
+win available here — it beats FFV1. Matching *lossy* VP9 remains out of reach.
+Measured on 48 consecutive RGB24 frames from t=121.2 s, the same corpus as every
+other table here:
 
-簡單的影格差分成本低、略有幫助；但要達到 VP9 的水準並不實際。以相同的 8 格
-RGB24 實測：
+簡單的影格差分成本低，而且在此處是可取得的無損效益中**最大的一項**——它勝過 FFV1。
+要達到*有損* VP9 的水準則仍不可行。以 t=121.2 秒起的 48 格連續 RGB24 影格實測，與本文
+其他表格同一語料：
 
-| method | bytes | % of raw | kind |
-|---|---:|---:|---|
-| independent frames + zstd | 3,509,790 | 7.05% | lossless |
-| **frame delta + zstd** | **3,260,525** | **6.55%** | lossless |
-| frame XOR + zstd | 4,068,581 | 8.18% | lossless |
-| x264 lossless (qp 0) | 3,026,945 | 6.08% | lossless |
-| FFV1 level 3 | 1,922,856 | 3.86% | lossless |
-| VP9 (same 8 frames, 2300k) | 31,519 | 0.06% | **lossy** |
+| method | bytes | B/frame | % of raw | kind |
+|---|---:|---:|---:|---|
+| independent frames + zstd -3 | 148,359,055 | 3,090,814 | 49.69% | lossless |
+| **frame delta + zstd -3** | **42,520,301** | **885,840** | **14.24%** | lossless |
+| FFV1 level 3 (intra) | 58,689,456 | 1,222,697 | 19.65% | lossless |
+| VP9 -lossless (intra) | 111,778,032 | 2,328,709 | 37.43% | lossless |
+| frame XOR + zstd † | — | — | — | lossless |
+| x264 lossless (qp 0) † | — | — | — | lossless |
+| VP9 lossy (2300k) † | — | — | — | **lossy** |
 
-> **"independent frames" really is independent, verified 2026-08-14.** These
-> rows come from compressing the 8 frames as one stream, which in principle
-> lets the codec dedup across frames — a bonus no real-time sender could claim,
-> since it cannot wait for eight frames or reference one it has not sent yet.
-> Two scripts measure this. `batch_vs_per_frame.zsh` covers zstd -3 across
-> two frame sources (consecutive and 10 s-sampled) and reports a penalty of
-> **−0.1% to 0.0%**; `nv12_vs_rgb1_streaming.zsh --both` extends the same
-> comparison to all five codecs and finds **at most 0.34%** (rgb24/xz — the
-> largest dictionary, hence the largest gap; zstd stays within ±0.18%). About
-> 0.04% of even that is per-frame tar headers rather than compression. The reason is window size — one 1080p
-> frame is 3.1 MB (NV12) or 6.2 MB (RGB24), more than zstd, gzip or lz4 can look
-> back across, so they never reference the previous frame at all. The batch
-> figures above and the bitrates below are therefore safe as per-frame numbers.
-> This would need re-checking at a resolution low enough for a frame to fit
-> inside a codec's window.
+† Not yet re-measured on this corpus; the t=0 figures they carried were
+withdrawn rather than quoted, since every other row moved by more than an order
+of magnitude.
+
+† 尚未於本語料重測；其原本承載的 t=0 數字已撤下而非續用，因為其餘每一列的變動都
+超過一個數量級。
+
+> **"independent frames" is independent for zstd, gzip and lz4 — but not for
+> xz. Corrected 2026-08-14.** These rows compress the batch as one stream, which
+> lets a codec dedup across frames — a bonus no real-time sender can claim, since
+> it cannot wait for the batch or reference a frame it has not sent yet.
+> `batch_vs_per_frame.zsh` covers zstd -3 across two frame sources and reports
+> **−0.1% to 0.0%**, and `nv12_vs_rgb1_streaming.zsh --both` now confirms
+> −0.08% to +0.05% for zstd, gzip and lz4. The reason is window size: one 1080p
+> frame is 3.1 MB (NV12) or 6.2 MB (RGB24), more than zstd -3 (1 MiB), gzip
+> (32 KiB) or lz4 (64 KiB) can look back across, so they never reference the
+> previous frame at all.
 >
-> **「independent frames」確實獨立，2026-08-14 實測確認。** 上表各列是把 8 格壓成
-> 單一串流所得，原則上讓 codec 有機會跨格去重——而那是任何即時傳送端都無法主張的
-> 紅利，因為它不可能等滿八格，也無法參照尚未送出的影格。
-> 有兩支腳本量測此事：`batch_vs_per_frame.zsh` 以 zstd -3 涵蓋兩種影格來源
-> （連續與相隔 10 秒取樣），回報 penalty 為 **−0.1% 至 0.0%**；
-> `nv12_vs_rgb1_streaming.zsh --both` 則把同一比較延伸到全部五種 codec，
-> 實測**最多 0.34%**（rgb24／xz——字典最大，差距因而最大；zstd 維持在 ±0.18%
-> 內）。且其中約 0.04% 還只是每格的 tar header，與壓縮無關。原因在視窗大小——單張 1080p
-> 影格為 3.1 MB（NV12）或 6.2 MB（RGB24），超出 zstd、gzip、lz4 的回看範圍，因此
-> 它們根本不曾參照前一格。故上表的批次數字與下文的位元率，作為每格數值皆可安心
-> 引用。若解析度低到單格能放進 codec 視窗，則須重新檢查。
+> **xz was wrongly included in that argument.** Its default dictionary is 8 MiB
+> — 2.70 NV12 frames — so it reuses the previous frame outright, and the batch
+> figure for xz/NV12 sits **21.27%** below what a streamer would send. This was
+> first recorded as "at most 0.34%", measured on the fade-from-black opening
+> where every codec compressed to ~5% and the gap was invisible. Quote the
+> per-frame column for xz. zstd, gzip and lz4 are unaffected, and so are the
+> bitrates below, which come from zstd.
+>
+> **「independent frames」對 zstd、gzip、lz4 確實獨立——但對 xz 不然。2026-08-14
+> 更正。** 上表各列是把整批壓成單一串流，這讓 codec 有機會跨格去重——而那是任何即時
+> 傳送端都無法主張的紅利，因為它不可能等滿整批，也無法參照尚未送出的影格。
+> `batch_vs_per_frame.zsh` 以 zstd -3 涵蓋兩種影格來源，回報 **−0.1% 至 0.0%**；
+> `nv12_vs_rgb1_streaming.zsh --both` 現在也對 zstd、gzip、lz4 量得 −0.08% 至 +0.05%。
+> 原因在視窗大小：單張 1080p 影格為 3.1 MB（NV12）或 6.2 MB（RGB24），超出
+> zstd -3（1 MiB）、gzip（32 KiB）、lz4（64 KiB）的回看範圍，故三者根本不曾參照前一格。
+>
+> **xz 被錯誤地一併納入該論證。** 它的預設字典為 8 MiB——相當於 2.70 張 NV12 影格
+> ——因而直接重用前一格，xz／NV12 的批次數字比串流器實際會送出的量低了 **21.27%**。
+> 此事原記為「最多 0.34%」，量測於片頭的自黑畫面淡入，當時所有 codec 都壓到約 5%，
+> 差距根本看不出來。xz 請引用 per-frame 欄。zstd、gzip、lz4 不受影響，下文的位元率
+> 亦然，因為它們出自 zstd。
 
-A byte-wise delta against the previous frame costs a few dozen lines, but on this
-source it only saves **7.1%** (3,509,790 -> 3,260,525). An earlier measurement on
-a different clip showed 25%, so the benefit is highly content-dependent: it pays
-off when consecutive frames are nearly identical and collapses when they are not.
-XOR is worse than plain subtraction here (8.18% vs 6.55%), and FFV1 — a mature
-lossless codec with context modelling and a range coder — still beats the delta
-by 1.70x.
+A byte-wise delta against the previous frame costs a few dozen lines and saves
+**71.3%** (148,359,055 -> 42,520,301). It beats FFV1 — a mature lossless codec
+with context modelling and a range coder — by 1.38x, at a fraction of the compute.
 
-對前一格做逐位元組差分只需數十行程式碼，但在本素材上僅省下 **7.1%**
-（3,509,790 → 3,260,525）。先前在另一支影片上量到 25%，可見其效益高度依賴內容：
-相鄰影格幾乎相同時才有回報，否則效益立刻消失。此處 XOR 比單純相減更差
-（8.18% 對 6.55%），而 FFV1（成熟的無損 codec，具 context modelling 與 range
-coder）仍勝過差分 1.70 倍。
+> **Corrected 2026-08-14; this section previously said the delta "only saves
+> 7.1%" and that FFV1 beat it by 1.70x.** Those came from 8 frames at t=0, which
+> on this clip is a fade from black: the frames were already compressing to ~7%
+> of raw, so there was almost nothing for a delta to remove. On real consecutive
+> content the delta is the largest lossless win available here. The benefit is
+> still content-dependent — it pays off when consecutive frames are nearly
+> identical and collapses on a cut — but "helps a little" was an artifact of the
+> corpus, not a property of the technique.
+>
+> **2026-08-14 更正；本節原本寫差分「僅省下 7.1%」且 FFV1 勝過它 1.70 倍。** 那組
+> 數字取自 t=0 的 8 格，而該片此處是自黑畫面淡入：影格本身已壓到原始的約 7%，差分
+> 幾乎沒有東西可以消除。在真實的連續內容上，差分是此處可取得的最大無損效益。其效益
+> 仍取決於內容——相鄰影格幾乎相同時才有回報，遇到鏡頭切換則失效——但「略有幫助」是
+> 語料造成的假象，而非該技術的性質。
 
-The remaining gap to VP9 is **103x** (3,260,525 vs 31,519), and it is not an
-implementation-quality gap — it is the lossy/lossless boundary. VP9 additionally
+對前一格做逐位元組差分只需數十行程式碼，卻省下 **71.3%**
+（148,359,055 → 42,520,301）。它以遠低的計算成本勝過 FFV1（成熟的無損 codec，具
+context modelling 與 range coder）1.38 倍。
+
+The remaining gap to lossy VP9 is large — the t=0 measurement put it at 103x
+against a 31,519-byte VP9 encode, and that row has not been re-measured on this
+corpus, so treat the multiple as unquantified rather than as 103x. What does not
+change is *why* the gap exists, and it is not an implementation-quality gap — it is the lossy/lossless boundary. VP9 additionally
 does motion compensation (so a moving object produces near-zero residual instead
 of a large delta), transform + quantisation (which *discards* high-frequency
 detail), and context-adaptive entropy coding. Quantisation is where almost all of
-the 103x comes from, and a lossless path cannot do it by definition. Even FFV1,
-the best lossless result here, is still 61x larger than VP9.
+that gap comes from, and a lossless path cannot do it by definition.
 
-與 VP9 之間剩下的 **103 倍**差距（3,260,525 對 31,519），並非實作品質問題，而是
-有損／無損的分界。VP9 另外做了 motion compensation（使移動物體產生接近零的殘差，
+與有損 VP9 之間仍有很大的差距——t=0 的量測對照 31,519 位元組的 VP9 編碼得出 103 倍，
+而該列尚未於本語料重測，故請將此倍數視為未定量，而非 103 倍。不變的是差距**為何**
+存在：它並非實作品質問題，而是有損／無損的分界。VP9 另外做了 motion compensation（使移動物體產生接近零的殘差，
 而非大量差分值）、transform + 量化（**丟棄**高頻細節），以及 context-adaptive
-entropy coding。這 103 倍幾乎全部來自量化這一步，而無損路徑在定義上無法做這件
-事。即使是此處最佳的無損結果 FFV1，仍比 VP9 大 61 倍。
+entropy coding。該差距幾乎全部來自量化這一步，而無損路徑在定義上無法做這件事。
 
 ## What should a 60 fps game stream actually transfer?
 
@@ -573,12 +599,12 @@ of no longer being a sequence of self-contained RGB1 frames.
 > fade-in from black and compress ~5x better than real content. The techniques
 > and their relative ranking still hold; the absolute percentages do not. See
 > "How close does YCoCg-R + MED + planar get to FFV1 and VP9?" at the end of this
-> file for the current numbers on the 24-frame sampled corpus.
+> file for the current numbers on the 48-frame consecutive corpus.
 >
 > **以下百分比已被取代。** 本節與其後的 YCoCg-R/MED 一節，量測對象為 t=0 起的
 > 8 格連續影格；那是自黑畫面淡入的片段，較真實內容易壓縮約 5 倍。技術本身與其
 > 相對排序仍然成立，絕對百分比則否。當前數據請見本檔末的「YCoCg-R + MED +
-> planar 與 FFV1、VP9 的差距有多少？」，該節以 24 格取樣語料量測。
+> planar 與 FFV1、VP9 的差距有多少？」，該節以 48 格連續語料量測。
 
 ## Can VP9's streaming techniques improve the RGB1 format?
 

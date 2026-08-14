@@ -660,17 +660,23 @@ func lzipCompressStream(_ input: Data, level: Int32 = 6) -> Data? {
 /// 每分塊一個完整 zstd frame（依規格可串接）。
 /// zstd compression level, set once by `--zstd-level` during CLI parsing and
 /// read-only from then on, so the concurrent chunk compressors all see the same
-/// value. Default 3 matches zstd's own default. The upper bound comes from
+/// value. Default 9 rather than zstd's own default of 3: this tool is compared
+/// against `zstd -9` throughout, and while the level was silently pinned at 3
+/// those comparisons measured a level gap and were read as an implementation
+/// gap. Matching the level the comparisons assume makes the default honest; use
+/// `--zstd-level 3` for zstd CLI parity. The upper bound comes from
 /// `ZSTD_maxCLevel()` (22 with libzstd 1.5.x) rather than a literal, so it
 /// tracks the linked library. Note the zstd CLI silently caps at 19 unless
 /// `--ultra` is passed; the C API has no such gate, so `--zstd-level 22` here
 /// really is 22.
 /// zstd 壓縮等級，於 CLI 解析時由 `--zstd-level` 設定一次，其後唯讀，因此並發的
-/// 分塊壓縮器都看到同一個值。預設 3 與 zstd 自身的預設相同。上限取自
-/// `ZSTD_maxCLevel()`（libzstd 1.5.x 為 22）而非寫死的常數，以隨連結的函式庫變動。
-/// 注意 zstd CLI 未加 `--ultra` 時會靜默降到 19；C API 無此限制，故此處的
-/// `--zstd-level 22` 確實是 22。
-var zstdCompressionLevel: Int32 = 3
+/// 分塊壓縮器都看到同一個值。預設為 9 而非 zstd 自身的 3：本工具全程與 `zstd -9`
+/// 對照，而等級被靜默固定在 3 的那段期間，這些對照量到的其實是等級差異，卻被解讀
+/// 為實作差異。讓預設值符合對照所假設的等級才誠實；若需與 zstd CLI 一致請用
+/// `--zstd-level 3`。上限取自 `ZSTD_maxCLevel()`（libzstd 1.5.x 為 22）而非寫死的
+/// 常數，以隨連結的函式庫變動。注意 zstd CLI 未加 `--ultra` 時會靜默降到 19；
+/// C API 無此限制，故此處的 `--zstd-level 22` 確實是 22。
+var zstdCompressionLevel: Int32 = 9
 
 func zstdCompressFrame(_ input: Data, level: Int32 = zstdCompressionLevel) -> Data? {
     let bound = ZSTD_compressBound(input.count)
@@ -2734,6 +2740,8 @@ private func printTarUsage() {
       --lzip           : lzip CLI, one lzip stream per chunk
                          每分塊一個 lzip 串流（需 lzip CLI）
       --zstd           : libzstd, one frame per chunk / 每分塊一個 zstd frame
+      --zstd-level <N> : zstd level, 1 to ZSTD_maxCLevel; default 9
+                         zstd 等級，1 至 ZSTD_maxCLevel；預設 9
       --lz4            : liblz4 standard frames / 標準 LZ4 frame
       (none)           : Plain uncompressed tar / 不壓縮的純 tar
 

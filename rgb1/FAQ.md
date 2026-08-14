@@ -111,81 +111,108 @@ RGBA。加速主要來自三個地方：
 **Q: RGB1 compresses well with zstd — does that close the 2x size gap?**
 **Q: RGB1 用 zstd 壓得不錯——這能弭平 2 倍的大小差距嗎？**
 
-No. Measured on real video frames (1920x1080, 8 frames from the P6 test app's
-real-programme sample, VP9 + Opus) with
+No — it widens it. Measured on real video frames (1920x1080, 48 consecutive
+frames from t=121.2 s of the P6 test app's real-programme sample, VP9 + Opus)
+with
 `../verifications/rgb1/nv12_vs_rgb1_streaming.zsh`:
 
-不能。以真實視訊影格實測（1920x1080，取自 P6 測試程式的真實節目樣本，
-VP9 + Opus 的 8 格），腳本為 `../verifications/rgb1/nv12_vs_rgb1_streaming.zsh`：
+不能，反而拉大。以真實視訊影格實測（1920x1080，取自 P6 測試程式真實節目樣本
+VP9 + Opus 的 t=121.2 秒起 48 格連續影格），腳本為 `../verifications/rgb1/nv12_vs_rgb1_streaming.zsh`：
 
-| codec | NV12 | RGB1 payload | RGB1 ratio | NV12 ratio |
-|---|---:|---:|---:|---:|
-| zstd | 2,040,441 | 3,521,027 | **7.08%** | 8.20% |
-| gzip | 1,974,514 | 3,351,184 | **6.73%** | 7.94% |
-| lz4 | 3,511,405 | 6,002,134 | **12.06%** | 14.11% |
-| xz | 1,409,388 | 2,351,780 | **4.73%** | 5.66% |
+| codec | NV12 | RGB1 payload | NV12 ratio | RGB1 ratio | RGB1 / NV12 on the wire |
+|---|---:|---:|---:|---:|---:|
+| none | 149,300,736 | 298,599,936 | 100.00% | 100.00% | 2.00x |
+| zstd | 69,481,931 | 148,623,226 | **46.54%** | 49.77% | 2.14x |
+| gzip | 65,033,049 | 145,407,312 | **43.56%** | 48.70% | 2.24x |
+| lz4 | 93,310,011 | 194,984,127 | **62.50%** | 65.30% | 2.09x |
+| xz † | 41,573,252 | 106,140,244 | 27.85% | 35.55% | 2.55x |
+| xz, per-frame † | 50,415,968 | 106,342,328 | **33.77%** | 35.61% | 2.11x |
 
-> **This table is still t=0, and both conclusions below fail on real content.
-> Flagged 2026-08-14.** The 7% ratios are the tell — the same fade-from-black
-> opening that put 122 Mbps in the bitrate table. `nv12_vs_rgb1_streaming.zsh`
-> has not yet been re-run with mid-video sampling, so these rows were missed when
-> the bitrate table was corrected. Recomputed from `batch_vs_per_frame_output.txt`
-> (t=121.2 s) and the raw frame sizes 1920x1080x1.5 and x3:
+Re-measured 2026-08-14 on 48 consecutive frames from t=121.2 s — the same
+footage as every other table here. NV12 compresses **better** than RGB1 under all
+four codecs, so the wire gap never narrows below the 2.00x it starts at.
+"RGB1 / NV12 on the wire" is `2.00 x (RGB1 ratio / NV12 ratio)`: raw RGB24 is
+exactly twice raw NV12, and the compression ratio only moves that starting
+figure.
+
+† **Quote the per-frame xz row, not the batch one.** xz's default dictionary is
+8 MiB, which is larger than one NV12 frame (3.11 MB, 2.70 frames fit), so it
+reuses the previous frame — the batch figure is 21.27% below what a streamer
+that cannot buffer would actually send. zstd -3 (1 MiB), gzip (32 KiB) and lz4
+(64 KiB) all look back less than one frame, so for them batch and per-frame agree
+to within 0.08% and either may be quoted.
+
+2026-08-14 以 t=121.2 秒起的 48 格連續影格重測——與本文其他表格同一段影片。四種
+codec 下 NV12 皆比 RGB1 **更好壓**，故線路差距從未低於其 2.00x 的起點。
+「RGB1 / NV12 線路比」的算式為 `2.00 × (RGB1 壓縮比 ÷ NV12 壓縮比)`：原始 RGB24 恰為
+原始 NV12 的兩倍，壓縮比只是把這個起點往哪一邊推。
+
+† **xz 請引用逐格列而非批次列。** xz 的預設字典為 8 MiB，大於單張 NV12 影格
+（3.11 MB，可容納 2.70 格），因而會重用前一格——批次數字比「無法緩衝的串流器實際會送
+出的量」低了 21.27%。zstd -3（1 MiB）、gzip（32 KiB）與 lz4（64 KiB）的回看範圍皆小於
+單格，故批次與逐格相差在 0.08% 以內，兩者皆可引用。
+
+> **Resolved 2026-08-14 — the flag below was raised, then the script was fixed
+> and re-run.** This table had no `-ss`, so it read the clip's fade-from-black
+> opening; the 7% ratios were the tell, the same defect that put 122 Mbps in the
+> bitrate table. The Windows-side reader flagged it and recomputed zstd from
+> `batch_vs_per_frame_output.txt`; the table above is now the direct measurement
+> at t=121.2 s over 48 frames, and it confirms that recomputation:
 >
 > | source | NV12 ratio | RGB1 ratio | RGB1 / NV12 |
 > |---|---:|---:|---:|
-> | t=0 (this table) | 8.20% | **7.08%** | 1.73x |
-> | consecutive, mid-video | **46.16%** | 49.21% | **2.13x** |
-> | sampled, 10 s apart | **41.40%** | 43.71% | **2.11x** |
+> | t=0 (the old table) | 8.20% | **7.08%** | 1.73x |
+> | recomputed from zstd, 8 frames | 46.16% | 49.21% | 2.13x |
+> | **measured, 48 frames** | **46.54%** | **49.77%** | **2.14x** |
 >
-> **The ordering reverses.** On real content NV12 compresses *better* than RGB1
-> (46.16% vs 49.21%), so "RGB1 wins under every codec" is an artifact of the
-> fade, and the statement it was cited as refuting — that a general-purpose
-> compressor gets less out of raw RGB — was right after all. The wire gap is
-> **2.13x, not 1.73x**: the ratio does not narrow the 2.00x starting gap, it
-> widens it.
+> **The ordering reverses.** On real content NV12 compresses *better* than RGB1,
+> so "RGB1 wins under every codec" was an artifact of the fade, and the statement
+> it had been cited as refuting — that a general-purpose compressor gets less out
+> of raw RGB — was right after all. The wire gap is 2.14x, not 1.73x: the
+> compression ratio does not narrow the 2.00x starting gap, it widens it. That
+> holds under all four codecs now that they all have mid-video data.
 >
-> Only zstd -3 has mid-video data. **The gzip, lz4 and xz rows should not be
-> quoted** until the script is re-run. Raised in review by the Windows-side
-> reader.
+> The re-run also overturned something the earlier rounds had settled. Batching
+> was recorded as costing "at most 0.34%", so batch figures were declared safe to
+> quote. On real content xz on NV12 measures **+21.27%**: its 8 MiB dictionary is
+> larger than a 3.11 MB NV12 frame, so the window argument never covered that
+> case — see the † note above.
 >
-> **本表仍為 t=0，其下兩項結論在真實內容上皆不成立。2026-08-14 標記。**
-> 7% 的壓縮率就是線索——正是那段把 122 Mbps 送進位元率表的自黑畫面淡入。
-> `nv12_vs_rgb1_streaming.zsh` 尚未以中段取樣重跑，故位元率表更正時漏掉了這幾列。
-> 以 `batch_vs_per_frame_output.txt`（t=121.2 秒）與原始影格大小
-> 1920x1080x1.5、x3 重算，結果如上表。
+> **2026-08-14 已解決——下方標記提出後，腳本已修正並重跑。** 本表原先沒有 `-ss`，
+> 因而讀到片頭的自黑畫面淡入；7% 的壓縮率就是線索，與把 122 Mbps 送進位元率表的是
+> 同一個缺陷。Windows 端讀者提出此問題並以 `batch_vs_per_frame_output.txt` 重算了
+> zstd；上方表格現為 t=121.2 秒、48 格的直接量測，且證實了該次重算。
 >
-> **高下順序反轉。** 在真實內容上 NV12 壓得*比* RGB1 好（46.16% 對 49.21%），
-> 故「RGB1 在每個 codec 下都較好」是淡入造成的假象；而它所推翻的那句話——通用
-> 壓縮器對 raw RGB 得不到同樣效益——反而才是對的。線路上的差距是 **2.13 倍而非
-> 1.73 倍**：較佳的壓縮率並未縮小 2.00 倍的起點差距，而是把它拉大。
+> **順序翻轉。** 真實內容下 NV12 比 RGB1 **更好壓**，故「RGB1 在每個 codec 下都勝出」
+> 是淡入造成的假象，而它原本被引用來反駁的說法——通用壓縮器對 raw RGB 效益較差
+> ——其實是對的。線路差距為 2.14x 而非 1.73x：壓縮比不但沒有縮小 2.00x 的起始差距，
+> 反而把它拉大。四種 codec 都取得中段資料後，此結論一致成立。
 >
-> 目前僅 zstd -3 有中段數據。**gzip、lz4、xz 三列在腳本重跑之前不應引用。**
-> 此問題由 Windows 端讀者於 review 中提出。
+> 這次重跑也推翻了前幾輪已經定案的一件事。批次紅利原記為「最大 0.34%」，據此宣告
+> 批次數字可安心引用。真實內容下 xz 對 NV12 實測為 **+21.27%**：其 8 MiB 字典大於
+> 3.11 MB 的 NV12 影格，故視窗論證從來就沒有涵蓋該情形——詳見上方的 † 註。
+NV12 compresses *better than* RGB1 under **every** codec tested (46.54% vs
+49.77% for zstd, and the same ordering for gzip, lz4 and xz), so the claim above
+that "general-purpose compressors don't get the same win from raw RGB" holds.
+RGB1 starts at 2x the size and the compression ratio widens that rather than
+narrowing it, so it needs **2.14x the bytes on the wire** at zstd -3, and up to
+2.24x at gzip.
 
-RGB1 compresses *better than* NV12 under **every** codec tested (7.08% vs 8.20%
-for zstd; the same holds for gzip, lz4 and xz), so the earlier claim above that
-"general-purpose compressors don't get the same win from raw RGB" is not
-accurate — the opposite is true. But RGB1 starts at 2x the size, so after
-compression it still needs **1.73x the bytes on the wire**; the better ratio
-narrows the gap from 2.00x but does not close it.
-*(Superseded — holds only at t=0. 本段已被上方取代，僅在 t=0 成立。)*
-
-在測試的**每一個** codec 下，RGB1 的壓縮率都**優於** NV12（zstd 為 7.08% 對
-8.20%，gzip、lz4、xz 亦然），因此上文「通用壓縮器對 raw RGB 得不到同樣效益」
-的說法並不準確——事實正好相反。但 RGB1 起點大 2 倍，壓縮後傳輸量仍是
-**NV12 的 1.73 倍**；較佳的壓縮率把差距從 2.00 倍縮小，但無法弭平。
+在測試的**每一個** codec 下，NV12 的壓縮率都**優於** RGB1（zstd 為 46.54% 對
+49.77%，gzip、lz4、xz 的順序亦同），因此上文「通用壓縮器對 raw RGB 得不到同樣
+效益」的說法成立。RGB1 起點大 2 倍，而壓縮比是把該差距拉大而非縮小，故在 zstd -3
+下傳輸量為 **NV12 的 2.14 倍**，gzip 下更達 2.24 倍。
 
 Render prep (converting to the `Image<RGBA>` that P6 hands to Metal) is close
-enough to be noise: 0.068 s for RGB1 versus 0.061 s for NV12 over 8 frames on
-this source, and the ordering reversed on a different clip. Both are ~1 GB/s,
+enough to be noise: 0.130 s for RGB1 versus 0.110 s for NV12 over 48 frames on
+this source, and the ordering reversed on a different clip. Both are ~3 GB/s,
 so neither format has a meaningful CPU-side conversion advantage. This excludes
 GPU shader time; if the YUV->RGB matrix moves into a fragment shader (see
 above), NV12 gains.
 
 Render prep（轉成 P6 交給 Metal 的 `Image<RGBA>`）兩者差距已在雜訊範圍：本素材
-8 格為 RGB1 0.068 秒對 NV12 0.061 秒，而在另一支影片上順序相反。兩者皆約
-1 GB/s，因此在 CPU 端的轉換成本上沒有任何一方具實質優勢。此量測不含 GPU
+48 格為 RGB1 0.130 秒對 NV12 0.110 秒，而在另一支影片上順序相反。兩者皆約
+3 GB/s，因此在 CPU 端的轉換成本上沒有任何一方具實質優勢。此量測不含 GPU
 shader 時間；若 YUV→RGB 矩陣移進 fragment shader（見上文），NV12 更佔優。
 
 > **Caveat**: measured on one 1080p programme clip (talking-head content, low

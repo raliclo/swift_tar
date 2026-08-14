@@ -1,73 +1,77 @@
-[Info] date / 日期: 2026-08-14 07:24:00 CST
+[Info] date / 日期: 2026-08-14 19:18:46 CST
 [Info] machine / 機器: arm64, Apple M4
 [Info] os / 系統: macOS 27.0 (26A5406e)
-[Info] swift_tar: swift_tar 20260814-023717
-[Info] source / 來源: 20260803 回到神面前 讓神來醫治 [恩典365 - 時代先知 ： 耶利米 系列] [d-t779PY_S0].webm  1920x1080, 8 frames
+[Info] swift_tar: swift_tar 20260814-190500
+[Info] source / 來源: 20260803 回到神面前 讓神來醫治 [恩典365 - 時代先知 ： 耶利米 系列] [d-t779PY_S0].webm  1920x1080, 48 frames
 [Info] render prep = conversion to RGBA (what P6 feeds Metal); excludes GPU shader time
 [Info] render prep = 轉成 RGBA（P6 交給 Metal 的格式）；不含 GPU shader 時間
 
+[Info] start / 起點: t=121.2s (mid-video; t=0 is a fade from black / 中段取樣)
+
 == Raw frame sizes / 原始影格大小 ==
-  nv12         24883200 bytes   1.50 B/px  YUV 4:2:0
-  rgb24        49766400 bytes   3.00 B/px  RGB1 payload (+876 B header per frame)
-  rgba         66355200 bytes   4.00 B/px  what P6 hands to Metal
+  nv12        149299200 bytes   1.50 B/px  YUV 4:2:0
+  rgb24       298598400 bytes   3.00 B/px  RGB1 payload (+876 B header per frame)
+  rgba        398131200 bytes   4.00 B/px  what P6 hands to Metal
 
 == Transfer size and streaming cost / 傳輸大小與串流成本 ==
 format  codec      transfer(B)   of raw     enc(s)     dec(s)
 ------- -------- ------------- -------- ---------- ----------
-nv12    none          24884736  100.01%      0.016      0.018
-nv12    zstd           2040441    8.20%      0.021      0.033
-nv12    gzip           1974516    7.94%      0.068      0.030
-nv12    lz4            3511405   14.11%      0.018      0.027
-nv12    xz             1409396    5.66%      0.442      0.098
-rgb24   none          49767936  100.00%      0.020      0.023
-rgb24   zstd           3521027    7.08%      0.024      0.045
-rgb24   gzip           3351184    6.73%      0.072      0.046
-rgb24   lz4            6002134   12.06%      0.020      0.041
-rgb24   xz             2351784    4.73%      0.514      0.147
+nv12    none         149300736  100.00%      0.040      0.066
+nv12    zstd          69481931   46.54%      0.098      0.204
+nv12    gzip          65033049   43.56%      0.549      0.269
+nv12    lz4           93310011   62.50%      0.053      0.126
+nv12    xz            41573252   27.85%      5.032      1.604
+rgb24   none         298599936  100.00%      0.079      0.156
+rgb24   zstd         148623226   49.77%      0.184      0.383
+rgb24   gzip         145407312   48.70%      0.692      0.532
+rgb24   lz4          194984127   65.30%      0.072      0.229
+rgb24   xz           106140244   35.55%      7.399      3.542
 
 [OK] every codec round-tripped to identical bytes / 每個 codec 皆還原為相同位元組
 
 == Per-frame compression (each frame its own stream) / 逐格壓縮（每格獨立串流） ==
 format  codec     per-frame(B)   of raw      batch(B) batch adv.
 ------- -------- ------------- -------- ------------- ----------
-nv12    none          24895488  100.05%      24884736     +0.04%
-nv12    zstd           2038979    8.19%       2040441     -0.07%
-nv12    gzip           1974315    7.93%       1974516     -0.01%
-nv12    lz4            3511830   14.11%       3511405     +0.01%
-nv12    xz             1411072    5.67%       1409396     +0.12%
-rgb24   none          49778688  100.02%      49767936     +0.02%
-rgb24   zstd           3527477    7.09%       3521027     +0.18%
-rgb24   gzip           3350818    6.73%       3351184     -0.01%
-rgb24   lz4            6004004   12.06%       6002134     +0.03%
-rgb24   xz             2359712    4.74%       2351784     +0.34%
+nv12    none         149372928  100.05%     149300736     +0.05%
+nv12    zstd          69444476   46.51%      69481931     -0.05%
+nv12    gzip          65016886   43.55%      65033049     -0.02%
+nv12    lz4           93308038   62.50%      93310011     -0.00%
+nv12    xz            50415968   33.77%      41573252    +21.27%
+rgb24   none         298672128  100.02%     298599936     +0.02%
+rgb24   zstd         148507868   49.73%     148623226     -0.08%
+rgb24   gzip         145376490   48.69%     145407312     -0.02%
+rgb24   lz4          194978003   65.30%     194984127     -0.00%
+rgb24   xz           106342328   35.61%     106140244     +0.19%
 
 'batch adv.' is how much larger the per-frame total is than the batch
 figure -- i.e. the cross-frame dedup a real-time sender cannot use.
-Measured at 1920x1080 over 8 frames it is at most 0.34%, and the 'none'
-row shows ~0.04% of that is just per-frame tar headers, not compression.
-The reason is window size: one frame is 3.1 MB (nv12) or 6.2 MB (rgb24),
-larger than zstd/gzip/lz4 can look back across, so they cannot reference
-the previous frame at all. xz, with the largest dictionary, shows the
-biggest gap (+0.34% on rgb24) -- which is still negligible.
-Conclusion: batching 8 frames does NOT inflate the per-frame bitrate here,
-so the batch figures are safe to quote. Re-check this if the resolution
-drops far enough for a frame to fit inside a codec's window.
+The 'none' rows show the floor: per-frame tar headers, not compression.
 「batch adv.」為逐格加總相對批次數字大出多少，即即時傳送端無法取用的
-跨格去重紅利。1920x1080、8 格下實測最大為 0.34%，且 none 列顯示其中
-約 0.04% 只是每格的 tar header，與壓縮無關。原因在視窗大小：單格為
-3.1 MB（nv12）或 6.2 MB（rgb24），超出 zstd/gzip/lz4 的回看範圍，因此
-根本無法參照前一格；字典最大的 xz 差距最大（rgb24 +0.34%），仍可忽略。
-結論：此處批次 8 格並不會灌大每格位元率，批次數字可安心引用。若解析度
-低到單格能放進 codec 視窗，須重新檢查。
+跨格去重紅利。none 各列即為下限：每格的 tar header，與壓縮無關。
+
+codec/format         dict dict/frame  cross-frame reuse possible?
+-------------- ---------- ----------  ---------------------------
+zstd/nv12         1048576       0.34  no
+zstd/rgb24        1048576       0.17  no
+gzip/*              32768       0.01  no
+lz4/*               65536       0.02  no
+xz/nv12           8388608       2.70  yes
+xz/rgb24          8388608       1.35  yes
+
+Any row whose dictionary exceeds one frame can reuse the previous
+frame, and its batch figure is NOT a per-frame bitrate. Quote the
+per-frame column for those.
+凡字典大於單格的列都能重用前一格，其批次數字不等於每格位元率；該類列請
+改引用 per-frame 欄。
 
 == Render prep: convert to RGBA / 轉換成 RGBA ==
 format     time(s)         MB/s           note
-nv12         0.044       1508.1 YUV->RGB matrix
-rgb24        0.044       1508.1 add alpha channel
+nv12         0.109       3652.6 YUV->RGB matrix
+rgb24        0.130       3062.5 add alpha channel
 
 == Verdict / 結論 ==
-  zstd transfer: NV12 2,040,441 B vs RGB1 3,521,027 B
-  -> NV12 transfers 1,480,586 B less (42.0% smaller)
-  RGB1 needs 1.73x the bytes of NV12 on the wire
+  zstd transfer: NV12 69,481,931 B vs RGB1 148,623,226 B
+  -> NV12 transfers 79,141,295 B less (53.2% smaller)
+  RGB1 needs 2.14x the bytes of NV12 on the wire
 
 [Done] output / 輸出: /Users/raliclo/proj/lzfse2/swift_tar/verifications/rgb1/nv12_vs_rgb1_streaming_output.txt

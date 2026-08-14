@@ -38,13 +38,14 @@ OUTPUT="$HERE/nv12_vs_rgb1_streaming_output.txt"
 
 # --batch (default) compresses all frames as ONE stream, so the codec dedups
 # across frames; --per-frame compresses each frame independently and sums the
-# results. Batch flatters the ratio: a streamer cannot wait for eight frames and
-# cannot reuse a neighbour it has not sent yet. Reporting both makes the
+# results. Batch flatters the ratio: a streamer cannot wait for the whole batch
+# (FRAMES/60 s of latency at 60 fps) and cannot reuse a neighbour it has not
+# sent yet. Reporting both makes the
 # cross-frame dedup bonus visible instead of silently folding it into a
 # per-frame bitrate. --both runs the two and prints the gap.
 # --batch（預設）將所有影格壓成「單一」串流，codec 因而能跨格去重；--per-frame
-# 則每格獨立壓縮再加總。批次會美化壓縮比：串流器不可能等滿八格，也無法重用尚未
-# 送出的鄰格。同時回報兩者，可讓跨格去重的紅利現形，而非悄悄併進每格位元率。
+# 則每格獨立壓縮再加總。批次會美化壓縮比：串流器不可能等滿整批（60 fps 下為
+# FRAMES/60 秒的延遲），也無法重用尚未送出的鄰格。同時回報兩者，可讓跨格去重的紅利現形，而非悄悄併進每格位元率。
 # --both 會執行兩者並印出差額。
 # batch_vs_per_frame.zsh covers the same question for zstd -3 across two frame
 # sources; this covers all five codecs on one source. Keep both in step.
@@ -104,12 +105,40 @@ echo
 # ---------------------------------------------------------------------
 # Extract the SAME frames in both formats so the comparison is like-for-like.
 # 以相同影格取出兩種格式，確保比較基礎一致。
-# ---------------------------------------------------------------------
-ffmpeg -v error -i "$SRC" -frames:v "$FRAMES" -pix_fmt nv12  -f rawvideo "$TMP/f.nv12"  -y
-ffmpeg -v error -i "$SRC" -frames:v "$FRAMES" -pix_fmt rgb24 -f rawvideo "$TMP/f.rgb24" -y
+#
+# From mid-video, not t=0. This script had no -ss until 2026-08-14 and so read
+# the opening of the clip, which is a fade from black. Every ratio it produced
+# was ~7-8% of raw, and on that material RGB1 appeared to compress better than
+# NV12 -- the opposite of what real content does. Same defect, same clip, as the
+# 122 Mbps figure the bitrate table carried. duration/2 matches
+# batch_vs_per_frame.zsh and make_consecutive_corpus.zsh so all three land on
+# the same footage.
+# 取自影片中段而非 t=0。本腳本在 2026-08-14 之前沒有 -ss，因而讀到片頭的自黑畫面
+# 淡入。它產出的每個壓縮比都只有原始大小的約 7-8%，而在該素材上 RGB1 看起來比 NV12
+# 更好壓——與真實內容的結果相反。這與位元率表上 122 Mbps 那個數字是同一個缺陷、同一
+# 段影片。取 duration/2 與 batch_vs_per_frame.zsh、make_consecutive_corpus.zsh 一致，
+# 使三者落在同一段影片上。
+DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$SRC")
+START="${START:-$(python3 -c "print(f'{float('$DUR')/2:.1f}')")}"
+echo "[Info] start / 起點: t=${START}s (mid-video; t=0 is a fade from black / 中段取樣)"
+echo
+
+ffmpeg -v error -ss "$START" -i "$SRC" -frames:v "$FRAMES" -pix_fmt nv12  -f rawvideo "$TMP/f.nv12"  -y
+ffmpeg -v error -ss "$START" -i "$SRC" -frames:v "$FRAMES" -pix_fmt rgb24 -f rawvideo "$TMP/f.rgb24" -y
+
+for f in "$TMP/f.nv12" "$TMP/f.rgb24"; do
+    [[ -s "$f" ]] || { echo "[Error] no frames extracted at t=${START}s / 未取得影格" >&2; exit 1 }
+done
 
 NV12_RAW=$(stat -f '%z' "$TMP/f.nv12")
 RGB_RAW=$(stat -f '%z' "$TMP/f.rgb24")
+# Per-frame, not the whole extraction. Whether a codec can reference the
+# previous frame depends on its dictionary against ONE frame; comparing against
+# the total would say no for every codec at any frame count.
+# 單格大小，非整批。codec 能否參照前一格，取決於其字典相對「單格」的大小；若拿總和
+# 來比，任何 codec 在任何影格數下都會得出「不能」。
+NV12_FB=$(( NV12_RAW / FRAMES ))
+RGB_FB=$(( RGB_RAW / FRAMES ))
 RGBA_BYTES=$(( W * H * 4 * FRAMES ))
 
 echo "== Raw frame sizes / 原始影格大小 =="
@@ -215,24 +244,46 @@ if [[ "$MODE" == "per-frame" || "$MODE" == "both" ]]; then
         done
     done
     echo
+    # The verdict is derived from the run, not asserted. An earlier version had
+    # the numbers and the conclusion typed in as prose -- "at most 0.34%",
+    # "batching does NOT inflate the per-frame bitrate" -- and both were still
+    # printed verbatim by a later run that measured +21.27%. A conclusion that
+    # cannot disagree with its own measurement is not a conclusion.
+    # 結論由本次執行推導，而非寫死。先前版本把數字與結論直接寫成文字——「最大
+    # 0.34%」「批次不會灌大每格位元率」——而在一次量到 +21.27% 的執行中，那兩句
+    # 依然被原樣印出。一個無法與自身量測相牴觸的結論，不是結論。
     echo "'batch adv.' is how much larger the per-frame total is than the batch"
     echo "figure -- i.e. the cross-frame dedup a real-time sender cannot use."
-    echo "Measured at 1920x1080 over 8 frames it is at most 0.34%, and the 'none'"
-    echo "row shows ~0.04% of that is just per-frame tar headers, not compression."
-    echo "The reason is window size: one frame is 3.1 MB (nv12) or 6.2 MB (rgb24),"
-    echo "larger than zstd/gzip/lz4 can look back across, so they cannot reference"
-    echo "the previous frame at all. xz, with the largest dictionary, shows the"
-    echo "biggest gap (+0.34% on rgb24) -- which is still negligible."
-    echo "Conclusion: batching 8 frames does NOT inflate the per-frame bitrate here,"
-    echo "so the batch figures are safe to quote. Re-check this if the resolution"
-    echo "drops far enough for a frame to fit inside a codec's window."
+    echo "The 'none' rows show the floor: per-frame tar headers, not compression."
     echo "「batch adv.」為逐格加總相對批次數字大出多少，即即時傳送端無法取用的"
-    echo "跨格去重紅利。1920x1080、8 格下實測最大為 0.34%，且 none 列顯示其中"
-    echo "約 0.04% 只是每格的 tar header，與壓縮無關。原因在視窗大小：單格為"
-    echo "3.1 MB（nv12）或 6.2 MB（rgb24），超出 zstd/gzip/lz4 的回看範圍，因此"
-    echo "根本無法參照前一格；字典最大的 xz 差距最大（rgb24 +0.34%），仍可忽略。"
-    echo "結論：此處批次 8 格並不會灌大每格位元率，批次數字可安心引用。若解析度"
-    echo "低到單格能放進 codec 視窗，須重新檢查。"
+    echo "跨格去重紅利。none 各列即為下限：每格的 tar header，與壓縮無關。"
+    echo
+    printf "%-14s %10s %10s  %s\n" "codec/format" "dict" "dict/frame" "cross-frame reuse possible?"
+    printf "%-14s %10s %10s  %s\n" "--------------" "----------" "----------" "---------------------------"
+    # Window sizes are the codecs' defaults at the presets swift_tar invokes.
+    # zstd -3 and gzip and lz4 all look back less than one 1080p frame, so they
+    # cannot reference the previous frame at all. xz's 8 MiB dictionary is
+    # LARGER than an NV12 frame -- that case was always outside the window
+    # argument, and measurement caught up with it only when the corpus stopped
+    # being a fade from black.
+    # 各視窗大小為 swift_tar 所用 preset 下的 codec 預設值。zstd -3、gzip 與 lz4 的
+    # 回看範圍都小於一張 1080p 影格，故根本無法參照前一格。xz 的 8 MiB 字典則**大於**
+    # 一張 NV12 影格——該情形從來就不在視窗論證的涵蓋範圍內，只是直到語料不再是自黑
+    # 畫面淡入，量測才追上這件事。
+    for spec in "zstd/nv12:1048576:$NV12_FB" "zstd/rgb24:1048576:$RGB_FB" \
+                "gzip/*:32768:$NV12_FB" "lz4/*:65536:$NV12_FB" \
+                "xz/nv12:8388608:$NV12_FB" "xz/rgb24:8388608:$RGB_FB"; do
+        name="${spec%%:*}"; rest="${spec#*:}"; dict="${rest%%:*}"; fb="${rest##*:}"
+        ratio=$(python3 -c "print(f'{$dict/$fb:.2f}')")
+        verdict=$(python3 -c "print('yes' if $dict > $fb else 'no')")
+        printf "%-14s %10s %10s  %s\n" "$name" "$dict" "$ratio" "$verdict"
+    done
+    echo
+    echo "Any row whose dictionary exceeds one frame can reuse the previous"
+    echo "frame, and its batch figure is NOT a per-frame bitrate. Quote the"
+    echo "per-frame column for those."
+    echo "凡字典大於單格的列都能重用前一格，其批次數字不等於每格位元率；該類列請"
+    echo "改引用 per-frame 欄。"
 fi
 echo
 

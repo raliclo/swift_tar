@@ -77,20 +77,24 @@ swift_tar 25e1759 and the per-frame flags in the commit that follows it.
   (added in 0e528ec, 40 min after the commit that review was written against —
   `git ls-tree fd48496` shows it absent, so it was not overlooked) measured
   −0.1% to 0.0% for
-  zstd -3 across two frame sources; `nv12_vs_rgb1_streaming.zsh --both` extends
-  it to all five codecs and finds at most +0.34% (rgb24/xz, the largest
-  dictionary), of which ~0.04% is per-frame tar headers. The batch figures — and
-  the 689 Mbps conclusion — stand. Re-check if the resolution ever drops far
-  enough for a frame to fit inside a codec's window.
+  zstd -3 across two frame sources. **The "all five codecs" half of this was
+  wrong, and was corrected on 2026-08-14 — see #10 below.** It rested on
+  `nv12_vs_rgb1_streaming.zsh`, which had no `-ss` and so measured the clip's
+  fade-from-black opening; re-run from mid-video, xz on NV12 costs **+21.27%**,
+  not the +0.34% recorded here. The window argument still holds for zstd, gzip
+  and lz4, whose look-back is smaller than one frame, and the 689 Mbps
+  conclusion is unaffected because it comes from zstd.
 - **#2 — 2026-08-14 解決；該疑慮經量測不成立。**
   原本擔心把 8 格壓成單一串流會讓 codec 跨格去重，因而灌大每格位元率。1080p 下
   並非如此：單格為 3.1 MB（NV12）或 6.2 MB（RGB24），超出 zstd、gzip、lz4 的回看
   範圍，它們根本不曾參照前一格。`batch_vs_per_frame.zsh`（由 0e528ec 加入，時間
   在該則 review 所依據的提交之後 40 分鐘——`git ls-tree fd48496` 顯示當時該檔尚
   不存在，故並非未察覺）以 zstd -3 對兩種影格來源量得 −0.1% 至 0.0%；
-  `nv12_vs_rgb1_streaming.zsh --both` 將其延伸至全部五種 codec，最大為 +0.34%
-  （rgb24／xz，字典最大），其中約 0.04% 還是每格的 tar header。批次數字與
-  689 Mbps 的結論皆成立。若日後解析度低到單格能放進 codec 視窗，須重新檢查。
+  **其中「延伸至全部五種 codec」那半是錯的，已於 2026-08-14 更正——見下方 #10。**
+  該半段依據的是 `nv12_vs_rgb1_streaming.zsh`，而它沒有 `-ss`，量到的是片頭的自黑
+  畫面淡入；改自中段重跑後，xz 對 NV12 為 **+21.27%**，而非此處所記的 +0.34%。
+  視窗論證對 zstd、gzip、lz4 仍然成立（其回看範圍小於單格），而 689 Mbps 的結論
+  不受影響，因為它出自 zstd。
 
 `comparison.csv` was never regenerated while A was live, so A itself never
 reached a committed number. That sentence was too comforting: the reason
@@ -243,6 +247,44 @@ review 未提出:
 - **8. 語料本身的形狀就不對。** FAQ 頻寬表每一列現在都來自同一份 48 格連續語料
   （`make_consecutive_corpus.zsh`，t=121.2 秒），取代原本「8 格連續 + 相隔 10 秒的
   24 格」的混用——後者不但仍含淡入那格，且較連續影格好壓約 11%。
+
+- **10. Batching does inflate the ratio for xz on NV12: +21.27%, not +0.34%.**
+  `nv12_vs_rgb1_streaming.zsh` had no `-ss` and had been reading the clip's
+  fade-from-black opening since it was written — the same defect as the 122 Mbps
+  bitrate figure, missed when that one was fixed. Re-run from t=121.2 s over 48
+  frames, the whole table moves and one conclusion inverts: NV12 compresses
+  better than RGB1 under every codec, so the wire gap is 2.14x rather than the
+  recorded 1.73x, and the claim it had been cited as refuting was right.
+
+  The batching result is the sharper correction. xz's default dictionary is
+  8 MiB against a 3.11 MB NV12 frame — 2.70 frames fit, so it reuses the
+  previous frame outright. The window argument never covered that case: it was
+  stated for zstd (1 MiB), gzip (32 KiB) and lz4 (64 KiB), all of which look
+  back less than one frame, and xz was folded in on the strength of a t=0
+  measurement where everything compressed to ~5% and the gap was invisible. The
+  reviewer's original concern in #2 — that batching lets a codec dedup across
+  frames and understates a per-frame bitrate — is correct for xz on NV12.
+
+  The script now derives that verdict from the run instead of printing it as
+  prose: it tabulates each codec's dictionary against one frame and says which
+  rows can reuse a neighbour. The old text asserted "at most 0.34%" and "batch
+  figures are safe to quote", and printed both verbatim in the run that measured
+  +21.27%.
+- **10. 批次確實會灌大 xz 對 NV12 的比率：+21.27%，而非 +0.34%。**
+  `nv12_vs_rgb1_streaming.zsh` 自撰寫以來就沒有 `-ss`，一直讀著片頭的自黑畫面淡入
+  ——與 122 Mbps 那個位元率數字是同一個缺陷，且在修正該數字時被漏掉。改自 t=121.2 秒
+  取 48 格重跑後，整張表都變了，其中一項結論翻轉：四種 codec 下 NV12 都比 RGB1 更
+  好壓，故線路差距為 2.14x 而非原記的 1.73x，而它原本被引用來反駁的說法其實是對的。
+
+  批次那項更正更為關鍵。xz 的預設字典為 8 MiB，對上 3.11 MB 的 NV12 影格——可容納
+  2.70 格，因而直接重用前一格。視窗論證從來就沒有涵蓋該情形：它是針對
+  zstd（1 MiB）、gzip（32 KiB）、lz4（64 KiB）而言，三者回看範圍皆小於單格，而 xz 是
+  憑一次 t=0 量測（當時所有東西都壓到約 5%，差距根本看不出來）被一併歸入。該 review
+  在 #2 提出的原始疑慮——批次讓 codec 跨格去重，因而低估每格位元率——對 xz/NV12 成立。
+
+  腳本現已改為由執行結果推導該判定，而非以文字印出：它會列出各 codec 字典相對單格
+  的大小，並指出哪幾列能重用鄰格。舊文字斷言「最大 0.34%」與「批次數字可安心引用」，
+  而在量到 +21.27% 的那次執行中，兩句依然被原樣印出。
 
 Follow-up / 後續:
 

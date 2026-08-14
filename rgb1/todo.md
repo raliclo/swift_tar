@@ -319,6 +319,40 @@ Defensive hygiene, 2026-08-14 / 防禦性衛生:
   77 行的紀錄換成 12 行的錯誤訊息。重導現已改至影格數檢查之後，故只有取得所要求影格數的
   執行才會開啟該紀錄。兩條路徑皆已驗證：錯誤的 `START` 會報錯，且入版檔案位元組完全未變。
 
+- **The streaming DOE inherited swift_tar's zstd default, which moved from 3 to
+  9 on 2026-08-14 (`a5ac4a8`).** `nv12_vs_rgb1_streaming.zsh` invoked bare
+  `--zstd`, so every zstd figure in its output and in `rgb1/FAQ.md` would have
+  silently re-based onto a different level while the rows still read "zstd". Both
+  call sites now pass `--zstd-level 3`, matching `batch_vs_per_frame.zsh` and
+  `consecutive_bitrate.zsh`, and the level is printed in the output header.
+  Re-run against the new binary, all ten ratios reproduce exactly — which is also
+  the payoff for having moved the FAQ table off byte counts and onto ratios.
+
+  The first attempt at pinning was worse than not pinning: it probed
+  `swift_tar --help` for the flag and omitted it when absent. swift_tar's
+  `--help` exits with "specify exactly one of -c, -x, ..." and never lists
+  options, so the probe always failed and the fallback would have measured the
+  new default of 9 while labelling it 3. The flag is now passed unconditionally.
+
+  Still unpinned elsewhere: `encrypt_mbps_rss.sh`, `encrypt_mbps_win.sh`,
+  `bsdtar_compat.sh`, `test_no_lzfse.sh`, `test_encrypt.sh`. The correctness
+  tests are unaffected by the level; `encrypt_mbps_rss.sh` reports MB/s and will
+  move. Not addressed here.
+- **串流 DOE 沿用了 swift_tar 的 zstd 預設值，而該預設已於 2026-08-14（`a5ac4a8`）
+  由 3 改為 9。** `nv12_vs_rgb1_streaming.zsh` 呼叫的是裸 `--zstd`，故其輸出與
+  `rgb1/FAQ.md` 中的每個 zstd 數字都會靜默地換基準到另一個等級，而各列仍只寫著
+  「zstd」。兩個呼叫點現皆傳入 `--zstd-level 3`，與 `batch_vs_per_frame.zsh`、
+  `consecutive_bitrate.zsh` 一致，並將等級印入輸出檔頭。以新二進位重跑後，十個比率
+  全數完全重現——這也正是先前把 FAQ 表格由位元組改為比率所換得的回報。
+
+  第一版的釘法比不釘更糟：它探測 `swift_tar --help` 是否列出該旗標，找不到就不傳。
+  但 swift_tar 的 `--help` 會以「specify exactly one of -c, -x, ...」結束，從不列出
+  選項，故該探測必然失敗，而退回路徑會以新預設值 9 量測卻標示為 3。現已改為無條件傳入。
+
+  其他仍未釘住的腳本：`encrypt_mbps_rss.sh`、`encrypt_mbps_win.sh`、
+  `bsdtar_compat.sh`、`test_no_lzfse.sh`、`test_encrypt.sh`。正確性測試不受等級影響；
+  `encrypt_mbps_rss.sh` 回報的是 MB/s，會隨之變動。本次未處理。
+
 Follow-up / 後續:
 
 - Compile and smoke-test the RGB1 CLI operations.

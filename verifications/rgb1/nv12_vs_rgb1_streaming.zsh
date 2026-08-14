@@ -36,6 +36,28 @@ HERE="${0:A:h}"
 ST="${SWIFT_TAR:-${HERE:h:h}/release/swift_tar}"
 OUTPUT="$HERE/nv12_vs_rgb1_streaming_output.txt"
 
+# Pin the zstd level rather than inheriting swift_tar's default. The default
+# moved from 3 to 9 on 2026-08-14, which would have silently re-based every zstd
+# figure in this file's output and in rgb1/FAQ.md against a different level while
+# the rows still read "zstd". 3 keeps this comparable with batch_vs_per_frame.zsh
+# and consecutive_bitrate.zsh, both of which call the zstd CLI at -3.
+# 明確釘住 zstd 等級，不沿用 swift_tar 的預設值。該預設已於 2026-08-14 由 3 改為 9，
+# 若不釘住，本檔輸出與 rgb1/FAQ.md 中的每個 zstd 數字都會靜默地換成另一個等級的量測，
+# 而各列仍只寫著「zstd」。取 3 可與 batch_vs_per_frame.zsh、consecutive_bitrate.zsh
+# 保持可比——兩者都是以 -3 呼叫 zstd CLI。
+#
+# Passed unconditionally. An earlier version probed `--help` for the flag and
+# fell back to omitting it -- but swift_tar's --help exits with "specify exactly
+# one of -c, -x, ..." and never lists options, so the probe always failed and the
+# fallback would have measured the new default of 9 while labelling it 3. A
+# binary too old to accept the flag should fail loudly here, not be papered over.
+# 無條件傳入。先前版本會探測 `--help` 是否列出該旗標，找不到就退回不傳——但
+# swift_tar 的 --help 會以「specify exactly one of -c, -x, ...」結束，從不列出選項，
+# 故該探測必然失敗，而退回路徑會以新預設值 9 量測卻標示為 3。舊到不接受此旗標的
+# 執行檔應在此明確失敗，而不是被掩蓋過去。
+ZSTD_LEVEL="${ZSTD_LEVEL:-3}"
+ZSTD_LEVEL_FLAG=(--zstd-level "$ZSTD_LEVEL")
+
 # --batch (default) compresses all frames as ONE stream, so the codec dedups
 # across frames; --per-frame compresses each frame independently and sums the
 # results. Batch flatters the ratio: a streamer cannot wait for the whole batch
@@ -174,6 +196,7 @@ echo "[Info] machine / 機器: $(uname -m), $(sysctl -n machdep.cpu.brand_string
 echo "[Info] os / 系統: macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
 echo "[Info] swift_tar: $("$ST" --version)"
 echo "[Info] source / 來源: ${SRC:t}  ${W}x${H}, ${FRAMES} frames"
+echo "[Info] zstd level / 等級: -${ZSTD_LEVEL} (pinned; swift_tar default is 9 since 2026-08-14 / 已釘住)"
 echo "[Info] start / 起點: t=${START}s (mid-video; t=0 is a fade from black / 中段取樣)"
 echo "[Info] render prep = conversion to RGBA (what P6 feeds Metal); excludes GPU shader time"
 echo "[Info] render prep = 轉成 RGBA（P6 交給 Metal 的格式）；不含 GPU shader 時間"
@@ -211,6 +234,7 @@ per_frame_size() { # src frame-bytes codec → total compressed bytes
     local -a flag
     case "$codec" in
         none) flag=() ;;
+        zstd) flag=(--zstd "${ZSTD_LEVEL_FLAG[@]}") ;;
         *)    flag=(--$codec) ;;
     esac
     while (( i < n )); do
@@ -230,6 +254,7 @@ for fmt in nv12 rgb24; do
         arc="$TMP/$fmt.$codec"
         case "$codec" in
             none) flag=() ;;
+            zstd) flag=(--zstd "${ZSTD_LEVEL_FLAG[@]}") ;;
             *)    flag=(--$codec) ;;
         esac
         s=$(now)

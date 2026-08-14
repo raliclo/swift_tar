@@ -123,19 +123,50 @@ archived or streamed — they are not the same decision:
 
 RGB1 本身不壓縮。等級取決於影格是要封存還是串流，兩者並非同一個決定：
 
-| use / 用途 | level | measured cost / 實測成本 |
-|---|---|---|
-| archive / 封存 | `-19` | 6,040 ms/frame at 1080p — offline only / 僅適用離線 |
-| **stream / 串流** | **`-3`** | **encode 15.4 ms, decode 9.8 ms per frame** |
+| use / 用途 | level | measured cost / 實測成本 | config |
+|---|---|---|---|
+| archive / 封存 | `-19` | 740 ms/frame encode — offline only / 僅適用離線 | 1 slice, `-n 1` |
+| **stream / 串流** | **`-3`** | **6.5 ms encode, 4.6 ms decode** | **20 slices, `-n 20`** |
 
-Level 9 was recommended here previously; measurement retired it. At 1080p it
-costs 168 ms/frame, which overruns even a 30 fps budget (33.3 ms), while giving
-up only a few percent of size against `-3`. See
-`../verifications/rgb1/streaming_budget_benchmark.zsh`.
+The two rows are measured at different concurrency because that is the whole
+point of the split: at 1 slice on `-n 1`, level 3 already costs **16.7 ms/frame**
+and overruns the 16.67 ms budget on its own. Slicing the frame into 20 bands and
+compressing them concurrently is what brings it to 6.5 ms. The archive row has no
+such requirement, so it is quoted at the plain single-threaded cost that
+`zstd -19 frame.rgb1` would also pay.
 
-此處先前建議 level 9，量測後已淘汰該建議。1080p 下它要 168 ms/frame，連 30 fps
-的預算（33.3 ms）都塞不下，而相對 `-3` 只換到數個百分點的體積。詳見
-`../verifications/rgb1/streaming_budget_benchmark.zsh`。
+兩列的並行度不同，因為這正是兩者分開的理由：在 1 個 slice、`-n 1` 下，level 3 就要
+**16.7 ms/frame**，光是它自己就超出 16.67 ms 的預算。把影格切成 20 條列帶並行壓縮，
+才使其降到 6.5 ms。封存並無此需求，故直接標示單執行緒成本，即 `zstd -19 frame.rgb1`
+同樣要付的代價。
+
+Level 9 was recommended here previously; measurement retired it. At 1 slice on
+`-n 1` it costs **52.7 ms/frame**, which overruns even a 30 fps budget (33.3 ms).
+It does buy real size — 44.0% of raw against `-3`'s 49.7%, an 11% reduction — but
+not at a rate any live path can pay for.
+
+此處先前建議 level 9，量測後已淘汰該建議。在 1 個 slice、`-n 1` 下它要
+**52.7 ms/frame**，連 30 fps 的預算（33.3 ms）都塞不下。它確實換到實質的體積——
+壓到原始的 44.0%，相對 `-3` 的 49.7% 少了 11%——但沒有任何即時路徑付得起這個代價。
+
+> **All four figures above were re-measured on 2026-08-14.** The table read
+> 6,040 ms for archive, 15.4 / 9.8 ms for stream and 168 ms for level 9, and said
+> level 9 gave up "only a few percent" of size. Every one of those predated three
+> fixes to the benchmark itself — in-process libzstd instead of a subprocess, a
+> pinned QoS so both arms are scheduled alike, and the per-frame reassembly moved
+> out of the timed region — and were 8.2x, 2.3x and 3.2x too high respectively.
+> The conclusions did not change: level 9 still cannot stream, and level 19 is
+> still offline-only. Current source: `comparison.csv` (produced by
+> `../verifications/rgb1/streaming_budget_benchmark.zsh`) and a `swift_tar_DOE
+> --preset raw --slices 1 -n 1` sweep, both over the 48-frame corpus.
+>
+> **上述四個數字皆於 2026-08-14 重測。** 本表原記封存為 6,040 ms、串流為 15.4／9.8 ms、
+> level 9 為 168 ms，並稱 level 9「只換到數個百分點」的體積。這些全都早於 benchmark
+> 自身的三項修正——改用行程內 libzstd 而非子行程、釘死 QoS 使兩組獲得相同排程、將逐格
+> 重組移出計時區——分別高了 8.2 倍、2.3 倍與 3.2 倍。結論未變：level 9 仍無法串流，
+> level 19 仍僅適用離線。現值來源：`comparison.csv`（由
+> `../verifications/rgb1/streaming_budget_benchmark.zsh` 產生），以及對 48 格語料執行的
+> `swift_tar_DOE --preset raw --slices 1 -n 1` 掃描。
 
 ```sh
 zstd -3 frame.rgb1 -o frame.rgb1.zst      # stream / 串流
@@ -143,6 +174,21 @@ zstd -19 frame.rgb1 -o frame.rgb1.zst     # archive / 封存
 zstd -dc frame.rgb1.zst > frame.rgb1
 swift_tar --rgb1-info -f frame.rgb1
 ```
+
+The timings quoted above are **not** from these commands. They come from
+`swift_tar_DOE`, which splits a frame into row bands and compresses each band as
+its own zstd frame — that is what makes the work parallel, and it is the only
+reason the encode fits a 60 fps budget at all. The commands above compress the
+whole file as one zstd frame, single-threaded. Sizes differ slightly too, since
+one band cannot match against another; at `-3` the window is capped well below a
+6.2 MB 1080p frame either way, so the whole-file form gains less from its larger
+input than it appears to.
+
+上表所引的時間**並非**來自這幾行指令，而是來自 `swift_tar_DOE`：它將影格切成列帶，
+每條列帶各自壓成一個獨立的 zstd frame——這正是工作得以平行化的原因，也是編碼能塞進
+60 fps 預算的唯一理由。上列指令則是把整個檔案壓成單一 zstd frame，且為單執行緒。
+體積也略有差異，因為列帶之間無法互相匹配；而在 `-3` 下視窗上限本就遠小於 6.2 MB 的
+1080p 影格，故整檔形式從較大的輸入所獲得的好處，不如表面看來那麼多。
 
 Note: `--rgb1-info -f -` and `--rgb1-raw -f -` are not implemented yet; the
 current info/raw commands require a file path. This is a follow-up item for

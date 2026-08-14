@@ -13,13 +13,20 @@
 # FFV1 的 range coder，改以 zstd 替代。本測試量化該替換的代價，並納入 VP9
 # lossless 作為串流編碼器的參考點。
 #
-# All arms are INTRA-only and single-frame. The samples are 10 s apart, so any
-# inter-frame mode would be measuring scene changes rather than codec quality.
-# 所有組別皆為 INTRA、單影格。樣本相隔 10 秒，任何影格間模式量到的會是場景
-# 變化而非編碼器品質。
+# All arms are INTRA-only and single-frame, because the stack being compared has
+# no inter-frame mode: swift_tar_DOE's predictive preset is YCoCg-R + MED +
+# planar, all of which are within-frame. Giving FFV1 and VP9 inter-frame modes
+# would compare a video codec against a still-image pipeline.
+# 所有組別皆為 INTRA、單影格，因為受比較的堆疊本身沒有影格間模式：
+# swift_tar_DOE 的 predictive 預設為 YCoCg-R + MED + planar，三者皆為格內處理。
+# 若讓 FFV1 與 VP9 使用影格間模式，等於拿視訊編碼器與靜態影像管線相比。
 #
 # Usage / 用法:
 #   ./ffv1_vp9_vs_predictive.zsh [sample-dir]
+#   the corpus is now sample_consecutive (48 consecutive frames from mid-video);
+#   sample/ opened on a fade from black that dragged every average down.
+#   語料現為 sample_consecutive（自影片中段取的 48 格連續影格）；sample/ 的開頭
+#   是自黑畫面淡入的那格，會拉低所有平均值。
 # =====================================================================
 set -euo pipefail
 

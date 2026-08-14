@@ -1,0 +1,14 @@
+[Info] date / 日期: 2026-08-14 08:24:09 CST
+[Info] os: macOS 27.0 (26A5406e)
+[Info] source / 來源: 20260803 回到神面前 讓神來醫治 [恩典365 - 時代先知 ： 耶利米 系列] [d-t779PY_S0].webm  1920x1080
+[Info] corpus / 語料: 48 consecutive frames from t=121.2s / 自 t=121.2s 起的連續影格
+[Info] link / 線路: 118 MB/s (1 GbE practical, same value build_streaming_budget.py uses)
+[Info]              118 MB/s（1 GbE 實務值，與 build_streaming_budget.py 相同）
+
+== Per-frame wire cost at zstd-3 / 逐格線路成本 ==
+format        bytes/frame       MB/s       Mbps     of 1 GbE
+---------- -------------- ---------- ---------- ------------
+nv12            1,446,120       86.8      694.1          74%
+rgb24           3,088,169      185.3     1482.3         157%
+
+[Done] output / 輸出: /Users/raliclo/proj/lzfse2/swift_tar/verifications/rgb1/consecutive_bitrate_output.txt

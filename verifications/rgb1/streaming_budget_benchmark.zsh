@@ -30,17 +30,22 @@
 set -euo pipefail
 
 HERE="${0:A:h}"
-SAMPLES="${1:-$HERE/sample}"
+SAMPLES="${1:-$HERE/sample_consecutive}"
 LEVEL="${2:-3}"
 DOE="$HERE/swift_tar_DOE"
 CSV="$HERE/comparison.csv"
 OUTPUT="$HERE/streaming_budget_benchmark_output.txt"
 
-# Three frames are enough: --repeat 3 takes a best-of, and the per-frame figures
-# are stable to within a few percent across the corpus.
-# 三格已足夠：--repeat 3 取最佳值，且各格數字在整份語料上的差異僅數個百分點。
-TIMING_FRAMES=("$SAMPLES"/t000020s.rgb1 "$SAMPLES"/t000030s.rgb1 "$SAMPLES"/t000040s.rgb1)
+# Timing runs over the whole corpus. It used to run over three frames named by
+# hand, which coupled the numbers to one sampler's naming scheme and left the
+# question of whether those three were representative permanently open. The
+# corpus is small enough that timing all of it costs a few minutes, so the
+# question is better closed than argued.
+# 計時涵蓋整份語料。先前是對三個手動指定檔名的影格計時，這既把數字綁死在某一支
+# sampler 的命名規則上，也讓「那三格是否具代表性」永遠懸而未決。語料規模夠小，
+# 全部計時只需數分鐘，與其爭論不如直接消除這個問題。
 ALL_FRAMES=("$SAMPLES"/*.rgb1(N))
+TIMING_FRAMES=("${ALL_FRAMES[@]}")
 
 [[ -x "$DOE" ]] || {
     echo "[Error] build first / 請先建置:" >&2
@@ -49,12 +54,9 @@ ALL_FRAMES=("$SAMPLES"/*.rgb1(N))
 }
 (( ${#ALL_FRAMES} )) || {
     echo "[Error] no samples in $SAMPLES / 找不到樣本" >&2
-    echo "        generate them: ./rgb1_sampler <video> 10 sample" >&2
+    echo "        generate them: ./make_consecutive_corpus.zsh" >&2
     exit 1
 }
-for f in "${TIMING_FRAMES[@]}"; do
-    [[ -f "$f" ]] || { echo "[Error] missing timing frame: $f" >&2; exit 1 }
-done
 
 exec > >(tee "$OUTPUT") 2>&1
 

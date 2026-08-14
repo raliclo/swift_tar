@@ -248,60 +248,117 @@ budget**. Measured per-frame encode cost on the same clip:
 有兩個約束同時成立：連線頻寬，以及**每格 16.67 ms 的預算**。以相同影片實測的
 每格編碼耗時：
 
-| method | Mbps @60fps | ms/frame | verdict |
-|---|---:|---:|---|
-| RGB24 raw | 2986 | 0 | bandwidth fails |
-| NV12 raw | 1493 | 0 | bandwidth fails |
-| **NV12 + zstd-3** | **689** | **9.0** | **1 GbE at 86%** |
-| RGB24 + zstd-3 | 1469 | 9.0 | **exceeds 1 GbE** |
-| RGB1 predictive + zstd-3 | 809 | 15.1 enc / 9.8 dec | 1 GbE at 101%, needs 2.5 GbE |
-| FFV1 | 565 | 22.8 | over compute budget |
-| x264 lossless | — | 64.2 | over compute budget |
-| hardware lossy (VideoToolbox / VP9) | ~2-10 | see note | the only internet-capable option |
+| method | Mbps @60fps | of 1 GbE | ms/frame | verdict |
+|---|---:|---:|---:|---|
+| RGB24 raw | 2986 | 316% | 0 | bandwidth fails |
+| NV12 raw | 1493 | 158% | 0 | bandwidth fails |
+| **NV12 + zstd-3** | **694** | **74%** | — | **fits both** |
+| RGB24 + zstd-3 | 1482 | 157% | 3.2 enc / 0.8 dec | exceeds 1 GbE |
+| RGB1 predictive + zstd-3 | 813 | 86% | 6.5 enc / 4.6 dec | fits both, no room for a second stream |
+| FFV1 | 587 | 62% | 22.8 | over compute budget |
+| x264 lossless | — | — | 64.2 | over compute budget |
+| hardware lossy (VideoToolbox / VP9) | ~2-10 | <1% | see note | the only internet-capable option |
 
-> **Corrected 2026-08-14, and the conclusion moved with it.** This table first
-> read NV12 + zstd at 122 Mbps and RGB24 at 211 Mbps. Those came from 8 frames
-> taken at t=0, and the opening of the source clip is a fade from black — a
-> region the measuring script's own header warns about. Re-measured from
-> mid-video, NV12 is **689 Mbps and RGB24 is 1469 Mbps**, 5.6x and 7.0x higher.
-> Raised in review by the Windows-side reader.
->
-> The reviewer also expected a second error, that compressing 8 frames as one
-> zstd stream deduplicates across frames and understates a per-frame bitrate.
-> Measured directly with `batch_vs_per_frame.zsh`: the penalty is **-0.0%**.
-> zstd-3's window is smaller than a single 6.2 MB frame, so by the time the
-> encoder reaches frame 2, frame 1 has already left the window and cross-frame
-> matching cannot happen at all. Batched and per-frame are the same number.
->
-> **2026-08-14 更正，結論亦隨之改變。** 本表原記 NV12 + zstd 為 122 Mbps、
-> RGB24 為 211 Mbps。該數字取自 t=0 的 8 格影格，而來源影片開頭是自黑畫面淡入
-> ——量測腳本自身的檔頭已對此提出警告。改自影片中段重測後，NV12 為 **689 Mbps、
-> RGB24 為 1469 Mbps**，分別高出 5.6 倍與 7.0 倍。此問題由 Windows 端讀者於
-> review 中提出。
->
-> 該讀者另預期存在第二項錯誤：8 格壓成單一 zstd 串流會跨影格去重，因而低估每格
-> 位元率。以 `batch_vs_per_frame.zsh` 直接量測，懲罰為 **-0.0%**。zstd-3 的視窗
-> 小於單張 6.2 MB 影格，編碼器讀到第 2 格時第 1 格早已離開視窗，跨影格匹配根本
-> 無從發生。批次與逐格是同一個數字。
+Every row above is measured on the **same 48 consecutive frames from t=121.2 s**
+of the source clip (`verifications/rgb1/sample_consecutive`, built by
+`make_consecutive_corpus.zsh`). Provenance by column: bandwidth for the two zstd
+rows from `consecutive_bitrate.zsh`, for the predictive row from
+`comparison.csv`, for FFV1 from `ffv1_vp9_vs_predictive_output.txt`; timings from
+`comparison.csv` at 20 slices and `-n 20`. "of 1 GbE" is against **118 MB/s**,
+the practical-gigabit figure `build_streaming_budget.py` uses. NV12 has no RGB1
+container so it has no timing row — it is the same codec on two-thirds the bytes
+of the RGB24 row. FFV1's 22.8 ms and x264's 64.2 ms are older figures, not
+re-measured on this corpus. The two zstd rows compress each frame whole; the
+predictive row compresses 20 row bands separately, which costs ~3% more bytes and
+buys the parallelism that puts it inside the budget at all.
 
-**On a LAN: NV12 + zstd-3 at 689 Mbps, and 1 GbE is no longer comfortable** —
-that is 86% of a practical gigabit link for a single stream, where the earlier
-122 Mbps figure implied a link could carry several. RGB24 + zstd-3 at 1469 Mbps
-does not fit 1 GbE at all. RGB1's predictive stack lands at 809 Mbps, between
-them, and needs 2.5 GbE for any headroom.
+上表每一列皆量測於來源影片 **t=121.2 秒起的同一批 48 格連續影格**
+（`verifications/rgb1/sample_consecutive`，由 `make_consecutive_corpus.zsh` 產生）。
+各欄出處：兩個 zstd 列的頻寬來自 `consecutive_bitrate.zsh`，predictive 列來自
+`comparison.csv`，FFV1 來自 `ffv1_vp9_vs_predictive_output.txt`；計時皆取自
+`comparison.csv` 的 20 slices、`-n 20`。「of 1 GbE」的分母為 **118 MB/s**，即
+`build_streaming_budget.py` 所採用的實務 gigabit 值。NV12 沒有 RGB1 容器，故無計時
+列——它是同一個編碼器作用在 RGB24 列三分之二的位元組上。FFV1 的 22.8 ms 與 x264 的
+64.2 ms 為較早的數字，並未在本語料上重測。兩個 zstd 列為整格壓縮；predictive 列則
+將 20 條列帶分別壓縮，多付約 3% 的體積，換得使其得以塞進預算的平行度。
 
-**區域網路：NV12 + zstd-3 為 689 Mbps，1 GbE 已不再寬裕** —— 單一串流即佔實務
-gigabit 連線的 86%，而先前的 122 Mbps 會讓人以為一條線路可承載數條。RGB24 +
-zstd-3 的 1469 Mbps 則完全塞不進 1 GbE。RGB1 的預測式堆疊落在兩者之間的
-809 Mbps，要有餘裕需 2.5 GbE。
+> **This table has been corrected twice on 2026-08-14. Four things were wrong.**
+>
+> **1. t=0 sampling.** It first read NV12 + zstd at 122 Mbps and RGB24 at
+> 211 Mbps, from 8 frames taken at t=0 — and the clip opens on a fade from black,
+> a region the measuring script's own header warns about. Raised in review by the
+> Windows-side reader. Re-measured from mid-video, those became 689 and
+> 1469 Mbps.
+>
+> **2. Mixed corpora.** The corrected NV12/RGB24 figures came from 8 consecutive
+> frames while the FFV1 and predictive rows still came from 24 frames sampled 10 s
+> apart — a corpus that still contained the fade frame, and that compresses ~11%
+> better than consecutive footage. Every row is now measured on one 48-frame
+> consecutive corpus, which moved FFV1 from 565 to 587 Mbps.
+>
+> **3. A unit error in the verdict column.** "1 GbE at 86%" and "at 101%" were
+> not percentages: they were 86.1 and 101.1 **MB/s**, the Mbps figures divided by
+> 8, copied across as if they were a link-utilisation ratio. Against the 118 MB/s
+> this project actually uses for a practical gigabit, NV12 is 74% and the
+> predictive stack is 86% — so the old table overstated NV12's pressure on the
+> link and wrongly showed the predictive stack overflowing it.
+>
+> **4. Stale timings.** The 15.1 enc / 9.8 dec figures predated three commits of
+> measurement-infrastructure fixes (in-process libzstd, pinned QoS, the flatten
+> removed from the timed region). Re-run on the current binary, the same three
+> frames give 6.5 / 4.7 — the published numbers were 2.3x too high.
+>
+> One expected error turned out not to be one. The reviewer also predicted that
+> compressing 8 frames as one zstd stream deduplicates across frames and
+> understates a per-frame bitrate. Measured directly with
+> `batch_vs_per_frame.zsh`: the penalty is **-0.0%**. zstd-3's window is smaller
+> than a single 6.2 MB frame, so by the time the encoder reaches frame 2, frame 1
+> has already left the window and cross-frame matching cannot happen at all.
+>
+> **本表於 2026-08-14 經兩輪更正，共有四處錯誤。**
+>
+> **一、t=0 取樣。** 原記 NV12 + zstd 為 122 Mbps、RGB24 為 211 Mbps，取自 t=0 的
+> 8 格影格，而本片開頭是自黑畫面淡入——量測腳本自身的檔頭已對此提出警告。此問題由
+> Windows 端讀者於 review 中提出。改自影片中段重測後為 689 與 1469 Mbps。
+>
+> **二、語料混用。** 更正後的 NV12／RGB24 取自 8 格連續影格，而 FFV1 與 predictive
+> 兩列仍取自相隔 10 秒的 24 格——該語料不但仍含淡入那格，且較連續影格好壓約 11%。
+> 現已全數改用同一份 48 格連續語料，FFV1 因此由 565 變為 587 Mbps。
+>
+> **三、判定欄的單位錯誤。**「1 GbE at 86%」與「at 101%」並非百分比，而是 86.1 與
+> 101.1 **MB/s**——Mbps 值除以 8 之後，被當成連線佔用率抄了過來。以本專案實際採用的
+> 實務 gigabit 值 118 MB/s 為分母，NV12 為 74%、預測式堆疊為 86%。舊表因此既誇大了
+> NV12 對線路的壓力，也錯誤地顯示預測式堆疊塞不進去。
+>
+> **四、過期的計時。** 15.1 enc／9.8 dec 這組數字早於三次量測基礎設施的修正（改用
+> 行程內 libzstd、釘死 QoS、將攤平移出計時區）。以現行二進位對同樣三格重跑，得到
+> 6.5／4.7——已發表的數字高了 2.3 倍。
+>
+> 另有一項預期中的錯誤並不存在。該讀者亦預測「8 格壓成單一 zstd 串流會跨影格去重，
+> 因而低估每格位元率」。以 `batch_vs_per_frame.zsh` 直接量測，懲罰為 **-0.0%**。
+> zstd-3 的視窗小於單張 6.2 MB 影格，編碼器讀到第 2 格時第 1 格早已離開視窗，跨影格
+> 匹配根本無從發生。
+
+**On a LAN: NV12 + zstd-3 at 694 Mbps, which is 74% of a practical gigabit** —
+one stream fits, two do not, and the earlier 122 Mbps figure implied a link could
+carry five. RGB24 + zstd-3 at 1482 Mbps does not fit 1 GbE at all. RGB1's
+predictive stack lands between them at 813 Mbps, 86% of the link: it fits, but it
+leaves nothing behind it. Both zstd paths are inside the 16.67 ms budget with
+room to spare — bandwidth is the binding constraint here, not compute.
+
+**區域網路：NV12 + zstd-3 為 694 Mbps，佔實務 gigabit 的 74%** —— 一條串流塞得下，
+兩條不行；而先前的 122 Mbps 會讓人以為一條線路可承載五條。RGB24 + zstd-3 的
+1482 Mbps 則完全塞不進 1 GbE。RGB1 的預測式堆疊落在兩者之間的 813 Mbps，佔線路
+86%：塞得下，但後面不留任何餘地。兩條 zstd 路徑都在 16.67 ms 預算內且尚有餘裕
+——此處真正的約束是頻寬而非計算。
 
 **Over the internet: a lossy encoder is mandatory.** The source clip's own VP9
-track runs at 2 Mbps against zstd's 689 Mbps — a 345x difference; no lossless path
+track runs at 2 Mbps against zstd's 694 Mbps — a 347x difference; no lossless path
 fits a typical connection. swift_tar's role there is container and transport, not
 compression.
 
 **跨網際網路：必須使用有損編碼器。** 來源影片自身的 VP9 軌為 2 Mbps，對比 zstd
-的 689 Mbps 相差 345 倍；沒有任何無損路徑能塞進一般連線。此時 swift_tar 的角色是
+的 694 Mbps 相差 347 倍；沒有任何無損路徑能塞進一般連線。此時 swift_tar 的角色是
 容器與傳輸層，而非壓縮。
 
 > **Note on the h264_videotoolbox row**: its 41 ms/frame measurement includes
@@ -401,8 +458,8 @@ The metadata itself is nearly free on a LAN:
 
 | stream | video rate | geo overhead (876 B/frame @60fps) | share |
 |---|---:|---:|---:|
-| NV12 + zstd | 122 Mbps | 0.42 Mbps | 0.34% |
-| RGB1 + zstd | 211 Mbps | 0.42 Mbps | 0.20% |
+| NV12 + zstd | 694 Mbps | 0.42 Mbps | 0.06% |
+| RGB1 + zstd | 1482 Mbps | 0.42 Mbps | 0.03% |
 | VP9 lossy | 2 Mbps | 0.42 Mbps | **21.0%** |
 
 | format | how it would carry per-frame geo |
@@ -1258,11 +1315,11 @@ describe different inputs and both hold.
 
 **What survives the revert.** The streaming path is unaffected: it applies
 `YCoCg-R -> MED -> planar` regardless of what the container stores, so the
-809 Mbps figure does not move. `P6-DOE` path C still demonstrates that ffmpeg's
+813 Mbps figure does not move. `P6-DOE` path C still demonstrates that ffmpeg's
 `gbrp` byte order feeds a three-plane upload with no byte movement — that
 interop holds at the GPU layer whatever the container does.
 
 **回退後仍然成立的部分。** 串流路徑不受影響：無論容器儲存什麼，它都會套用
-`YCoCg-R → MED → planar`，故 809 Mbps 這個數字不變。`P6-DOE` 的路徑 C 仍然證明
+`YCoCg-R → MED → planar`，故 813 Mbps 這個數字不變。`P6-DOE` 的路徑 C 仍然證明
 ffmpeg 的 `gbrp` 位元組順序可零搬移地餵入三平面上傳 —— 該互通性在 GPU 層成立，
 與容器如何儲存無關。

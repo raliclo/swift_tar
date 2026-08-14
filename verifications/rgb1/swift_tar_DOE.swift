@@ -605,19 +605,27 @@ func parallelMap<T>(_ count: Int, threads: Int,
 /// then compression.
 /// 單一列帶：影格間差分、色彩變換、預測、planar 排列，最後壓縮。
 ///
-/// `previous` is the prior frame's full payload, sliced to the same band. It was
-/// missing here while `--delta` was only implemented on the whole-frame path,
-/// which meant `--delta` alone produced byte-identical output to `raw` and still
-/// labelled it "delta" — a silently wrong result rather than a failure.
-/// `previous` 為前一影格的完整 payload，切取相同列帶。此處原本缺少該參數，而
-/// `--delta` 僅實作於整格路徑，導致單獨使用 `--delta` 產生與 `raw` 完全相同的
-/// 位元組卻仍標記為「delta」——是靜默的錯誤結果，而非失敗。
+/// `previous` is the prior frame's full payload, sliced to the same band here.
+/// The encoder gets the whole frame for free — it is the loaded file — so it
+/// slices; the decoder gets bands for free — it just produced them — so it passes
+/// one band. Neither side copies a frame it does not already hold. The caller
+/// supplies `previous` only when the prior frame had identical geometry; see the
+/// delta guard at both call sites.
+/// It was missing here entirely while `--delta` was only implemented on the
+/// whole-frame path, which meant `--delta` alone produced byte-identical output
+/// to `raw` and still labelled it "delta" — a silently wrong result.
+/// `previous` 為前一影格的完整 payload，於此處切取相同列帶。編碼端本就免費持有整格
+/// ——它就是載入的檔案——故由它切片；解碼端本就免費持有各列帶——它剛產出——故傳入單一
+/// 列帶。兩端都不會去複製自己尚未持有的整格資料。呼叫端僅在前一格幾何完全相同時才
+/// 傳入 `previous`；守門位於兩端的呼叫處。
+/// 此參數原本完全缺少，而 `--delta` 僅實作於整格路徑，導致單獨使用 `--delta` 產生與
+/// `raw` 完全相同的位元組卻仍標記為「delta」——是靜默的錯誤結果。
 func encodeBand(_ payload: [UInt8], previous: [UInt8]?, width: Int, y0: Int, y1: Int,
                 opt: Options) -> [UInt8]? {
     let rows = y1 - y0
     let range = (y0 * width * 3)..<(y1 * width * 3)
     var buf = Array(payload[range])
-    if opt.delta, let prev = previous, prev.count == payload.count {
+    if opt.delta, let prev = previous {
         let pb = Array(prev[range])
         for i in 0..<buf.count { buf[i] = UInt8((Int(buf[i]) &- Int(pb[i])) & 0xFF) }
     }
@@ -632,7 +640,7 @@ func encodeBand(_ payload: [UInt8], previous: [UInt8]?, width: Int, y0: Int, y1:
 
 /// The exact inverse, in reverse order. This is the client-side cost.
 /// 完全對應的反向流程，順序相反。這就是客戶端要付的成本。
-func decodeBand(_ blob: [UInt8], previous: [UInt8]?, width: Int, y0: Int, rows: Int,
+func decodeBand(_ blob: [UInt8], previous: [UInt8]?, width: Int, rows: Int,
                 opt: Options) -> [UInt8]? {
     var raw = rows * width * 3
     if opt.dirSim { raw += (rows * width * dirBits + 7) / 8 }
@@ -654,8 +662,7 @@ func decodeBand(_ blob: [UInt8], previous: [UInt8]?, width: Int, y0: Int, rows: 
     // 最後還原差分，與 encodeBand 的順序相對。--verify 會將重建結果與原始 payload
     // 比對，故若差分缺少此步會明確失敗，而非靜默回報錯誤的大小。
     if opt.delta, let prev = previous {
-        let base = y0 * width * 3
-        for i in 0..<buf.count { buf[i] = UInt8((Int(buf[i]) &+ Int(prev[base + i])) & 0xFF) }
+        for i in 0..<buf.count { buf[i] = UInt8((Int(buf[i]) &+ Int(prev[i])) & 0xFF) }
     }
     return buf
 }
@@ -813,14 +820,27 @@ func run(_ base: Options) throws -> [Result] {
                 }
             } else {
                 var previous: [UInt8]? = nil
+                var previousGeo: (Int, Int)? = nil
                 for frame in frames {
                     let bs = bands(height: frame.height, slices: opt.slices)
-                    let prev = previous
+                    // Delta only across frames of identical geometry. Equal byte
+                    // counts are not enough: 64x48 and 48x64 are the same size but
+                    // slice into different band layouts, so the residual would be
+                    // arithmetic noise and the two sides could not agree band for
+                    // band. The DOE accepts any file list, so this is reachable.
+                    // 僅在幾何完全相同的影格之間做差分。位元組數相同並不足夠：
+                    // 64x48 與 48x64 大小相同，切出的列帶佈局卻不同，殘差將只是
+                    // 算術雜訊，且兩端無法逐帶對應。DOE 接受任意檔案清單，此情境
+                    // 可被觸及。
+                    let same = previousGeo != nil
+                        && previousGeo! == (frame.width, frame.height)
+                    let prev = same ? previous : nil
                     guard let parts = parallelMap(bs.count, threads: opt.threads, { i in
                         encodeBand(frame.payload, previous: prev, width: frame.width,
                                    y0: bs[i].0, y1: bs[i].1, opt: opt)
                     }) else { throw Err("codec \(opt.codec) unavailable / 找不到編碼器") }
                     previous = frame.payload
+                    previousGeo = (frame.width, frame.height)
                     encoded.append(parts)
                     stored += frame.payload.count + head
                     // Each band stores its own length so the decoder can split.
@@ -837,45 +857,44 @@ func run(_ base: Options) throws -> [Result] {
             // decoder has.
             // 解碼端依序走訪影格，因為差分影格需要前一格已重建完成——這與真實
             // 解碼器面對的約束相同。
-            var decodedPrev: [UInt8]? = nil
+            var decodedPrev: [[UInt8]]? = nil
+            var previousGeo: (Int, Int)? = nil
             for (fi, frame) in frames.enumerated() {
                 let bs = bands(height: frame.height, slices: opt.slices)
-                // Mirror encodeBand's guard (prev.count == payload.count): it
-                // skips the delta when the previous frame is a different size,
-                // so decode has to skip it too. Checked here because decodeBand
-                // sees only its own band and cannot know the frame size. Without
-                // this, a mixed-size corpus — the DOE accepts any file list —
-                // would rebuild wrongly, and a smaller previous frame would run
-                // off the end of prev[base + i].
-                // 鏡像 encodeBand 的守門（prev.count == payload.count）：前一格
-                // 尺寸不同時它會跳過差分，解碼端也必須跳過。在此檢查是因為
-                // decodeBand 只看得到自己那條 band，無從得知整格大小。若缺少
-                // 此檢查，尺寸混雜的語料（DOE 接受任意檔案清單）會重建錯誤，
-                // 且前一格較小時會在 prev[base + i] 越界。
-                let frameBytes = frame.width * frame.height * 3
-                let prev = decodedPrev?.count == frameBytes ? decodedPrev : nil
+                // The same geometry guard the encoder applies, for the same
+                // reason. It has to be here rather than inside decodeBand,
+                // which sees one band and cannot know what the frame looks like.
+                // 與編碼端相同的幾何守門，理由亦同。必須置於此處而非 decodeBand
+                // 內——後者只看得到一條列帶，無從得知整格的樣貌。
+                let same = previousGeo != nil
+                    && previousGeo! == (frame.width, frame.height)
+                let prev = same ? decodedPrev : nil
                 guard let out = parallelMap(bs.count, threads: opt.threads, { i in
-                    decodeBand(encoded[fi][i], previous: prev, width: frame.width,
-                               y0: bs[i].0, rows: bs[i].1 - bs[i].0, opt: opt)
+                    decodeBand(encoded[fi][i], previous: prev?[i], width: frame.width,
+                               rows: bs[i].1 - bs[i].0, opt: opt)
                 }) else { throw Err("decode failed / 解碼失敗") }
-                // Flatten at most once per frame, and only when something needs
-                // it: --delta uses it as the next frame's reference, --verify
-                // uses it for the comparison. Doing it unconditionally put a
-                // 6.2 MB allocation and copy per 1080p frame inside the timed
-                // region — roughly 0.5-1 ms against a ~9-10 ms decode and a
-                // 16.67 ms budget, inflating the number that decides PASS/FAIL
-                // even under --no-verify, which the budget scan uses precisely
-                // to avoid that cost.
-                // 每格最多攤平一次，且僅在有需要時才做：--delta 用它作下一格的
-                // 參考，--verify 用它作比對。原本無條件執行，使 1080p 每格在
-                // 計時區內多付 6.2 MB 配置與複製——約 0.5-1 ms，對照解碼
-                // ~9-10 ms 與 16.67 ms 預算，灌大了判定 PASS/FAIL 的數字，
-                // 連 --no-verify 也擋不掉，而 budget 掃描正是靠它避開此成本。
-                let decodedFrame: [UInt8]? =
-                    (opt.delta || opt.verify) ? Array(out.joined()) : nil
-                if opt.delta { decodedPrev = decodedFrame }
+                // The reference for the next frame is kept as bands, so keeping
+                // it is a retain and not a copy. Reassembling the frame here cost
+                // a 6.2 MB allocation and copy per 1080p frame inside the timed
+                // region, and only some arms paid it: unconditionally at first,
+                // then only under --delta or --verify, which still left --delta
+                // uncomparable against anything else on decode time. A real
+                // decoder does not reassemble either — it holds the reference in
+                // whatever layout it decoded into.
+                // 下一格的參考以列帶形式保留，故保留它只是 retain 而非複製。原本在
+                // 此重組整格，使 1080p 每格在計時區內多付 6.2 MB 的配置與複製，且
+                // 只有部分組別要付：起初是無條件，之後改為僅 --delta 或 --verify，
+                // 仍使 --delta 的解碼時間無法與其他組別相比。真實解碼器同樣不會重組
+                // ——它就以解出來的佈局持有該參考。
+                decodedPrev = out
+                previousGeo = (frame.width, frame.height)
+                // --verify is the one place a contiguous frame is genuinely
+                // needed, and every arm pays it equally. The budget sweep runs
+                // --no-verify precisely to keep this out of the timed region.
+                // --verify 是唯一真正需要連續整格之處，且所有組別付出相同代價。
+                // budget 掃描以 --no-verify 執行，正是為了讓此步留在計時區之外。
                 if opt.verify {
-                    guard decodedFrame == frame.payload else {
+                    guard Array(out.joined()) == frame.payload else {
                         throw Err("round-trip mismatch on \(opt.label) / 往返結果不符")
                     }
                 }

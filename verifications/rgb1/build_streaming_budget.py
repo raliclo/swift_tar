@@ -56,14 +56,23 @@ def measured_render():
     """Three-plane upload + GPU time, by running P6-DOE.
     三平面上傳與 GPU 時間，實際執行 P6-DOE 取得。"""
     doe = os.path.join(HERE, "..", "..", "rgb1", "P6-DOE")
-    frame = os.path.join(HERE, "sample", "t000020s.rgb1")
+    frame = os.path.join(HERE, "sample_consecutive", "f000.rgb1")
     if not (os.path.exists(doe) and os.path.exists(frame)):
         sys.exit("P6-DOE or sample frame missing — build it and generate samples\n"
                  "缺少 P6-DOE 或樣本影格 —— 請先建置並產生樣本")
     out = subprocess.run([doe, frame, "60"], capture_output=True, text=True).stdout
-    m = re.search(r"B\s+3 plane textures \(planar\)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)", out)
+    # Matched on the row's "B" prefix and the last three numbers, not on the full
+    # label text. The label was "3 plane textures (planar)" when this was written
+    # and is now "3 planes, RGB order (ours)"; the exact-text match turned this
+    # script into a no-op that exits 1, so streaming_budget.csv silently stopped
+    # tracking the measurements it claims to summarise.
+    # 以該列的「B」前綴與末三個數字比對，而非比對完整標籤文字。撰寫本檔時標籤為
+    # 「3 plane textures (planar)」，現已改為「3 planes, RGB order (ours)」；原本的
+    # 精確比對使本腳本變成一執行就 exit 1 的空操作，導致 streaming_budget.csv 靜默
+    # 地停止追蹤它所宣稱摘要的量測結果。
+    m = re.search(r"^B\s+3 planes.*\s([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*$", out, re.M)
     if not m:
-        sys.exit("could not parse P6-DOE output / 無法解析 P6-DOE 輸出")
+        sys.exit("could not parse P6-DOE output / 無法解析 P6-DOE 輸出\n" + out)
     return float(m.group(3))
 
 

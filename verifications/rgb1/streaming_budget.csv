@@ -1,8 +1,8 @@
-step,side,ms_per_frame,budget_ms,headroom_pct,bytes_in,bytes_out,MB_per_s,max_fps_capacity,fits,limited_by,note
-1 source frame (RGB1 in memory),server,0.00,16.67,n/a,0,6221676,373.3,inf,yes,capture rate,"uncompressed, 3 B/px / 未壓縮"
-2 transform + zstd-3 encode,server,15.07,16.67,9.6,6221676,1685800,101.1,66,yes,"CPU, 20 slices at -n 20",YCoCg-R -> MED -> planar -> zstd / 依序套用
-3 wire transfer,network,0.00,16.67,n/a,1685800,1685800,101.1,70,yes,link 118 MB/s,the binding constraint / 真正的約束
-4 zstd-3 decode + inverse,client,9.77,16.67,41.4,1685800,6220800,373.2,102,yes,"CPU, 20 slices at -n 20","emits planar, ready to upload / 輸出 planar，可直接上傳"
-5 three-plane upload + render,client,1.41,16.67,91.5,6220800,6220800,373.2,709,yes,GPU / PCIe-equivalent,"3x r8Unorm, no alpha expansion / 三個 r8Unorm，免補 alpha"
-TOTAL server,server,15.07,16.67,9.6,,,,66,yes,CPU,sum of server steps / server 各步驟總和
-TOTAL client,client,11.18,16.67,32.9,,,,89,yes,CPU + GPU,sum of client steps / client 各步驟總和
+step,side,ms_per_frame,budget_ms,headroom_pct,bytes_in,bytes_out,MB_per_s,max_fps_capacity,fits,limited_by,tool,note
+1 source frame (RGB1 in memory),server,0.00,16.67,n/a,0,6221676,373.3,inf,yes,capture rate,-,"uncompressed, 3 B/px / 未壓縮"
+2 transform + zstd-3 encode,server,6.52,16.67,60.9,6221676,1694563,101.7,153,yes,"CPU, 20 slices at -n 20","swift_tar -n 20 --zstd (level 3, 20 slices)",YCoCg-R -> MED -> planar -> zstd / 依序套用
+3 wire transfer,network,0.00,16.67,n/a,1694563,1694563,101.7,70,yes,link 118 MB/s,-,the binding constraint / 真正的約束
+4 zstd-3 decode + inverse,client,4.61,16.67,72.3,1694563,6220800,373.2,217,yes,"CPU, 20 slices at -n 20","swift_tar -n 20 -x (level 3, 20 slices)","emits planar GBR, ready to upload / 輸出 planar GBR，可直接上傳"
+5 three-plane upload + render,client,0.88,16.67,94.7,6220800,6220800,373.2,1136,yes,GPU / PCIe-equivalent,P6-DOE path C (gbrp),"3x r8Unorm, no alpha expansion / 三個 r8Unorm，免補 alpha"
+TOTAL server,server,6.52,16.67,60.9,,,,153,yes,CPU,swift_tar -n 20,sum of server steps / server 各步驟總和
+TOTAL client,client,5.49,16.67,67.1,,,,182,yes,CPU + GPU,swift_tar -n 20,sum of client steps / client 各步驟總和

@@ -1,14 +1,14 @@
 #!/bin/zsh
 # =====================================================================
-# encrypt_mbps_rss.sh -- measure the cost of the ChaCha20-Poly1305 layer:
+# encrypt_mbps_rss.zsh -- measure the cost of the ChaCha20-Poly1305 layer:
 # throughput, peak RSS, and size overhead, both on its own (--encrypt-only /
 # --decrypt-only) and layered on top of a codec.
-# encrypt_mbps_rss.sh -- 量測 ChaCha20-Poly1305 加密層的成本：吞吐量、peak RSS
+# encrypt_mbps_rss.zsh -- 量測 ChaCha20-Poly1305 加密層的成本：吞吐量、peak RSS
 # 與大小額外開銷，分別測「單獨加解密」（--encrypt-only／--decrypt-only）與
 # 「疊在 codec 之上」兩種情形。
 #
 # Usage / 用法：
-#   ROUNDS=3 ./encrypt_mbps_rss.sh ../../claw-code
+#   ROUNDS=3 ./encrypt_mbps_rss.zsh ../../claw-code
 #
 # The keyfile path is used throughout so the runs are non-interactive. Because
 # --keyfile skips the scrypt KDF, these numbers measure the AEAD itself; the

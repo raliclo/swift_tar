@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# test_rgb1.sh
+# test_rgb1.zsh
 # Verify swift_tar's RGB1 raw-image container: --rgb1-pack / --rgb1-info /
 # --rgb1-raw. Covers header layout (magic + fixed 876-byte header), payload
 # round-trip, big-endian geo (E7) precision, ASCII field validation, stdin/
@@ -20,7 +20,7 @@ if [ -z "${ST:-}" ]; then
 fi
 
 if [ ! -x "$ST" ]; then
-  echo "error: build first (./compile_tar.sh) — missing $ST" >&2
+  echo "error: build first (./compile_tar.zsh) — missing $ST" >&2
   exit 1
 fi
 

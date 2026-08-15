@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# test_append_update.sh
+# test_append_update.zsh
 # Verify swift_tar's -r (append), -u (update), and --delete (in-place member
 # removal — a feature BSD tar lacks) against the platform's standard tar. Every
 # archive is validated by extracting it and diffing the tree against a
@@ -19,7 +19,7 @@ fi
 SYS_TAR="$(command -v tar)"
 
 if [ ! -x "$ST" ]; then
-  echo "error: build first (./compile_tar.sh) — missing $ST" >&2
+  echo "error: build first (./compile_tar.zsh) — missing $ST" >&2
   exit 1
 fi
 

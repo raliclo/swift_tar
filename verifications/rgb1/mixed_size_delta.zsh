@@ -24,7 +24,7 @@ DOE="${DOE:-$HERE/swift_tar_DOE}"
 ST="${SWIFT_TAR:-${HERE:h:h}/release/swift_tar}"
 
 [[ -x "$DOE" ]] || { print -ru2 -- "no swift_tar_DOE at $DOE — build it first"; exit 1 }
-[[ -x "$ST"  ]] || { print -ru2 -- "no swift_tar at $ST — run compile_tar.sh"; exit 1 }
+[[ -x "$ST"  ]] || { print -ru2 -- "no swift_tar at $ST — run compile_tar.zsh"; exit 1 }
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

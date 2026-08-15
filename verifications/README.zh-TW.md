@@ -3,29 +3,29 @@
 - **English: [README.md](README.md)**
 
 本目錄收錄 swift_tar 的臨時量測腳本，涵蓋主 benchmark pipeline
-（`../../benchmark.sh`／`../../benchmark2.sh`）未測試的行為。這些結果屬於
+（`../../benchmark.zsh`／`../../benchmark2.zsh`）未測試的行為。這些結果屬於
 探索性質；採信結論前，請先閱讀各節的「狀態」。
 
 ## 加密吞吐量、RSS 與大小開銷
 
-`encrypt_mbps_rss.sh` 量測 ChaCha20-Poly1305 加密層的成本：同一封存在有無
+`encrypt_mbps_rss.zsh` 量測 ChaCha20-Poly1305 加密層的成本：同一封存在有無
 `--encrypt` 下的對比、以 `--encrypt-only`／`--decrypt-only` 單獨作用的情形，
 以及大小開銷。結果寫入
 [`encrypt_mbps_rss_output.txt`](encrypt_mbps_rss_output.txt)。
 
 ```sh
-ROUNDS=3 ./encrypt_mbps_rss.sh ../../claw-code
+ROUNDS=3 ./encrypt_mbps_rss.zsh ../../claw-code
 ```
 
 全程使用 keyfile 以維持非互動；`--keyfile` 不走 scrypt KDF，因此數字量的是
 AEAD 本身，而非金鑰衍生。
 
-Windows/MSYS 吞吐量使用 `encrypt_mbps_win.sh`，輸出寫入
+Windows/MSYS 吞吐量使用 `encrypt_mbps_win.zsh`，輸出寫入
 [`encrypt_mbps_win_output.txt`](encrypt_mbps_win_output.txt)。此腳本只回報
 MB/s；peak working set 仍由既有 Windows RSS 腳本負責。
 
 ```sh
-ROUNDS=1 ./encrypt_mbps_win.sh ../../claw-code
+ROUNDS=1 ./encrypt_mbps_win.zsh ../../claw-code
 ```
 
 2026-08-06 的 Windows 執行使用 MSYS_NT-10.0-26200 上的
@@ -45,12 +45,12 @@ ROUNDS=1 ./encrypt_mbps_win.sh ../../claw-code
 
 ### Windows 正確性 smoke test
 
-`encrypt_windows_correctness.sh` 保留一個可重用的 Windows/MSYS 正確性測試，
+`encrypt_windows_correctness.zsh` 保留一個可重用的 Windows/MSYS 正確性測試，
 針對 release 執行檔執行，輸出寫入
 [`encrypt_windows_correctness_output.txt`](encrypt_windows_correctness_output.txt)。
 
 ```sh
-./encrypt_windows_correctness.sh
+./encrypt_windows_correctness.zsh
 ```
 
 2026-08-06 的執行使用 MSYS_NT-10.0-26200 上的 `release/swift_tar.exe`
@@ -122,14 +122,14 @@ peak RSS 51.48 MB；keyfile baseline 則為 6.13 MB。
 > 開始。
 
 > **狀態**：macOS 吞吐量／RSS 數字已於 Apple M4 驗證。Windows throughput
-> MB/s 另由 `encrypt_mbps_win.sh` 驗證；Windows peak working set 則由既有
+> MB/s 另由 `encrypt_mbps_win.zsh` 驗證；Windows peak working set 則由既有
 > Windows RSS 腳本覆蓋。正確性是強制檢查而非假設——macOS sweep 在任一 `-n`
 > 設定無法還原為相同位元組時即中止，且 `--crypto-selftest` 會對四種 payload
 > 形狀檢查全部 16 種加密／解密 `-n` 組合。
 
 ## RGB1 容器各 codec 吞吐量
 
-`../test_swift_tar_rgb1.sh` 將 RGB1 容器經由 swift_tar 各 codec 封存，回報封存
+`../test_swift_tar_rgb1.zsh` 將 RGB1 容器經由 swift_tar 各 codec 封存，回報封存
 大小、壓縮比、建立／解出耗時與 MB/s，並附上執行日期與建置版本。加上 `--record`
 才會將表格寫入該平台對應的檔案：
 [`-mac.txt`](rgb1_container_mbps_output-mac.txt) ·
@@ -146,18 +146,18 @@ codec 都會直接匹配——該表把 zstd 記為壓縮比 0.001，而真實�
 > 寫入紀錄。
 
 ```sh
-../test_swift_tar_rgb1.sh              # 僅驗證 / verify only
-../test_swift_tar_rgb1.sh --record     # 驗證並更新本平台的表格
+../test_swift_tar_rgb1.zsh              # 僅驗證 / verify only
+../test_swift_tar_rgb1.zsh --record     # 驗證並更新本平台的表格
 ```
 
 ## claw-code ZIP 吞吐量與 RSS
 
-`zip_claw_code_mbps_rss.sh` 以完整 `claw-code` 語料執行真實 ZIP encode 與
+`zip_claw_code_mbps_rss.zsh` 以完整 `claw-code` 語料執行真實 ZIP encode 與
 decode，逐輪回報十進位 logical-input MB/s 與程序 peak RSS，並比較第一輪解壓目錄和
 來源。預設執行三輪，結果寫入 `zip_claw_code_mbps_rss_output.txt`。
 
 ```sh
-ROUNDS=3 ./zip_claw_code_mbps_rss.sh ../../claw-code
+ROUNDS=3 ./zip_claw_code_mbps_rss.zsh ../../claw-code
 ```
 
 ## 建立端 `-C` 相容性（2026-07-18）
@@ -181,10 +181,10 @@ Windows build `swift_tar 20260718-171714` 已完成以下驗證：
 - `release/swift_tar_win.zip` 內的執行檔回報 `20260718-171714`、self-test
   通過，並保留 static zlib 1.3.2 與 zstd 1.5.7 provenance。
 
-## tgz_inflight_rss.sh
+## tgz_inflight_rss.zsh
 
 **問題**：swift_tar 的 `-n` 旗標（chunk-parallel gzip 的在途 chunk 並行數）
-是否控制 TGZ encode／decode 的 peak RSS？`zshrc.sh` 的 `getar()` 沒有傳入
+是否控制 TGZ encode／decode 的 peak RSS？`zshrc.zsh` 的 `getar()` 沒有傳入
 `-n`，因此 TGZ benchmark 使用預設值 `inflight = cores*2`（R45-Mac 測試機
 為 10 核心，因此預設是 20）。提出此問題的背景是 TGZ 在
 `OPTIMIZATION.md` 中曾是 peak RSS 最高的格式：1.3GB 語料約使用
@@ -193,7 +193,7 @@ Windows build `swift_tar 20260718-171714` 已完成以下驗證：
 **使用方式**：
 
 ```sh
-swift_tar/verifications/tgz_inflight_rss.sh <path-to-corpus>
+swift_tar/verifications/tgz_inflight_rss.zsh <path-to-corpus>
 ```
 
 **原始輸出**：[`tgz_inflight_rss_output.txt`](tgz_inflight_rss_output.txt)。

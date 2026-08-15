@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
-# test_strip_components.sh -- verify --strip-components extraction semantics.
-# test_strip_components.sh -- 驗證 --strip-components 解出語意。
+# test_strip_components.zsh -- verify --strip-components extraction semantics.
+# test_strip_components.zsh -- 驗證 --strip-components 解出語意。
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"

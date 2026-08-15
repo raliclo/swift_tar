@@ -1,21 +1,21 @@
 # swift_tar TODO / 待辦
 
 Tracked issues that are known, reproduced, and deliberately not fixed yet.
-`verifications/bsdtar_compat.sh:385` already points here for its XFAIL, so this
+`verifications/bsdtar_compat.zsh:385` already points here for its XFAIL, so this
 file has to exist for that reference to mean anything.
 
-已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.sh:385` 的 XFAIL
+已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
 ## Expected failures / 預期失敗
 
 ### Unicode path: swift_tar create -> bsdtar extract (Windows only)
 
-`bsdtar_compat.sh` records this as XFAIL on Windows only; on macOS and Linux the
+`bsdtar_compat.zsh` records this as XFAIL on Windows only; on macOS and Linux the
 same case passes. Not yet diagnosed — the tree comparison after extraction
 differs, but which side normalises the name has not been established.
 
-`bsdtar_compat.sh` 僅在 Windows 上將此列為 XFAIL；macOS 與 Linux 上同一案例通過。
+`bsdtar_compat.zsh` 僅在 Windows 上將此列為 XFAIL；macOS 與 Linux 上同一案例通過。
 尚未診斷——解出後的樹比對不一致，但究竟是哪一端對檔名做了正規化仍未確認。
 
 ## Windows verification run, 2026-08-16 / Windows 驗證執行
@@ -37,14 +37,14 @@ checkable. Item 4 is still open — `sha()` at
 查核的是其推理而非結論。項目 4 尚未處理——`parallel_extract_correctness.zsh:123`
 的 `sha()` 仍是每檔兩個行程。
 
-### 1. encrypt_windows_correctness.sh reports success but exits 1 / 報成功卻回傳 1  ▸ ✅ 已修正 74dd2b4
+### 1. encrypt_windows_correctness.zsh reports success but exits 1 / 報成功卻回傳 1  ▸ ✅ 已修正 74dd2b4
 
 ```
 SUMMARY: PASS=6 FAIL=0
 cleanup: tmp: parameter not set
 ```
 
-`verifications/encrypt_windows_correctness.sh:21-24` declares `local tmp` and
+`verifications/encrypt_windows_correctness.zsh:21-24` declares `local tmp` and
 defines `cleanup() { rm -rf "$tmp"; }` **inside** a function, then arms
 `trap cleanup EXIT`. The trap fires after that function has returned, when the
 `local` is out of scope, so `set -u` aborts the cleanup and the script exits 1.
@@ -80,15 +80,15 @@ NTFS 沒有 POSIX mode bits，MSYS 對所有一般檔案皆回報 644——這�
 （含它真正要保護的平行解壓順序案例）全部通過。該腳本對「不可寫目的地」已有前提不成立
 即跳過的機制，mode 檢查應比照處理，而非直接失敗。
 
-### 3. test_no_lzfse.sh fails silently on Windows / 在 Windows 上無聲失敗  ▸ ✅ 已修正 74dd2b4
+### 3. test_no_lzfse.zsh fails silently on Windows / 在 Windows 上無聲失敗  ▸ ✅ 已修正 74dd2b4
 
-It calls `./compile_tar.sh`, which is macOS-only (`/opt/homebrew`, `otool`), and
+It calls `./compile_tar.zsh`, which is macOS-only (`/opt/homebrew`, `otool`), and
 both streams are discarded with `>/dev/null 2>&1`. The run prints
 `building full + public binaries...` and then dies with no message at all. Not
 applicable here, but the failure mode should name the platform rather than
 vanish.
 
-它呼叫僅適用 macOS 的 `./compile_tar.sh`（`/opt/homebrew`、`otool`），且以
+它呼叫僅適用 macOS 的 `./compile_tar.zsh`（`/opt/homebrew`、`otool`），且以
 `>/dev/null 2>&1` 丟棄兩個輸出串流。執行後只印出 `building full + public binaries...`
 便毫無訊息地結束。本平台雖不適用，但失敗時應指明平台，而不是靜默消失。
 
@@ -146,7 +146,7 @@ ${:-/tmp}:A         ->  /tmp                correct
 `cd` accepts all three forms, so the shell disagrees with itself about what
 counts as absolute. This matters because `${0:A:h}` is the standard idiom for
 "directory of this script" and at least six scripts here use it
-(`verifications/bsdtar_compat.sh:24`, `verifications/tgz_inflight_rss_win.sh:29`,
+(`verifications/bsdtar_compat.zsh:24`, `verifications/tgz_inflight_rss_win.zsh:29`,
 `verifications/rgb1/mixed_size_delta.zsh:22`,
 `verifications/rgb1/nv12_vs_rgb1_streaming.zsh:35`, and others). Invoked with a
 relative path it is fine; invoked with a `C:/...` absolute path it silently

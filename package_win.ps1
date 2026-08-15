@@ -1,7 +1,7 @@
 # package_win.ps1 -- package release\swift_tar.exe with the Swift runtime DLLs
 # into a self-contained swift_tar_win.zip (runs on machines without Swift installed).
 #
-# Mirrors helper_windows/build-cli-win.sh's packaging step for lzfse.exe:
+# Mirrors helper_windows/build-cli-win.zsh's packaging step for lzfse.exe:
 # auto-detect the Swift runtime dir from swiftc's own path, copy every DLL in
 # it alongside the exe, then zip via Compress-Archive.
 #
@@ -27,7 +27,7 @@ if (-not (Test-Path $ExePath)) {
     exit 1
 }
 if (-not (Test-Path "version-win.txt")) {
-    Write-Error "version-win.txt not found (run zsh ./build_zlib-win.sh)"
+    Write-Error "version-win.txt not found (run zsh ./build_zlib-win.zsh)"
     exit 1
 }
 if (-not (Test-Path "zlib\LICENSE")) {

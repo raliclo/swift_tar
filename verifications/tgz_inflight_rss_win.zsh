@@ -1,10 +1,10 @@
 #!/usr/bin/env zsh
 # =====================================================================
-# tgz_inflight_rss_win.sh — Windows counterpart of tgz_inflight_rss.sh:
+# tgz_inflight_rss_win.zsh — Windows counterpart of tgz_inflight_rss.zsh:
 # measure TGZ encode/decode peak working set vs -n (in-flight chunk
 # concurrency) to confirm the Data append+removeFirst fix (see
 # README.md) also helps on Windows, not just macOS.
-# tgz_inflight_rss_win.sh —— tgz_inflight_rss.sh 的 Windows 對照版：量測
+# tgz_inflight_rss_win.zsh —— tgz_inflight_rss.zsh 的 Windows 對照版：量測
 # TGZ encode/decode 的 peak working set 隨 -n（在途 chunk 並行數）如何
 #變化，確認 Data append+removeFirst 修正（見 README.md）在 Windows 上
 #是否也有幫助，而不只是 macOS。
@@ -19,14 +19,21 @@
 # Process.PeakWorkingSet64。
 #
 # Usage / 用法：
-#   swift_tar/verifications/tgz_inflight_rss_win.sh <path-to-corpus>
+#   swift_tar/verifications/tgz_inflight_rss_win.zsh <path-to-corpus>
 #
 # Requires / 需求：swift_tar 已編譯至 release\swift_tar.exe
 #   （執行 swift_tar\compile_tar-win.bat）。
 # =====================================================================
 set -euo pipefail
 
-SCRIPT_DIR="${0:A:h}"
+# Not ${0:A:h}: this script runs on Windows, and the installed zsh does not treat
+# a Windows drive path as absolute -- with $0 = C:/... it prepends the cwd and
+# produces a directory that does not exist. Upstream has fixed this, but that
+# build is not installed yet.
+# 不用 ${0:A:h}：本腳本在 Windows 執行，而安裝版 zsh 不把 Windows 磁碟機路徑視為
+# 絕對路徑——$0 為 C:/... 時會把 cwd 接在前面，產生不存在的目錄。上游已修正，
+# 但該版本尚未安裝。
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SWIFT_TAR_BIN="${SWIFT_TAR_BIN:-$SCRIPT_DIR/../release/swift_tar.exe}"
 MEASURE_PS1="$SCRIPT_DIR/measure_peak_ws_win.ps1"
 CORPUS="${1:?Usage: $0 <path-to-corpus>}"

@@ -1,11 +1,11 @@
 #!/usr/bin/env zsh
 # =====================================================================
-# bsdtar_compat.sh -- cross-check swift_tar against standard bsdtar.
-# bsdtar_compat.sh -- 將 swift_tar 與標準 bsdtar 做交叉相容性檢查。
+# bsdtar_compat.zsh -- cross-check swift_tar against standard bsdtar.
+# bsdtar_compat.zsh -- 將 swift_tar 與標準 bsdtar 做交叉相容性檢查。
 #
 # Usage / 用法:
-#   verifications/bsdtar_compat.sh
-#   FULL_CODECS=1 verifications/bsdtar_compat.sh
+#   verifications/bsdtar_compat.zsh
+#   FULL_CODECS=1 verifications/bsdtar_compat.zsh
 #
 # Exit codes / 結束碼:
 #   0  OK             required checks passed / 必要檢查通過

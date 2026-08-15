@@ -239,6 +239,6 @@ low enough resolution would require re-checking.
 - [x] `crypto.swift`:`index` 為 `UInt32` 且以 `&+=` 遞增,理論上 2^32 chunks
       (4 MiB × 2^32 = 16 PiB 單一封存)會回繞造成 nonce 重用——對
       ChaCha20-Poly1305 是嚴重問題,但門檻實務不可達。可加上限檢查以策安全。
-- [x] `test_strip_components.sh` 檔案模式為 `100644`,其餘測試皆 `100755`;
-      clone 後無法直接 `./test_strip_components.sh` 執行,需 `bash` 前綴。
+- [x] `test_strip_components.zsh` 檔案模式為 `100644`,其餘測試皆 `100755`;
+      clone 後無法直接 `./test_strip_components.zsh` 執行,需 `bash` 前綴。
       `git update-index --chmod=+x` 即可。

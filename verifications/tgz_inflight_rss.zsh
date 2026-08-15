@@ -1,15 +1,15 @@
 #!/bin/zsh
 # =====================================================================
-# tgz_inflight_rss.sh — measure TGZ encode/decode peak RSS vs -n (in-flight
+# tgz_inflight_rss.zsh — measure TGZ encode/decode peak RSS vs -n (in-flight
 # chunk concurrency) to confirm concurrency is the primary memory driver.
-# tgz_inflight_rss.sh —— 量測 TGZ encode/decode 的 peak RSS 隨 -n（在途
+# tgz_inflight_rss.zsh —— 量測 TGZ encode/decode 的 peak RSS 隨 -n（在途
 # chunk 並行數）如何變化，驗證並行度是主要的記憶體驅動因子。
 #
 # Background / 背景：
-#   getar() in zshrc.sh calls `tar czf` (shimmed to swift_tar) without -n,
+#   getar() in zshrc.zsh calls `tar czf` (shimmed to swift_tar) without -n,
 #   so swift_tar falls back to its default inflight = cores*2 (capped at
 #   cores*4; 20 on the 10-core R45-Mac test machine).
-#   zshrc.sh 的 getar() 呼叫 `tar czf`（被 shim 成 swift_tar）時沒有帶
+#   zshrc.zsh 的 getar() 呼叫 `tar czf`（被 shim 成 swift_tar）時沒有帶
 #   -n，因此 swift_tar 會退回預設值 inflight = cores*2（上限 cores*4；
 #   R45-Mac 測試機 10 核心 → 預設 20）。
 #
@@ -50,10 +50,10 @@
 #     那其實是洩漏的副作用。
 #
 # Usage / 用法：
-#   swift_tar/verifications/tgz_inflight_rss.sh <path-to-corpus>
+#   swift_tar/verifications/tgz_inflight_rss.zsh <path-to-corpus>
 #
 # Requires / 需求：swift_tar 已編譯至 /opt/homebrew/bin/swift_tar
-#   （執行 swift_tar/compile_tar.sh）。
+#   （執行 swift_tar/compile_tar.zsh）。
 # =====================================================================
 set -euo pipefail
 
@@ -68,7 +68,7 @@ OUTPUT_TXT="${0:A:h}/tgz_inflight_rss_output.txt"
 exec > >(tee "$OUTPUT_TXT")
 
 if [[ ! -x "$SWIFT_TAR_BIN" ]]; then
-    echo "[Error] swift_tar not found at $SWIFT_TAR_BIN — run swift_tar/compile_tar.sh first." >&2
+    echo "[Error] swift_tar not found at $SWIFT_TAR_BIN — run swift_tar/compile_tar.zsh first." >&2
     exit 1
 fi
 if [[ ! -e "$CORPUS" ]]; then

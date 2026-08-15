@@ -288,7 +288,7 @@ review 未提出:
 
 Defensive hygiene, 2026-08-14 / 防禦性衛生:
 
-- **`log()` shadowed a zsh builtin in `compile_tar-linux.sh`; renamed to
+- **`log()` shadowed a zsh builtin in `compile_tar-linux.zsh`; renamed to
   `log_msg()`.** `log` is a zsh builtin, and a function shadows it only from the
   point of definition — a call placed above the definition resolves to the
   builtin, which rejects any argument with `zsh:log:1: too many arguments` and
@@ -298,7 +298,7 @@ Defensive hygiene, 2026-08-14 / 防禦性衛生:
   rename removes the trap rather than documenting it. Verified by rebuilding in
   the VM: `BUILD_RC=0`, no `too many arguments`. No other script in the tree
   defines `log()`, and `die()` is not a builtin.
-- **`compile_tar-linux.sh` 的 `log()` 遮蔽了 zsh builtin，已改名為 `log_msg()`。**
+- **`compile_tar-linux.zsh` 的 `log()` 遮蔽了 zsh builtin，已改名為 `log_msg()`。**
   `log` 是 zsh 的 builtin，而函式只從定義處起遮蔽它——位於定義之上的呼叫會解析到
   builtin，後者收到任何參數都會以 `zsh:log:1: too many arguments` 拒絕並回傳 1。在該
   腳本的 `set -euo pipefail` 下，這會讓建置中止，且訊息指向 zsh 而非「函式尚未定義」。
@@ -334,9 +334,9 @@ Defensive hygiene, 2026-08-14 / 防禦性衛生:
   options, so the probe always failed and the fallback would have measured the
   new default of 9 while labelling it 3. The flag is now passed unconditionally.
 
-  Still unpinned elsewhere: `encrypt_mbps_rss.sh`, `encrypt_mbps_win.sh`,
-  `bsdtar_compat.sh`, `test_no_lzfse.sh`, `test_encrypt.sh`. The correctness
-  tests are unaffected by the level; `encrypt_mbps_rss.sh` reports MB/s and will
+  Still unpinned elsewhere: `encrypt_mbps_rss.zsh`, `encrypt_mbps_win.zsh`,
+  `bsdtar_compat.zsh`, `test_no_lzfse.zsh`, `test_encrypt.zsh`. The correctness
+  tests are unaffected by the level; `encrypt_mbps_rss.zsh` reports MB/s and will
   move. Not addressed here.
 - **串流 DOE 沿用了 swift_tar 的 zstd 預設值，而該預設已於 2026-08-14（`a5ac4a8`）
   由 3 改為 9。** `nv12_vs_rgb1_streaming.zsh` 呼叫的是裸 `--zstd`，故其輸出與
@@ -349,20 +349,20 @@ Defensive hygiene, 2026-08-14 / 防禦性衛生:
   但 swift_tar 的 `--help` 會以「specify exactly one of -c, -x, ...」結束，從不列出
   選項，故該探測必然失敗，而退回路徑會以新預設值 9 量測卻標示為 3。現已改為無條件傳入。
 
-  其他仍未釘住的腳本：`encrypt_mbps_rss.sh`、`encrypt_mbps_win.sh`、
-  `bsdtar_compat.sh`、`test_no_lzfse.sh`、`test_encrypt.sh`。正確性測試不受等級影響；
-  `encrypt_mbps_rss.sh` 回報的是 MB/s，會隨之變動。本次未處理。
+  其他仍未釘住的腳本：`encrypt_mbps_rss.zsh`、`encrypt_mbps_win.zsh`、
+  `bsdtar_compat.zsh`、`test_no_lzfse.zsh`、`test_encrypt.zsh`。正確性測試不受等級影響；
+  `encrypt_mbps_rss.zsh` 回報的是 MB/s，會隨之變動。本次未處理。
 
 - **Test scripts aligned with zstd -9 (2026-08-15).** With the default at 9, a
   bare `--zstd` already produces level 9 — the problem was that nothing said so,
-  and the committed numbers had been recorded at 3. `test_swift_tar_rgb1.sh`,
-  `encrypt_mbps_rss.sh` and `encrypt_mbps_win.sh` now pass `--zstd-level 9`
+  and the committed numbers had been recorded at 3. `test_swift_tar_rgb1.zsh`,
+  `encrypt_mbps_rss.zsh` and `encrypt_mbps_win.zsh` now pass `--zstd-level 9`
   explicitly. All three took the codec flag as a single quoted argument, so each
   helper was changed to split it into an array first (`read -r -a` in bash,
   `${=2}` in zsh); a level cannot be pinned otherwise.
 
-  Re-measured. `test_swift_tar_rgb1.sh`: the zstd row goes 4,567 -> 4,555 B.
-  `encrypt_mbps_rss.sh` on the 1.4 GB corpus: **433,753,307 -> 401,152,357 B, a
+  Re-measured. `test_swift_tar_rgb1.zsh`: the zstd row goes 4,567 -> 4,555 B.
+  `encrypt_mbps_rss.zsh` on the 1.4 GB corpus: **433,753,307 -> 401,152,357 B, a
   7.52% reduction**.
 
   Throughput is *not* attributable to the level: zstd create reads 1541.76 ->
@@ -371,14 +371,14 @@ Defensive hygiene, 2026-08-14 / 防禦性衛生:
   previous record is from 2026-08-05 on a binary ten days older; only the archive
   sizes isolate the level cleanly.
 
-  One near-miss worth recording. `bench()` in `test_swift_tar_rgb1.sh` uses
+  One near-miss worth recording. `bench()` in `test_swift_tar_rgb1.zsh` uses
   `flag` twice, and the first pass only fixed the creation call. The timing loop
   is `... && "$ST" -c "$flag" ... || "$ST" -c -f ...`, so a malformed argument
   would have fallen through to plain tar and reported plain-tar timings under the
   zstd label. Caught because 4,555 B is not 3,148,288 B.
 
-  Left alone deliberately: `test_encrypt.sh`, `test_no_lzfse.sh`,
-  `bsdtar_compat.sh` and `encrypt_windows_correctness.sh` assert round-trip
+  Left alone deliberately: `test_encrypt.zsh`, `test_no_lzfse.zsh`,
+  `bsdtar_compat.zsh` and `encrypt_windows_correctness.zsh` assert round-trip
   equality, which no level changes. `nv12_vs_rgb1_streaming.zsh` stays pinned at
   **3**, because its two companion scripts call the zstd CLI at -3 and the FAQ
   section it feeds concludes "-3 for streaming, -19 for archiving"; moving that
@@ -389,25 +389,25 @@ Defensive hygiene, 2026-08-14 / 防禦性衛生:
   but only the Windows side can re-run it, so the gap is now explicit rather than
   silent.
 - **測試腳本對齊 zstd -9（2026-08-15）。** 預設已是 9，故裸 `--zstd` 本來就會產生等級
-  9——問題在於沒有任何地方載明，而入版數字是在等級 3 下錄的。`test_swift_tar_rgb1.sh`、
-  `encrypt_mbps_rss.sh` 與 `encrypt_mbps_win.sh` 現皆明確傳入 `--zstd-level 9`。三者
+  9——問題在於沒有任何地方載明，而入版數字是在等級 3 下錄的。`test_swift_tar_rgb1.zsh`、
+  `encrypt_mbps_rss.zsh` 與 `encrypt_mbps_win.zsh` 現皆明確傳入 `--zstd-level 9`。三者
   原本都把 codec 旗標當作單一引號參數，故各自的 helper 都改為先拆成陣列（bash 用
   `read -r -a`，zsh 用 `${=2}`）；否則根本無法釘住等級。
 
-  已重新量測。`test_swift_tar_rgb1.sh`：zstd 列由 4,567 變為 4,555 B。
-  `encrypt_mbps_rss.sh` 於 1.4 GB 語料：**433,753,307 → 401,152,357 B，減少 7.52%**。
+  已重新量測。`test_swift_tar_rgb1.zsh`：zstd 列由 4,567 變為 4,555 B。
+  `encrypt_mbps_rss.zsh` 於 1.4 GB 語料：**433,753,307 → 401,152,357 B，減少 7.52%**。
 
   吞吐量*不可*歸因於等級：兩次執行間 zstd create 由 1541.76 變為 531.44 MB/s，但同一
   組對照中 plain-tar create 也由 550.20 變為 1389.11 MB/s，而純 tar 根本不含 zstd。
   前一份紀錄錄於 2026-08-05、二進位早了十天；能乾淨隔離出等級影響的只有封存大小。
 
-  一個值得記下的險些出錯。`test_swift_tar_rgb1.sh` 的 `bench()` 用到 `flag` 兩次，而
+  一個值得記下的險些出錯。`test_swift_tar_rgb1.zsh` 的 `bench()` 用到 `flag` 兩次，而
   第一次只改了建立那處。計時迴圈寫作 `... && "$ST" -c "$flag" ... || "$ST" -c -f ...`，
   參數格式錯誤會落到 `||` 而以純 tar 執行，並把純 tar 的計時掛在 zstd 標籤下回報。
   之所以發現，是因為 4,555 B 不是 3,148,288 B。
 
-  刻意未動：`test_encrypt.sh`、`test_no_lzfse.sh`、`bsdtar_compat.sh` 與
-  `encrypt_windows_correctness.sh` 斷言的是往返一致，任何等級都不影響。
+  刻意未動：`test_encrypt.zsh`、`test_no_lzfse.zsh`、`bsdtar_compat.zsh` 與
+  `encrypt_windows_correctness.zsh` 斷言的是往返一致，任何等級都不影響。
   `nv12_vs_rgb1_streaming.zsh` 維持釘在 **3**，因為其兩支姊妹腳本以 `-3` 呼叫 zstd CLI，
   且它所支撐的 FAQ 一節結論正是「串流用 -3、封存用 -19」；單獨把該研究改成 9 會與其
   自身論證矛盾，需三支腳本連同 FAQ 一併調整。
@@ -477,7 +477,7 @@ New DOE, 2026-08-15 / 新增 DOE:
 Corpus audit, 2026-08-15 / 語料稽核:
 
 - **Every rgb1 study uses real sampled video except one, and that one produced a
-  committed record.** `test_swift_tar_rgb1.sh`'s codec table built its corpus
+  committed record.** `test_swift_tar_rgb1.zsh`'s codec table built its corpus
   from a 4 KiB `/dev/urandom` block repeated 768 times. That is perfectly
   periodic: any codec with a window of 4 KiB or more matches immediately, and
   the table reported **zstd at a ratio of 0.001** where a real 1080p frame gives
@@ -508,12 +508,12 @@ Corpus audit, 2026-08-15 / 語料稽核:
   size is derived from the source frame now. A test that cries corruption at
   intact data costs as much trust as one that misses real corruption.
 
-  Left synthetic on purpose: `test_encrypt.sh`, `encrypt_windows_correctness.sh`
+  Left synthetic on purpose: `test_encrypt.zsh`, `encrypt_windows_correctness.zsh`
   and `mixed_size_delta.zsh` assert round-trip equality, where content is
-  irrelevant. `encrypt_mbps_rss.sh` uses `/dev/urandom` only for its 64-byte
+  irrelevant. `encrypt_mbps_rss.zsh` uses `/dev/urandom` only for its 64-byte
   keyfile; its corpus is the real `claw-code` tree.
 - **rgb1 各研究皆使用真實取樣視訊，唯一的例外卻產出了入版紀錄。**
-  `test_swift_tar_rgb1.sh` 的 codec 比較表以 4 KiB `/dev/urandom` 區塊重複 768 次作為
+  `test_swift_tar_rgb1.zsh` 的 codec 比較表以 4 KiB `/dev/urandom` 區塊重複 768 次作為
   語料。該資料週期完全規律：任何視窗達 4 KiB 以上的 codec 都立即匹配，於是表格把
   **zstd 記為壓縮比 0.001**，而真實 1080p 影格為 **0.443**——相差 450 倍，且該列標示為
   「RGB1 container」。本專案自己的 FAQ 正好警告過這件事。該區塊每次執行還會重新隨機，
@@ -534,8 +534,8 @@ Corpus audit, 2026-08-15 / 語料稽核:
   「round-trip corrupted」，而 `cmp` 明明判定位元組完全相同。期望值現由來源影格導出。
   一個對完好資料喊損毀的測試，損失的信任與漏掉真實損毀一樣多。
 
-  刻意維持合成語料者：`test_encrypt.sh`、`encrypt_windows_correctness.sh` 與
-  `mixed_size_delta.zsh` 斷言的是往返一致，內容無關緊要。`encrypt_mbps_rss.sh` 的
+  刻意維持合成語料者：`test_encrypt.zsh`、`encrypt_windows_correctness.zsh` 與
+  `mixed_size_delta.zsh` 斷言的是往返一致，內容無關緊要。`encrypt_mbps_rss.zsh` 的
   `/dev/urandom` 僅用於 64 位元組金鑰檔，其語料是真實的 `claw-code` 檔案樹。
 
 Sampling rules and fixtures, 2026-08-15 / 取樣規則與 fixture:
@@ -574,7 +574,7 @@ Sampling rules and fixtures, 2026-08-15 / 取樣規則與 fixture:
   a difference check in the generator. Prompted by that, the whole corpus was
   hashed: **47 distinct frames out of 48**, so the delta figures are not inflated
   by duplicates.
-- **`test_encrypt.sh` and `encrypt_windows_correctness.sh` use a real frame when
+- **`test_encrypt.zsh` and `encrypt_windows_correctness.zsh` use a real frame when
   the corpus is present**, with a labelled random fallback. One 1080p payload is
   6,220,800 B, which crosses the 4 MiB chunk boundary and leaves a partial tail —
   exactly what the chunked AEAD path needs. The fallback stays because coverage
@@ -609,7 +609,7 @@ Sampling rules and fixtures, 2026-08-15 / 取樣規則與 fixture:
   依然通過——只是它不再測試它所宣稱的東西。已改用第 0 與第 2 格，並在產生器加上差異
   檢查。由此順帶對整份語料取雜湊：**48 格中有 47 格相異**，故差分的數字並未被重複影格
   灌水。
-- **`test_encrypt.sh` 與 `encrypt_windows_correctness.sh` 在語料存在時使用真實影格**，
+- **`test_encrypt.zsh` 與 `encrypt_windows_correctness.zsh` 在語料存在時使用真實影格**，
   否則以明確標示的隨機資料備援。一張 1080p payload 為 6,220,800 B，跨過 4 MiB 分塊邊界
   並留下不足一塊的尾段——正是分塊 AEAD 路徑所需。保留備援是因為該路徑的覆蓋率不應依賴
   一份不入版的 285 MB 語料。金鑰仍使用 `/dev/urandom`；金鑰本來就該是隨機的。

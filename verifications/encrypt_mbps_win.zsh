@@ -1,15 +1,15 @@
 #!/bin/zsh
 # =====================================================================
-# encrypt_mbps_win.sh -- Windows/MSYS throughput and correctness check for
+# encrypt_mbps_win.zsh -- Windows/MSYS throughput and correctness check for
 # swift_tar's ChaCha20-Poly1305 encryption layer.
-# encrypt_mbps_win.sh -- Windows/MSYS 版 swift_tar ChaCha20-Poly1305 加密層
+# encrypt_mbps_win.zsh -- Windows/MSYS 版 swift_tar ChaCha20-Poly1305 加密層
 # 吞吐量與正確性驗證。
 #
 # Usage / 用法:
-#   ROUNDS=1 ./encrypt_mbps_win.sh ../../claw-code
+#   ROUNDS=1 ./encrypt_mbps_win.zsh ../../claw-code
 #
 # Optional / 選用:
-#   VERIFY_TREE=1 ROUNDS=1 ./encrypt_mbps_win.sh ../../claw-code
+#   VERIFY_TREE=1 ROUNDS=1 ./encrypt_mbps_win.zsh ../../claw-code
 #
 # MB/s uses the corpus's logical regular-file bytes, not archive size.
 # This Windows counterpart intentionally reports throughput only; peak working
@@ -155,9 +155,9 @@ printf "%-16s %-9s %10s %10s %14s\n" "codec" "mode" "real(s)" "MB/s" "archive(by
 
 run_pair() {
     # $2 is split into words so a codec can pin its own level; see the same
-    # change in encrypt_mbps_rss.sh. swift_tar's default zstd level moved from 3
+    # change in encrypt_mbps_rss.zsh. swift_tar's default zstd level moved from 3
     # to 9 on 2026-08-14, so a bare --zstd silently changed what this measures.
-    # $2 會被拆成多個詞，使 codec 得以釘住自身等級；同樣的改動見 encrypt_mbps_rss.sh。
+    # $2 會被拆成多個詞，使 codec 得以釘住自身等級；同樣的改動見 encrypt_mbps_rss.zsh。
     # swift_tar 的 zstd 預設等級已於 2026-08-14 由 3 改為 9，故裸 --zstd 會靜默改變本
     # 腳本所量測的對象。
     local label="$1"

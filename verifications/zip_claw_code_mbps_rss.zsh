@@ -1,12 +1,12 @@
 #!/bin/zsh
 # =====================================================================
-# zip_claw_code_mbps_rss.sh -- verify true-ZIP encode/decode throughput,
+# zip_claw_code_mbps_rss.zsh -- verify true-ZIP encode/decode throughput,
 # peak RSS, and extracted-data correctness with the claw-code corpus.
-# zip_claw_code_mbps_rss.sh -- 使用 claw-code 語料驗證真實 ZIP encode/decode
+# zip_claw_code_mbps_rss.zsh -- 使用 claw-code 語料驗證真實 ZIP encode/decode
 # 吞吐量、peak RSS 與解壓內容正確性。
 #
 # Usage / 用法：
-#   ROUNDS=3 ./zip_claw_code_mbps_rss.sh ../../claw-code
+#   ROUNDS=3 ./zip_claw_code_mbps_rss.zsh ../../claw-code
 #
 # MB/s uses the corpus's logical regular-file bytes, not ZIP size. RSS is the
 # maximum resident set size reported for the swift_tar process itself.

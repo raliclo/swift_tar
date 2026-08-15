@@ -1,8 +1,8 @@
 #!/bin/zsh
 # =====================================================================
-# streaming_budget_benchmark.sh -- does the predictive stack fit a 30/60 fps
+# streaming_budget_benchmark.zsh -- does the predictive stack fit a 30/60 fps
 # frame budget once slices are compressed in parallel?
-# streaming_budget_benchmark.sh -- 預測式堆疊在 slice 平行壓縮後，能否塞進
+# streaming_budget_benchmark.zsh -- 預測式堆疊在 slice 平行壓縮後，能否塞進
 # 30/60 fps 的影格預算？
 #
 # A frame budget is per side: the server encodes, the client decodes, and they
@@ -25,7 +25,7 @@
 # 掃描以 --no-verify 執行，之後再對整份語料做一次驗證。
 #
 # Usage / 用法:
-#   ./streaming_budget_benchmark.sh [sample-dir] [zstd-level]
+#   ./streaming_budget_benchmark.zsh [sample-dir] [zstd-level]
 # =====================================================================
 set -euo pipefail
 

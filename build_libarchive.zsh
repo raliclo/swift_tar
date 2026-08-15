@@ -32,11 +32,11 @@ fi
 clang -O2 -Ilibarchive/libarchive -c libarchive_zip_bridge.c \
     -o build/libarchive_zip_bridge.o
 
-# Record the pinned gitlink, mirroring build_libarchive-win.sh. Until this was
+# Record the pinned gitlink, mirroring build_libarchive-win.zsh. Until this was
 # added, version-mac.txt carried no libarchive provenance at all and the shared
 # version.txt made a macOS build look as if it had linked the library the
 # Windows build linked.
-# 記錄所固定的 gitlink，與 build_libarchive-win.sh 相同。在此之前 version-mac.txt
+# 記錄所固定的 gitlink，與 build_libarchive-win.zsh 相同。在此之前 version-mac.txt
 # 完全沒有 libarchive 的來源資訊，而共用的 version.txt 會讓 macOS 建置看起來像是
 # 連結了 Windows 建置所連結的那份函式庫。
 libarchive_version=$(git -C libarchive describe --tags --always)

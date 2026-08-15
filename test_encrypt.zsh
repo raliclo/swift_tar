@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# test_encrypt.sh
+# test_encrypt.zsh
 # Verify swift_tar's encryption layer: ChaCha20-Poly1305 over 4 MiB chunks,
 # wrapped OUTSIDE the compression codec. Covers the RFC test vectors, keyfile
 # and passphrase key paths, layering with each codec, and — most importantly —

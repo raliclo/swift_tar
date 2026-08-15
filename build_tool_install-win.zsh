@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 #
-# build_tool_install-win.sh -- install the Windows build toolchain for swift_tar
-# build_tool_install-win.sh -- 安裝 swift_tar Windows 版所需的建置工具鏈
+# build_tool_install-win.zsh -- install the Windows build toolchain for swift_tar
+# build_tool_install-win.zsh -- 安裝 swift_tar Windows 版所需的建置工具鏈
 #
 # Installs, only if missing (safe to re-run):
 #   1. Swift toolchain                       (winget: Swift.Toolchain)
@@ -13,8 +13,8 @@
 #                                              (scoop: bzip2 xz zstd lz4 lzip)
 #
 # After this script succeeds, build the dependencies once, then swift_tar:
-#     zsh ./build_zlib-win.sh
-#     zsh ./build_zstd-win.sh
+#     zsh ./build_zlib-win.zsh
+#     zsh ./build_zstd-win.zsh
 #     ./compile_tar-win.bat
 #
 # 只在缺少時才安裝（可重複執行）：
@@ -27,8 +27,8 @@
 #                                              (scoop: bzip2 xz zstd lz4 lzip)
 #
 # 完成後先建置一次相依套件，再建置 swift_tar：
-#     zsh ./build_zlib-win.sh
-#     zsh ./build_zstd-win.sh
+#     zsh ./build_zlib-win.zsh
+#     zsh ./build_zstd-win.zsh
 #     ./compile_tar-win.bat
 set -e
 
@@ -96,4 +96,4 @@ for tool in bzip2 xz zstd lz4 lzip; do
     fi
 done
 
-echo "=== Done. First run: zsh ./build_zlib-win.sh; zsh ./build_zstd-win.sh; then ./compile_tar-win.bat ==="
+echo "=== Done. First run: zsh ./build_zlib-win.zsh; zsh ./build_zstd-win.zsh; then ./compile_tar-win.bat ==="

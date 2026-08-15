@@ -39,7 +39,7 @@ for tool in ffmpeg ffprobe python3; do
     command -v "$tool" >/dev/null || { print -ru2 -- "[Error] $tool required / 需要 $tool"; exit 1 }
 done
 [[ -f "$SRC" ]] || { print -ru2 -- "[Error] source not found: $SRC"; exit 1 }
-[[ -x "$ST"  ]] || { print -ru2 -- "[Error] no swift_tar at $ST — run compile_tar.sh"; exit 1 }
+[[ -x "$ST"  ]] || { print -ru2 -- "[Error] no swift_tar at $ST — run compile_tar.zsh"; exit 1 }
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/consecutive.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT INT TERM

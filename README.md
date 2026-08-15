@@ -33,18 +33,18 @@ Requires the Xcode toolchain (`swiftc`) and a few Homebrew libraries:
 ```sh
 brew install lz4 xz zstd      # liblz4 / liblzma / libzstd
 git submodule update --init   # fetch lzfse2 + libarchive + zlib
-./build.sh                    # → release/swift_tar
+./build.zsh                    # → release/swift_tar
 ```
 
-`build.sh` detects the platform with `uname` and runs that platform's build —
-`compile_tar.sh` on macOS, `compile_tar-linux.sh` on Linux,
+`build.zsh` detects the platform with `uname` and runs that platform's build —
+`compile_tar.zsh` on macOS, `compile_tar-linux.zsh` on Linux,
 `compile_tar-win.bat` on Windows — so the same command works on all three.
-`./build.sh --platform` prints the detected name without building. Calling the
+`./build.zsh --platform` prints the detected name without building. Calling the
 platform script directly still works.
 
 ### Linux
 
-`compile_tar-linux.sh` needs a Swift toolchain and the codec headers and shared
+`compile_tar-linux.zsh` needs a Swift toolchain and the codec headers and shared
 libraries. Both are probed rather than assumed: it uses `/workspace/opt/swift`
 and `/workspace/sysroot` when they exist (the buildroot aarch64 appliance under
 `sos/linux_kernal_vm_interactive`), otherwise `swiftc` from `PATH` and `/usr`.
@@ -71,7 +71,7 @@ below.
 
 ### Public build without LZFSE
 
-`compile_no_lzfse.sh` (a wrapper for `compile_tar.sh --no-lzfse`) builds a
+`compile_no_lzfse.zsh` (a wrapper for `compile_tar.zsh --no-lzfse`) builds a
 public/distributable binary that ships **none** of the private LZFSE engine —
 `lzfse-cli.swift` is not compiled in, so the binary can neither create nor decode
 any LZFSE-family archive (`other3` / `bvx3` / `bvx2`) and contains no LZFSE code
@@ -80,8 +80,8 @@ plain tar, and ZIP/ZIP64 are unaffected. This build does not need the `lzfse2`
 submodule.
 
 ```sh
-./compile_no_lzfse.sh         # → release/swift_tar (public, LZFSE-free)
-./test_no_lzfse.sh            # verify the exclusion + standard codecs still work
+./compile_no_lzfse.zsh         # → release/swift_tar (public, LZFSE-free)
+./test_no_lzfse.zsh            # verify the exclusion + standard codecs still work
 ```
 
 ### Windows
@@ -93,12 +93,12 @@ external `gzip.exe`, or per-chunk `zstd.exe` is required at runtime.
 
 ```bat
 git submodule update --init
-zsh ./build_zlib-win.sh
-zsh ./build_zstd-win.sh
+zsh ./build_zlib-win.zsh
+zsh ./build_zstd-win.zsh
 compile_tar-win.bat
 ```
 
-`build_zlib-win.sh` and `build_zstd-win.sh` are dependency-maintenance steps:
+`build_zlib-win.zsh` and `build_zstd-win.zsh` are dependency-maintenance steps:
 each syncs its pinned gitlink, rebuilds the static library (`zs.lib` /
 `zstd_static.lib`), and writes the exact tag/commit/linkage to
 `version-win.txt`.
@@ -114,7 +114,7 @@ against. A single shared file meant whichever platform built last overwrote the
 other's provenance.
 
 The remaining external codecs (bzip2, xz, lz4, lzip) require their corresponding
-Scoop CLI tools; `build_tool_install-win.sh` installs the complete toolchain.
+Scoop CLI tools; `build_tool_install-win.zsh` installs the complete toolchain.
 
 The Windows ZIP contains the statically linked executable, Swift runtime DLLs,
 `version.txt` (staged from `version-win.txt`), `zlib-LICENSE.txt`, `zstd-LICENSE.txt`, and
@@ -260,10 +260,10 @@ non-zero exit status; it never returns partial plaintext as if it were valid.
 
 The primitives are implemented from the specifications and checked against
 their published test vectors (RFC 8439, RFC 4231, RFC 7914, FIPS 180-4).
-Run them with `--crypto-selftest`, or the full suite with `./test_encrypt.sh`.
-On Windows/MSYS, `verifications/encrypt_windows_correctness.sh` reruns the
+Run them with `--crypto-selftest`, or the full suite with `./test_encrypt.zsh`.
+On Windows/MSYS, `verifications/encrypt_windows_correctness.zsh` reruns the
 self-test and a CLI smoke suite against `release/swift_tar.exe`; use
-`verifications/encrypt_mbps_win.sh` for Windows MB/s throughput.
+`verifications/encrypt_mbps_win.zsh` for Windows MB/s throughput.
 
 ### Append / update / delete
 
@@ -372,15 +372,15 @@ compiled, for example `swift_tar 20260712-143015`. The same value is stored as
 swift_tar.swift    tar writer/reader + codecs + libarchive-style filters
 crypto.swift       ChaCha20-Poly1305 / scrypt + the encrypted container
 rgb1.swift         RGB1 raw image container
-build.sh           platform-detecting entry point → the build below
-compile_tar.sh     macOS build script → release/swift_tar
-compile_tar-linux.sh  Linux build script → release/swift_tar
-platform.sh        sourced: the one place the platform suffix is decided
+build.zsh           platform-detecting entry point → the build below
+compile_tar.zsh     macOS build script → release/swift_tar
+compile_tar-linux.zsh  Linux build script → release/swift_tar
+platform.zsh        sourced: the one place the platform suffix is decided
 version-mac.txt / version-linux.txt / version-win.txt   per-platform build stamp + linkage provenance
-build_libarchive.sh / build_libarchive-win.sh  static ZIP backend builds
+build_libarchive.zsh / build_libarchive-win.zsh  static ZIP backend builds
 libarchive_zip_bridge.c  shared macOS/Windows ZIP C ABI
-build_zlib-win.sh  sync/rebuild the pinned Windows static zlib dependency
-build_zstd-win.sh  sync/rebuild the pinned Windows static zstd dependency
+build_zlib-win.zsh  sync/rebuild the pinned Windows static zlib dependency
+build_zstd-win.zsh  sync/rebuild the pinned Windows static zstd dependency
 release/swift_tar  compiled binary
 lzfse2/            submodule — LZFSE engine (other3 / bvx3)
 libarchive/        submodule — active static ZIP/ZIP64 backend

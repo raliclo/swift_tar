@@ -1,5 +1,5 @@
 platform,host,date,swift_tar_version,build,self_test_pass,self_test_total,crypto_pass,crypto_total,tar_peer,zip_peer,notes
 Windows,Ralic-W11,2026-08-15,20260815-215309,ok,16,16,44,44,bsdtar 3.8.4,bsdtar 3.8.4,"Two extra cases over the others: the -write_foundation and -write_ucrt extraction backends are Windows-only."
 Linux (WSL Ubuntu),Ralic-W11,2026-08-15,20260815-215619,ok,14,14,44,44,GNU tar 1.35,Info-ZIP zip 3.0 / unzip,"GNU tar can neither read nor write ZIP, so the suite probes for that and falls back to Info-ZIP. Needed liblz4-dev, libarchive-dev and zip installed."
-Linux (mac_vm),mac,,,pending,,,,,,,"Not verified from the Windows host. Run ./compile_tar-linux.sh then ./release/swift_tar -test and --crypto-selftest."
-macOS,mac,,,pending,,,,,,,"Not verified from the Windows host. Run ./compile_tar.sh then ./release/swift_tar -test and --crypto-selftest."
+Linux (mac_vm),mac,,,pending,,,,,,,"Not verified from the Windows host. Run ./compile_tar-linux.zsh then ./release/swift_tar -test and --crypto-selftest."
+macOS,mac,,,pending,,,,,,,"Not verified from the Windows host. Run ./compile_tar.zsh then ./release/swift_tar -test and --crypto-selftest."

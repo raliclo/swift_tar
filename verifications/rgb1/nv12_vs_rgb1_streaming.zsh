@@ -117,7 +117,7 @@ SRC="${1:-$DEFAULT_SRC}"
 for tool in ffmpeg ffprobe; do
     command -v "$tool" >/dev/null || { echo "[Error] $tool required / 需要 $tool" >&2; exit 1 }
 done
-[[ -x "$ST" ]] || { echo "[Error] build first: ../../compile_tar.sh / 請先建置" >&2; exit 1 }
+[[ -x "$ST" ]] || { echo "[Error] build first: ../../compile_tar.zsh / 請先建置" >&2; exit 1 }
 [[ -f "$SRC" ]] || {
     echo "[Error] source video not found: $SRC" >&2
     echo "        pass one as \$1, or mount the volume holding the P6 sample" >&2

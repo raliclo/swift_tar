@@ -2,8 +2,8 @@
 //  swift_tar.swift — Multi-core tar archiver in Swift
 //  swift_tar.swift — Swift 多核心 tar 打包工具
 //
-//  Compile: ./compile_tar.sh   (pairs with lzfse-cli.swift, runCLI() stripped)
-//  編譯：./compile_tar.sh（與剝除 runCLI() 的 lzfse-cli.swift 一起編譯）
+//  Compile: ./compile_tar.zsh   (pairs with lzfse-cli.swift, runCLI() stripped)
+//  編譯：./compile_tar.zsh（與剝除 runCLI() 的 lzfse-cli.swift 一起編譯）
 //
 //  Design / 設計：
 //   - Tar container: POSIX ustar + pax extended headers (long paths, big files)
@@ -323,9 +323,9 @@ private let LZMA_CHECK_CRC64: Int32 = 4
 // MARK: - libzstd API（silgen；Windows 靜態 libzstd、macOS homebrew）
 // =================================================================
 // zstd runs in-process on ALL platforms — Windows links the static libzstd
-// submodule (see build_zstd-win.sh) instead of spawning one zstd.exe per chunk.
+// submodule (see build_zstd-win.zsh) instead of spawning one zstd.exe per chunk.
 // zstd 在所有平台皆 in-process——Windows 連結靜態 libzstd submodule
-// （見 build_zstd-win.sh），不再每個 chunk 生一個 zstd.exe。
+// （見 build_zstd-win.zsh），不再每個 chunk 生一個 zstd.exe。
 
 private struct ZSTDInBuffer {                 // ZSTD_inBuffer
     var src: UnsafeRawPointer? = nil
@@ -3538,13 +3538,13 @@ struct SwiftTarMain {
         ]
         // The LZFSE flag names are compiled in only when the engine is. Listing
         // them unconditionally put the literal "other3" into the --no-lzfse
-        // binary, which test_no_lzfse.sh checks for with `strings`: the public
+        // binary, which test_no_lzfse.zsh checks for with `strings`: the public
         // build is meant to carry no trace of the private engine, and the option
         // table is a trace. Rejecting them there is also the right behaviour --
         // that build genuinely cannot do it, so accepting the flag and ignoring
         // it would be the silent-mismatch this whole check exists to stop.
         // LZFSE 的旗標名稱僅在該引擎被編入時才一併編入。先前無條件列出，會使字串
-        // 「other3」出現在 --no-lzfse 的執行檔中，而 test_no_lzfse.sh 正是以 `strings`
+        // 「other3」出現在 --no-lzfse 的執行檔中，而 test_no_lzfse.zsh 正是以 `strings`
         // 檢查此事：公開版本不應留下私有引擎的任何痕跡，而選項表就是一種痕跡。在該版本
         // 拒絕這些旗標也是正確行為——它確實做不到，接受後忽略正是本檢查要杜絕的靜默不符。
         #if !EXCLUDE_LZFSE

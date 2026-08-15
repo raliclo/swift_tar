@@ -1,27 +1,27 @@
 #!/usr/bin/env zsh
 # =====================================================================
-# build.sh -- one entry point; it works out which platform it is on.
-# build.sh -- 單一進入點，自行判斷所處平台。
+# build.zsh -- one entry point; it works out which platform it is on.
+# build.zsh -- 單一進入點，自行判斷所處平台。
 #
 # Before this, the build you ran depended on knowing which script your platform
-# used: compile_tar.sh on macOS, compile_tar-win.bat on Windows, and nothing at
+# used: compile_tar.zsh on macOS, compile_tar-win.bat on Windows, and nothing at
 # all on Linux. Nothing in the tree said so. This dispatches on uname and leaves
 # the provenance in version-<platform>.txt, so the same command works everywhere
 # and the record it writes can never land on another platform's file.
 # 在此之前，該執行哪支建置腳本取決於你知不知道自己平台用哪一支：macOS 用
-# compile_tar.sh、Windows 用 compile_tar-win.bat、Linux 則完全沒有。程式庫裡沒有任何
+# compile_tar.zsh、Windows 用 compile_tar-win.bat、Linux 則完全沒有。程式庫裡沒有任何
 # 地方說明這件事。本腳本依 uname 分派，並將來源資訊寫入 version-<平台>.txt，使同一道
 # 指令在各平台皆可用，且其寫下的紀錄絕不會落到另一平台的檔案上。
 #
 # Usage / 用法:
-#   ./build.sh [args...]      args pass through to the platform's build
+#   ./build.zsh [args...]      args pass through to the platform's build
 #                             參數會原樣傳給該平台的建置腳本
-#   ./build.sh --platform     print the detected platform and exit
+#   ./build.zsh --platform     print the detected platform and exit
 #                             印出偵測到的平台後結束
 # =====================================================================
 set -eu
 cd "$(dirname "$0")"
-. ./platform.sh
+. ./platform.zsh
 
 platform=$(swift_tar_platform)
 
@@ -35,10 +35,10 @@ echo "[Info] version file / 版本檔: version-$platform.txt"
 
 case "$platform" in
     mac)
-        exec ./compile_tar.sh "$@"
+        exec ./compile_tar.zsh "$@"
         ;;
     linux)
-        exec ./compile_tar-linux.sh "$@"
+        exec ./compile_tar-linux.zsh "$@"
         ;;
     win)
         # compile_tar-win.bat needs cmd.exe: it loads the MSVC environment
@@ -60,7 +60,7 @@ case "$platform" in
         # 路徑，並以該平台的工具讀回連結資訊，跑錯一支只會在比這一行更難察覺的地方
         # 失敗。
         echo "[Error] no build path for '$platform' / 尚無 '$platform' 的建置路徑" >&2
-        echo "        mac → compile_tar.sh, linux → compile_tar-linux.sh," >&2
+        echo "        mac → compile_tar.zsh, linux → compile_tar-linux.zsh," >&2
         echo "        win → compile_tar-win.bat" >&2
         exit 1
         ;;

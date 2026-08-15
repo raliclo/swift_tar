@@ -3,31 +3,31 @@
 - **Traditional Chinese: [README.zh-TW.md](README.zh-TW.md)**
 
 Ad-hoc measurement scripts for swift_tar behavior that isn't covered by the
-main benchmark pipeline (`../../benchmark.sh` / `../../benchmark2.sh`). Results
+main benchmark pipeline (`../../benchmark.zsh` / `../../benchmark2.zsh`). Results
 here are exploratory—read the "Status" line on each before trusting a
 conclusion.
 
 ## Encryption throughput, RSS and size overhead
 
-`encrypt_mbps_rss.sh` measures what the ChaCha20-Poly1305 layer costs: the same
+`encrypt_mbps_rss.zsh` measures what the ChaCha20-Poly1305 layer costs: the same
 archive with and without `--encrypt`, the layer on its own via
 `--encrypt-only` / `--decrypt-only`, and the size overhead. Results in
 [`encrypt_mbps_rss_output.txt`](encrypt_mbps_rss_output.txt).
 
 ```sh
-ROUNDS=3 ./encrypt_mbps_rss.sh ../../claw-code
+ROUNDS=3 ./encrypt_mbps_rss.zsh ../../claw-code
 ```
 
 Runs use a keyfile so they stay non-interactive; `--keyfile` skips the scrypt
 KDF, so the numbers measure the AEAD itself rather than key derivation.
 
-For Windows/MSYS throughput, use `encrypt_mbps_win.sh`; it writes
+For Windows/MSYS throughput, use `encrypt_mbps_win.zsh`; it writes
 [`encrypt_mbps_win_output.txt`](encrypt_mbps_win_output.txt). It reports MB/s
 only. Peak working set is intentionally left to the existing Windows RSS
 scripts.
 
 ```sh
-ROUNDS=1 ./encrypt_mbps_win.sh ../../claw-code
+ROUNDS=1 ./encrypt_mbps_win.zsh ../../claw-code
 ```
 
 The 2026-08-06 Windows run used `release/swift_tar.exe` version
@@ -49,12 +49,12 @@ and tampered-ciphertext inputs were rejected.
 
 ### Windows correctness smoke test
 
-`encrypt_windows_correctness.sh` keeps a reusable Windows/MSYS correctness test
+`encrypt_windows_correctness.zsh` keeps a reusable Windows/MSYS correctness test
 for the release executable. It writes
 [`encrypt_windows_correctness_output.txt`](encrypt_windows_correctness_output.txt).
 
 ```sh
-./encrypt_windows_correctness.sh
+./encrypt_windows_correctness.zsh
 ```
 
 The 2026-08-06 run used `release/swift_tar.exe` version `20260805-193735` on
@@ -136,7 +136,7 @@ the same trade-off the codecs make.
 > refuses to start without room for them.
 
 > **Status**: macOS throughput/RSS numbers are verified on Apple M4. Windows
-> throughput MB/s is verified separately by `encrypt_mbps_win.sh`; Windows peak
+> throughput MB/s is verified separately by `encrypt_mbps_win.zsh`; Windows peak
 > working set is covered by the existing Windows RSS scripts. Correctness is
 > enforced rather than assumed — the macOS sweep aborts if any `-n` setting
 > fails to round-trip to identical bytes, and `--crypto-selftest` checks all 16
@@ -144,7 +144,7 @@ the same trade-off the codecs make.
 
 ## RGB1 container throughput by codec
 
-`../test_swift_tar_rgb1.sh` archives an RGB1 container through every swift_tar
+`../test_swift_tar_rgb1.zsh` archives an RGB1 container through every swift_tar
 codec and reports archive size, compression ratio, create/extract time and MB/s,
 together with the run date and build version. With `--record` it also writes the
 table to the file for its platform:
@@ -164,19 +164,19 @@ about 0.44, and it was re-randomised each run so no two records were comparable.
 > unchanged. Record deliberately, on an idle machine.
 
 ```sh
-../test_swift_tar_rgb1.sh              # verify only / 僅驗證
-../test_swift_tar_rgb1.sh --record     # verify and update this platform's table
+../test_swift_tar_rgb1.zsh              # verify only / 僅驗證
+../test_swift_tar_rgb1.zsh --record     # verify and update this platform's table
 ```
 
 ## ZIP throughput and RSS on claw-code
 
-`zip_claw_code_mbps_rss.sh` runs true-ZIP encode and decode against the complete
+`zip_claw_code_mbps_rss.zsh` runs true-ZIP encode and decode against the complete
 `claw-code` corpus, reports decimal logical-input MB/s and process peak RSS for each
 round, and compares the first extracted tree with the source. By default it
 runs three rounds and writes `zip_claw_code_mbps_rss_output.txt`.
 
 ```sh
-ROUNDS=3 ./zip_claw_code_mbps_rss.sh ../../claw-code
+ROUNDS=3 ./zip_claw_code_mbps_rss.zsh ../../claw-code
 ```
 
 ## Create-side `-C` compatibility (2026-07-18)
@@ -205,10 +205,10 @@ Windows build `swift_tar 20260718-171714` was verified with:
   `20260718-171714`, passed its self-test, and retained static zlib 1.3.2 and
   zstd 1.5.7 provenance.
 
-## tgz_inflight_rss.sh
+## tgz_inflight_rss.zsh
 
 **Question**: Does swift_tar's `-n` flag (in-flight chunk concurrency for
-chunk-parallel gzip) control TGZ encode/decode peak RSS? `zshrc.sh`'s `getar()`
+chunk-parallel gzip) control TGZ encode/decode peak RSS? `zshrc.zsh`'s `getar()`
 never passes `-n`, so TGZ benchmark runs use the default `inflight = cores*2`
 (20 on the 10-core R45-Mac test machine). This was raised while investigating
 why TGZ showed the highest peak RSS of any format in `OPTIMIZATION.md`
@@ -217,7 +217,7 @@ why TGZ showed the highest peak RSS of any format in `OPTIMIZATION.md`
 **Usage**:
 
 ```sh
-swift_tar/verifications/tgz_inflight_rss.sh <path-to-corpus>
+swift_tar/verifications/tgz_inflight_rss.zsh <path-to-corpus>
 ```
 
 **Raw output**: [`tgz_inflight_rss_output.txt`](tgz_inflight_rss_output.txt)—

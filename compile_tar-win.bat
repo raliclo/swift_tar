@@ -15,14 +15,14 @@ set "_vswhere=C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.e
 where cl.exe > nul 2>&1
 if errorlevel 1 (
     if not exist "%_vswhere%" (
-        echo [FAIL] vswhere.exe not found. Run: zsh ./build_tool_install-win.sh
+        echo [FAIL] vswhere.exe not found. Run: zsh ./build_tool_install-win.zsh
         pause
         exit /b 1
     )
     set "_vsroot="
     for /f "usebackq delims=" %%I in (`"%_vswhere%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "_vsroot=%%I"
     if not defined _vsroot (
-        echo [FAIL] MSVC C++ tools not found. Run: zsh ./build_tool_install-win.sh
+        echo [FAIL] MSVC C++ tools not found. Run: zsh ./build_tool_install-win.zsh
         pause
         exit /b 1
     )
@@ -46,22 +46,22 @@ if not exist ..\lzfse-cli.swift (
 )
 
 if not exist zlib\build\Release\zs.lib (
-    echo [FAIL] zlib static library not found. Run: zsh ./build_zlib-win.sh
+    echo [FAIL] zlib static library not found. Run: zsh ./build_zlib-win.zsh
     pause
     exit /b 1
 )
 if not exist zstd\build\lib\Release\zstd_static.lib (
-    echo [FAIL] zstd static library not found. Run: zsh ./build_zstd-win.sh
+    echo [FAIL] zstd static library not found. Run: zsh ./build_zstd-win.zsh
     pause
     exit /b 1
 )
 if not exist version-win.txt (
-    echo [FAIL] version-win.txt not found. Run: zsh ./build_zlib-win.sh
+    echo [FAIL] version-win.txt not found. Run: zsh ./build_zlib-win.zsh
     pause
     exit /b 1
 )
 
-zsh .\build_libarchive-win.sh
+zsh .\build_libarchive-win.zsh
 if errorlevel 1 (
     echo [FAIL] libarchive backend build failed / libarchive 後端建置失敗
     pause
@@ -79,13 +79,13 @@ if errorlevel 1 (
 :: Strip the top-level runCLI() entry point (not valid in multi-file builds)
 set "_temp_cli=%TEMP%\swift_tar_lzfse_cli-%RANDOM%.swift"
 set "_temp_version=%TEMP%\swift_tar_version-%RANDOM%.swift"
-zsh .\strip_runcli.sh ../lzfse-cli.swift "%_temp_cli%"
+zsh .\strip_runcli.zsh ../lzfse-cli.swift "%_temp_cli%"
 if errorlevel 1 (
     echo [FAIL] failed to strip runCLI^(^) / 剝除 runCLI^(^) 失敗
     pause
     exit /b 1
 )
-zsh .\generate_version.sh "%_temp_version%"
+zsh .\generate_version.zsh "%_temp_version%"
 if errorlevel 1 (
     echo [FAIL] build version generation failed
     del /Q "%_temp_cli%" > nul 2>&1

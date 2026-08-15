@@ -1,8 +1,8 @@
 #!/usr/bin/env zsh
-# encrypt_windows_correctness.sh -- Windows/MSYS correctness smoke test for
+# encrypt_windows_correctness.zsh -- Windows/MSYS correctness smoke test for
 # swift_tar's ChaCha20-Poly1305 encryption layer.
 #
-# encrypt_windows_correctness.sh -- 在 Windows/MSYS 上快速驗證 swift_tar 的
+# encrypt_windows_correctness.zsh -- 在 Windows/MSYS 上快速驗證 swift_tar 的
 # ChaCha20-Poly1305 加密層正確性。
 set -euo pipefail
 
@@ -41,12 +41,12 @@ run_test() {
     mkdir -p "$tmp/src"
     printf 'alpha\n' > "$tmp/src/a.txt"
     printf 'bravo\n' > "$tmp/src/b.txt"
-    # Real image content when the sampled corpus is present; see test_encrypt.sh for
+    # Real image content when the sampled corpus is present; see test_encrypt.zsh for
 # the same pattern and the reason a labelled random fallback stays. One 1080p
 # RGB1 payload is 6,220,800 B, which crosses the 4 MiB chunk boundary and leaves
 # a partial tail.
 # 取樣語料存在時使用真實影像內容；相同作法與保留「明確標示的隨機備援」之理由見
-# test_encrypt.sh。一張 1080p 的 RGB1 payload 為 6,220,800 B，跨過 4 MiB 分塊邊界並
+# test_encrypt.zsh。一張 1080p 的 RGB1 payload 為 6,220,800 B，跨過 4 MiB 分塊邊界並
 # 留下不足一塊的尾段。
 _blob_src=""
 # (N) null-glob: without it zsh's default NOMATCH aborts before the labelled

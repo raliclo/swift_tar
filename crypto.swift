@@ -2,11 +2,11 @@
 //  crypto.swift — self-contained crypto primitives for swift_tar
 //  crypto.swift — swift_tar 自足密碼學原語
 //
-//  Compiled together with swift_tar.swift, see ./compile_tar.sh /
+//  Compiled together with swift_tar.swift, see ./compile_tar.zsh /
 //  compile_tar-win.bat. Depends only on Foundation: no CryptoKit, no
 //  OpenSSL, so the same code builds on macOS, Linux and Windows and is
 //  present in both the full and the --no-lzfse public build.
-//  與 swift_tar.swift 一起編譯，見 ./compile_tar.sh / compile_tar-win.bat。
+//  與 swift_tar.swift 一起編譯，見 ./compile_tar.zsh / compile_tar-win.bat。
 //  僅依賴 Foundation：不用 CryptoKit、不用 OpenSSL，因此 macOS、Linux 與
 //  Windows 共用同一份程式碼，全功能版與 --no-lzfse 公開版皆包含。
 //

@@ -1,5 +1,5 @@
-# platform.sh -- the one place that decides what this platform is called.
-# platform.sh -- 決定本平台名稱的唯一來源。
+# platform.zsh -- the one place that decides what this platform is called.
+# platform.zsh -- 決定本平台名稱的唯一來源。
 #
 # Sourced, not executed. The suffix it returns names version-<plat>.txt and the
 # per-platform measurement outputs under verifications/. Those files record

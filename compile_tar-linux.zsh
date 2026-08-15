@@ -1,14 +1,14 @@
 #!/usr/bin/env zsh
 # =====================================================================
-# compile_tar-linux.sh — build swift_tar as a Linux ELF.
-# compile_tar-linux.sh — 將 swift_tar 建置為 Linux ELF。
+# compile_tar-linux.zsh — build swift_tar as a Linux ELF.
+# compile_tar-linux.zsh — 將 swift_tar 建置為 Linux ELF。
 #
-# Separate from compile_tar.sh rather than a branch inside it. compile_tar.sh
+# Separate from compile_tar.zsh rather than a branch inside it. compile_tar.zsh
 # is macOS throughout: it requires /opt/homebrew/lib *.dylib, builds a bundled
 # static libarchive with cmake, reads linkage back with otool, and installs into
 # /opt/homebrew/bin. None of that holds here, and threading five conditionals
 # through it would make the macOS path harder to read for no gain.
-# 與 compile_tar.sh 分開，而非在其中加分支。compile_tar.sh 通篇都是 macOS 的作法：
+# 與 compile_tar.zsh 分開，而非在其中加分支。compile_tar.zsh 通篇都是 macOS 的作法：
 # 需要 /opt/homebrew/lib 的 *.dylib、以 cmake 建置內附的靜態 libarchive、用 otool
 # 讀回連結資訊、安裝到 /opt/homebrew/bin。這些在此都不成立，而為此在其中穿插五個
 # 條件判斷，只會讓 macOS 路徑更難讀且毫無收穫。
@@ -42,7 +42,7 @@
 # =====================================================================
 set -euo pipefail
 cd "$(dirname "$0")"
-. ./platform.sh
+. ./platform.zsh
 
 die() { print -u2 -- "[swift_tar-linux] ERROR / 錯誤：$*"; exit 1; }
 # log_msg, not log: `log` is a zsh builtin. A function shadows it only from the
@@ -94,11 +94,11 @@ for h in zlib.h bzlib.h lzma.h zstd.h lz4.h archive.h; do
 done
 
 # LZFSE is private and shipped as a submodule; without it the binary can neither
-# create nor read the LZFSE family, exactly as ./compile_tar.sh --no-lzfse.
+# create nor read the LZFSE family, exactly as ./compile_tar.zsh --no-lzfse.
 # Detected rather than hardcoded: the appliance has no lzfse2 checkout, a full
 # clone does.
 # LZFSE 為私有並以 submodule 形式提供；沒有它時，產出的執行檔既不能建立也不能讀取
-# LZFSE 家族，與 ./compile_tar.sh --no-lzfse 相同。此處以偵測而非寫死決定：設備上沒有
+# LZFSE 家族，與 ./compile_tar.zsh --no-lzfse 相同。此處以偵測而非寫死決定：設備上沒有
 # lzfse2 checkout，完整 clone 則有。
 SWIFT_DEFINES=(-DEXCLUDE_LZFSE)
 CLI_SRC=()
@@ -120,11 +120,11 @@ trap 'rm -f "$TEMP_CLI"' EXIT
 log_msg "Generate version constants / 產生版本常數"
 # zsh, not sh: the callee declares `#!/usr/bin/env zsh` and `sh script` ignores
 # the shebang, so it would only keep working for as long as that script happens
-# to stay POSIX. Same for build_libarchive.sh below.
+# to stay POSIX. Same for build_libarchive.zsh below.
 # 使用 zsh 而非 sh：被呼叫者宣告 `#!/usr/bin/env zsh`，而 `sh script` 會忽略
-# shebang，故只在該腳本剛好維持 POSIX 的期間內可行。下方的 build_libarchive.sh
+# shebang，故只在該腳本剛好維持 POSIX 的期間內可行。下方的 build_libarchive.zsh
 # 亦同。
-zsh ./generate_version.sh "$TEMP_VERSION"
+zsh ./generate_version.zsh "$TEMP_VERSION"
 
 log_msg "Compile the libarchive ZIP bridge / 編譯 libarchive ZIP bridge"
 "$CLANG" -O2 -fPIC -I"$SYSROOT/include" \
@@ -133,7 +133,7 @@ log_msg "Compile the libarchive ZIP bridge / 編譯 libarchive ZIP bridge"
 ARCHIVE_LINK=(-L"$SYSROOT/lib" -larchive)
 if [[ "${LIBARCHIVE_STATIC:-0}" == 1 ]]; then
     command -v cmake >/dev/null 2>&1 || die "LIBARCHIVE_STATIC=1 需要 cmake / requires cmake"
-    zsh ./build_libarchive.sh
+    zsh ./build_libarchive.zsh
     ARCHIVE_LINK=("build/libarchive-$(swift_tar_platform)/libarchive/libarchive.a")
 fi
 

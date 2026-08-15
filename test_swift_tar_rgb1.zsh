@@ -1,15 +1,15 @@
 #!/usr/bin/env zsh
-# test_swift_tar_rgb1.sh
+# test_swift_tar_rgb1.zsh
 # Integration test: an RGB1 container packed by swift_tar must survive a full
 # archive round-trip through swift_tar's own tar / gzip / zip pipelines and come
 # back byte-for-byte, with --rgb1-info and --rgb1-raw still decoding correctly.
 # Also checks interop: the platform's standard tar extracts swift_tar's plain
-# tar of the .rgb1 without corrupting it. This complements test_rgb1.sh (which
+# tar of the .rgb1 without corrupting it. This complements test_rgb1.zsh (which
 # unit-tests the three RGB1 modes in isolation).
 # 整合測試：swift_tar 打包出的 RGB1 容器，經 swift_tar 自身的 tar / gzip / zip
 # 封存往返後，必須位元組級一致，且 --rgb1-info 與 --rgb1-raw 仍能正確解析。
 # 另驗證互通：系統標準 tar 能解出 swift_tar 的純 tar .rgb1 而不損壞。此測試補足
-# test_rgb1.sh（後者單獨測 RGB1 三個模式）。
+# test_rgb1.zsh（後者單獨測 RGB1 三個模式）。
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -40,7 +40,7 @@ for arg in "$@"; do
 done
 
 if [ ! -x "$ST" ]; then
-  echo "error: build first (./compile_tar.sh) — missing $ST" >&2
+  echo "error: build first (./compile_tar.zsh) — missing $ST" >&2
   exit 1
 fi
 
@@ -161,7 +161,7 @@ ms()  { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f", (b-a)*1000}'; }
 # 依平台加後綴。共用單一檔案會造成陷阱：入版的表格錄自 Windows，而本腳本在 macOS
 # 上跑一次就會靜默地把它換成 macOS 的數字——只留下一個沒人解釋得清的 diff。現在每個
 # 平台各自擁有一個檔案，三者可同時入版。
-. "$HERE/platform.sh"
+. "$HERE/platform.zsh"
 RESULTS="$HERE/verifications/rgb1_container_mbps_output-$(swift_tar_platform).txt"
 
 # Built in a temp file and moved into place only after the last codec passes,

@@ -1,11 +1,11 @@
 #!/bin/zsh
 # =====================================================================
-# compile_tar.sh — build swift_tar (multi-core tar archiver)
-# compile_tar.sh — 編譯 swift_tar（多核心 tar 打包工具）
+# compile_tar.zsh — build swift_tar (multi-core tar archiver)
+# compile_tar.zsh — 編譯 swift_tar（多核心 tar 打包工具）
 #
-# Reuses lzfse-cli.swift as a library (same pattern as lzfse-ui/build-ui.sh:
+# Reuses lzfse-cli.swift as a library (same pattern as lzfse-ui/build-ui.zsh:
 # strip the top-level runCLI() entry point, then compile both files together).
-# 將 lzfse-cli.swift 當函式庫重用（同 lzfse-ui/build-ui.sh 模式：剝除頂層
+# 將 lzfse-cli.swift 當函式庫重用（同 lzfse-ui/build-ui.zsh 模式：剝除頂層
 # runCLI() 進入點後兩檔合併編譯）。
 #
 # Links / 連結：
@@ -19,7 +19,7 @@
 # =====================================================================
 set -e
 cd "$(dirname "$0")"
-. ./platform.sh
+. ./platform.zsh
 
 # Optional: --no-lzfse builds the public/distributable binary that ships NONE of
 # the private LZFSE engine — lzfse-cli.swift is not compiled in, and the binary
@@ -58,10 +58,10 @@ if [[ "$EXCLUDE_LZFSE" != 1 ]]; then
     if [[ ! -f lzfse2/lzfse-cli.swift ]]; then
         echo "Error: lzfse2 submodule not found (lzfse2/lzfse-cli.swift is missing)." >&2
         echo "       Fetch it with: git submodule update --init" >&2
-        echo "       Or compile WITHOUT LZFSE support instead: ./compile_no_lzfse.sh" >&2
+        echo "       Or compile WITHOUT LZFSE support instead: ./compile_no_lzfse.zsh" >&2
         echo "錯誤：找不到 lzfse2 submodule（缺少 lzfse2/lzfse-cli.swift）。" >&2
         echo "      請執行：git submodule update --init 取得" >&2
-        echo "      或改為「不含 LZFSE 支援」編譯：./compile_no_lzfse.sh" >&2
+        echo "      或改為「不含 LZFSE 支援」編譯：./compile_no_lzfse.zsh" >&2
         exit 1
     fi
     TEMP_CLI="$(mktemp -t lzfse-cli-lib).swift"
@@ -79,11 +79,11 @@ trap 'rm -f "$TEMP_CLI" "$TEMP_VERSION"' EXIT
 # 會忽略 shebang。以 sh 執行 zsh 腳本，只在它剛好維持 POSIX 的期間內可行——一旦
 # 其中任一支用了 `print`、`(N)` glob qualifier 或 `${0:A:h}`，就會在與該改動
 # 毫無關聯之處失敗。
-zsh ./generate_version.sh "$TEMP_VERSION"
+zsh ./generate_version.zsh "$TEMP_VERSION"
 
 # Build into the release/ folder / 建置輸出至 release/ 資料夾
 mkdir -p release
-zsh ./build_libarchive.sh
+zsh ./build_libarchive.zsh
 swiftc -O $SWIFT_DEFINES $CLI_SRC "$TEMP_VERSION" swift_tar.swift rgb1.swift crypto.swift \
     build/libarchive_zip_bridge.o build/libarchive-macos/libarchive/libarchive.a \
     -o release/swift_tar -lz -lbz2 -L"$BREW_LIB" -llz4 -llzma -lzstd
@@ -94,11 +94,11 @@ echo "Built ./release/swift_tar / 已建置 ./release/swift_tar"
 # names the dylib that will be loaded at run time, which is the only version a
 # provenance record can honestly mean — a header or a `brew list` can describe
 # something the linker did not pick. libarchive is absent here because it is
-# static; build_libarchive.sh records it from the submodule's own gitlink, the
+# static; build_libarchive.zsh records it from the submodule's own gitlink, the
 # same way the Windows builders do.
 # 記錄執行檔實際連結了什麼，且直接自執行檔讀回。otool 指出的是執行時會載入的 dylib，
 # 那是 provenance 紀錄唯一能誠實表達的版本——標頭檔或 `brew list` 描述的可能是連結器
-# 根本沒選用的那一份。此處沒有 libarchive，因為它是靜態連結；build_libarchive.sh 會
+# 根本沒選用的那一份。此處沒有 libarchive，因為它是靜態連結；build_libarchive.zsh 會
 # 依 submodule 自身的 gitlink 記錄它，與 Windows 建置腳本作法相同。
 #
 # The version recorded is the Mach-O "current version" of the dylib, hence the

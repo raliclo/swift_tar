@@ -1,9 +1,9 @@
 // =====================================================================
 //  rgb1.swift — RGB1 raw image container / RGB1 原始影像容器
 //
-//  Compiled together with swift_tar.swift, see ./compile_tar.sh /
+//  Compiled together with swift_tar.swift, see ./compile_tar.zsh /
 //  compile_tar-win.bat. Self-contained: only depends on Foundation.
-//  與 swift_tar.swift 一起編譯，見 ./compile_tar.sh / compile_tar-win.bat。
+//  與 swift_tar.swift 一起編譯，見 ./compile_tar.zsh / compile_tar-win.bat。
 //  獨立自足：僅依賴 Foundation。
 // =====================================================================
 

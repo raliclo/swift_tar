@@ -1,6 +1,8 @@
-[Info] date: 2026-08-06 14:53:02 TST
-[Info] uname: MSYS_NT-10.0-26200 Ralic-W11 3.6.10-8fbd9808.x86_64 2026-07-31 07:26 UTC x86_64 Msys
-[Info] swift_tar: swift_tar 20260806-144221
+[Info] blob: random (no sampled corpus)
+[Info] date: 2026-08-16 04:59:43 TST
+[Info] os: MINGW64_NT-10.0-26200 3.6.10-8fbd9808.x86_64
+[Info] uname: MINGW64_NT-10.0-26200 Ralic-W11 3.6.10-8fbd9808.x86_64 2026-07-31 07:26 UTC x86_64 Msys
+[Info] swift_tar: swift_tar 20260816-045456
 
 == crypto self-test ==
 PASS: ChaCha20 block (RFC 8439 2.3.2)

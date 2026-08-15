@@ -12,10 +12,10 @@
 set -eu
 
 SCRIPT_DIR=${SWIFT_TAR_SOURCE_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
-output_swift=${1:?Usage: generate_version.sh <output-swift-file>}
+output_swift=${1:?Usage: generate_version.zsh <output-swift-file>}
 build_version=$(date +%Y%m%d-%H%M%S)
 
-. "$SCRIPT_DIR/platform.sh"
+. "$SCRIPT_DIR/platform.zsh"
 version_file="$SCRIPT_DIR/version-$(swift_tar_platform).txt"
 
 # Refresh the build stamp and keep every other line as the builders left it.

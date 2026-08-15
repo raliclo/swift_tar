@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
-# build_zstd-win.sh -- sync the pinned zstd submodule and rebuild its Windows
+# build_zstd-win.zsh -- sync the pinned zstd submodule and rebuild its Windows
 # static library, then record the exact dependency version for packaging.
-# build_zstd-win.sh -- 同步固定版本的 zstd submodule、重建 Windows 靜態庫，
+# build_zstd-win.zsh -- 同步固定版本的 zstd submodule、重建 Windows 靜態庫，
 # 並記錄封裝所需的精確相依版本。
 set -eu
 

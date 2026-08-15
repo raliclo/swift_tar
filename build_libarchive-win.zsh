@@ -9,7 +9,7 @@ cd "$SCRIPT_DIR"
 git submodule update --init libarchive zlib
 
 if [ ! -f zlib/build/Release/zs.lib ]; then
-    echo "[FAIL] zlib/build/Release/zs.lib not found; run zsh ./build_zlib-win.sh" >&2
+    echo "[FAIL] zlib/build/Release/zs.lib not found; run zsh ./build_zlib-win.zsh" >&2
     exit 1
 fi
 

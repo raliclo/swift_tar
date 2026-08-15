@@ -30,17 +30,17 @@
 ```sh
 brew install lz4 xz zstd      # liblz4 / liblzma / libzstd
 git submodule update --init   # 取得 lzfse2 + libarchive + zlib
-./build.sh                    # → release/swift_tar
+./build.zsh                    # → release/swift_tar
 ```
 
-`build.sh` 以 `uname` 偵測平台並執行該平台的建置——macOS 用 `compile_tar.sh`、
-Linux 用 `compile_tar-linux.sh`、Windows 用 `compile_tar-win.bat`——故同一道指令在
-三者皆可用。`./build.sh --platform` 只印出偵測到的平台名稱而不建置。直接呼叫各平台
+`build.zsh` 以 `uname` 偵測平台並執行該平台的建置——macOS 用 `compile_tar.zsh`、
+Linux 用 `compile_tar-linux.zsh`、Windows 用 `compile_tar-win.bat`——故同一道指令在
+三者皆可用。`./build.zsh --platform` 只印出偵測到的平台名稱而不建置。直接呼叫各平台
 腳本仍然可行。
 
 ### Linux
 
-`compile_tar-linux.sh` 需要 Swift 工具鏈與各 codec 的 header 與共享函式庫。兩者皆以
+`compile_tar-linux.zsh` 需要 Swift 工具鏈與各 codec 的 header 與共享函式庫。兩者皆以
 探測而非假設決定：存在時使用 `/workspace/opt/swift` 與 `/workspace/sysroot`（即
 `sos/linux_kernal_vm_interactive` 下的 buildroot aarch64 設備），否則改用 `PATH` 上的
 `swiftc` 與 `/usr`。可用 `SWIFT_PREFIX` 與 `SYSROOT` 覆寫。
@@ -61,15 +61,15 @@ RPATH，並將所連結的函式庫寫入 `version-linux.txt`。
 
 ### 不含 LZFSE 的公開版
 
-`compile_no_lzfse.sh`（`compile_tar.sh --no-lzfse` 的包裝）建置「公開／可散布」版
+`compile_no_lzfse.zsh`（`compile_tar.zsh --no-lzfse` 的包裝）建置「公開／可散布」版
 binary，完全**不含**私有 LZFSE 引擎——不編譯 `lzfse-cli.swift`，因此既不能建立也
 不能解碼任何 LZFSE 家族封存（`other3` / `bvx3` / `bvx2`），binary 內也無任何 LZFSE
 程式碼或格式字串。標準外部 codec、純 tar 與 ZIP/ZIP64 不受影響。
 此建置不需要 `lzfse2` submodule。
 
 ```sh
-./compile_no_lzfse.sh         # → release/swift_tar（公開版、不含 LZFSE）
-./test_no_lzfse.sh            # 驗證排除是否生效，且標準 codec 仍可用
+./compile_no_lzfse.zsh         # → release/swift_tar（公開版、不含 LZFSE）
+./test_no_lzfse.zsh            # 驗證排除是否生效，且標準 codec 仍可用
 ```
 
 ### Windows
@@ -81,12 +81,12 @@ chunk 生一個 `zstd.exe`。
 
 ```bat
 git submodule update --init
-zsh ./build_zlib-win.sh
-zsh ./build_zstd-win.sh
+zsh ./build_zlib-win.zsh
+zsh ./build_zstd-win.zsh
 compile_tar-win.bat
 ```
 
-`build_zlib-win.sh` 與 `build_zstd-win.sh` 是相依套件維護步驟：各自同步固定的
+`build_zlib-win.zsh` 與 `build_zstd-win.zsh` 是相依套件維護步驟：各自同步固定的
 gitlink、重建靜態庫（`zs.lib`／`zstd_static.lib`），並將精確的 tag、commit 與
 連結方式寫入 `version-win.txt`。首次 clone 或變更任一 submodule 後才需執行；平常的
 `compile_tar-win.bat` 會增量重建 libarchive 後端並重用既有 zlib/zstd 靜態庫。
@@ -99,7 +99,7 @@ release 驗證。
 最後建置的那個平台會覆寫掉另一個平台的 provenance。
 
 其餘外部 codec（bzip2、xz、lz4、lzip）仍需要對應的 Scoop CLI 工具；
-`build_tool_install-win.sh` 可安裝完整工具鏈。
+`build_tool_install-win.zsh` 可安裝完整工具鏈。
 
 Windows ZIP 包含靜態連結的執行檔、Swift runtime DLL、`version.txt`（由
 `version-win.txt` 放入）、
@@ -232,9 +232,9 @@ keyfile **沒有格式要求**：文字或二進位、任何長度皆可，位�
 
 密碼學原語依規範實作，並對照其公開測試向量驗證（RFC 8439、RFC 4231、
 RFC 7914、FIPS 180-4）。可用 `--crypto-selftest` 執行，完整測試套件則為
-`./test_encrypt.sh`。Windows/MSYS 可用 `verifications/encrypt_windows_correctness.sh`
+`./test_encrypt.zsh`。Windows/MSYS 可用 `verifications/encrypt_windows_correctness.zsh`
 針對 `release/swift_tar.exe` 重跑 self-test 與 CLI smoke suite；Windows MB/s
-吞吐量則使用 `verifications/encrypt_mbps_win.sh`。
+吞吐量則使用 `verifications/encrypt_mbps_win.zsh`。
 
 ### 追加／更新／刪除
 
@@ -337,15 +337,15 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 swift_tar.swift    tar 寫入／讀取 + 壓縮引擎 + libarchive 式 filter
 crypto.swift       ChaCha20-Poly1305 / scrypt 與加密容器
 rgb1.swift         RGB1 原始影像容器
-build.sh           會偵測平台的進入點 → 下方對應的建置腳本
-compile_tar.sh     macOS 建置腳本 → release/swift_tar
-compile_tar-linux.sh  Linux 建置腳本 → release/swift_tar
-platform.sh        供 source：決定平台後綴的唯一來源
+build.zsh           會偵測平台的進入點 → 下方對應的建置腳本
+compile_tar.zsh     macOS 建置腳本 → release/swift_tar
+compile_tar-linux.zsh  Linux 建置腳本 → release/swift_tar
+platform.zsh        供 source：決定平台後綴的唯一來源
 version-mac.txt / version-linux.txt / version-win.txt   各平台的建置版本戳與連結來源
-build_libarchive.sh / build_libarchive-win.sh  靜態 ZIP 後端建置
+build_libarchive.zsh / build_libarchive-win.zsh  靜態 ZIP 後端建置
 libarchive_zip_bridge.c  macOS/Windows 共用 ZIP C ABI
-build_zlib-win.sh  同步／重建 Windows 固定版本的 zlib 靜態相依套件
-build_zstd-win.sh  同步／重建 Windows 固定版本的 zstd 靜態相依套件
+build_zlib-win.zsh  同步／重建 Windows 固定版本的 zlib 靜態相依套件
+build_zstd-win.zsh  同步／重建 Windows 固定版本的 zstd 靜態相依套件
 release/swift_tar  編譯後的二進位
 lzfse2/            子模組 —— LZFSE 引擎（other3 / bvx3）
 libarchive/        子模組 —— 實際使用的靜態 ZIP/ZIP64 後端

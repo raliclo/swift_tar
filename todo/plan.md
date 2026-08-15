@@ -121,7 +121,7 @@ R43-Win §4 已實測僅 ~2%。Step 1 驗證通過後可順手加 5 行(parser �
 ### ✅ R46-Mac(已完成 2026-08-11,swift_tar 16cd98e):POSIX 版平行寫入池 + 單次開檔
 
 下方候選已實作為「Extract small files in parallel on macOS and Linux」,並於
-R48-Mac 一輪(`-swift_tar -power-test`)完成量測:
+R47-Mac 一輪(`-swift_tar -power-test`)完成量測:
 
 - **llama.cpp 解壓 27/27 組全部變快,中位數 +171%**(min +50%、max +256%),
   解壓時間普遍由 9–10 秒降至 3–4 秒。

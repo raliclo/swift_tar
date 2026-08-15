@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # test_strip_components.sh -- verify --strip-components extraction semantics.
 # test_strip_components.sh -- 驗證 --strip-components 解出語意。
 set -euo pipefail

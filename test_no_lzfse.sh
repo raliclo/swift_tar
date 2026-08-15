@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # test_no_lzfse.sh
 # Verify the public/distributable build (compile_no_lzfse.sh) ships NONE of the
 # private LZFSE engine: no bvx3/other3 in the binary, LZFSE codecs unavailable,

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env zsh
 #
 # build_tool_install-win.sh -- install the Windows build toolchain for swift_tar
 # build_tool_install-win.sh -- 安裝 swift_tar Windows 版所需的建置工具鏈

@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env zsh
 # build_zlib-win.sh -- sync the pinned zlib submodule and rebuild its Windows
 # static library, then record the exact dependency version for packaging.
 # build_zlib-win.sh -- 同步固定版本的 zlib submodule、重建 Windows 靜態庫，

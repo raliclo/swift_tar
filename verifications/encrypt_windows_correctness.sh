@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # encrypt_windows_correctness.sh -- Windows/MSYS correctness smoke test for
 # swift_tar's ChaCha20-Poly1305 encryption layer.
 #

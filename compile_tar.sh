@@ -70,11 +70,20 @@ if [[ "$EXCLUDE_LZFSE" != 1 ]]; then
 fi
 TEMP_VERSION="$(mktemp -t swift-tar-version).swift"
 trap 'rm -f "$TEMP_CLI" "$TEMP_VERSION"' EXIT
-sh ./generate_version.sh "$TEMP_VERSION"
+# zsh, not sh: both callees declare `#!/usr/bin/env zsh`, and `sh script`
+# ignores the shebang. Running a zsh script under sh works only for as long as
+# it happens to stay POSIX — the moment either one uses `print`, a `(N)` glob
+# qualifier or `${0:A:h}`, it breaks somewhere unrelated to the change that
+# introduced it.
+# 使用 zsh 而非 sh：兩個被呼叫的腳本都宣告 `#!/usr/bin/env zsh`，而 `sh script`
+# 會忽略 shebang。以 sh 執行 zsh 腳本，只在它剛好維持 POSIX 的期間內可行——一旦
+# 其中任一支用了 `print`、`(N)` glob qualifier 或 `${0:A:h}`，就會在與該改動
+# 毫無關聯之處失敗。
+zsh ./generate_version.sh "$TEMP_VERSION"
 
 # Build into the release/ folder / 建置輸出至 release/ 資料夾
 mkdir -p release
-sh ./build_libarchive.sh
+zsh ./build_libarchive.sh
 swiftc -O $SWIFT_DEFINES $CLI_SRC "$TEMP_VERSION" swift_tar.swift rgb1.swift crypto.swift \
     build/libarchive_zip_bridge.o build/libarchive-macos/libarchive/libarchive.a \
     -o release/swift_tar -lz -lbz2 -L"$BREW_LIB" -llz4 -llzma -lzstd

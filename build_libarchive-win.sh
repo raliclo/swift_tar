@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env zsh
 # Build the bundled static libarchive ZIP backend with MSVC for Windows.
 # 使用 MSVC 建置 Windows 使用的內附靜態 libarchive ZIP 後端。
 set -eu

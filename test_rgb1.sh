@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # test_rgb1.sh
 # Verify swift_tar's RGB1 raw-image container: --rgb1-pack / --rgb1-info /
 # --rgb1-raw. Covers header layout (magic + fixed 876-byte header), payload

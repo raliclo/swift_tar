@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # test_append_update.sh
 # Verify swift_tar's -r (append), -u (update), and --delete (in-place member
 # removal — a feature BSD tar lacks) against the platform's standard tar. Every

@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env zsh
 # Build the bundled static libarchive ZIP backend for macOS.
 # 建置 macOS 使用的內附靜態 libarchive ZIP 後端。
 set -eu

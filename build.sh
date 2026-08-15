@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env zsh
 # =====================================================================
 # build.sh -- one entry point; it works out which platform it is on.
 # build.sh -- 單一進入點，自行判斷所處平台。

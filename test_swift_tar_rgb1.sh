@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # test_swift_tar_rgb1.sh
 # Integration test: an RGB1 container packed by swift_tar must survive a full
 # archive round-trip through swift_tar's own tar / gzip / zip pipelines and come
@@ -219,7 +219,11 @@ bench() { # label codec-flags archive-name
   # 等級，每一列 zstd 都靜默沿用 swift_tar 的預設值——而該預設已於 2026-08-14 由 3 改為
   # 9，會在不聲明的情況下改變本表的基準。
   local label="$1" arc="$TMP/$3" out="$TMP/xb_$3"
-  local -a flag; read -r -a flag <<< "$2"
+  # ${=2} forces word-splitting, which zsh does not do by default; this is the
+  # zsh equivalent of bash's `read -r -a flag <<< "$2"` (zsh's read has no -a).
+  # ${=2} 強制分詞——zsh 預設不對變數分詞；此為 bash `read -r -a` 的 zsh 等價寫法
+  # （zsh 的 read 沒有 -a 選項）。
+  local -a flag; flag=(${=2})
   # create: skip this codec if unsupported (e.g. missing CLI) / 建立：不支援則略過
   if [ ${#flag[@]} -gt 0 ]; then
     if ! "$ST" -c "${flag[@]}" -f "$arc" -C "$BIGSRC" big.rgb1 >/dev/null 2>&1; then

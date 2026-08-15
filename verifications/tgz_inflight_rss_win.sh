@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 # =====================================================================
 # tgz_inflight_rss_win.sh — Windows counterpart of tgz_inflight_rss.sh:
 # measure TGZ encode/decode peak working set vs -n (in-flight chunk
@@ -26,7 +26,7 @@
 # =====================================================================
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${0:A:h}"
 SWIFT_TAR_BIN="${SWIFT_TAR_BIN:-$SCRIPT_DIR/../release/swift_tar.exe}"
 MEASURE_PS1="$SCRIPT_DIR/measure_peak_ws_win.ps1"
 CORPUS="${1:?Usage: $0 <path-to-corpus>}"

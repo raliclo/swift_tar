@@ -2341,6 +2341,18 @@ final class TarReader {
         // GNU tar --touch semantics. / false（--touch）時解出項目維持目前
         // 時間，語意同 GNU tar --touch。
         var restoreMtime: Bool = true
+        // -so: write each regular member's contents to stdout and touch no
+        // filesystem at all -- bsdtar's -O / --to-stdout. Distinct from --cat,
+        // which emits the tar stream itself rather than the members' contents.
+        // -so：將各一般成員的內容輸出至 stdout，完全不動檔案系統——即 bsdtar 的
+        // -O / --to-stdout。與 --cat 不同：後者輸出的是 tar 串流本身，而非成員內容。
+        var toStdout: Bool = false
+        // -i / --ignore-zeros: keep reading past the two zero blocks that mark
+        // end-of-archive, for concatenated archives and for ones truncated mid
+        // stream. Same meaning as in bsdtar and GNU tar.
+        // -i / --ignore-zeros：略過標示封存結尾的兩個零區塊繼續讀取，用於串接的
+        // 封存或中途截斷的封存。語意與 bsdtar、GNU tar 相同。
+        var ignoreZeros: Bool = false
     }
 
     func run(options: Options) throws {
@@ -2382,7 +2394,7 @@ final class TarReader {
         while let block = readExactly(TAR_BLOCK) {
             if block.allSatisfy({ $0 == 0 }) {
                 zeroBlocks += 1
-                if zeroBlocks >= 2 { break }
+                if zeroBlocks >= 2 && !options.ignoreZeros { break }
                 continue
             }
             zeroBlocks = 0
@@ -2487,6 +2499,37 @@ final class TarReader {
                 print("x \(rel)")
             }
             let dest = options.destDir.isEmpty ? rel : options.destDir + "/" + rel
+
+            // -so is handled before any filesystem call: no parent directories,
+            // no symlinks, no hardlinks, nothing removed. Only the contents of
+            // regular members reach stdout; every other entry type is skipped,
+            // which is what bsdtar -O does.
+            // -so 在任何檔案系統呼叫之前處理：不建上層目錄、不建符號連結與硬連結、
+            // 不刪除任何東西。僅一般成員的內容會送到 stdout，其餘型別一律略過，
+            // 與 bsdtar -O 的行為相同。
+            if options.toStdout {
+                switch typeflag {
+                case UInt8(ascii: "0"), 0, UInt8(ascii: "7"):
+                    if isDir { continue }
+                    var remaining = size
+                    while remaining > 0 {
+                        try autoreleasepool {
+                            let want = Int(min(remaining, UInt64(DECODE_CHUNK)))
+                            guard let chunk = readExactly(want) else {
+                                throw TarError.format("truncated file data / 檔案資料不完整")
+                            }
+                            try FileHandle.standardOutput.write(contentsOf: chunk)
+                            remaining -= UInt64(want)
+                        }
+                    }
+                    let rem = Int(size % UInt64(TAR_BLOCK))
+                    if rem != 0 { _ = readExactly(TAR_BLOCK - rem) }
+                default:
+                    if !isDir { try skipData(size) }
+                }
+                continue
+            }
+
             let parent = (dest as NSString).deletingLastPathComponent
             if !parent.isEmpty {
                 try? fm.createDirectory(atPath: parent, withIntermediateDirectories: true)
@@ -2764,6 +2807,24 @@ private func printTarUsage() {
                         封存檔路徑（"-" 表標準輸入／輸出；預設 "-"）
                         RGB1 modes use -f as the RGB1 input/output path.
                         RGB1 模式以 -f 作為 RGB1 輸入／輸出路徑。
+      -O, --to-stdout : (-x) members' contents to stdout, nothing written to
+                        disk; the bsdtar / GNU tar spelling
+                        （-x）將成員內容輸出至 stdout，不寫入任何檔案；
+                        此為 bsdtar／GNU tar 的寫法
+      -stream-in      : Read the archive from stdin, same as -f -
+                        自 stdin 讀入封存，等同 -f -
+      -stream-out     : Write the archive to stdout, same as -f -; with -x it
+                        instead writes members' contents to stdout, as -O does.
+                        Spelled out because GNU tar's -s is --same-order, so
+                        -si / -so would mean something else there.
+                        將封存輸出至 stdout，等同 -f -；搭配 -x 時改為輸出成員
+                        內容，同 -O。使用完整字樣是因 GNU tar 的 -s 為
+                        --same-order，故 -si / -so 在該處另有他意。
+      -i              : Ignore the end-of-archive zero blocks and keep reading
+                        略過封存結尾的零區塊繼續讀取（同 --ignore-zeros）
+      -o              : Do not restore ownership; already the behaviour here,
+                        accepted for tar compatibility
+                        不還原擁有者；本工具本就如此，接受此旗標僅為相容 tar
       -C <dir>        : Change directory before create, or extract into <dir>
                         建立封存前切換目錄，或解出至 <dir>
       --strip-components <N>
@@ -2980,6 +3041,29 @@ func runTarProcess(_ exePath: String, _ args: [String], cwd: String? = nil) -> B
     return process.terminationStatus == 0
 }
 
+/// Same as `runTarProcess`, but sends the child's stdout to `toFile`. Needed to
+/// check the flags whose whole purpose is what lands on stdout.
+/// 同 `runTarProcess`，但將子行程的 stdout 導向 `toFile`。用於檢查那些「重點就在
+/// stdout 輸出什麼」的旗標。
+func runTarProcessCapturingStdout(_ exePath: String, _ args: [String],
+                                  toFile: String, cwd: String? = nil) -> Bool {
+    FileManager.default.createFile(atPath: toFile, contents: nil)
+    guard let out = FileHandle(forWritingAtPath: toFile) else { return false }
+    defer { try? out.close() }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: exePath)
+    process.arguments = args
+    if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+    var env = ProcessInfo.processInfo.environment
+    env["COPYFILE_DISABLE"] = "1"
+    process.environment = env
+    process.standardOutput = out
+    process.standardError = FileHandle.nullDevice
+    guard (try? process.run()) != nil else { return false }
+    process.waitUntilExit()
+    return process.terminationStatus == 0
+}
+
 func runSelfTest(debug: Bool = false) {
     // CommandLine.arguments[0] can be relative (e.g. invoked as `..\swift_tar\
     // release\swift_tar.exe`) or a bare name with no path component at all
@@ -3017,6 +3101,13 @@ func runSelfTest(debug: Bool = false) {
         print("       \(label): \(ok ? "✓" : "✗ 失敗 / FAILED")")
         if !ok { allOK = false }
     }
+    // Deliberately no skip() helper. Every case runs on every platform: where
+    // the platform tar cannot do ZIP, the suite falls back to Info-ZIP's unzip
+    // and zip, and fails if those are absent too. A skipped case reads like a
+    // passing one at a glance, and this suite gates whole benchmark rounds.
+    // 刻意不提供 skip() 輔助函式。每個項目在每個平台都會執行：平台 tar 無法處理
+    // ZIP 時，改用 Info-ZIP 的 unzip 與 zip 備援，兩者亦不存在才判定失敗。
+    // 被跳過的項目乍看與通過無異，而本套測試正是整輪 benchmark 的守門條件。
 
     guard let stdTar = findStandardTar(debug: debug) else {
         print("[swift_tar -test] standard tar not found on PATH, skipping cross-compat round-trip / 在 PATH 中找不到標準 tar，略過互通性測試")
@@ -3087,37 +3178,119 @@ func runSelfTest(debug: Bool = false) {
     // 不需明確指定旗標。
     let zipA = "\(tmp)/zip_by_swift_tar.zip"
     let zipB = "\(tmp)/zip_by_std_tar.zip"
+
+    // The compatibility peer for ZIP differs by platform. bsdtar reads and
+    // writes ZIP through libarchive, so on Windows and macOS the platform tar
+    // is the peer. GNU tar, which is what Linux ships, has no ZIP support at
+    // all -- `tar -tf x.zip` answers "This does not look like a tar archive".
+    // Reporting that as a swift_tar failure is wrong twice over: it blames the
+    // wrong component, and it makes -test fail on Linux for every run, which
+    // matters because run_round.command gates on -test passing. Probe for the
+    // capability and fall back to unzip / zip, which Linux does have.
+    // ZIP 的互通對象因平台而異。bsdtar 透過 libarchive 可讀寫 ZIP，故 Windows 與
+    // macOS 以平台 tar 為對象。Linux 隨附的 GNU tar 則完全不支援 ZIP——
+    // `tar -tf x.zip` 會回答「This does not look like a tar archive」。把這回報成
+    // swift_tar 失敗有雙重錯誤：歸咎於錯誤的元件，且會使 Linux 上每次 -test 都失敗，
+    // 而 run_round.command 正是以 -test 通過與否作為守門條件。因此改為偵測能力，
+    // 不足時退回 Linux 本就具備的 unzip / zip。
+    func toolPath(_ name: String) -> String? {
+#if os(Windows)
+        let pathSep: Character = ";"
+#else
+        let pathSep: Character = ":"
+#endif
+        for dir in (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: pathSep).map(String.init) {
+            let p = dir + "/" + name
+            if fm.isExecutableFile(atPath: p) { return p }
+#if os(Windows)
+            let exe = p + ".exe"
+            if fm.isExecutableFile(atPath: exe) { return exe }
+#endif
+        }
+        return nil
+    }
+    // Probed rather than assumed from the platform: a Linux box may well have
+    // bsdtar installed as `tar`, and a probe is right in both cases.
+    // 以實測而非平台推定：Linux 機器也可能將 bsdtar 安裝為 `tar`，實測在兩種情況
+    // 下都正確。
+    let stdTarReadsZip: Bool = {
+        guard runTarProcess(selfExe, ["-c", "--zip", "-f", "\(tmp)/zip_probe.zip", "-C", tmp, "src"])
+        else { return false }
+        return runTarProcess(stdTar, ["-t", "-f", "\(tmp)/zip_probe.zip"])
+    }()
+    let unzipTool = toolPath("unzip")
+    let zipTool = toolPath("zip")
+
     if runTarProcess(selfExe, ["-c", "--zip", "-f", zipA, "-C", tmp, "src"]) {
         let out = "\(tmp)/zip_out_std"
         try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
-        let extracted = runTarProcess(stdTar, ["-x", "-f", zipA, "-C", out])
-        check("ZIP: swift_tar create → std tar extract",
-              extracted && compareTrees(srcDir, "\(out)/src"))
+        if stdTarReadsZip {
+            let extracted = runTarProcess(stdTar, ["-x", "-f", zipA, "-C", out])
+            check("ZIP: swift_tar create → std tar extract",
+                  extracted && compareTrees(srcDir, "\(out)/src"))
+        } else if let unzipTool {
+            let extracted = runTarProcess(unzipTool, ["-q", zipA, "-d", out])
+            check("ZIP: swift_tar create → unzip extract",
+                  extracted && compareTrees(srcDir, "\(out)/src"))
+        } else {
+            // Not skipped: without a ZIP-capable peer the environment cannot
+            // verify interoperability at all, which is worth failing over
+            // rather than passing over in silence. Install unzip.
+            // 不跳過：缺少可處理 ZIP 的對象時，此環境根本無法驗證互通性，那應當
+            // 失敗而非默默放行。請安裝 unzip。
+            check("ZIP: swift_tar create → external extract (install unzip)", false)
+        }
     } else {
-        check("ZIP: swift_tar create → std tar extract", false)
+        check("ZIP: swift_tar create → external extract", false)
     }
-    if runTarProcess(stdTar, ["-c", "--format", "zip", "-f", zipB, "-C", tmp, "src"]) {
+
+    if stdTarReadsZip, runTarProcess(stdTar, ["-c", "--format", "zip", "-f", zipB, "-C", tmp, "src"]) {
         let out = "\(tmp)/zip_out_swift"
         try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
         let extracted = runTarProcess(selfExe, ["-x", "-f", zipB, "-C", out])
         check("ZIP: std tar create → swift_tar extract",
               extracted && compareTrees(srcDir, "\(out)/src"))
+    } else if let zipTool, runTarProcess(zipTool, ["-qr", zipB, "src"], cwd: tmp) {
+        let out = "\(tmp)/zip_out_swift"
+        try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
+        let extracted = runTarProcess(selfExe, ["-x", "-f", zipB, "-C", out])
+        check("ZIP: zip create → swift_tar extract",
+              extracted && compareTrees(srcDir, "\(out)/src"))
     } else {
-        check("ZIP: std tar create → swift_tar extract", false)
+        // Not skipped: reading a ZIP that swift_tar did not write is the whole
+        // point of this check, so without a peer that can write one the
+        // environment cannot verify interoperability at all. Fail rather than
+        // pass in silence. Install zip.
+        // 不跳過：讀取非 swift_tar 所寫的 ZIP 正是本檢查的意義，因此缺少能寫 ZIP
+        // 的對象時，此環境根本無法驗證互通性。應當失敗而非默默放行。請安裝 zip。
+        check("ZIP: external create → swift_tar extract (install zip)", false)
     }
 
     let zip64 = "\(tmp)/zip64_by_swift_tar.zip"
     if runTarProcess(selfExe, ["-c", "--zip64", "-f", zip64, "-C", tmp, "src"]),
        let zip64Data = fm.contents(atPath: zip64) {
+        // The ZIP64 end-of-central-directory record is checked regardless of
+        // which peer reads the archive back; only the read side varies.
+        // 不論由哪個對象讀回，ZIP64 的 end-of-central-directory 記錄都會被檢查；
+        // 僅讀取端會因平台而異。
         let signature = Data([0x50, 0x4b, 0x06, 0x06])
         let hasZip64Record = zip64Data.range(of: signature) != nil
         let out = "\(tmp)/zip64_out_std"
         try? fm.createDirectory(atPath: out, withIntermediateDirectories: true)
-        let extracted = runTarProcess(stdTar, ["-x", "-f", zip64, "-C", out])
-        check("ZIP64: record + std tar extract",
-              hasZip64Record && extracted && compareTrees(srcDir, "\(out)/src"))
+        if stdTarReadsZip {
+            let extracted = runTarProcess(stdTar, ["-x", "-f", zip64, "-C", out])
+            check("ZIP64: record + std tar extract",
+                  hasZip64Record && extracted && compareTrees(srcDir, "\(out)/src"))
+        } else if let unzipTool {
+            let extracted = runTarProcess(unzipTool, ["-q", zip64, "-d", out])
+            check("ZIP64: record + unzip extract",
+                  hasZip64Record && extracted && compareTrees(srcDir, "\(out)/src"))
+        } else {
+            check("ZIP64: record + external extract (install unzip)", false)
+        }
     } else {
-        check("ZIP64: record + std tar extract", false)
+        check("ZIP64: record + external extract", false)
     }
 
     // ---- create-side -C plus native ZSTD ----
@@ -3139,6 +3312,67 @@ func runSelfTest(debug: Bool = false) {
               fm.fileExists(atPath: zstdC) && extracted && compareTrees(srcDir, "\(out)/src"))
     } else {
         check("create-side -C: native ZSTD round-trip", false)
+    }
+
+    // ---- stdout extraction and tar-compatibility flags ----
+    // The point of these is that they write nothing. An option this tool does
+    // not know used to be skipped in silence, so `-x --to-stdout` extracted the
+    // whole archive to the current directory while reading as a stream to
+    // nowhere; the Windows benchmark recorded those disk writes as decode
+    // timings. Each case below therefore asserts on the directory being empty,
+    // not merely on the exit status.
+    // ---- 輸出至 stdout 與 tar 相容旗標 ----
+    // 這些旗標的重點在於「不寫入任何東西」。本工具過去會靜默略過不認識的選項，
+    // 使 `-x --to-stdout` 看似串流至空裝置，實則把整個封存解到當前目錄；Windows
+    // benchmark 曾把那些磁碟寫入記為解壓計時。因此以下每項都檢查目錄是否為空，
+    // 而不只看結束碼。
+    let soDir = "\(tmp)/stdout_flags"
+    try? fm.createDirectory(atPath: soDir, withIntermediateDirectories: true)
+    let soArchive = "\(soDir)/a.tar.zst"
+    if runTarProcess(selfExe, ["-c", "--zstd", "-f", soArchive, "-C", tmp, "src"]) {
+        let probeDir = "\(soDir)/probe"
+        // Captured to a real file rather than discarded: this asserts both that
+        // nothing lands on disk and that the members' bytes actually reach
+        // stdout. Discarding via Foundation's nullDevice is not usable here --
+        // a FileHandle write to it fails on Windows, which `print()` swallows
+        // but `write(contentsOf:)` reports, so the child would exit non-zero
+        // for a reason unrelated to what is being tested.
+        // 擷取到真實檔案而非丟棄：如此可同時驗證「磁碟上沒有東西」與「成員位元組
+        // 確實抵達 stdout」。此處不能用 Foundation 的 nullDevice 丟棄——在 Windows
+        // 上對它進行 FileHandle 寫入會失敗，`print()` 會吞掉此錯誤而
+        // `write(contentsOf:)` 會回報，使子行程因與待測項無關的原因回傳非零。
+        let expected = "swift_tar self-test root file\n"
+        for spelling in ["-O", "--to-stdout", "-stream-out"] {
+            try? fm.removeItem(atPath: probeDir)
+            try? fm.createDirectory(atPath: probeDir, withIntermediateDirectories: true)
+            let captured = "\(soDir)/captured\(spelling).bin"
+            let ok = runTarProcessCapturingStdout(selfExe, [spelling, "-x", "-f", soArchive],
+                                                  toFile: captured, cwd: probeDir)
+            let left = (try? fm.contentsOfDirectory(atPath: probeDir))?.count ?? -1
+            let body = (try? String(contentsOfFile: captured, encoding: .utf8)) ?? ""
+            check("\(spelling) with -x: streams to stdout, writes nothing",
+                  ok && left == 0 && body.contains(expected))
+        }
+        // An unknown option must stop the command rather than be skipped.
+        // 未知選項必須中止指令，而非被略過。
+        try? fm.removeItem(atPath: probeDir)
+        try? fm.createDirectory(atPath: probeDir, withIntermediateDirectories: true)
+        let bogusRan = runTarProcess(selfExe, ["--no-such-option", "-x", "-f", soArchive], cwd: probeDir)
+        let bogusLeft = (try? fm.contentsOfDirectory(atPath: probeDir))?.count ?? -1
+        check("unknown option: rejected, nothing extracted", !bogusRan && bogusLeft == 0)
+        // -i and -o exist for tar compatibility and must not break a normal read.
+        // -i 與 -o 為相容 tar 而存在，且不得影響正常讀取。
+        check("-i / -o accepted on a normal list",
+              runTarProcess(selfExe, ["-t", "-i", "-o", "-f", soArchive]))
+        // -stream-in feeds the archive through stdin; -stream-out emits it there.
+        // -stream-in 以 stdin 餵入封存；-stream-out 由該處輸出。
+        let piped = "\(soDir)/piped.tar.zst"
+        check("-stream-out with -c: archive on stdout",
+              runTarProcessCapturingStdout(selfExe, ["-c", "--zstd", "-stream-out", "-C", tmp, "src"],
+                                           toFile: piped)
+              && ((try? fm.attributesOfItem(atPath: piped)[.size] as? Int) ?? 0) > 0)
+    } else {
+        check("stdout flags: create archive", false)
     }
 
 #if os(Windows)
@@ -3208,10 +3442,16 @@ struct SwiftTarMain {
         let args: [String] = {
             var out: [String] = [CommandLine.arguments[0]]
             for (idx, a) in CommandLine.arguments.dropFirst().enumerated() {
-                // Long single-dash flags with "_" (-write_ucrt, -write_foundation)
-                // must not be split into single letters.
-                // 含底線的單槓長旗標（-write_ucrt、-write_foundation）不可拆成單字母。
-                if a.hasPrefix("-") && !a.hasPrefix("--") && a.count > 2 && !a.contains("_") {
+                // Single-dash flags that are words, not clusters of short
+                // options, must survive intact: -write_ucrt and -write_foundation
+                // carry "_", while -stream-in and -stream-out carry "-", which
+                // the rule below does not exempt, so they are named here.
+                // 屬於「單字」而非短旗標叢集的單槓旗標必須保持完整：-write_ucrt 與
+                // -write_foundation 含底線，-stream-in 與 -stream-out 含連字號，
+                // 下方規則並未豁免，故在此列名。
+                let singleDashWords: Set<String> = ["-stream-in", "-stream-out"]
+                if a.hasPrefix("-") && !a.hasPrefix("--") && a.count > 2
+                    && !a.contains("_") && !singleDashWords.contains(a) {
                     for ch in a.dropFirst() { out.append("-\(ch)") }
                 } else if idx == 0 && !a.hasPrefix("-") && a.count > 1 && a.allSatisfy({ $0.isLetter }) {
                     for ch in a { out.append("-\(ch)") }
@@ -3393,7 +3633,43 @@ struct SwiftTarMain {
             let prefix = flag + "="
             return args.first(where: { $0.hasPrefix(prefix) }).map { String($0.dropFirst(prefix.count)) }
         }
-        let archivePath = optValue("-f") ?? "-"
+        // -stream-in / -stream-out name the archive's stream ends. They are
+        // spelled out rather than -si / -so because GNU tar has a real -s
+        // (--same-order), so `-so` there parses as -s -o and `-si` as -s -i:
+        // a GNU tar command using either would silently mean something else
+        // here. bsdtar has no -s, so only the Linux side collides -- which is
+        // reason enough, that being tar's main implementation there.
+        // 使用完整字樣而非 -si / -so，因為 GNU tar 有真正的 -s（--same-order），
+        // 在該處 `-so` 會被解析為 -s -o、`-si` 為 -s -i：使用其一的 GNU tar 指令
+        // 在此會靜默地表示另一件事。bsdtar 無 -s，故只有 Linux 側衝突——而那正是
+        // 該平台的主流 tar 實作，已足以構成理由。
+        let wantStdin  = args.contains("-stream-in")
+        // -O and --to-stdout are how bsdtar and GNU tar spell this; accepting
+        // them means a command written for either tool does here what it says.
+        // -O 與 --to-stdout 是 bsdtar 與 GNU tar 的寫法；接受它們，為那兩個工具
+        // 所寫的指令在此才會如其字面所述地運作。
+        let stdoutAlias = args.contains("-O") || args.contains("--to-stdout")
+        let wantStdout = args.contains("-stream-out") || stdoutAlias
+        let toStdout   = wantStdout && args.contains("-x")
+        // -i keeps reading past the end-of-archive marker; -o is accepted for
+        // tar compatibility and is already this tool's behaviour, since extract
+        // never restores ownership on any platform.
+        // -i 會越過封存結尾標記繼續讀取；-o 為相容 tar 而接受，且本工具本就如此，
+        // 因為解出時在任何平台都不還原擁有者。
+        let ignoreZeros = args.contains("-i") || args.contains("--ignore-zeros")
+        // -O / --to-stdout say where the *output* goes, not where the archive
+        // comes from, so unlike -so they leave -f alone.
+        // -O / --to-stdout 指的是「輸出」去向，而非封存來源，故不像 -so 那樣影響 -f。
+        // -so names where the *output* goes, and what that is depends on the
+        // operation: creating, the output is the archive, so -so means -f -;
+        // extracting, the output is the members' contents, so the archive still
+        // comes from -f. Treating -so as -f - in both cases made `-x -so -f a`
+        // read an empty stdin and emit nothing.
+        // -so 指的是「輸出」去向，而輸出是什麼取決於操作：建立時輸出是封存，故
+        // -so 等同 -f -；解出時輸出是成員內容，封存仍來自 -f。若兩種情況都把 -so
+        // 當成 -f -，`-x -so -f a` 會去讀空的 stdin 而毫無輸出。
+        let archiveFromStream = wantStdin || (args.contains("-stream-out") && !args.contains("-x"))
+        let archivePath = archiveFromStream ? "-" : (optValue("-f") ?? "-")
         let destDir = optValue("-C") ?? ""
 
         // ---- encryption wiring / 加密接線 ----
@@ -3490,13 +3766,60 @@ struct SwiftTarMain {
             return v
         }()
 
+        // Every option this tool accepts. An unrecognised one is an error rather
+        // than something to skip past: silently ignoring it means the command
+        // does something other than what was asked and says nothing about it.
+        // `swift_tar --to-stdout -x -f a.tar.zst > /dev/null` read as a
+        // stream-to-nowhere and in fact extracted the whole archive to the
+        // current directory, because --to-stdout is bsdtar's spelling and this
+        // tool has no such option; the benchmark measured disk writes for
+        // months believing it measured decompression. Use --cat for that.
+        // 本工具接受的所有選項。無法辨識者視為錯誤而非略過：靜默忽略會使指令做出
+        // 與要求不同的事，且毫無提示。`swift_tar --to-stdout -x -f a.tar.zst
+        // > /dev/null` 看起來像是串流到空裝置，實際卻把整個封存解到當前目錄——
+        // 因為 --to-stdout 是 bsdtar 的寫法，本工具並無此選項；benchmark 因此
+        // 長期把磁碟寫入當成解壓縮在量測。該用途請改用 --cat。
+        let knownOptions: Set<String> = [
+            // commands / 命令
+            "-c", "-x", "-t", "-r", "-u", "--delete", "--identify", "--cat",
+            "--encrypt-only", "--decrypt-only",
+            "--rgb1-pack", "--rgb1-info", "--rgb1-raw",
+            // options / 選項
+            "-f", "-C", "-n", "-v", "-h", "--touch", "--keyfile", "--encrypt",
+            "-stream-in", "-stream-out", "-O", "--to-stdout", "-i", "--ignore-zeros",
+            "-o", "--no-same-owner",
+            "--strip-components", "--zstd-level",
+            "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
+            // codecs / 壓縮引擎
+            "--other3-fast", "--other3-optimal", "--bvx3-fast", "--bvx3-optimal",
+            "--gzip", "-z", "--bzip2", "-j", "--xz", "-J", "--lzip", "--zstd",
+            "--lz4", "--zip", "--zip64",
+            // RGB1 fields / RGB1 欄位
+            "--width", "--height", "--lat", "--lng", "--height-m", "--title",
+            "--country", "--creator-email", "--right", "--created-ms",
+            "--tz-offset-min",
+            // handled before this point, listed so they never trip the check
+            // 於此之前已處理，列出以免誤判
+            "-test", "-debug", "--version", "--crypto-selftest",
+        ]
+
         // positional file args (skip flags and their values) / 位置參數（略過旗標與其值）
         var files: [String] = []
         var skipNext = true   // args[0] is the binary path / args[0] 是執行檔路徑
         for a in args {
             if skipNext { skipNext = false; continue }
             if a == "-f" || a == "-C" || a == "-n" || a == "--keyfile" || a == "--strip-components" || a == "--zstd-level" { skipNext = true; continue }
-            if a.hasPrefix("-") { continue }
+            if a.hasPrefix("-") {
+                // "-" alone is the stdin/stdout archive path, not an option.
+                // 單獨的 "-" 是代表 stdin/stdout 的封存路徑，並非選項。
+                if a == "-" { files.append(a); continue }
+                guard knownOptions.contains(a) else {
+                    eprint("swift_tar: unknown option \(a) / 無法辨識的選項 \(a)")
+                    eprint("  run swift_tar -h for the full list / 執行 swift_tar -h 可列出完整選項")
+                    exit(1)
+                }
+                continue
+            }
             files.append(a)
         }
 
@@ -3544,7 +3867,8 @@ struct SwiftTarMain {
                     try runRead(archivePath: archivePath, extract: doExtract,
                                 destDir: destDir, inflight: inflightN, verbose: verbose,
                                 writeBackend: writeBackend, restoreMtime: restoreMtime,
-                                stripComponents: stripComponents)
+                                stripComponents: stripComponents,
+                                toStdout: toStdout, ignoreZeros: ignoreZeros)
                 }
             }
         } catch {
@@ -3944,7 +4268,9 @@ struct SwiftTarMain {
                         inflight: Int, verbose: Bool,
                         writeBackend: WriteBackend = .ucrt,
                         restoreMtime: Bool = true,
-                        stripComponents: Int = 0) throws {
+                        stripComponents: Int = 0,
+                        toStdout: Bool = false,
+                        ignoreZeros: Bool = false) throws {
         let input = try openInput(archivePath)
         defer { if archivePath != "-" { try? input.close() } }
 
@@ -3963,7 +4289,9 @@ struct SwiftTarMain {
         let options = TarReader.Options(extract: extract, destDir: destDir, verbose: verbose,
                                         inflight: inflight, writeBackend: writeBackend,
                                         stripComponents: stripComponents,
-                                        restoreMtime: restoreMtime)
+                                        restoreMtime: restoreMtime,
+                                        toStdout: toStdout,
+                                        ignoreZeros: ignoreZeros)
         try TarReader(input: stream.handle, prefix: stream.prefix).run(options: options)
         group.wait()
         guard result.ok else {

@@ -79,7 +79,7 @@ if errorlevel 1 (
 :: Strip the top-level runCLI() entry point (not valid in multi-file builds)
 set "_temp_cli=%TEMP%\swift_tar_lzfse_cli-%RANDOM%.swift"
 set "_temp_version=%TEMP%\swift_tar_version-%RANDOM%.swift"
-powershell -NoProfile -Command "Get-Content -LiteralPath '..\lzfse-cli.swift' -Encoding UTF8 | Where-Object { $_ -ne 'runCLI()' } | Set-Content -LiteralPath '%_temp_cli%' -Encoding UTF8"
+zsh .\strip_runcli.sh ../lzfse-cli.swift "%_temp_cli%"
 if errorlevel 1 (
     echo [FAIL] failed to strip runCLI^(^) / 剝除 runCLI^(^) 失敗
     pause

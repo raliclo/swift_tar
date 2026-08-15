@@ -3813,7 +3813,13 @@ struct SwiftTarMain {
                 // "-" alone is the stdin/stdout archive path, not an option.
                 // 單獨的 "-" 是代表 stdin/stdout 的封存路徑，並非選項。
                 if a == "-" { files.append(a); continue }
-                guard knownOptions.contains(a) else {
+                // A long option may carry its value inline as --opt=value, so
+                // validate the name alone -- otherwise --strip-components=1 is
+                // rejected while --strip-components 1 is accepted.
+                // 長選項可用 --opt=value 夾帶其值，故僅驗證名稱部分——否則
+                // --strip-components=1 會被拒絕，而 --strip-components 1 卻可通過。
+                let name = a.hasPrefix("--") ? String(a.prefix(while: { $0 != "=" })) : a
+                guard knownOptions.contains(name) else {
                     eprint("swift_tar: unknown option \(a) / 無法辨識的選項 \(a)")
                     eprint("  run swift_tar -h for the full list / 執行 swift_tar -h 可列出完整選項")
                     exit(1)

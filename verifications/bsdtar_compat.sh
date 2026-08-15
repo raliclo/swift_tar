@@ -70,7 +70,18 @@ rm -rf "$LOG_DIR"
 mkdir -p "$LOG_DIR"
 exec > >(tee "$OUTPUT_TXT") 2>&1
 
-note() { print -r -- "$*"; }
+# printf, not print: printf is a builtin in both bash and zsh, so it never does a
+# PATH lookup. `print` is zsh-only -- under bash it falls through to PATH, and on
+# Windows that is System32\print.exe, the printer, which writes "Unable to
+# initialize device PRN" to stdout and exits 0. This file is .sh, and this script
+# is the one that runs against Windows, so the hazard is not hypothetical here.
+# `printf '%s\n'` is the exact equivalent of `print -r --`: no escape processing.
+# 使用 printf 而非 print：printf 在 bash 與 zsh 皆為 builtin，不做 PATH 查找。
+# `print` 只是 zsh builtin——bash 下會落到 PATH，於 Windows 即 System32\print.exe
+# （印表機），會把「Unable to initialize device PRN」寫到 stdout 並回傳 0。本檔為
+# .sh，且正是對 Windows 執行的腳本，此風險並非假想。`printf '%s\n'` 與
+# `print -r --` 完全等價：皆不做跳脫處理。
+note() { printf '%s\n' "$*"; }
 
 pass() {
     CASE_COUNT=$((CASE_COUNT + 1))
@@ -115,7 +126,7 @@ cmd_path() {
     if [[ "$p" == .* && "$p" != .\\* ]]; then
         p=".\\$p"
     fi
-    print -r -- "$p"
+    printf '%s\n' "$p"
 }
 
 cmd_arg() {
@@ -123,7 +134,7 @@ cmd_arg() {
     # 旗標與磁碟機絕對路徑可直接交給 cmd。
     local a="$1"
     if [[ "$a" == -* || "$a" == [A-Za-z]:\\* ]]; then
-        print -r -- "$a"
+        printf '%s\n' "$a"
     else
         cmd_path "$a"
     fi
@@ -214,11 +225,11 @@ ensure_tools() {
 make_fixture() {
     local src="$1"
     mkdir -p "$src/sub/empty-dir"
-    print -r -- "root text" >"$src/root.txt"
-    print -r -- "nested text" >"$src/sub/nested.txt"
+    printf '%s\n' "root text" >"$src/root.txt"
+    printf '%s\n' "nested text" >"$src/sub/nested.txt"
     : >"$src/empty-file.txt"
     printf '\000\001\002binary\377\n' >"$src/binary.bin"
-    print -r -- "long pax filename" >"$src/long-name-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz.txt"
+    printf '%s\n' "long pax filename" >"$src/long-name-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz-abcdefghijklmnopqrstuvwxyz.txt"
 
     if [[ "${EXTENDED_ENTRIES:-0}" == "1" ]]; then
         ln "$src/root.txt" "$src/hardlink-to-root.txt" 2>/dev/null || skip "hardlink fixture could not be created"
@@ -231,7 +242,7 @@ make_fixture() {
 make_unicode_fixture() {
     local src="$1"
     mkdir -p "$src/unicode-資料夾"
-    print -r -- "unicode filename" >"$src/unicode-資料夾/檔案.txt"
+    printf '%s\n' "unicode filename" >"$src/unicode-資料夾/檔案.txt"
 }
 
 hash_file() {

@@ -44,7 +44,18 @@ set -euo pipefail
 cd "$(dirname "$0")"
 . ./platform.sh
 
-die() { print -u2 -- "[swift_tar-linux] ERROR / 錯誤：$*"; exit 1; }
+# printf, not print: printf is a builtin in both bash and zsh, so it never does
+# a PATH lookup and behaves the same whichever shell runs the line. `print` is a
+# zsh builtin only -- under bash it falls through to PATH, and on Windows that
+# resolves to System32\print.exe, the printer, which writes "Unable to
+# initialize device PRN" to stdout and exits 0. This file declares zsh, but the
+# extension says .sh and the repo already runs some .sh files with `sh`.
+# 使用 printf 而非 print：printf 在 bash 與 zsh 皆為 builtin，不會做 PATH 查找，
+# 由哪個 shell 執行行為都相同。`print` 只是 zsh 的 builtin——在 bash 下會落到 PATH，
+# 於 Windows 解析為 System32\print.exe（印表機），它會把「Unable to initialize
+# device PRN」寫到 stdout 並回傳 0。本檔雖宣告 zsh，但副檔名是 .sh，且本程式庫
+# 已有以 `sh` 執行 .sh 檔的先例。
+die() { printf '%s\n' "[swift_tar-linux] ERROR / 錯誤：$*" >&2; exit 1; }
 # log_msg, not log: `log` is a zsh builtin. A function shadows it only from the
 # point of definition, so a call placed above this line silently resolves to the
 # builtin, which rejects any argument with "zsh:log:1: too many arguments" and
@@ -56,7 +67,7 @@ die() { print -u2 -- "[swift_tar-linux] ERROR / 錯誤：$*"; exit 1; }
 # 「zsh:log:1: too many arguments」拒絕並回傳 1——在上方的 `set -e` 下，這會讓建置
 # 中止，而訊息指向 zsh 而非「函式尚未定義」。目前並無任何提前呼叫；此處改名是為了
 # 移除該陷阱，而不是替它寫註解。
-log_msg() { print -- "[swift_tar-linux] $*"; }
+log_msg() { printf '%s\n' "[swift_tar-linux] $*"; }
 
 # The appliance layout first, then the system one. Probed rather than assumed so
 # the same script serves both without a flag.

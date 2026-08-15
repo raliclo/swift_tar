@@ -54,12 +54,27 @@ else ok "public help lists no LZFSE codec"; fi
 # fall back to LZVN). / 夠大的可壓縮內容以觸發真正的 bvx3 區塊（小輸入會退回 LZVN）。
 seq 1 500 > "$TMP/f.txt"
 
-# 3) LZFSE encode flags are unavailable: --bvx3-fast must NOT yield an LZFSE
-#    archive (falls back to plain tar). / LZFSE encode 旗標不可用，退回純 tar。
-"$PUB" -c --bvx3-fast -f "$TMP/pub.bin" -C "$TMP" f.txt
-fmt="$("$FULL" --identify -f "$TMP/pub.bin" | sed 's/^.*: //')"   # format field only, not the path
-if echo "$fmt" | grep -qiE 'lzfse|bvx'; then bad "public --bvx3-fast produced an LZFSE archive: $fmt"
-else ok "public --bvx3-fast produced no LZFSE archive ($fmt)"; fi
+# 3) LZFSE encode flags are unavailable, and the public build says so instead of
+#    quietly writing something else. This used to assert a silent fall back to
+#    plain tar: the caller asked for --bvx3-fast, got a plain tar, and nothing
+#    reported the substitution. That is the same shape as the --to-stdout defect
+#    that motivated option validation -- a command doing something other than
+#    what was asked, in silence. The flag names are not compiled into this build
+#    at all (their absence is what check 2 above verifies with `strings`), so it
+#    rejects them as unknown, which is both correct and the only outcome that
+#    keeps the private engine's names out of the public binary.
+# 3) LZFSE encode 旗標不可用，且公開版會明說，而非默默寫出別的東西。此處原本斷言的是
+#    「靜默退回純 tar」：呼叫端要求 --bvx3-fast、拿到純 tar，卻沒有任何地方回報這個替換。
+#    那與促成選項驗證的 --to-stdout 缺陷是同一種形狀——指令做了與要求不同的事，且沉默。
+#    這些旗標名稱根本沒有編進本版本（上方檢查 2 正是以 `strings` 驗證其不存在），故它會
+#    以「未知選項」拒絕；這既正確，也是唯一能讓私有引擎名稱不出現在公開執行檔中的結果。
+if "$PUB" -c --bvx3-fast -f "$TMP/pub.bin" -C "$TMP" f.txt >/dev/null 2>&1; then
+    bad "public --bvx3-fast was accepted; it should be rejected as unknown"
+else
+    ok "public --bvx3-fast is rejected rather than silently substituted"
+fi
+[ -s "$TMP/pub.bin" ] && bad "public --bvx3-fast wrote an archive despite failing" \
+                      || ok "public --bvx3-fast wrote nothing"
 
 # 4) public build cannot recover contents from an LZFSE archive made by the full
 #    build. Judge by content recovery, not exit code (garbage may read as an

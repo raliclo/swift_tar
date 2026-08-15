@@ -184,6 +184,46 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Negative geo values must survive the CLI. Combined-short-flag expansion used
+# to split any single-dash token longer than two characters, so --lat -33.8688
+# became -3 -3 -. -8 -6 -8 -8 and the container was written with latitude
+# -3.0000000, exit 0, no message. Southern latitudes, western longitudes,
+# below-sea-level heights, pre-1970 timestamps and every Americas timezone were
+# affected. Nothing covered negative values, which is why it survived.
+# 負數地理值必須能通過 CLI。combined short flag 展開原本會拆開任何長度超過兩字元的
+# 單槓詞元，於是 --lat -33.8688 變成 -3 -3 -. -8 -6 -8 -8，容器就以緯度 -3.0000000
+# 寫出、結束碼 0、毫無訊息。南半球緯度、西經、海平面以下高度、1970 年前時間戳與整個
+# 美洲的時區皆受影響。先前沒有任何測試涵蓋負值，這正是它得以存活的原因。
+NEG="$TMP/neg.rgb1"
+"$ST" --rgb1-pack --width 3 --height 2 \
+      --lat -33.8688 --lng -151.2093 --height-m -430.5 \
+      --title "negative geo" --country AU --creator-email a@b.co --right R \
+      --created-ms -1000000000 --tz-offset-min -480 \
+      -f "$NEG" "$RAW" >/dev/null 2>&1
+
+neg_field() { "$ST" --rgb1-info -f "$NEG" | grep -i "^$1=" | cut -d= -f2; }
+for spec in "latitude:-33.8688000" "longitude:-151.2093000" "height_m:-430.500" \
+            "created_unix_ms:-1000000000" "timezone_offset_minutes:-480"; do
+  key="${spec%%:*}"; want="${spec##*:}"; got="$(neg_field "$key")"
+  if [ "$got" = "$want" ]; then
+    ok "negative $key survives the CLI ($got)"
+  else
+    bad "negative $key mangled: got $got, want $want"
+  fi
+done
+
+# The fix must not stop -czf and czf from expanding, which is what the
+# expansion exists for.
+# 該修正不得使 -czf 與 czf 停止展開，那正是展開機制存在的理由。
+for form in "-czf" "czf"; do
+  arc="$TMP/comb_$form.tar.gz"
+  if "$ST" "$form" "$arc" -C "$TMP" "$(basename "$RGB1")" >/dev/null 2>&1 && [ -s "$arc" ]; then
+    ok "combined flags still expand ($form)"
+  else
+    bad "combined flags broken ($form)"
+  fi
+done
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

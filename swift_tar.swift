@@ -3450,8 +3450,31 @@ struct SwiftTarMain {
                 // -write_foundation 含底線，-stream-in 與 -stream-out 含連字號，
                 // 下方規則並未豁免，故在此列名。
                 let singleDashWords: Set<String> = ["-stream-in", "-stream-out"]
+                // A negative number is a value, never a cluster of short options.
+                // Without this, --lat -33.8688 expanded to -3 -3 -. -8 -6 -8 -8
+                // and optValue("--lat") read back "-3": the container was written
+                // with latitude -3.0000000 and exited 0. Every negative-valued
+                // field was affected -- southern latitudes, western longitudes,
+                // below-sea-level heights, pre-1970 timestamps, and the whole of
+                // the Americas' timezone offsets -- silently, in a format meant
+                // to be archived.
+                // 負數是「值」，絕不會是短旗標叢集。若無此判斷，--lat -33.8688 會被展開為
+                // -3 -3 -. -8 -6 -8 -8，而 optValue("--lat") 讀回 "-3"：容器就以緯度
+                // -3.0000000 寫出並以 0 結束。所有可為負值的欄位皆受影響——南半球緯度、
+                // 西經、海平面以下高度、1970 年前的時間戳，以及整個美洲的時區偏移
+                // ——而且是靜默發生在一個用於長期保存的格式上。
+                //
+                // isFinite matters: Double("-inf") and Double("-nan") both parse,
+                // and -inf is a legitimate cluster here (-i -n -f). No option
+                // value is legitimately infinite, so only finite numbers are
+                // treated as values.
+                // isFinite 是必要的：Double("-inf") 與 Double("-nan") 都能解析，而 -inf
+                // 在此確實是合法叢集（-i -n -f）。沒有任何選項的值會是無限大，故僅有限數
+                // 才視為值。
+                let isNegativeNumber: Bool = { if let d = Double(a) { return d.isFinite }; return false }()
                 if a.hasPrefix("-") && !a.hasPrefix("--") && a.count > 2
-                    && !a.contains("_") && !singleDashWords.contains(a) {
+                    && !a.contains("_") && !singleDashWords.contains(a)
+                    && !isNegativeNumber {
                     for ch in a.dropFirst() { out.append("-\(ch)") }
                 } else if idx == 0 && !a.hasPrefix("-") && a.count > 1 && a.allSatisfy({ $0.isLetter }) {
                     for ch in a { out.append("-\(ch)") }
@@ -3791,7 +3814,6 @@ struct SwiftTarMain {
             "--strip-components", "--zstd-level",
             "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
             // codecs / 壓縮引擎
-            "--other3-fast", "--other3-optimal", "--bvx3-fast", "--bvx3-optimal",
             "--gzip", "-z", "--bzip2", "-j", "--xz", "-J", "--lzip", "--zstd",
             "--lz4", "--zip", "--zip64",
             // RGB1 fields / RGB1 欄位
@@ -3802,6 +3824,24 @@ struct SwiftTarMain {
             // 於此之前已處理，列出以免誤判
             "-test", "-debug", "--version", "--crypto-selftest",
         ]
+        // The LZFSE flag names are compiled in only when the engine is. Listing
+        // them unconditionally put the literal "other3" into the --no-lzfse
+        // binary, which test_no_lzfse.sh checks for with `strings`: the public
+        // build is meant to carry no trace of the private engine, and the option
+        // table is a trace. Rejecting them there is also the right behaviour --
+        // that build genuinely cannot do it, so accepting the flag and ignoring
+        // it would be the silent-mismatch this whole check exists to stop.
+        // LZFSE 的旗標名稱僅在該引擎被編入時才一併編入。先前無條件列出，會使字串
+        // 「other3」出現在 --no-lzfse 的執行檔中，而 test_no_lzfse.sh 正是以 `strings`
+        // 檢查此事：公開版本不應留下私有引擎的任何痕跡，而選項表就是一種痕跡。在該版本
+        // 拒絕這些旗標也是正確行為——它確實做不到，接受後忽略正是本檢查要杜絕的靜默不符。
+        #if !EXCLUDE_LZFSE
+        let lzfseOptions: Set<String> = [
+            "--other3-fast", "--other3-optimal", "--bvx3-fast", "--bvx3-optimal",
+        ]
+        #else
+        let lzfseOptions: Set<String> = []
+        #endif
 
         // positional file args (skip flags and their values) / 位置參數（略過旗標與其值）
         var files: [String] = []
@@ -3819,7 +3859,7 @@ struct SwiftTarMain {
                 // 長選項可用 --opt=value 夾帶其值，故僅驗證名稱部分——否則
                 // --strip-components=1 會被拒絕，而 --strip-components 1 卻可通過。
                 let name = a.hasPrefix("--") ? String(a.prefix(while: { $0 != "=" })) : a
-                guard knownOptions.contains(name) else {
+                guard knownOptions.contains(name) || lzfseOptions.contains(name) else {
                     eprint("swift_tar: unknown option \(a) / 無法辨識的選項 \(a)")
                     eprint("  run swift_tar -h for the full list / 執行 swift_tar -h 可列出完整選項")
                     exit(1)

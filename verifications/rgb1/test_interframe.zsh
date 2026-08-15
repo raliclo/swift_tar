@@ -59,7 +59,6 @@ done
 set -- "${_args[@]}"
 
 HERE="${0:A:h}"
-DOE="$HERE/swift_tar_DOE"
 OUTPUT="$HERE/test_interframe_output.txt"
 DEFAULT_SRC="/Volumes/Windows/proj_Win/swift-cross-ui/testapp/output/20260803 回到神面前 讓神來醫治 [恩典365 - 時代先知 ： 耶利米 系列] [d-t779PY_S0].webm"
 SRC="${1:-$DEFAULT_SRC}"
@@ -70,7 +69,6 @@ for tool in ffmpeg ffprobe zstd python3; do
     command -v "$tool" >/dev/null || { print -ru2 -- "[Error] $tool required / 需要 $tool"; exit 1 }
 done
 python3 -c "import numpy" 2>/dev/null || { print -ru2 -- "[Error] python3 numpy required / 需要 numpy"; exit 1 }
-[[ -x "$DOE" ]] || { print -ru2 -- "[Error] build swift_tar_DOE first / 請先建置 swift_tar_DOE"; exit 1 }
 [[ -f "$SRC" ]] || { print -ru2 -- "[Error] source not found: $SRC"; exit 1 }
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/interframe.XXXXXX")"

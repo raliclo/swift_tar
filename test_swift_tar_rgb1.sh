@@ -170,7 +170,11 @@ emit() { echo "$1"; echo "$1" >> "$RESULTS"; }
 # （make_consecutive_corpus.zsh）。
 BIGSRC=""
 for d in "$HERE/verifications/rgb1/sample_consecutive" "$HERE/verifications/rgb1/sample"; do
-  for f in "$d"/*.rgb1; do
+  # (N) null-glob: neither sample dir is required to exist, and zsh's default
+  # NOMATCH would abort here rather than fall through to the no-corpus path.
+  # (N) null-glob：兩個 sample 目錄都非必要存在，而 zsh 預設的 NOMATCH 會在此
+  # 中止，走不到「無語料」的路徑。
+  for f in "$d"/*.rgb1(N); do
     [ -f "$f" ] || continue
     BIGSRC="$TMP/bigsrc"; mkdir -p "$BIGSRC"
     cp "$f" "$BIGSRC/big.rgb1"

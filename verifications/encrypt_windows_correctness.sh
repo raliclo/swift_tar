@@ -17,11 +17,26 @@ if [ ! -x "$SWIFT_TAR_BIN" ]; then
     exit 1
 fi
 
+# The temp dir and its cleanup live at file scope, not inside run_test. They were
+# `local tmp` plus a `cleanup()` defined inside the function, with `trap cleanup
+# EXIT` armed there: the trap fires after run_test has returned, when the `local`
+# is already out of scope, so `set -u` aborted the cleanup with
+# "cleanup: tmp: parameter not set" and the script exited 1 -- immediately after
+# printing "SUMMARY: PASS=6 FAIL=0". Summary and exit code disagreed, so any gate
+# reading the exit code saw a failure the output denied, and the temp dir was
+# never removed either.
+# 暫存目錄與其清理置於檔案作用域，而非 run_test 之內。原本是函式內的 `local tmp` 加上
+# 同樣定義於函式內的 `cleanup()`，並在該處掛上 `trap cleanup EXIT`：該 trap 在 run_test
+# 返回之後才觸發，此時 `local` 已離開作用域，`set -u` 於是以
+# 「cleanup: tmp: parameter not set」中止清理，腳本回傳 1——而且就發生在印出
+# 「SUMMARY: PASS=6 FAIL=0」的下一行。摘要與離開碼互相矛盾，任何以離開碼判定的閘門
+# 都會得到與輸出相反的結論，且暫存目錄也不會被刪除。
+tmp=""
+cleanup() { [ -n "$tmp" ] && rm -rf "$tmp"; }
+trap cleanup EXIT
+
 run_test() {
-    local tmp
     tmp="$(mktemp -d /tmp/swift_tar_win_crypto.XXXXXX)"
-    cleanup() { rm -rf "$tmp"; }
-    trap cleanup EXIT
 
     mkdir -p "$tmp/src"
     printf 'alpha\n' > "$tmp/src/a.txt"
@@ -34,7 +49,11 @@ run_test() {
 # test_encrypt.sh。一張 1080p 的 RGB1 payload 為 6,220,800 B，跨過 4 MiB 分塊邊界並
 # 留下不足一塊的尾段。
 _blob_src=""
-for _f in "$SCRIPT_DIR"/rgb1/sample_consecutive/*.rgb1; do
+# (N) null-glob: without it zsh's default NOMATCH aborts before the labelled
+# random fallback below can be chosen.
+# (N) null-glob：若無此qualifier，zsh 預設的 NOMATCH 會在選到下方「明確標示的
+# 隨機備援」之前就中止。
+for _f in "$SCRIPT_DIR"/rgb1/sample_consecutive/*.rgb1(N); do
   [ -f "$_f" ] || continue
   tail -c +877 "$_f" > "$tmp/src/blob.bin"
   _blob_src="sampled video frame ${_f##*/}"

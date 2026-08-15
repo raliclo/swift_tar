@@ -220,12 +220,32 @@ say "因此本案例正是用來抓「退化為 umask 預設」的回歸。"
 say ""
 out=$B/perm; mkdir -p $out
 $ST -x -n 8 -f $B/corpus.tgz -C $out >/dev/null 2>&1
-for spec in "./a.txt:755" "./sub/b.txt:600" "./sub/deep/c.txt:644"; do
-  f=${spec%%:*} want=${spec##*:}
-  got=$(modeof $out/$f)
-  say "  $f -> $got (want $want)"
-  check "mode preserved: $f" $([[ $got == $want ]] && print 1 || print 0)
-done
+# NTFS has no POSIX mode bits, and MSYS reports 644 for every regular file. Run
+# unguarded on Windows this reported two failures -- 755 and 600 both read back
+# as 644 -- while the one case that happens to want 644 passed, which is the
+# giveaway that the filesystem is answering rather than swift_tar. Skipping is
+# the same treatment the unwritable-destination case below already gets when its
+# precondition cannot be met; reporting a platform limit as a defect trains
+# people to ignore the report.
+# NTFS 沒有 POSIX mode bits，MSYS 對所有一般檔案一律回報 644。在 Windows 上未加守門
+# 執行會產生兩個失敗——755 與 600 都讀回 644——而唯一「想要 644」的案例卻通過，這正是
+# 「回答的是檔案系統而非 swift_tar」的破綻。此處跳過，與下方「不可寫目的地」案例在前提
+# 不成立時的處理一致；把平台限制報成缺陷，只會訓練人忽略報告。
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    for spec in "./a.txt" "./sub/b.txt" "./sub/deep/c.txt"; do
+      check "mode preserved: $spec" 1 "SKIPPED -- no POSIX mode bits on this filesystem"
+    done
+    ;;
+  *)
+    for spec in "./a.txt:755" "./sub/b.txt:600" "./sub/deep/c.txt:644"; do
+      f=${spec%%:*} want=${spec##*:}
+      got=$(modeof $out/$f)
+      say "  $f -> $got (want $want)"
+      check "mode preserved: $f" $([[ $got == $want ]] && print 1 || print 0)
+    done
+    ;;
+esac
 
 # --- 3. links ---------------------------------------------------------------
 say ""

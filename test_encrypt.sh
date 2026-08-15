@@ -85,7 +85,16 @@ printf 'bravo\n' > "$SRC/b.txt"
 # 正是此處所需。該語料 285 MB 且不入版，故在乾淨 clone 上以「明確標示的隨機資料」備援，
 # 使分塊路徑的覆蓋率不依賴某個磁碟區是否掛載。
 BLOB_SRC=""
-for f in "$HERE"/verifications/rgb1/sample_consecutive/*.rgb1; do
+# (N) is the zsh null-glob qualifier: an unmatched pattern expands to nothing
+# instead of aborting the script. Under bash the bare glob was left as a literal
+# and the `[ -f ]` below rejected it, but zsh's default NOMATCH errors out first,
+# so the corpus-absent fallback would never be reached on macOS or Linux. This
+# machine hides it -- the scoop zsh's .zshenv does `unsetopt nomatch`.
+# (N) 為 zsh 的 null-glob qualifier：未匹配時展開為空，而非中止腳本。在 bash 下
+# 未匹配的 glob 會原樣保留為字面值、由下方 `[ -f ]` 擋掉；但 zsh 預設的 NOMATCH
+# 會搶先報錯，導致 macOS/Linux 上根本走不到「語料不存在」的 fallback。本機看不出
+# 問題——scoop zsh 的 .zshenv 設了 `unsetopt nomatch`。
+for f in "$HERE"/verifications/rgb1/sample_consecutive/*.rgb1(N); do
   [ -f "$f" ] || continue
   tail -c +877 "$f" > "$SRC/blob.bin"
   BLOB_SRC="sampled video frame ${f##*/}"

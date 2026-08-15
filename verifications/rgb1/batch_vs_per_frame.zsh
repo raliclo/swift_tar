@@ -26,6 +26,23 @@
 # =====================================================================
 set -euo pipefail
 
+# --dry-run validates and reports without writing the committed record. Testing
+# the sampling guards used to mean running the script for real, and one such
+# test overwrote this file's record with data from t=5 s -- the opening the
+# guards exist to keep out. A check that damages what it checks is not a check.
+# --dry-run 只驗證並回報，不寫入入版紀錄。先前要測試取樣守門就得真的跑一次，而其中一次
+# 測試把本檔的紀錄覆蓋成 t=5 秒的資料——正是那些守門要擋掉的片頭。一個會破壞其檢查對象
+# 的檢查，不算檢查。
+DRY_RUN=0
+_args=()
+for _a in "$@"; do
+    case "$_a" in
+        --dry-run) DRY_RUN=1 ;;
+        *)         _args+=("$_a") ;;
+    esac
+done
+set -- "${_args[@]}"
+
 HERE="${0:A:h}"
 OUTPUT="$HERE/batch_vs_per_frame_output.txt"
 DEFAULT_SRC="/Volumes/Windows/proj_Win/swift-cross-ui/testapp/output/20260803 回到神面前 讓神來醫治 [恩典365 - 時代先知 ： 耶利米 系列] [d-t779PY_S0].webm"
@@ -39,12 +56,34 @@ done
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/batchdoe.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT INT TERM
+if (( DRY_RUN )); then
+    print -- "[dry-run] would write / 將寫入: $OUTPUT"
+    print -- "[dry-run] start / 起點: ${MID}s   frames / 格數: ${FRAMES}"
+    print -- "[dry-run] validation passed; nothing written / 驗證通過，未寫入任何檔案"
+    exit 0
+fi
+
 exec > >(tee "$OUTPUT") 2>&1
 
 W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width  -of csv=p=0 "$SRC")
 H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$SRC")
 DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$SRC")
-MID=$(python3 -c "print(f'{float('$DUR')/2:.1f}')")
+# Never start inside the opening 30 s, and enforce it hardest when the selection
+# is small. A clip's first seconds are where fades, title cards and static holds
+# live: the 8 frames taken at t=0 that produced the 122 Mbps bitrate figure
+# compressed to 7% of raw where real content gives 50%. A large sample dilutes
+# that; a sample under 10 frames is dominated by it.
+# 起點一律不落在片頭 30 秒內，且在選取格數少時檢查最嚴。影片開頭正是淡入、標題卡與
+# 靜止畫面所在：先前產出 122 Mbps 那個數字的 t=0 八格，壓縮到原始的 7%，而真實內容為
+# 50%。樣本大時該影響會被稀釋，樣本少於 10 格時則由它主導。
+MIN_START=30
+MID=$(python3 -c "print(f'{max(float('$DUR')/2, $MIN_START):.1f}')")
+(( $(python3 -c "print(1 if float('$MID') >= $MIN_START or $FRAMES >= 10 else 0)") )) || {
+    print -ru2 -- "[Error] MID=${MID}s is inside the opening ${MIN_START}s with only $FRAMES frames"
+    print -ru2 -- "        起點 ${MID} 秒落在片頭 ${MIN_START} 秒內，且僅取 $FRAMES 格"
+    exit 1
+}
+
 
 echo "[Info] date / 日期: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 echo "[Info] source / 來源: ${SRC:t}  ${W}x${H}"

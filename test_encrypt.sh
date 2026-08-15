@@ -74,9 +74,28 @@ must_fail_fast() { local desc="$1"; shift
 SRC="$TMP/src"; mkdir -p "$SRC"
 printf 'alpha\n' > "$SRC/a.txt"
 printf 'bravo\n' > "$SRC/b.txt"
-# >4 MiB so the chunked AEAD path and a partial final chunk are both exercised
-# 超過 4 MiB，同時涵蓋分塊 AEAD 路徑與不足一塊的尾段
-head -c 5000000 /dev/urandom > "$SRC/blob.bin"
+# >4 MiB so the chunked AEAD path and a partial final chunk are both exercised.
+# Real image content when the sampled corpus is present: one 1080p RGB1 payload
+# is 6,220,800 B, which crosses the 4 MiB chunk boundary and leaves a partial
+# tail, exactly what this needs. The corpus is 285 MB and not in the repository,
+# so a labelled random fallback keeps the AEAD path covered on a fresh clone --
+# coverage of the chunking must not depend on a volume being mounted.
+# 超過 4 MiB，同時涵蓋分塊 AEAD 路徑與不足一塊的尾段。取樣語料存在時使用真實影像內容：
+# 一張 1080p 的 RGB1 payload 為 6,220,800 B，跨過 4 MiB 分塊邊界並留下不足一塊的尾段，
+# 正是此處所需。該語料 285 MB 且不入版，故在乾淨 clone 上以「明確標示的隨機資料」備援，
+# 使分塊路徑的覆蓋率不依賴某個磁碟區是否掛載。
+BLOB_SRC=""
+for f in "$HERE"/verifications/rgb1/sample_consecutive/*.rgb1; do
+  [ -f "$f" ] || continue
+  tail -c +877 "$f" > "$SRC/blob.bin"
+  BLOB_SRC="sampled video frame ${f##*/}"
+  break
+done
+if [ -z "$BLOB_SRC" ]; then
+  head -c 5000000 /dev/urandom > "$SRC/blob.bin"
+  BLOB_SRC="random (no sampled corpus; run verifications/rgb1/make_consecutive_corpus.zsh)"
+fi
+echo "[Info] blob: $BLOB_SRC ($(wc -c < "$SRC/blob.bin" | tr -d ' ') B)"
 KEY="$TMP/key"; head -c 64 /dev/urandom > "$KEY"
 WRONG="$TMP/wrongkey"; head -c 64 /dev/urandom > "$WRONG"
 

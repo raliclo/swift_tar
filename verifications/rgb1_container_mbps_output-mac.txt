@@ -1,20 +1,20 @@
-[Info] date: 2026-08-15 01:19:49 CST
+[Info] date: 2026-08-15 08:07:17 CST
 [Info] os: macOS 27.0 (26A5406e)
 [Info] host: Darwin 27.0.0 arm64
 [Info] swift_tar: /Users/raliclo/proj/lzfse2/swift_tar/release/swift_tar
-[Info] version: swift_tar 20260815-001813
+[Info] version: swift_tar 20260815-012124
 [Info] corpus: sampled video frame verifications/rgb1/sample_consecutive/f000.rgb1 (6221676 B incl. 876 B header)
 [Info] MB/s = container bytes / time (MB = 10^6); times are the mean of 3 runs
 
 == RGB1 container: size / time / throughput by codec ==
 codec                 size(B)   ratio  create(ms)  cr(MB/s) extract(ms)  ex(MB/s)
 ---------------- ------------ ------- ----------- --------- ----------- ---------
-plain                 6223360   1.000        12.4     501.7        13.3     467.8
-gzip                  2995865   0.481        67.9      91.6        22.8     272.9
-bzip2                 2241327   0.360       188.0      33.1       119.7      52.0
-xz                    2187888   0.352       539.0      11.5        82.0      75.9
-zstd                  2756712   0.443        49.8     124.9        19.9     312.6
-lz4                   4032808   0.648        16.2     384.1        17.8     349.5
-zip                   2994822   0.481        99.2      62.7        19.9     312.6
-bvx3-optimal          2591939   0.416       653.1       9.5        26.2     237.5
-other3-optimal        2819731   0.453       473.8      13.1        21.5     289.4
+plain                 6223360   1.000        12.6     493.8        13.3     467.8
+gzip                  2995865   0.481        67.4      92.3        22.8     272.9
+bzip2                 2241342   0.360       188.9      32.9       115.5      53.9
+xz                    2187936   0.352       570.1      10.9        82.0      75.9
+zstd                  2756712   0.443        50.5     123.2        20.0     311.1
+lz4                   4032808   0.648        16.1     386.4        17.5     355.5
+zip                   2994822   0.481        98.7      63.0        19.3     322.4
+bvx3-optimal          2591939   0.416       673.4       9.2        24.7     251.9
+other3-optimal        2819731   0.453       480.5      12.9        22.7     274.1

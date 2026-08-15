@@ -41,15 +41,31 @@ print -- "[Info] date: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 print -- "[Info] os: $(command -v sw_vers >/dev/null 2>&1 && echo "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))" || uname -sr)"
 print -- "[Info] swift_tar_DOE: $DOE"
 
-# Two frames of deliberately different sizes / 兩格刻意不同尺寸
-mk() { # w h out
-    head -c $(( $1 * $2 * 3 )) /dev/urandom > "$TMP/raw"
-    "$ST" --rgb1-pack --width "$1" --height "$2" --lat 0 --lng 0 --height-m 0 \
-          --title t --country TW --creator-email a@b.co --right R --created-ms 0 \
-          -f "$3" "$TMP/raw"
+# Real image content, from committed fixtures. These were /dev/urandom frames
+# until 2026-08-15, and noise is the one input on which this file's own size
+# discriminator cannot work: zstd stores incompressible data verbatim, so the
+# delta of two independent noise frames compresses to exactly the same length as
+# the frames themselves. Real frames compress, so a delta that ran and one that
+# did not are separable -- which is also why the reviewer's original suggestion
+# (compare two different frames) works now and did not before.
+# 使用真實影像內容，取自入版的 fixture。這些在 2026-08-15 之前是 /dev/urandom 影格，
+# 而雜訊正是本檔自身的體積判別式唯一失效的輸入：zstd 對不可壓縮資料原樣儲存，故兩張
+# 獨立雜訊影格的差分，壓縮後長度與影格本身完全相同。真實影格可壓縮，因此「差分有跑」
+# 與「沒跑」得以區分——這也正是該 review 原本的建議（比對兩張不同影格）現在可行、
+# 當初卻不可行的原因。
+#
+# Committed rather than derived at run time: the 285 MB sampled corpus is not in
+# the repository, and a correctness test must not depend on a volume being
+# mounted. Four frames at 3-10 KB each.
+# 選擇入版而非執行時產生：285 MB 的取樣語料不入版，而正確性測試不應依賴某個磁碟區
+# 是否掛載。四張影格各 3-10 KB。
+FIXTURES="$HERE/fixtures"
+[[ -d "$FIXTURES" ]] || { print -ru2 -- "no fixtures at $FIXTURES / 找不到 fixture"; exit 1 }
+mk() { # fixture-name out
+    cp "$FIXTURES/$1" "$2" || { print -ru2 -- "missing fixture $1 / 缺少 fixture"; exit 1 }
 }
-mk 64 48 "$TMP/big.rgb1"
-mk 32 24 "$TMP/small.rgb1"
+mk a_64x48.rgb1    "$TMP/big.rgb1"
+mk small_32x24.rgb1 "$TMP/small.rgb1"
 
 # Either order must succeed. The delta is simply skipped, exactly as the encode
 # side already does, so --verify's round-trip check has to pass.
@@ -88,8 +104,8 @@ fi
 # 使差分的效果無可爭辯：全零殘差壓縮後只剩原雜訊的一小部分。此處不能改用兩張
 # *獨立* 的雜訊影格——zstd 對不可壓縮的輸入是原樣儲存，故兩張雜訊影格的差分雖是
 # 不同的位元組序列，壓縮後大小卻完全相同。
-mk 64 48 "$TMP/eq1.rgb1"
-cp "$TMP/eq1.rgb1" "$TMP/eq2.rgb1"
+mk a_64x48.rgb1 "$TMP/eq1.rgb1"
+mk b_64x48.rgb1 "$TMP/eq2.rgb1"
 if run "$TMP/eq1.rgb1" "$TMP/eq2.rgb1"; then
     grep -q "round-trip verified" "$TMP/out" \
         && ok "equal sizes: round-trip verifies" \
@@ -131,8 +147,8 @@ fi
 # 必須加上 --slices 3 才能暴露此問題。在預設的 1 個 slice 下，兩格皆為單一 9216 B
 # 的列帶，佈局恰好一致，僅比對大小的守門不會出錯。切成 3 條時，64x48 為 3 條
 # 3072 B，而 48x64 為 3168／3168／2880。
-mk 64 48 "$TMP/geo1.rgb1"
-mk 48 64 "$TMP/geo2.rgb1"
+mk a_64x48.rgb1   "$TMP/geo1.rgb1"
+mk rot_48x64.rgb1 "$TMP/geo2.rgb1"
 run() { "$DOE" --codec zstd --delta --slices 3 --repeat 1 "$1" "$2" > "$TMP/out" 2>&1 }
 if run "$TMP/geo1.rgb1" "$TMP/geo2.rgb1"; then
     grep -q "round-trip verified" "$TMP/out" \

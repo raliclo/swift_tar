@@ -36,7 +36,33 @@ from datetime import datetime
 
 import numpy as np
 
-SAMPLE_DIR = sys.argv[1] if len(sys.argv) > 1 else "sample"
+# sample_consecutive, not sample. The 10 s-sampled corpus opens on this clip's
+# fade from black: that frame has 12 unique colours and compresses to 311 bytes,
+# and it sat in the average of every arm below. Consecutive mid-video frames are
+# what the rest of the study uses.
+# 預設為 sample_consecutive 而非 sample。相隔 10 秒的語料以本片自黑畫面淡入那格開頭：
+# 該格僅 12 種顏色、壓縮後 311 位元組，卻計入下方每一組的平均。本研究其餘部分使用的
+# 都是中段的連續影格。
+SAMPLE_DIR = sys.argv[1] if len(sys.argv) > 1 else "sample_consecutive"
+
+# Writes its own record, like every other script in this directory. It used to
+# print to stdout and rely on the caller redirecting: a re-run with the output
+# discarded left the committed file untouched and dated three days earlier, which
+# reads exactly like a run that produced identical numbers.
+# 與本目錄其他腳本一致，自行寫出紀錄檔。它原本只印到 stdout，靠呼叫端重導：一次把輸出
+# 丟棄的重跑會讓入版檔案原封不動、日期停在三天前，看起來與「重跑後數字完全相同」無異。
+OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "palette_vs_predictive_output.txt")
+
+class _Tee:
+    def __init__(self, path):
+        self.f = open(path, "w")
+    def write(self, s):
+        sys.__stdout__.write(s); self.f.write(s)
+    def flush(self):
+        sys.__stdout__.flush(); self.f.flush()
+
+sys.stdout = _Tee(OUTPUT)
 LEVEL = int(sys.argv[2]) if len(sys.argv) > 2 else 19
 HEADER = 876  # RGB1 header size / RGB1 標頭大小
 

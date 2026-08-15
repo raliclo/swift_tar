@@ -1212,19 +1212,19 @@ shrink the container.**
 24 bits 窄，這應該能縮小容器。**
 
 **The premise is right and the conclusion is wrong: it shrinks the uncompressed
-payload but comes out 23.5% LARGER after compression.** Measured over 24 sampled
-1920x1080 frames with `../verifications/rgb1/palette_vs_predictive.py`, every arm
+payload but comes out 24.3% LARGER after compression.** Measured over the 48
+consecutive 1920x1080 frames with `../verifications/rgb1/palette_vs_predictive.py`, every arm
 round-trip verified:
 
-**前提正確而結論不成立：它確實縮小了未壓縮的 payload，但壓縮後反而大 23.5%。**
-以 `../verifications/rgb1/palette_vs_predictive.py` 對 24 張 1920x1080 取樣影格實測，
+**前提正確而結論不成立：它確實縮小了未壓縮的 payload，但壓縮後反而大 24.3%。**
+以 `../verifications/rgb1/palette_vs_predictive.py` 對 48 張 1920x1080 連續影格實測，
 每組皆通過往返驗證：
 
 | arm | stored (B) | +zstd-19 (B) | of raw |
 |---|---:|---:|---:|
-| raw payload (today) | 6,220,800 | 2,315,247 | 37.22% |
-| **colour map + pointers** | **4,613,592** | 2,859,226 | 45.96% |
-| YCoCg-R + MED + planar | 6,220,800 | **1,370,475** | **22.03%** |
+| raw payload (today) | 6,220,800 | 2,390,137 | 38.42% |
+| **colour map + pointers** | **4,750,251** | 2,971,464 | 47.77% |
+| YCoCg-R + MED + planar | 6,220,800 | **1,421,224** | **22.85%** |
 
 The map does its job: unique colours average 112,263 out of 2.07 M pixels, so an
 18-bit pointer replaces a 24-bit pixel and the stored payload drops 25.8%. But
@@ -1241,17 +1241,17 @@ raw RGB 壓到 37%，指標串流只到 62%。
 **The general lesson: a fixed-width saving that destroys structure loses to
 leaving the structure intact.** Predictive coding wins because it does the
 opposite — it *increases* structure by turning pixels into mostly-zero
-residuals, which is why it beats the palette by 52.1%.
+residuals, which is why it beats the palette by 52.2%.
 
 **通則：以摧毀結構換取固定寬度的節省，輸給保留結構。** 預測式編碼之所以勝出，
 正因為它做的是相反的事 —— 它把像素轉成大多為零的殘差，從而**增加**結構，這也是
-它勝過調色盤 52.1% 的原因。
+它勝過調色盤 52.2% 的原因。
 
 This is reproducible from either implementation. `swift_tar_DOE` reaches the
-same -40.8% for the predictive stack as the Python DOE, from independent code:
+same -40.5% for the predictive stack as the Python DOE, from independent code:
 
 兩份實作皆可重現此結果。`swift_tar_DOE` 以獨立程式碼得到與 Python DOE 相同的
-預測式堆疊 -40.8%：
+預測式堆疊 -40.5%：
 
 ```
 ./swift_tar_DOE --all --codec zstd --level 19 sample/*.rgb1
@@ -1325,11 +1325,11 @@ back and byte-compared before its size was counted.
 > —— 但與 FFV1 的差距是 86% 而非 91%。請以本節數字為準。
 
 **What this settles.** The stack is worth implementing: it cuts the payload by
-40.8% versus today's format, in exchange for two integer transforms and a
+40.5% versus today's format, in exchange for two integer transforms and a
 different byte order. Closing the last 16.5% means writing a range coder, which
 is a much larger undertaking than the transforms and can be decided separately.
 
-**這確立了什麼。** 此堆疊值得實作：相較現行格式可縮減 payload 40.8%，代價僅是兩個
+**這確立了什麼。** 此堆疊值得實作：相較現行格式可縮減 payload 40.5%，代價僅是兩個
 整數變換與不同的位元組排列。要補上最後的 16.5% 則需自行實作 range coder，其工程量
 遠大於這些變換，可另行決定。
 
@@ -1480,6 +1480,18 @@ the cost grows with the level:
 
 **實作、量測後回退：維持原本的交錯定義。** 直接壓縮容器時 planar 明顯較差，且
 代價隨等級上升：
+
+> **Old corpus.** These rows are from `sample/` — 24 frames 10 s apart, the set
+> whose first frame is this clip's fade from black. Its raw+zstd-19 figure is
+> 2,315,357 (37.21%) where the 48-frame consecutive corpus gives 2,390,137
+> (38.42%), so the absolute numbers are ~3% optimistic. The planar penalty is a
+> ratio between two arms on the same frames and survives the corpus change; the
+> table has not been re-run.
+>
+> **舊語料。** 以下各列取自 `sample/`——相隔 10 秒的 24 格，其第一格即本片的自黑畫面
+> 淡入。其 raw+zstd-19 為 2,315,357（37.21%），而 48 格連續語料為 2,390,137（38.42%），
+> 故絕對數字樂觀約 3%。planar 的懲罰是同一批影格上兩組之間的比值，換語料後仍成立；
+> 本表尚未重跑。
 
 | zstd | rgb24 interleaved | gbrp planar | planar cost |
 |---|---:|---:|---:|

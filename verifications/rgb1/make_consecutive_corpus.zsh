@@ -47,7 +47,22 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width  -of csv=p=0 "$SRC")
 H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$SRC")
 DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$SRC")
-MID=$(python3 -c "print(f'{float('$DUR')/2:.1f}')")
+# Never start inside the opening 30 s, and enforce it hardest when the selection
+# is small. A clip's first seconds are where fades, title cards and static holds
+# live: the 8 frames taken at t=0 that produced the 122 Mbps bitrate figure
+# compressed to 7% of raw where real content gives 50%. A large sample dilutes
+# that; a sample under 10 frames is dominated by it.
+# 起點一律不落在片頭 30 秒內，且在選取格數少時檢查最嚴。影片開頭正是淡入、標題卡與
+# 靜止畫面所在：先前產出 122 Mbps 那個數字的 t=0 八格，壓縮到原始的 7%，而真實內容為
+# 50%。樣本大時該影響會被稀釋，樣本少於 10 格時則由它主導。
+MIN_START=30
+MID=$(python3 -c "print(f'{max(float('$DUR')/2, $MIN_START):.1f}')")
+(( $(python3 -c "print(1 if float('$MID') >= $MIN_START or $FRAMES >= 10 else 0)") )) || {
+    print -ru2 -- "[Error] MID=${MID}s is inside the opening ${MIN_START}s with only $FRAMES frames"
+    print -ru2 -- "        起點 ${MID} 秒落在片頭 ${MIN_START} 秒內，且僅取 $FRAMES 格"
+    exit 1
+}
+
 FB=$((W * H * 3))
 
 print -- "[Info] date / 日期: $(date '+%Y-%m-%d %H:%M:%S %Z')"

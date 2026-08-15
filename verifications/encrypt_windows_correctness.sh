@@ -26,7 +26,25 @@ run_test() {
     mkdir -p "$tmp/src"
     printf 'alpha\n' > "$tmp/src/a.txt"
     printf 'bravo\n' > "$tmp/src/b.txt"
-    head -c 5000000 /dev/urandom > "$tmp/src/blob.bin"
+    # Real image content when the sampled corpus is present; see test_encrypt.sh for
+# the same pattern and the reason a labelled random fallback stays. One 1080p
+# RGB1 payload is 6,220,800 B, which crosses the 4 MiB chunk boundary and leaves
+# a partial tail.
+# 取樣語料存在時使用真實影像內容；相同作法與保留「明確標示的隨機備援」之理由見
+# test_encrypt.sh。一張 1080p 的 RGB1 payload 為 6,220,800 B，跨過 4 MiB 分塊邊界並
+# 留下不足一塊的尾段。
+_blob_src=""
+for _f in "$SCRIPT_DIR"/rgb1/sample_consecutive/*.rgb1; do
+  [ -f "$_f" ] || continue
+  tail -c +877 "$_f" > "$tmp/src/blob.bin"
+  _blob_src="sampled video frame ${_f##*/}"
+  break
+done
+if [ -z "$_blob_src" ]; then
+  head -c 5000000 /dev/urandom > "$tmp/src/blob.bin"
+  _blob_src="random (no sampled corpus)"
+fi
+echo "[Info] blob: $_blob_src"
     head -c 64 /dev/urandom > "$tmp/key"
     head -c 64 /dev/urandom > "$tmp/wrong"
 

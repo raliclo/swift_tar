@@ -1,19 +1,36 @@
-[Info] date: 2026-08-06 14:47:01 TST
-[Info] host: MSYS_NT-10.0-26200 3.6.10-8fbd9808.x86_64 x86_64
-[Info] swift_tar: /c/Users/lowei/proj/lzfse2/swift_tar/release/swift_tar.exe
-[Info] version: swift_tar 20260806-144221
-[Info] corpus: synthetic RGB1 1024x1024 (3 MiB payload + 876B header = 3146604 B)
-[Info] MB/s = container bytes / time (MB = 10^6); times are the mean of 3 runs
+[Retired] 2026-08-15 — this record was produced from a synthetic corpus and
+cannot be reproduced by the current script.
 
-== RGB1 container: size / time / throughput by codec ==
-codec                 size(B)   ratio  create(ms)  cr(MB/s) extract(ms)  ex(MB/s)
----------------- ------------ ------- ----------- --------- ----------- ---------
-plain                 3148288   1.000       109.9      28.6       173.1      18.2
-gzip                    23127   0.007       114.0      27.6       103.4      30.4
-bzip2                   41006   0.013      1243.4       2.5       171.8      18.3
-xz                       4876   0.002       220.0      14.3       143.0      22.0
-zstd                     4560   0.001       100.3      31.4       100.4      31.3
-lz4                     16619   0.005       177.6      17.7       149.0      21.1
-zip                     23201   0.007       107.9      29.2        93.5      33.7
-bvx3-optimal             4595   0.001       106.3      29.6       101.6      31.0
-other3-optimal           6396   0.002       146.5      21.5        97.8      32.2
+test_swift_tar_rgb1.sh built its codec table from a 4 KiB /dev/urandom block
+repeated 768 times. That data is perfectly periodic, so every codec with a
+window of 4 KiB or more matched immediately and the table reported zstd at a
+ratio of 0.001 — where the same script on a real 1080p frame reports 0.443.
+The block was also re-randomised on every run, so the numbers were never
+comparable across runs or platforms; the 7-byte difference between the mac and
+Windows records, once read as a library difference, was only a different corpus.
+
+The script now requires a sampled video frame and skips the table when none is
+present, so these figures can never be regenerated in this form. They are
+removed rather than kept with a warning: the ratios are wrong by a factor of
+450 for the thing the rows name, and a reader who skims a table does not read
+its header.
+
+To restore this record on Windows:
+  1. verifications/rgb1/make_consecutive_corpus.zsh   (needs the source video)
+  2. ./test_swift_tar_rgb1.sh
+
+[已退役] 2026-08-15 —— 本紀錄產自合成語料，且無法由現行腳本重現。
+
+test_swift_tar_rgb1.sh 原本以 4 KiB /dev/urandom 區塊重複 768 次作為 codec 比較表的
+語料。該資料週期完全規律，任何視窗達 4 KiB 以上的 codec 都立即匹配，於是表格把 zstd
+記為壓縮比 0.001——而同一支腳本在真實 1080p 影格上為 0.443。該區塊每次執行還會重新
+隨機，故數字從未能跨執行或跨平台比較；mac 與 Windows 兩份紀錄相差 7 位元組，一度被
+讀成函式庫差異，其實只是語料不同。
+
+現行腳本要求使用取樣視訊影格，找不到就跳過該表，故這些數字不可能再以此形式產生。
+此處選擇移除而非保留加警語：那些壓縮比對其所命名的對象而言錯了 450 倍，而略讀表格的
+讀者不會去看檔頭。
+
+在 Windows 上重建此紀錄：
+  1. verifications/rgb1/make_consecutive_corpus.zsh   （需要來源影片）
+  2. ./test_swift_tar_rgb1.sh

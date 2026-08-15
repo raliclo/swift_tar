@@ -224,6 +224,33 @@ for form in "-czf" "czf"; do
   fi
 done
 
+# Unknown options must be rejected on the RGB1 paths too. Validation used to sit
+# below the command branches, and the RGB1 modes return before reaching it, so
+# they were the one family that never saw the check: --titel WRONG wrote a
+# container and exited 0. That is the silent acceptance the check exists to
+# remove, surviving where the check could not reach.
+# 未知選項在 RGB1 路徑上同樣必須被拒。驗證原本位於命令分支之下，而 RGB1 模式在抵達
+# 之前就返回，故它們是唯一從未經過檢查的一族：--titel WRONG 會寫出容器並以 0 結束。
+# 那正是本檢查所要消除的靜默接受，只是存活在檢查搆不到之處。
+BASE=(--rgb1-pack --width 4 --height 3 --lat 25 --lng 121 --height-m 5
+      --title ok --country TW --creator-email a@b.co --right R --created-ms 0)
+# The bogus flag carries no value. An earlier version wrote `$bogus X`, and the
+# extra X became a second positional argument, which rgb1-pack rejects on its
+# own -- so the check passed against the unfixed binary too and proved nothing.
+# 該虛構旗標不帶值。先前版本寫成 `$bogus X`，多出來的 X 成為第二個位置參數，而
+# rgb1-pack 本來就會拒絕——於是該檢查對未修正的執行檔同樣通過，什麼也證明不了。
+for bogus in --titel --totally-bogus; do
+  out="$TMP/reject_${bogus#--}.rgb1"
+  rm -f "$out"
+  if "$ST" "${BASE[@]}" "$bogus" -f "$out" "$RAW" >/dev/null 2>&1; then
+    bad "rgb1-pack accepted unknown option $bogus"
+  elif [ -e "$out" ]; then
+    bad "rgb1-pack rejected $bogus but still wrote a container"
+  else
+    ok "rgb1-pack rejects unknown option $bogus and writes nothing"
+  fi
+done
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

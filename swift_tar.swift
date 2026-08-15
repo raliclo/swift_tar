@@ -3489,6 +3489,116 @@ struct SwiftTarMain {
             exit(args.count < 2 ? 1 : 0)
         }
 
+        // Validated here, before any command branch, not after them. The RGB1
+        // modes below return without reaching the tar path, so while this lived
+        // further down they were the one family of commands that never saw it:
+        // `--titel WRONG --title ok` wrote a container and exited 0, and so did
+        // a wholly invented `--totally-bogus X`. That is the same silent
+        // acceptance the check was added to remove, surviving in the corner the
+        // check could not reach.
+        // 於此驗證——在任何命令分支之前，而非之後。下方的 RGB1 模式會在抵達 tar 路徑前
+        // 就返回，故當本檢查位於更下方時，它們正是唯一從未經過檢查的一族命令：
+        // `--titel WRONG --title ok` 會寫出容器並以 0 結束，完全虛構的 `--totally-bogus X`
+        // 亦然。那正是本檢查所要消除的靜默接受，只是存活在檢查搆不到的角落。
+
+        // Every option this tool accepts. An unrecognised one is an error rather
+        // than something to skip past: silently ignoring it means the command
+        // does something other than what was asked and says nothing about it.
+        // `swift_tar --to-stdout -x -f a.tar.zst > /dev/null` read as a
+        // stream-to-nowhere and in fact extracted the whole archive to the
+        // current directory, because --to-stdout is bsdtar's spelling and this
+        // tool has no such option; the benchmark measured disk writes for
+        // months believing it measured decompression. Use --cat for that.
+        // 本工具接受的所有選項。無法辨識者視為錯誤而非略過：靜默忽略會使指令做出
+        // 與要求不同的事，且毫無提示。`swift_tar --to-stdout -x -f a.tar.zst
+        // > /dev/null` 看起來像是串流到空裝置，實際卻把整個封存解到當前目錄——
+        // 因為 --to-stdout 是 bsdtar 的寫法，本工具並無此選項；benchmark 因此
+        // 長期把磁碟寫入當成解壓縮在量測。該用途請改用 --cat。
+        let knownOptions: Set<String> = [
+            // commands / 命令
+            "-c", "-x", "-t", "-r", "-u", "--delete", "--identify", "--cat",
+            "--encrypt-only", "--decrypt-only",
+            "--rgb1-pack", "--rgb1-info", "--rgb1-raw",
+            // options / 選項
+            "-f", "-C", "-n", "-v", "-h", "--touch", "--keyfile", "--encrypt",
+            "-stream-in", "-stream-out", "-O", "--to-stdout", "-i", "--ignore-zeros",
+            "-o", "--no-same-owner",
+            "--strip-components", "--zstd-level",
+            "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
+            // codecs / 壓縮引擎
+            "--gzip", "-z", "--bzip2", "-j", "--xz", "-J", "--lzip", "--zstd",
+            "--lz4", "--zip", "--zip64",
+            // RGB1 fields / RGB1 欄位
+            "--width", "--height", "--lat", "--lng", "--height-m", "--title",
+            "--country", "--creator-email", "--right", "--created-ms",
+            "--tz-offset-min",
+            // handled before this point, listed so they never trip the check
+            // 於此之前已處理，列出以免誤判
+            "-test", "-debug", "--version", "--crypto-selftest",
+        ]
+        // The LZFSE flag names are compiled in only when the engine is. Listing
+        // them unconditionally put the literal "other3" into the --no-lzfse
+        // binary, which test_no_lzfse.sh checks for with `strings`: the public
+        // build is meant to carry no trace of the private engine, and the option
+        // table is a trace. Rejecting them there is also the right behaviour --
+        // that build genuinely cannot do it, so accepting the flag and ignoring
+        // it would be the silent-mismatch this whole check exists to stop.
+        // LZFSE 的旗標名稱僅在該引擎被編入時才一併編入。先前無條件列出，會使字串
+        // 「other3」出現在 --no-lzfse 的執行檔中，而 test_no_lzfse.sh 正是以 `strings`
+        // 檢查此事：公開版本不應留下私有引擎的任何痕跡，而選項表就是一種痕跡。在該版本
+        // 拒絕這些旗標也是正確行為——它確實做不到，接受後忽略正是本檢查要杜絕的靜默不符。
+        #if !EXCLUDE_LZFSE
+        let lzfseOptions: Set<String> = [
+            "--other3-fast", "--other3-optimal", "--bvx3-fast", "--bvx3-optimal",
+        ]
+        #else
+        let lzfseOptions: Set<String> = []
+        #endif
+
+        // positional file args (skip flags and their values) / 位置參數（略過旗標與其值）
+        // Every option that consumes the argument after it. One list, because the
+        // check below inspects anything starting with "-" and a value that is
+        // missing from here is examined as if it were an option: with the RGB1
+        // fields absent, `--lat -33.8688` reported "unknown option -33.8688".
+        // Positive values hid it -- 25.033 does not start with a dash -- so the
+        // gap only surfaced for southern latitudes, western longitudes and the
+        // other negative-valued fields.
+        // 所有會消耗其後一個參數的選項，集中為單一清單。因為下方的檢查會檢視任何以 "-"
+        // 開頭的詞元，而未列於此的值就會被當成選項檢查：先前缺少 RGB1 各欄位時，
+        // `--lat -33.8688` 會回報「unknown option -33.8688」。正值掩蓋了這個缺口——
+        // 25.033 並不以減號開頭——故它只在南半球緯度、西經等負值欄位上現形。
+        let valueOptions: Set<String> = [
+            "-f", "-C", "-n", "--keyfile", "--strip-components", "--zstd-level",
+            "--width", "--height", "--lat", "--lng", "--height-m",
+            "--title", "--country", "--creator-email", "--right",
+            "--created-ms", "--tz-offset-min",
+        ]
+
+        var files: [String] = []
+        var skipNext = true   // args[0] is the binary path / args[0] 是執行檔路徑
+        for a in args {
+            if skipNext { skipNext = false; continue }
+            if valueOptions.contains(a) { skipNext = true; continue }
+            if a.hasPrefix("-") {
+                // "-" alone is the stdin/stdout archive path, not an option.
+                // 單獨的 "-" 是代表 stdin/stdout 的封存路徑，並非選項。
+                if a == "-" { files.append(a); continue }
+                // A long option may carry its value inline as --opt=value, so
+                // validate the name alone -- otherwise --strip-components=1 is
+                // rejected while --strip-components 1 is accepted.
+                // 長選項可用 --opt=value 夾帶其值，故僅驗證名稱部分——否則
+                // --strip-components=1 會被拒絕，而 --strip-components 1 卻可通過。
+                let name = a.hasPrefix("--") ? String(a.prefix(while: { $0 != "=" })) : a
+                guard knownOptions.contains(name) || lzfseOptions.contains(name) else {
+                    eprint("swift_tar: unknown option \(a) / 無法辨識的選項 \(a)")
+                    eprint("  run swift_tar -h for the full list / 執行 swift_tar -h 可列出完整選項")
+                    exit(1)
+                }
+                continue
+            }
+            files.append(a)
+        }
+
         // RGB1 raw-image container modes (self-contained, see rgb1.swift). Handled
         // before the tar mode guard because they use neither -c/-x/-t nor a codec.
         // RGB1 原始影像容器模式（自足，見 rgb1.swift）。在 tar 模式守衛前處理，
@@ -3788,86 +3898,6 @@ struct SwiftTarMain {
             }
             return v
         }()
-
-        // Every option this tool accepts. An unrecognised one is an error rather
-        // than something to skip past: silently ignoring it means the command
-        // does something other than what was asked and says nothing about it.
-        // `swift_tar --to-stdout -x -f a.tar.zst > /dev/null` read as a
-        // stream-to-nowhere and in fact extracted the whole archive to the
-        // current directory, because --to-stdout is bsdtar's spelling and this
-        // tool has no such option; the benchmark measured disk writes for
-        // months believing it measured decompression. Use --cat for that.
-        // 本工具接受的所有選項。無法辨識者視為錯誤而非略過：靜默忽略會使指令做出
-        // 與要求不同的事，且毫無提示。`swift_tar --to-stdout -x -f a.tar.zst
-        // > /dev/null` 看起來像是串流到空裝置，實際卻把整個封存解到當前目錄——
-        // 因為 --to-stdout 是 bsdtar 的寫法，本工具並無此選項；benchmark 因此
-        // 長期把磁碟寫入當成解壓縮在量測。該用途請改用 --cat。
-        let knownOptions: Set<String> = [
-            // commands / 命令
-            "-c", "-x", "-t", "-r", "-u", "--delete", "--identify", "--cat",
-            "--encrypt-only", "--decrypt-only",
-            "--rgb1-pack", "--rgb1-info", "--rgb1-raw",
-            // options / 選項
-            "-f", "-C", "-n", "-v", "-h", "--touch", "--keyfile", "--encrypt",
-            "-stream-in", "-stream-out", "-O", "--to-stdout", "-i", "--ignore-zeros",
-            "-o", "--no-same-owner",
-            "--strip-components", "--zstd-level",
-            "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
-            // codecs / 壓縮引擎
-            "--gzip", "-z", "--bzip2", "-j", "--xz", "-J", "--lzip", "--zstd",
-            "--lz4", "--zip", "--zip64",
-            // RGB1 fields / RGB1 欄位
-            "--width", "--height", "--lat", "--lng", "--height-m", "--title",
-            "--country", "--creator-email", "--right", "--created-ms",
-            "--tz-offset-min",
-            // handled before this point, listed so they never trip the check
-            // 於此之前已處理，列出以免誤判
-            "-test", "-debug", "--version", "--crypto-selftest",
-        ]
-        // The LZFSE flag names are compiled in only when the engine is. Listing
-        // them unconditionally put the literal "other3" into the --no-lzfse
-        // binary, which test_no_lzfse.sh checks for with `strings`: the public
-        // build is meant to carry no trace of the private engine, and the option
-        // table is a trace. Rejecting them there is also the right behaviour --
-        // that build genuinely cannot do it, so accepting the flag and ignoring
-        // it would be the silent-mismatch this whole check exists to stop.
-        // LZFSE 的旗標名稱僅在該引擎被編入時才一併編入。先前無條件列出，會使字串
-        // 「other3」出現在 --no-lzfse 的執行檔中，而 test_no_lzfse.sh 正是以 `strings`
-        // 檢查此事：公開版本不應留下私有引擎的任何痕跡，而選項表就是一種痕跡。在該版本
-        // 拒絕這些旗標也是正確行為——它確實做不到，接受後忽略正是本檢查要杜絕的靜默不符。
-        #if !EXCLUDE_LZFSE
-        let lzfseOptions: Set<String> = [
-            "--other3-fast", "--other3-optimal", "--bvx3-fast", "--bvx3-optimal",
-        ]
-        #else
-        let lzfseOptions: Set<String> = []
-        #endif
-
-        // positional file args (skip flags and their values) / 位置參數（略過旗標與其值）
-        var files: [String] = []
-        var skipNext = true   // args[0] is the binary path / args[0] 是執行檔路徑
-        for a in args {
-            if skipNext { skipNext = false; continue }
-            if a == "-f" || a == "-C" || a == "-n" || a == "--keyfile" || a == "--strip-components" || a == "--zstd-level" { skipNext = true; continue }
-            if a.hasPrefix("-") {
-                // "-" alone is the stdin/stdout archive path, not an option.
-                // 單獨的 "-" 是代表 stdin/stdout 的封存路徑，並非選項。
-                if a == "-" { files.append(a); continue }
-                // A long option may carry its value inline as --opt=value, so
-                // validate the name alone -- otherwise --strip-components=1 is
-                // rejected while --strip-components 1 is accepted.
-                // 長選項可用 --opt=value 夾帶其值，故僅驗證名稱部分——否則
-                // --strip-components=1 會被拒絕，而 --strip-components 1 卻可通過。
-                let name = a.hasPrefix("--") ? String(a.prefix(while: { $0 != "=" })) : a
-                guard knownOptions.contains(name) || lzfseOptions.contains(name) else {
-                    eprint("swift_tar: unknown option \(a) / 無法辨識的選項 \(a)")
-                    eprint("  run swift_tar -h for the full list / 執行 swift_tar -h 可列出完整選項")
-                    exit(1)
-                }
-                continue
-            }
-            files.append(a)
-        }
 
         do {
             if doCreate {

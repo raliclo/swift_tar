@@ -1,4 +1,4 @@
-swift_tar_version=20260814-091044
+swift_tar_version=20260816-014809
 libarchive_version=v3.7.5-1328-g51060e49
 libarchive_commit=51060e492b7499e9d26ea21b926f09e7aebe1aee
 libarchive_linkage=static

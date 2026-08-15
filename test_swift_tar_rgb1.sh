@@ -21,6 +21,24 @@ if [ -z "${ST:-}" ]; then
 fi
 SYS_TAR="$(command -v tar)"
 
+# --record is opt-in because this is a correctness test that happens to also
+# measure. Every run used to overwrite the committed table, so any run rewrote
+# the record whether or not anyone meant to publish it -- including runs under
+# machine load, which is how a table arrived once with every time uniformly ~8%
+# slower and sizes unchanged. A record that changes as a side effect of testing
+# cannot be compared across runs, because nobody chose when it was taken.
+# --record 採取選擇性加入，因為這是一支恰好也做量測的正確性測試。先前每次執行都會覆寫
+# 入版的表格，於是任何一次執行都在改寫紀錄，無論是否有意發佈——包括在機器負載下的執行，
+# 那正是某次表格所有時間一致慢約 8%、體積卻幾乎不變的由來。一份因測試副作用而變動的
+# 紀錄無法跨執行比較，因為沒有人決定過它是何時取得的。
+RECORD=0
+for arg in "$@"; do
+  case "$arg" in
+    --record) RECORD=1 ;;
+    *) echo "usage: $0 [--record]   # --record 才寫入 verifications/ 的量測紀錄" >&2; exit 2 ;;
+  esac
+done
+
 if [ ! -x "$ST" ]; then
   echo "error: build first (./compile_tar.sh) — missing $ST" >&2
   exit 1
@@ -145,8 +163,28 @@ ms()  { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f", (b-a)*1000}'; }
 # 平台各自擁有一個檔案，三者可同時入版。
 . "$HERE/platform.sh"
 RESULTS="$HERE/verifications/rgb1_container_mbps_output-$(swift_tar_platform).txt"
-: > "$RESULTS"
-emit() { echo "$1"; echo "$1" >> "$RESULTS"; }
+
+# Built in a temp file and moved into place only after the last codec passes,
+# rather than truncating the committed file up front and appending as we go.
+# Truncating first means a failure anywhere in the table -- a codec that errors,
+# a corpus that is missing, an interrupt -- leaves a half-written record in the
+# tree that still looks like a record.
+# 先寫入暫存檔，待最後一個 codec 通過後才搬移到位，而非一開始就截斷入版檔案再逐行附加。
+# 先截斷的話，表格中任何一處失敗——某個 codec 出錯、語料缺失、執行被中斷——都會在程式庫
+# 裡留下一份寫到一半、外觀卻仍像一份完整紀錄的檔案。
+# Staged inside $TMP so the existing `trap cleanup EXIT` removes it. A second
+# `trap ... EXIT` would not run alongside the first, it would replace it, and
+# the work directory would be left in the tree after every run.
+# 暫存於 $TMP 之內，交由既有的 `trap cleanup EXIT` 清除。再設一個 `trap ... EXIT`
+# 並不會與前一個並存，而是取代它，導致每次執行後工作目錄都留在程式庫中。
+STAGE="$TMP/rgb1_mbps.txt"
+emit() { echo "$1"; echo "$1" >> "$STAGE"; }
+if [ "$RECORD" = 1 ]; then
+  echo "[Info] --record given; will update $RESULTS on success / 指定 --record，成功後將更新該檔"
+else
+  echo "[Info] measuring only; $(basename "$RESULTS") not touched (pass --record to update)"
+  echo "[Info] 僅量測，不寫入 $(basename "$RESULTS")（要更新請加 --record）"
+fi
 
 # A real sampled video frame, not a synthetic pattern. This used to be a 4 KiB
 # random block repeated 768 times, which is perfectly periodic: every codec with
@@ -285,10 +323,15 @@ bench "zstd"   "--zstd --zstd-level 9"  "big.tar.zst"
 bench "lz4"    "--lz4"   "big.tar.lz4"
 bench "zip"    "--zip"   "big.zip"
 # LZFSE-family codecs exist only in the full build. In the --no-lzfse build the
-# flags are unknown and silently fall back to plain tar, so probe -h for support
-# and skip them rather than reporting a misleading ratio 1.000 row.
-# LZFSE 家族 codec 僅存在於全功能版。--no-lzfse 版中這些旗標為未知、會靜默退回
-# 純 tar，故先探測 -h 是否支援，不支援就略過，避免印出誤導的 ratio 1.000。
+# flags are rejected outright (exit 1), which under `set -e` would abort this
+# script, so probe -h for support and skip them instead.
+# They used to be accepted and ignored, producing a misleading ratio 1.000 row;
+# the probe was added for that and is still required, now for the opposite
+# reason -- the failure it avoids became loud rather than silent.
+# LZFSE 家族 codec 僅存在於全功能版。--no-lzfse 版會直接拒絕這些旗標（exit 1），在
+# `set -e` 下會中止本腳本，故先探測 -h 是否支援，不支援就略過。
+# 這些旗標從前是被接受後忽略，會產生誤導的 ratio 1.000 那一列；此探測原為該情況而加，
+# 現在仍然必要，但理由相反——它所迴避的失敗已從靜默變為顯性。
 if "$ST" -h 2>&1 | grep -q -- "--bvx3-optimal"; then
   bench "bvx3-optimal"   "--bvx3-optimal"   "big.tar.bvx3"
   bench "other3-optimal" "--other3-optimal" "big.tar.other3"
@@ -297,6 +340,19 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Only a fully passing run may publish. A table produced by a run that also
+# reported failures is a measurement of a build known to be wrong.
+# 唯有全數通過的執行才可發佈。一次同時回報失敗的執行所產出的表格，量測的是一份已知有誤
+# 的建置。
+if [ "$RECORD" = 1 ]; then
+  if [ "$fail" -eq 0 ]; then
+    cp "$STAGE" "$RESULTS"
+    echo "[Info] recorded → $RESULTS / 已寫入紀錄"
+  else
+    echo "[Warn] $fail failure(s); $RESULTS left unchanged / 有失敗，紀錄未更動" >&2
+  fi
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

@@ -129,17 +129,25 @@ peak RSS 51.48 MB；keyfile baseline 則為 6.13 MB。
 
 ## RGB1 容器各 codec 吞吐量
 
-`../test_swift_tar_rgb1.sh` 將 RGB1 容器經由 swift_tar 各 codec 封存，記錄封存
-大小、壓縮比、建立／解出耗時與 MB/s 至
-[`rgb1_container_mbps_output.txt`](rgb1_container_mbps_output.txt)，並附上執行
-日期與建置版本。
+`../test_swift_tar_rgb1.sh` 將 RGB1 容器經由 swift_tar 各 codec 封存，回報封存
+大小、壓縮比、建立／解出耗時與 MB/s，並附上執行日期與建置版本。加上 `--record`
+才會將表格寫入該平台對應的檔案：
+[`-mac.txt`](rgb1_container_mbps_output-mac.txt) ·
+[`-win.txt`](rgb1_container_mbps_output-win.txt)。
 
-> **狀態**：語料為合成的 1024×1024 RGB1 影像（3 MiB payload），由重複的
-> 4 KiB 區塊組成，因此本質上高度可壓縮。壓縮比**不能**代表真實照片的表現——
-> 此表僅供判讀吞吐量與各 codec 的相對成本。
+語料為真實取樣的 1080p 視訊影格（`sample_consecutive/f000.rgb1`，6,221,676 B）。
+先前為合成的 1024×1024 影像，由重複的 4 KiB 區塊組成，任何視窗達 4 KiB 以上的
+codec 都會直接匹配——該表把 zstd 記為壓縮比 0.001，而真實影格約為 0.44；且該區塊
+每次執行都重新隨機，故任兩份紀錄都無從比較。
+
+> **寫入紀錄採選擇性加入。** 未加 `--record` 時這純粹是一支正確性測試，不會動到
+> 入版的表格。先前每次執行都會覆寫，於是紀錄可能被一次無意發佈的執行取代——包括在
+> 機器負載下取得、所有時間一致慢約 8% 而體積不變的那一次。請在機器閒置時，有意識地
+> 寫入紀錄。
 
 ```sh
-../test_swift_tar_rgb1.sh
+../test_swift_tar_rgb1.sh              # 僅驗證 / verify only
+../test_swift_tar_rgb1.sh --record     # 驗證並更新本平台的表格
 ```
 
 ## claw-code ZIP 吞吐量與 RSS

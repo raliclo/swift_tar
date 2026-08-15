@@ -145,17 +145,27 @@ the same trade-off the codecs make.
 ## RGB1 container throughput by codec
 
 `../test_swift_tar_rgb1.sh` archives an RGB1 container through every swift_tar
-codec and records archive size, compression ratio, create/extract time and MB/s
-in [`rgb1_container_mbps_output.txt`](rgb1_container_mbps_output.txt), together
-with the run date and build version.
+codec and reports archive size, compression ratio, create/extract time and MB/s,
+together with the run date and build version. With `--record` it also writes the
+table to the file for its platform:
+[`-mac.txt`](rgb1_container_mbps_output-mac.txt) ·
+[`-win.txt`](rgb1_container_mbps_output-win.txt).
 
-> **Status**: the corpus is a synthetic 1024×1024 RGB1 image (3 MiB payload)
-> built from a repeating 4 KiB block, so it is highly compressible by
-> construction. The ratios are therefore *not* representative of real
-> photographs — read the table for throughput and relative codec cost only.
+The corpus is a real sampled 1080p video frame (`sample_consecutive/f000.rgb1`,
+6,221,676 B). It was previously a synthetic 1024×1024 image built from a
+repeating 4 KiB block, which every codec with a window of 4 KiB or more matched
+outright — that table reported zstd at a ratio of 0.001 where a real frame gives
+about 0.44, and it was re-randomised each run so no two records were comparable.
+
+> **Recording is opt-in.** Without `--record` this is purely a correctness test
+> and the committed tables are left untouched. Every run used to overwrite them,
+> so a record could be replaced by a run nobody meant to publish — including one
+> taken under machine load, whose times all came in ~8% slower with the sizes
+> unchanged. Record deliberately, on an idle machine.
 
 ```sh
-../test_swift_tar_rgb1.sh
+../test_swift_tar_rgb1.sh              # verify only / 僅驗證
+../test_swift_tar_rgb1.sh --record     # verify and update this platform's table
 ```
 
 ## ZIP throughput and RSS on claw-code

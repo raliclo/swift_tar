@@ -131,6 +131,15 @@ swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat|--encrypt-only|--decrypt-only
 
 `-f -`（或省略 `-f`）表示讀取標準輸入／寫至標準輸出，可組進管線。
 
+> **已知缺陷——下游提早關閉會把成功變成失敗。** 當下游程序在讀完之前就停止讀取時，
+> `--cat`、`--decrypt-only` 與 `--encrypt-only` 會以離開碼 `1` 結束並印出
+> `swift_tar: The file couldn't be saved.`，而 `| head`、`| less`、`| grep -q`、
+> `| od` 全都會提早關閉。已寫出的位元組是正確的，錯的只有狀態碼。此事在加密路徑上
+> 影響最大：同一個離開碼 `1` 正是金鑰錯誤或封存遭竄改時的結果，因此
+> `--decrypt-only … | head` 看起來與[解密](#解密)一節所述的竄改徵兆完全相同。
+> 當離開碼必須具有意義時，請完整消費整個串流（`| wc -c`、`> 檔案`）。
+> 已記錄於 [`todo/todo.md`](todo/todo.md)。
+
 ### 建立範例
 
 ```sh
@@ -301,8 +310,18 @@ release/swift_tar --identify -f mystery.bin     # 例如「mystery.bin: gzip →
 cat mystery.bin | release/swift_tar --identify  # 「<stdin>: gzip → tar」
 ```
 
-一般讀取時，`-v` 會印出相同的偵測結果（`compression format: gzip`，未壓縮則印
-`none`）。
+一般讀取時，`-v` 會將相同的偵測結果印至 stderr，格式與本工具其他訊息一致為雙語：
+
+```
+swift_tar: compression format / 壓縮格式：gzip
+swift_tar: compression format / 壓縮格式：none
+```
+
+搜尋時請用 `compression format`，不要用 `compression format: gzip`——實際的值接在
+中文標籤之後的全形冒號後面。
+
+**ZIP 是例外**：對 ZIP 封存，`-v` 不會印出這一行，因為 ZIP 是容器而非疊在 tar 之上的
+filter。請改用 `--identify`，它會正確回報 `zip`。
 
 ### RGB1 原始影像容器
 

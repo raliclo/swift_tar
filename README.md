@@ -147,6 +147,18 @@ swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat|--encrypt-only|--decrypt-only
 `-f -` (or omitting `-f`) reads stdin / writes stdout, so swift_tar composes
 in pipelines.
 
+> **Known defect — a reader that closes early turns success into failure.**
+> `--cat`, `--decrypt-only` and `--encrypt-only` exit `1` and print
+> `swift_tar: The file couldn't be saved.` when the process downstream stops
+> reading before the end, which is what `| head`, `| less`, `| grep -q` and
+> `| od` all do. The bytes already written are correct; only the status is
+> wrong. This matters most on the encrypted path, where the same exit `1` is
+> what a wrong key or a tampered archive produces — so
+> `--decrypt-only … | head` looks exactly like the tampering signature
+> described under [Decrypting](#decrypting). Consume the whole stream
+> (`| wc -c`, `> file`) when the exit status has to mean anything. Tracked in
+> [`todo/todo.md`](todo/todo.md).
+
 ### Create examples
 
 ```sh
@@ -338,8 +350,20 @@ release/swift_tar --identify -f mystery.bin     # e.g. "mystery.bin: gzip → ta
 cat mystery.bin | release/swift_tar --identify  # "<stdin>: gzip → tar"
 ```
 
-On a normal read, `-v` prints the same detection (`compression format: gzip`,
-or `none` when the archive is uncompressed).
+On a normal read, `-v` prints the same detection, on stderr, in the bilingual
+form the rest of the tool uses:
+
+```
+swift_tar: compression format / 壓縮格式：gzip
+swift_tar: compression format / 壓縮格式：none
+```
+
+Grep for `compression format`, not for `compression format: gzip` — the value
+follows a full-width colon after the Chinese half of the label.
+
+**ZIP is the exception**: `-v` prints no such line for a ZIP archive, because
+ZIP is a container rather than a filter over tar. Use `--identify`, which does
+report `zip`.
 
 ### RGB1 raw image container
 

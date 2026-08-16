@@ -1,5 +1,31 @@
 # swift_tar TODO / 待辦
 
+> **Open items, 2026-08-16 / 尚未處理項目.** In rough order of consequence:
+> `--keyfile=PATH` hangs an unattended run (High), `--zstd-level=N` is silently
+> ignored (Medium), `lzfse2/run_round.command:50` still calls the pre-rename
+> `compile_tar.sh` and is broken now, `package_win.ps1` is still PowerShell,
+> `sha()` costs 892 s on Windows, and `encrypt_mbps_win_output.txt` holds
+> zstd-3 numbers. Everything above was measured, not inferred; each section
+> below records how.
+>
+> **2026-08-16 未處理項目**，依影響程度排序：`--keyfile=PATH` 會讓無人值守的執行
+> 卡死（High）、`--zstd-level=N` 被靜默忽略（Medium）、
+> `lzfse2/run_round.command:50` 仍呼叫改名前的 `compile_tar.sh` 而現正壞著、
+> `package_win.ps1` 仍是 PowerShell、`sha()` 在 Windows 上耗時 892 秒、
+> `encrypt_mbps_win_output.txt` 仍是 zstd-3 的數字。以上皆為實測而非推論，各節
+> 記錄了測法。
+>
+> **Docs have not been tested against a reader who cannot see the code.** The
+> `read_easy` skill exists for exactly that and was installed at 14:57 on
+> 2026-08-16, after this session had loaded its skill list, so it could not be
+> invoked here. Run it from a fresh session against this repo. A reader who only
+> has the README will reach for `--keyfile=key.bin` and `--zstd-level=19`, which
+> is where the two defects above surface.
+> **文件尚未經「看不到程式碼的讀者」檢驗。** `read_easy` skill 正是為此而存在，但它
+> 於 2026-08-16 14:57 才安裝，晚於本 session 載入 skill 清單的時間，因此在此無法
+> 呼叫。請於全新 session 對本程式庫執行。只讀 README 的讀者會自然寫出
+> `--keyfile=key.bin` 與 `--zstd-level=19`，而那正是上述兩個缺陷浮現之處。
+
 Tracked issues that are known, reproduced, and deliberately not fixed yet.
 `verifications/bsdtar_compat.zsh:385` already points here for its XFAIL, so this
 file has to exist for that reference to mean anything.
@@ -129,9 +155,100 @@ machine can close this — re-run the script there and commit the result.
 - `verifications/rgb1/test_interframe.zsh` — needs the source clip under
   `/Volumes/Windows/...`. 需要 `/Volumes/Windows/...` 下的來源影片。
 
+## Inline `--opt=value` is accepted by validation but ignored by parsing / 內聯 `=value` 通過驗證卻被忽略
+
+Raised in `review.md` for `--zstd-level`, then measured on 2026-08-16 with the
+build from `9a4df08`. The finding holds and is wider than reported.
+
+由 `review.md` 就 `--zstd-level` 提出，2026-08-16 以 `9a4df08` 的建置實測。該發現
+成立，且範圍比原報告更廣。
+
+**Root cause / 根因.** Option validation deliberately accepts the inline form by
+checking only the name before `=`:
+
+```swift
+let name = a.hasPrefix("--") ? String(a.prefix(while: { $0 != "=" })) : a
+```
+
+but the value readers do not agree with it. `optValue()` matches the flag as a
+whole argument and so never sees `--flag=value`; `optValueLong()` handles both.
+**Only `--strip-components` uses `optValueLong`.** Everything else uses
+`optValue`, and `--zstd-level` uses a bare `args.firstIndex(of:)`.
+
+驗證層刻意只比對 `=` 之前的名稱，因而接受內聯形式；但讀值端並未跟上。`optValue()`
+以整個引數比對旗標，故永遠看不到 `--flag=value`；`optValueLong()` 兩種都能處理。
+**目前只有 `--strip-components` 使用 `optValueLong`**，其餘皆用 `optValue`，而
+`--zstd-level` 更是直接用 `args.firstIndex(of:)`。
+
+**Measured / 實測.** Corpus 14,157,900 B, `-c --zstd`:
+
+| form / 形式 | result / 結果 | severity |
+|---|---|---|
+| `--strip-components=1` | works / 正常 | — |
+| `--zstd-level 19` | 240,780 B | baseline |
+| `--zstd-level=19` | **264,671 B — byte-identical to the default**, `rc=0` | Medium |
+| `--keyfile PATH` | archive written, 14,160,537 B | baseline |
+| **`--keyfile=PATH`** | **falls through to the interactive passphrase prompt and blocks; `rc=124` under a 20 s timeout, no archive produced** | **High** |
+| RGB1 `--width=10` and the other 10 fields | rejected with an explicit error, `rc=1` | Low |
+
+`--keyfile=` is the one that matters: an unattended script hangs forever rather
+than failing, and produces nothing. The RGB1 fields are the acceptable shape --
+they fail loudly. `--zstd-level=` is the silent one: a benchmark that sets a
+level inline records numbers for a different level and exits 0.
+
+`--keyfile=` 是關鍵：無人值守的腳本會永久卡住而非失敗，且毫無產出。RGB1 欄位屬於
+可接受的形態——它們大聲失敗。`--zstd-level=` 則是靜默的那個：以內聯形式設定等級的
+benchmark 會記下另一個等級的數字，並以 0 結束。
+
+**Two candidate fixes / 兩種修法.** Either make every value reader inline-aware
+(`optValue` -> `optValueLong`, and give `--zstd-level` the same helper), or have
+validation reject the inline form outright. The first is friendlier; the second
+is smaller and closes the gap by construction. Whichever is chosen, add a
+regression case covering both spellings for at least `--keyfile` and
+`--zstd-level`.
+兩條路：讓所有讀值端都支援內聯，或在驗證層直接拒絕內聯形式。前者較友善，後者較小
+且從構造上杜絕落差。無論採哪一種，都應為 `--keyfile` 與 `--zstd-level` 至少各補一
+組涵蓋兩種寫法的回歸測試。
+
+## Fallout from the .zsh rename / 改名後的連帶問題
+
+### Parent repo still invokes the old name / 父 repo 仍呼叫舊檔名  ▸ ⬜ 未處理 / open
+
+`lzfse2/run_round.command:50` runs `./swift_tar/compile_tar.sh`, which no longer
+exists after `1cac313`. That line is an actual invocation in the macOS
+auto-runner, not a doc reference, so the runner is broken until the parent repo
+gets a matching commit. `helper_windows/run_round.bat:55` only mentions
+`generate_version.sh` in a comment and is harmless.
+
+`lzfse2/run_round.command:50` 實際執行 `./swift_tar/compile_tar.sh`，該檔在
+`1cac313` 之後已不存在。那一行是 macOS 自動化執行器的真實呼叫而非文件引用，故在父
+repo 補上對應提交之前，該執行器是壞的。`helper_windows/run_round.bat:55` 僅在註解
+中提及舊名，無妨。
+
+### `package_win.ps1` is still PowerShell / 仍是 PowerShell  ▸ ⬜ 未處理 / open
+
+The user-level scripting policy reserves PowerShell for UAC elevation shims.
+`compile_tar-win.bat`'s PowerShell step was replaced by `strip_runcli.zsh` in
+`a753ab7`; this one is the same class and was missed. It was touched by the
+rename only to update the script names it references.
+
+使用者層級的腳本政策僅保留 PowerShell 作為 UAC 提權 shim。`compile_tar-win.bat`
+的 PowerShell 步驟已於 `a753ab7` 換成 `strip_runcli.zsh`；本檔屬同一類而被遺漏。
+改名只是更新了它所引用的腳本名稱。
+
 ## zsh port / zsh 移植版
 
-### `:A` does not treat a drive-letter path as absolute / `:A` 不認磁碟機路徑為絕對路徑
+### `:A` does not treat a drive-letter path as absolute / `:A` 不認磁碟機路徑為絕對路徑  ▸ ✅ 已修正(zsh port)
+
+Re-tested 2026-08-16 after the port was patched: all three forms now resolve to
+`/c/Windows`. The version string is still `5.9.999.3-test`, so do not use it to
+tell the two builds apart — test the behaviour instead. Kept below because the
+scripts that depend on `${0:A:h}` will meet the old build on any machine that
+has not been updated.
+
+2026-08-16 於 patch 後的移植版重測：三種形式現在都解析為 `/c/Windows`。版本字串
+仍是 `5.9.999.3-test`，故不能用它區分新舊建置，要直接測行為。以下保留原始診斷，
+因為依賴 `${0:A:h}` 的腳本在任何尚未更新的機器上仍會遇到舊行為。
 
 Reproduced 2026-08-15 on the Windows zsh port (5.9.999.3-test):
 

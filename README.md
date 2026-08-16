@@ -434,13 +434,46 @@ the same behavior as a libarchive built without lzo support.
 | `-f <path>` | Archive file (`-` = stdin/stdout; default `-`) |
 | `-C <dir>`  | Change input directory before create (must exist); extract into it when reading (created if missing) |
 | `--strip-components <N>` | (`-x` tar extraction only) Remove N leading path components before writing entries; also accepts `--strip-components=N` |
+| `--zstd-level <N>` | (`--zstd` only) Compression level, `1`…`22`, default `9`. Out of range or non-numeric exits **2**. Silently ignored if `--zstd` is not also given — see below |
 | `-n <N>`    | In-flight parallel chunks (default: one per core, capped at 4 × cores) |
 | `-v`        | Verbose (list entries / show the applied filter chain) |
+| `--touch`   | (`-x` only) Do **not** restore the archived mtime; extracted files get the current time |
+| `-i`, `--ignore-zeros` | (`-x`, `-t`) Read past the zero blocks that end an archive, so concatenated archives are read as one |
+| `-o`, `--no-same-owner` | Accepted for `tar` compatibility and does nothing: swift_tar never restores ownership, with or without it |
 | `--encrypt` | (`-c` only) Encrypt with ChaCha20-Poly1305; prompts for a passphrase |
 | `--keyfile <path>` | Use the file's bytes as key material instead of a passphrase (create and read; required when stdin is not a terminal) |
 | `-h`        | Help |
 | `--version` | Show the fixed build-date version (`yyyyMMdd-HHmmss`) |
 | `--crypto-selftest` | Run the crypto unit tests (published vectors, header parsing, chunk framing), then exit |
+
+### Exit status
+
+| Code | Meaning |
+|---|---|
+| `0` | Success — **but see the caveat below** |
+| `1` | Everything that fails: unknown flag, no mode or two modes, missing file, unreadable/unwritable path, corrupt or truncated archive, wrong key, tampered ciphertext, RGB1 validation failure, `-r` on a compressed archive |
+| `2` | Only from `--zstd-level` validation (out of range, or not a number) |
+
+`2` is not a general "bad argument value" category — it is currently reachable
+from that one flag. `-n abc` and `--strip-components abc` are the same kind of
+error and exit `1`. Script against `!= 0` rather than against a specific code.
+
+Exit `1` is also not decomposable: a wrong passphrase, a tampered archive and a
+missing file are indistinguishable by exit code alone. Read stderr to tell them
+apart.
+
+**Caveat on `0`:** `-t` and `-x` exit `0` with no output on any input under 512
+bytes, including a truncated `.tar.gz` and random bytes — where `bsdtar` exits
+`1` with `Unrecognized archive format`. An empty file exiting `0` is the normal
+convention and matches `bsdtar`; the sub-512-byte garbage case is not, and is
+tracked in [`todo/todo.md`](todo/todo.md). Until it is resolved, do not treat
+exit `0` from `-t` as proof that an archive is intact.
+
+`--zstd-level` is honoured only when `--zstd` is also given. On its own it is
+accepted, exits 0 and writes a plain uncompressed tar — the level is discarded
+with no warning. This is unlike `-r` / `-u` / `--delete`, which reject a codec
+flag outright. Check with `--identify`: an archive built by
+`-c --zstd-level 9 -f out.tar dir` reports `tar`, not `zstd → tar`.
 
 ### Which way `-f` points
 

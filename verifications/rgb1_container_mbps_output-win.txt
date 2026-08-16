@@ -17,7 +17,7 @@ its header.
 
 To restore this record on Windows:
   1. verifications/rgb1/make_consecutive_corpus.zsh   (needs the source video)
-  2. ./test_swift_tar_rgb1.sh
+  2. ./test_swift_tar_rgb1.zsh
 
 [已退役] 2026-08-15 —— 本紀錄產自合成語料，且無法由現行腳本重現。
 
@@ -33,4 +33,4 @@ test_swift_tar_rgb1.sh 原本以 4 KiB /dev/urandom 區塊重複 768 次作為 c
 
 在 Windows 上重建此紀錄：
   1. verifications/rgb1/make_consecutive_corpus.zsh   （需要來源影片）
-  2. ./test_swift_tar_rgb1.sh
+  2. ./test_swift_tar_rgb1.zsh

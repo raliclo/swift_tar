@@ -400,6 +400,20 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 | `--version` | 顯示固定的建置日期版本（`yyyyMMdd-HHmmss`） |
 | `--crypto-selftest` | 執行密碼學單元測試（公開向量、標頭解析、分塊切分）後結束 |
 
+### `-f` 指向哪一邊
+
+`-f` 指定封存檔，但該封存究竟是被讀取還是被寫入，由命令決定，而非由 `-f` 決定：
+
+| 命令 | `-f` 是 |
+|---|---|
+| `-c`、`--rgb1-pack` | **輸出**——要寫出的檔案 |
+| `-x`、`-t`、`--cat`、`--identify`、`--encrypt-only`、`--decrypt-only`、`--rgb1-info`、`--rgb1-raw` | **輸入**——要讀取的檔案 |
+| `-r`、`-u`、`--delete` | **兩者**——就地修改 |
+
+`--rgb1-pack` 特別容易誤用：它在上方表格中緊鄰 `--encrypt-only` 與
+`--decrypt-only`，方向卻相反——那兩者是讀取 `-f` 並寫至 stdout，而 `--rgb1-pack`
+是**寫入** `-f`。
+
 `--version` 回報編譯 binary 時擷取的本機日期時間，例如
 `swift_tar 20260712-143015`。相同值會以 `swift_tar_version` 儲存在封裝的
 `version.txt` 中。

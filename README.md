@@ -442,6 +442,21 @@ the same behavior as a libarchive built without lzo support.
 | `--version` | Show the fixed build-date version (`yyyyMMdd-HHmmss`) |
 | `--crypto-selftest` | Run the crypto unit tests (published vectors, header parsing, chunk framing), then exit |
 
+### Which way `-f` points
+
+`-f` names the archive, but whether that archive is being read or written is
+decided by the command, not by `-f`:
+
+| Command | `-f` is the |
+|---|---|
+| `-c`, `--rgb1-pack` | **output** — the file being written |
+| `-x`, `-t`, `--cat`, `--identify`, `--encrypt-only`, `--decrypt-only`, `--rgb1-info`, `--rgb1-raw` | **input** — the file being read |
+| `-r`, `-u`, `--delete` | **both** — modified in place |
+
+This catches people out on `--rgb1-pack`, which sits next to `--encrypt-only`
+and `--decrypt-only` in the table above but points the other way: those two read
+`-f` and write to stdout, whereas `--rgb1-pack` *writes* `-f`.
+
 `--version` reports the local date and time captured when the binary was
 compiled, for example `swift_tar 20260712-143015`. The same value is stored as
 `swift_tar_version` in the packaged `version.txt`.

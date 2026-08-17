@@ -4,27 +4,28 @@
 > `--keyfile=PATH` hangs an unattended run (High), `--zstd-level=N` is silently
 > ignored (Medium), `lzfse2/run_round.command:50` still calls the pre-rename
 > `compile_tar.sh` and is broken now, `package_win.ps1` is still PowerShell,
-> `sha()` costs 892 s on Windows, and `encrypt_mbps_win_output.txt` holds
-> zstd-3 numbers. Everything above was measured, not inferred; each section
+> `sha()` costs 892 s on Windows, `encrypt_mbps_win_output.txt` holds
+> zstd-3 numbers, and a trailing `/` on an input path doubles every separator in
+> the archive (Low). Everything above was measured, not inferred; each section
 > below records how.
 >
 > **2026-08-16 未處理項目**，依影響程度排序：`--keyfile=PATH` 會讓無人值守的執行
 > 卡死（High）、`--zstd-level=N` 被靜默忽略（Medium）、
 > `lzfse2/run_round.command:50` 仍呼叫改名前的 `compile_tar.sh` 而現正壞著、
 > `package_win.ps1` 仍是 PowerShell、`sha()` 在 Windows 上耗時 892 秒、
-> `encrypt_mbps_win_output.txt` 仍是 zstd-3 的數字。以上皆為實測而非推論，各節
-> 記錄了測法。
+> `encrypt_mbps_win_output.txt` 仍是 zstd-3 的數字、輸入路徑帶尾隨 `/` 會使封存中
+> 所有分隔符加倍（Low）。以上皆為實測而非推論，各節記錄了測法。
 >
-> **Docs have not been tested against a reader who cannot see the code.** The
-> `read_easy` skill exists for exactly that and was installed at 14:57 on
-> 2026-08-16, after this session had loaded its skill list, so it could not be
-> invoked here. Run it from a fresh session against this repo. A reader who only
-> has the README will reach for `--keyfile=key.bin` and `--zstd-level=19`, which
-> is where the two defects above surface.
-> **文件尚未經「看不到程式碼的讀者」檢驗。** `read_easy` skill 正是為此而存在，但它
-> 於 2026-08-16 14:57 才安裝，晚於本 session 載入 skill 清單的時間，因此在此無法
-> 呼叫。請於全新 session 對本程式庫執行。只讀 README 的讀者會自然寫出
-> `--keyfile=key.bin` 與 `--zstd-level=19`，而那正是上述兩個缺陷浮現之處。
+> **The `read_easy` blind test has been started but is nowhere near finished:
+> 1 round of a planned 100.** See the section below for what round 1 found. The
+> run stopped on a model usage limit, not on a result, so the remaining 99 rounds
+> are still owed. A reader who only has the README will reach for
+> `--keyfile=key.bin` and `--zstd-level=19`, which is where the two defects above
+> surface — and neither has been exercised by the blind test yet.
+> **`read_easy` 盲測已啟動但遠未完成：計畫 100 回合，目前 1 回合。** round 1 的發現
+> 見下節。中止原因是模型額度上限而非測試結果，故其餘 99 回合仍待補。只讀 README 的
+> 讀者會自然寫出 `--keyfile=key.bin` 與 `--zstd-level=19`，而那正是上述兩個缺陷浮現
+> 之處——且盲測尚未觸及這兩者。
 
 Tracked issues that are known, reproduced, and deliberately not fixed yet.
 `verifications/bsdtar_compat.zsh:385` already points here for its XFAIL, so this
@@ -235,6 +236,59 @@ rename only to update the script names it references.
 使用者層級的腳本政策僅保留 PowerShell 作為 UAC 提權 shim。`compile_tar-win.bat`
 的 PowerShell 步驟已於 `a753ab7` 換成 `strip_runcli.zsh`；本檔屬同一類而被遺漏。
 改名只是更新了它所引用的腳本名稱。
+
+## read_easy blind test / read_easy 盲測
+
+A `general-purpose` agent restricted to `README.md` and `README.zh-TW.md` — no
+source, no scripts, no git history, and specifically **no `--help`** — running one
+task per round against `release/swift_tar.exe` (build 20260816-150106). Findings
+below are the ones I re-measured myself; the agent's own classification is
+recorded where it differed from mine, because that difference is the useful part.
+
+一個受限於 `README.md` 與 `README.zh-TW.md` 的 `general-purpose` agent——不得讀原始碼、
+腳本、git 歷史，尤其不得用 `--help`——對 `release/swift_tar.exe`（建置
+20260816-150106）每回合做一項測試。以下是我親自重測過的發現；agent 的分類若與我不同
+則一併記錄，因為有價值的正是那個落差。
+
+### Round 1: a trailing slash on the input path doubles every separator / 輸入路徑的尾隨斜線使所有分隔符加倍  ▸ ⬜ 未處理 / open
+
+The agent reported this round CLEAN. It was not — the defect was sitting in the
+output it pasted, and it read only its own exit code. Measured on 2026-08-16:
+
+agent 將本回合報為 CLEAN。並非如此——缺陷就在它自己貼出的輸出裡，而它只看了離開碼。
+2026-08-16 實測：
+
+```
+swift_tar -c -f a.tar tree/   ->  -t prints  tree//a.txt     diverges
+swift_tar -c -f b.tar tree    ->  -t prints  tree/a.txt      matches bsdtar
+bsdtar    -cf c.tar tree/     ->  -t prints  tree/a.txt
+```
+
+`archiveName()` at `swift_tar.swift:2093` normalises backslashes, the drive
+letter, and leading `/` and `./`, but not a **trailing** `/`. The walker at
+`swift_tar.swift:2132` then recurses with `path + "/" + child` on the argument as
+given, so the doubled separator propagates to every entry underneath, where it is
+no longer trailing but interior — which is why stripping the trailing slash alone
+is not sufficient; the repeated `/` has to be collapsed.
+
+`swift_tar.swift:2093` 的 `archiveName()` 會正規化反斜線、磁碟機代號、開頭的 `/` 與
+`./`，卻不處理**尾隨**的 `/`。`swift_tar.swift:2132` 的走訪器接著以原引數做
+`path + "/" + child` 遞迴，於是加倍的分隔符擴散到底下每一個項目，且此時它已不在結尾
+而在中間——這正是「只去尾隨斜線」不夠的原因，重複的 `/` 必須摺疊。
+
+**Severity: low, but not zero.** Extraction is unaffected: swift_tar and bsdtar
+both restore the doubled-slash archive correctly, and `--strip-components=1`
+still works. What breaks is anything comparing `-t` output against bsdtar's. It
+matters more than the severity suggests because a trailing slash is what shell
+tab-completion produces on a directory, so this is the common spelling.
+
+**嚴重度：低，但不為零。** 解壓不受影響：swift_tar 與 bsdtar 都能正確還原，
+`--strip-components=1` 亦正常。壞掉的是任何拿 `-t` 輸出與 bsdtar 比對的東西。其實際
+影響大於嚴重度所示，因為 shell 對目錄做 tab 補全時給的就是尾隨斜線，故這是常見寫法。
+
+Not a README defect — the README's description of `-c` is accurate. Deliberately
+not fixed in the same pass as the doc work, because it needs a rebuild to verify.
+非 README 缺陷——README 對 `-c` 的描述正確。刻意不與文件工作同批修正，因為驗證需要重建。
 
 ## zsh port / zsh 移植版
 

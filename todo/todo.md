@@ -7,8 +7,9 @@
 > `compile_tar.sh` and is broken now, `package_win.ps1` is still PowerShell,
 > `sha()` costs 892 s on Windows, `encrypt_mbps_win_output.txt` holds
 > zstd-3 numbers, and a trailing `/` on an input path doubles every separator in
-> the archive (Low). Everything above was measured, not inferred; each section
-> below records how.
+> the archive, which silently breaks `--delete` and makes `-u` double the archive
+> (Medium-High). Everything above was measured, not inferred; each section below
+> records how.
 >
 > **2026-08-18 未處理項目**，依影響程度排序：`--encrypt` 在 `< /dev/null` 下於
 > Windows 永久卡死（High）、`--keyfile=PATH` 會讓無人值守的執行
@@ -16,7 +17,8 @@
 > `lzfse2/run_round.command:50` 仍呼叫改名前的 `compile_tar.sh` 而現正壞著、
 > `package_win.ps1` 仍是 PowerShell、`sha()` 在 Windows 上耗時 892 秒、
 > `encrypt_mbps_win_output.txt` 仍是 zstd-3 的數字、輸入路徑帶尾隨 `/` 會使封存中
-> 所有分隔符加倍（Low）。以上皆為實測而非推論，各節記錄了測法。
+> 所有分隔符加倍，進而無聲破壞 `--delete` 並使 `-u` 讓封存翻倍（Medium-High）。
+> 以上皆為實測而非推論，各節記錄了測法。
 >
 > **The `read_easy` blind test has been started but is nowhere near finished:
 > 1 round of a planned 100.** See the section below for what round 1 found. The
@@ -278,19 +280,73 @@ is not sufficient; the repeated `/` has to be collapsed.
 `path + "/" + child` 遞迴，於是加倍的分隔符擴散到底下每一個項目，且此時它已不在結尾
 而在中間——這正是「只去尾隨斜線」不夠的原因，重複的 `/` 必須摺疊。
 
-**Severity: low, but not zero.** Extraction is unaffected: swift_tar and bsdtar
-both restore the doubled-slash archive correctly, and `--strip-components=1`
-still works. What breaks is anything comparing `-t` output against bsdtar's. It
-matters more than the severity suggests because a trailing slash is what shell
-tab-completion produces on a directory, so this is the common spelling.
+**Severity: initially assessed Low. Raised to Medium-High by round 8 — see
+below.** Extraction really is unaffected: swift_tar and bsdtar both restore the
+doubled-slash archive correctly, and `--strip-components=1` still works. The
+first assessment stopped there, and that was the mistake: it checked the paths
+that *read data* and never checked the paths that *match names*.
 
-**嚴重度：低，但不為零。** 解壓不受影響：swift_tar 與 bsdtar 都能正確還原，
-`--strip-components=1` 亦正常。壞掉的是任何拿 `-t` 輸出與 bsdtar 比對的東西。其實際
-影響大於嚴重度所示，因為 shell 對目錄做 tab 補全時給的就是尾隨斜線，故這是常見寫法。
+**嚴重度：初判 Low，經 round 8 上修為 Medium-High——見下。** 解壓確實不受影響：
+swift_tar 與 bsdtar 都能正確還原，`--strip-components=1` 亦正常。初判止步於此，而這
+正是失誤所在：它檢查了**讀取資料**的路徑，卻沒檢查**比對名稱**的路徑。
 
 Not a README defect — the README's description of `-c` is accurate. Deliberately
 not fixed in the same pass as the doc work, because it needs a rebuild to verify.
 非 README 缺陷——README 對 `-c` 的描述正確。刻意不與文件工作同批修正，因為驗證需要重建。
+
+### Round 8: the doubled separator breaks every name-matching operation / 加倍的分隔符使所有依名稱比對的操作失效  ▸ ⬜ 未處理 / open
+
+Round 1 called the doubled separator cosmetic because extraction survives it.
+Round 8 shows that conclusion was drawn from too narrow a sample. Measured
+2026-08-18 on an archive created from `tree/`:
+
+round 1 因解壓不受影響而判定加倍分隔符僅屬外觀問題。round 8 顯示該結論取樣過窄。
+2026-08-18 以 `tree/` 建立的封存實測：
+
+```
+--delete -f slash.tar tree/a.txt     ->  'tree/a.txt': not found in archive, rc=1
+--delete -f slash.tar 'tree//a.txt'  ->  rc=0, deleted
+```
+
+The file is unambiguously in the archive. The name the user would type — the name
+it actually has on disk — does not match, and the only spelling that works is the
+doubled one copied out of `-t` output. `--delete` is documented as "matching
+entry by name", and it does; the stored name is simply not the name anyone would
+write.
+
+該檔確實在封存中。使用者會鍵入的名稱——也就是它在磁碟上的真實名稱——比對不到，唯一
+有效的寫法是從 `-t` 輸出複製出來的加倍版本。README 說 `--delete` 依名稱比對，它確實
+如此；問題在於存進去的名稱不是任何人會寫的那個。
+
+**`-u` is worse, because it fails silently.** Create with `tree/`, then update
+with `tree` without modifying a single file:
+
+**`-u` 更糟，因為它無聲失敗。** 以 `tree/` 建立，再以 `tree` 更新，且未修改任何檔案：
+
+```
+created with "tree/"          ->   8 entries
+-u with "tree", nothing edited -> 16 entries, 16 distinct names, rc=0
+-u with "tree/" (consistent)   ->  11 entries (the 3 dirs, which -u always re-adds)
+```
+
+`-u` means "append only members that are newer or absent". Every member was
+present, under a spelling that did not match, so all were judged absent and the
+archive doubled — exit 0, no warning. Repeated updates grow it without bound.
+Extraction still yields the right tree because the later copy wins, which is
+exactly why nobody would notice.
+
+`-u` 的語意是「只追加較新或不存在的成員」。所有成員都在，只是拼法不符，於是全被判為
+不存在而使封存翻倍——離開碼 0，毫無警告。反覆更新會讓它無限膨脹。解出的樹仍然正確，
+因為後寫入的那份勝出——這正是沒有人會察覺的原因。
+
+**Fix the root cause, not the call sites.** Collapsing repeated `/` and stripping
+a trailing `/` in `archiveName()` closes `--delete`, `-u`, the `-t` divergence and
+anything added later that matches on names. Patching the matchers individually
+would leave the next name-based feature to rediscover this.
+
+**應修根因而非各呼叫點。** 在 `archiveName()` 中摺疊重複的 `/` 並去除尾隨 `/`，即可
+一併解決 `--delete`、`-u`、`-t` 輸出差異，以及日後任何依名稱比對的新功能。逐一修補
+比對端，只會讓下一個依名稱比對的功能重新踩到同一個坑。
 
 ### Round 4: `--encrypt` hangs forever on `< /dev/null` (Windows) / `--encrypt` 在 `< /dev/null` 下永久卡死（Windows）  ▸ ⬜ 未處理 / open
 
@@ -343,6 +399,33 @@ reaches the guard and the guard wrongly says "terminal".
 
 與上文 `--keyfile=PATH` 的內聯選項卡死相關但不同：那一個是值根本沒被解析，故從未走到
 守門；本項則走到了守門，而守門誤判為「終端機」。
+
+### Round 6: `--zstd-level` is the only path that exits 2 / 只有 `--zstd-level` 會回傳 2  ▸ ⬜ 未處理 / open
+
+Found while establishing the exit-status contract for the README. Measured
+2026-08-18 across twelve failure modes: every one exits 1 — missing archive,
+corrupt archive, unknown option, missing input path, no mode given, no files
+given, negative `--strip-components` — **except** `--zstd-level`, which exits 2.
+
+為 README 建立離開碼契約時發現。2026-08-18 對十二種失敗情形實測：封存檔不存在、封存
+損毀、未知選項、輸入路徑不存在、未指定模式、未指定檔案、`--strip-components` 為負，
+全部回傳 1——**唯獨** `--zstd-level` 回傳 2。
+
+`swift_tar.swift:3729` and `:3734` are the only two `exit(2)` calls in the file;
+the other sixteen error paths all use `exit(1)`. So the 2 is a one-off in that
+block rather than a category, and nothing documents it as meaning anything.
+
+`swift_tar.swift:3729` 與 `:3734` 是全檔僅有的兩處 `exit(2)`，其餘十六處錯誤路徑皆為
+`exit(1)`。故此 2 是該區塊的孤例而非一種分類，且無任何文件賦予它意義。
+
+Either make it 1 like everything else, or give 2 a documented meaning and apply
+it consistently. The README now sidesteps the question by telling readers to test
+zero versus non-zero and not to branch on a specific value — which is honest and
+stays true either way, but it is a workaround for an inconsistency, not a fix.
+
+要嘛改為與其他路徑一致的 1，要嘛賦予 2 明確意義並一致套用。README 目前以「請判斷零或
+非零、不要針對特定值分支」迴避此問題——這是誠實的寫法且無論如何都不會過期，但那是對
+不一致的迴避，不是修正。
 
 ## zsh port / zsh 移植版
 

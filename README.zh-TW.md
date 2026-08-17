@@ -289,6 +289,47 @@ cat mystery.bin | release/swift_tar --identify  # 「<stdin>: gzip → tar」
 一般讀取時，`-v` 會印出相同的偵測結果（`compression format: gzip`，未壓縮則印
 `none`）。
 
+### RGB1 原始影像容器
+
+`--rgb1-pack` 會把 raw RGB 位元組串包上標頭，標頭中帶有影像尺寸、WGS84 位置與來源
+資訊。`--rgb1-info` 將這些欄位印回；`--rgb1-raw` 移除標頭，把原始 payload 寫至 stdout。
+
+**`--rgb1-pack` 需要十個 metadata 旗標**，且皆無預設值——少任何一個都會以
+`Missing RGB1 argument ...` 失敗並回傳 1。
+
+```sh
+release/swift_tar --rgb1-pack \
+  --width 4 --height 4 \
+  --lat 25.0330 --lng 121.5654 --height-m 12.5 \
+  --title "test tile" --country "Taiwan" \
+  --creator-email "you@example.com" --right "CC" \
+  --created-ms 1755500000000 \
+  -f out.rgb1 raw.rgb
+
+release/swift_tar --rgb1-info -f out.rgb1     # 印出下表欄位
+release/swift_tar --rgb1-raw  -f out.rgb1 > back.rgb   # 與 raw.rgb 位元組相同
+```
+
+| 旗標 | 型別／範圍 | 說明 |
+|---|---|---|
+| `--width <W>` | UInt32 像素 | 必要 |
+| `--height <H>` | UInt32 像素 | 必要 |
+| `--lat <deg>` | WGS84 度，−90…90 | 必要；可為負值 |
+| `--lng <deg>` | WGS84 度，−180…180 | 必要；可為負值 |
+| `--height-m <m>` | 公尺 | 必要；**標頭中以毫米儲存** |
+| `--title <text>` | ASCII，小於 64 bytes | 必要 |
+| `--country <text>` | ASCII，小於 512 bytes | 必要 |
+| `--creator-email <email>` | ASCII，最多 254 bytes | 必要 |
+| `--right <text>` | 1–4 個英文字母 | 必要 |
+| `--created-ms <unix_ms>` | Int64，UTC Unix 毫秒 | 必要 |
+| `--tz-offset-min <minutes>` | Int16 | **可省**，預設 `480`（台灣） |
+
+位置引數是 raw 輸入，`-f` 指定輸出——與 `-x` 時兩者的角色相反。`--rgb1-info` 會回報
+`format`、`width`、`height`、`latitude`、`longitude`、`height_m`、`geo_datum_code`、
+`title`、`country`、`creator_email`、`right`、`created_unix_ms`、
+`timezone_offset_minutes` 與 `payload_bytes`。已實測往返：以上述指令打包 48 bytes 的
+payload 得到 924 bytes 的容器，`--rgb1-raw` 取回的 payload 以 `cmp` 比對完全相同。
+
 ## 壓縮引擎旗標（僅建立時）
 
 讀取檔案時一律自動偵測。若 ZIP 來自 stdin，因無法在不消耗輸入的情況下探測，
@@ -342,6 +383,29 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 `--version` 回報編譯 binary 時擷取的本機日期時間，例如
 `swift_tar 20260712-143015`。相同值會以 `swift_tar_version` 儲存在封裝的
 `version.txt` 中。
+
+## 離開碼
+
+**請判斷「零或非零」，不要針對某個特定的非零值分支**——實際拿到哪個值並非穩定介面，
+可能隨建置而變。
+
+| 離開碼 | 意義 |
+|---|---|
+| `0` | 所要求的操作已完成 |
+| 非零 | 未完成；原因輸出至 stderr |
+
+失敗時不會留下半成品：建立失敗不寫出封存，解出失敗不寫出檔案。已就封存檔不存在、封存
+損毀、未知選項、輸入路徑不存在、解密金鑰錯誤、密文遭截斷等情形逐一驗證——全部以非零
+離開且結果為空。
+
+有兩種情形值得單獨列出，否則腳本必然寫錯：
+
+- **`--identify` 即使無法辨識輸入也回傳 `0`。** 它會印出
+  `<file>: unrecognized (not tar) / 無法辨識（非 tar）` 並視為成功，與 `file` 的精神
+  一致。只有檔案讀不到才會失敗。故 `swift_tar --identify -f x && ...` **不代表**
+  「x 是封存檔」——若您要判斷的是這件事，請比對印出的文字。
+- **`-x` 搭配指向不存在目錄的 `-C` 會回傳 `0`** 並自動建立該目錄，而系統 tar 在此會
+  失敗。詳見上方 `-C` 對照表。
 
 ## 檔案結構
 

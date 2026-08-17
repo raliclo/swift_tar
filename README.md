@@ -326,6 +326,50 @@ cat mystery.bin | release/swift_tar --identify  # "<stdin>: gzip → tar"
 On a normal read, `-v` prints the same detection (`compression format: gzip`,
 or `none` when the archive is uncompressed).
 
+### RGB1 raw image container
+
+`--rgb1-pack` wraps a raw RGB byte stream in a header carrying image dimensions,
+a WGS84 location and provenance metadata. `--rgb1-info` prints those fields back;
+`--rgb1-raw` strips the header and writes the original payload to stdout.
+
+**`--rgb1-pack` requires ten metadata flags.** There are no defaults for them —
+omit any one and the command fails with `Missing RGB1 argument ...` and exit 1.
+
+```sh
+release/swift_tar --rgb1-pack \
+  --width 4 --height 4 \
+  --lat 25.0330 --lng 121.5654 --height-m 12.5 \
+  --title "test tile" --country "Taiwan" \
+  --creator-email "you@example.com" --right "CC" \
+  --created-ms 1755500000000 \
+  -f out.rgb1 raw.rgb
+
+release/swift_tar --rgb1-info -f out.rgb1     # prints the fields below
+release/swift_tar --rgb1-raw  -f out.rgb1 > back.rgb   # byte-identical to raw.rgb
+```
+
+| flag | type / range | notes |
+|---|---|---|
+| `--width <W>` | UInt32 pixels | required |
+| `--height <H>` | UInt32 pixels | required |
+| `--lat <deg>` | WGS84 degrees, −90…90 | required; negative values are fine |
+| `--lng <deg>` | WGS84 degrees, −180…180 | required; negative values are fine |
+| `--height-m <m>` | metres | required; **stored in the header as millimetres** |
+| `--title <text>` | ASCII, under 64 bytes | required |
+| `--country <text>` | ASCII, under 512 bytes | required |
+| `--creator-email <email>` | ASCII, at most 254 bytes | required |
+| `--right <text>` | 1–4 English letters | required |
+| `--created-ms <unix_ms>` | Int64, UTC Unix milliseconds | required |
+| `--tz-offset-min <minutes>` | Int16 | **optional**, default `480` (Taiwan) |
+
+The positional argument is the raw input, and `-f` names the output — the reverse
+of the roles they play in `-x`. `--rgb1-info` reports `format`, `width`, `height`,
+`latitude`, `longitude`, `height_m`, `geo_datum_code`, `title`, `country`,
+`creator_email`, `right`, `created_unix_ms`, `timezone_offset_minutes` and
+`payload_bytes`. Verified round-trip: a 48-byte payload packed with the command
+above produced a 924-byte container, and `--rgb1-raw` returned the payload
+`cmp`-identical.
+
 ## Codec flags (create only)
 
 Reading files always auto-detects. `--zip` may also be supplied when ZIP input
@@ -380,6 +424,31 @@ the same behavior as a libarchive built without lzo support.
 `--version` reports the local date and time captured when the binary was
 compiled, for example `swift_tar 20260712-143015`. The same value is stored as
 `swift_tar_version` in the packaged `version.txt`.
+
+## Exit status
+
+**Test for zero versus non-zero. Do not branch on a particular non-zero value** —
+which one you get is not a stable interface and may change between builds.
+
+| status | meaning |
+|---|---|
+| `0` | the requested operation completed |
+| non-zero | it did not; the reason goes to stderr |
+
+On failure nothing partial is left behind: a failed create writes no archive, and
+a failed extract writes no files. Verified for a missing archive, a corrupt
+archive, an unknown option, a missing input path, a wrong decryption key and a
+truncated ciphertext — every one of them exits non-zero with an empty result.
+
+Two cases deserve their own line because a script will otherwise get them wrong:
+
+- **`--identify` exits `0` even when it cannot identify the input.** It prints
+  `<file>: unrecognized (not tar)` and succeeds, in the same spirit as `file`.
+  Only an unreadable file makes it fail. So `swift_tar --identify -f x && ...`
+  does **not** mean "x is an archive" — match the printed text if that is what
+  you need to know.
+- **`-x` with `-C` pointing at a missing directory exits `0`** and creates the
+  directory, where system tar would fail. See the `-C` table above.
 
 ## Layout
 

@@ -164,6 +164,21 @@ relative `-f` path is still created relative to the original invocation
 directory. Using `-C <parent> <leaf>` keeps parent paths and `..` out of archive
 entry names.
 
+The two sides of `-C` differ on a missing directory, and neither matches system
+tar, so check this before porting a script:
+
+| mode | `-C` target does not exist | |
+|---|---|---|
+| extract (`-x`) | **created, including intermediate levels**, then extracted into | exit 0 |
+| create (`-c`) | refused: `cannot chdir to '<dir>'` | exit 1 |
+| bsdtar / GNU tar, extract | refused: `Cannot open: No such file or directory` | exit 2 |
+
+The consequence is worth stating plainly: with system tar a typo in the `-C` path
+is caught for you, because extraction fails. With `swift_tar -x` the typo
+succeeds — a whole new directory tree appears at the mistyped path and the exit
+code is 0. If your script relies on that failure as a guard, test the directory
+yourself before extracting.
+
 The output format is selected by the codec flag, not by the filename
 extension. For example, `--gzip -f archive.zip` still writes a gzip-compressed
 tar stream (magic `1f 8b`), not a ZIP container. Use `--zip` for a true ZIP;
@@ -352,7 +367,7 @@ the same behavior as a libarchive built without lzo support.
 | Option | Meaning |
 |--------|---------|
 | `-f <path>` | Archive file (`-` = stdin/stdout; default `-`) |
-| `-C <dir>`  | Change input directory before create; extract into it when reading |
+| `-C <dir>`  | Change input directory before create (must exist); extract into it when reading (created if missing) |
 | `--strip-components <N>` | (`-x` tar extraction only) Remove N leading path components before writing entries; also accepts `--strip-components=N` |
 | `-n <N>`    | In-flight parallel chunks (default: one per core, capped at 4 × cores) |
 | `-v`        | Verbose (list entries / show the applied filter chain) |

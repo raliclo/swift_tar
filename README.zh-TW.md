@@ -146,6 +146,18 @@ tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # （或以管線�
 語意與系統 tar 一致。相對 `-f` 路徑仍以原始呼叫目錄為基準建立。使用
 `-C <parent> <leaf>` 可避免封存項目名稱包含 parent path 或 `..`。
 
+`-C` 在目標目錄不存在時，兩側行為並不相同，且都與系統 tar 不同，移植腳本前請先確認：
+
+| 模式 | `-C` 目標不存在時 | |
+|---|---|---|
+| 解壓（`-x`） | **自動建立，含中間各層**，再解出至該處 | exit 0 |
+| 建立（`-c`） | 拒絕：`cannot chdir to '<dir>'` | exit 1 |
+| bsdtar／GNU tar 解壓 | 拒絕：`Cannot open: No such file or directory` | exit 2 |
+
+其後果值得明講：使用系統 tar 時，`-C` 路徑打錯會因解壓失敗而被擋下；使用
+`swift_tar -x` 則會成功——在打錯的路徑上長出一整棵新的目錄樹，離開碼為 0。若您的腳本
+是靠那個失敗當作守門，請在解壓前自行檢查目錄是否存在。
+
 輸出格式由 codec 旗標決定，不是由副檔名決定。例如
 `--gzip -f archive.zip` 寫出的仍是 gzip 壓縮 tar stream（magic `1f 8b`），
 不是真正的 ZIP container。建立真實 ZIP 請使用 `--zip`；libarchive 會在需要時
@@ -317,7 +329,7 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 | 選項 | 意義 |
 |------|------|
 | `-f <path>` | 封存檔路徑（`-` 表標準輸入／輸出；預設 `-`） |
-| `-C <dir>`  | 建立前切換輸入目錄；讀取時解出至此目錄 |
+| `-C <dir>`  | 建立前切換輸入目錄（須已存在）；讀取時解出至此目錄（不存在則自動建立） |
 | `--strip-components <N>` | （僅 `-x` tar 解出）寫入前移除成員路徑前 N 層；也接受 `--strip-components=N` |
 | `-n <N>`    | 平行在途分塊數（預設每核一個，上限 4 × 核心數） |
 | `-v`        | 詳細輸出（列出項目／顯示套用的 filter 鏈） |

@@ -1,6 +1,7 @@
 # swift_tar TODO / 待辦
 
-> **Open items, 2026-08-16 / 尚未處理項目.** In rough order of consequence:
+> **Open items, 2026-08-18 / 尚未處理項目.** In rough order of consequence:
+> `--encrypt` under `< /dev/null` hangs forever on Windows (High),
 > `--keyfile=PATH` hangs an unattended run (High), `--zstd-level=N` is silently
 > ignored (Medium), `lzfse2/run_round.command:50` still calls the pre-rename
 > `compile_tar.sh` and is broken now, `package_win.ps1` is still PowerShell,
@@ -9,7 +10,8 @@
 > the archive (Low). Everything above was measured, not inferred; each section
 > below records how.
 >
-> **2026-08-16 未處理項目**，依影響程度排序：`--keyfile=PATH` 會讓無人值守的執行
+> **2026-08-18 未處理項目**，依影響程度排序：`--encrypt` 在 `< /dev/null` 下於
+> Windows 永久卡死（High）、`--keyfile=PATH` 會讓無人值守的執行
 > 卡死（High）、`--zstd-level=N` 被靜默忽略（Medium）、
 > `lzfse2/run_round.command:50` 仍呼叫改名前的 `compile_tar.sh` 而現正壞著、
 > `package_win.ps1` 仍是 PowerShell、`sha()` 在 Windows 上耗時 892 秒、
@@ -289,6 +291,58 @@ tab-completion produces on a directory, so this is the common spelling.
 Not a README defect — the README's description of `-c` is accurate. Deliberately
 not fixed in the same pass as the doc work, because it needs a rebuild to verify.
 非 README 缺陷——README 對 `-c` 的描述正確。刻意不與文件工作同批修正，因為驗證需要重建。
+
+### Round 4: `--encrypt` hangs forever on `< /dev/null` (Windows) / `--encrypt` 在 `< /dev/null` 下永久卡死（Windows）  ▸ ⬜ 未處理 / open
+
+The README promises that swift_tar "refuses to write an archive it cannot key
+rather than silently leaving it unencrypted" when stdin is not a terminal. The
+guard exists and works — but only for pipes. Measured 2026-08-18:
+
+README 承諾 stdin 非終端機時 swift_tar「寧可拒絕，也不默默寫出未加密的封存」。該守門
+確實存在且有效——但只對管線有效。2026-08-18 實測：
+
+```
+printf '' | swift_tar -c --encrypt -f b.enc tree   ->  documented error, rc=1, no file
+printf 'pw\npw\n' | swift_tar -c --encrypt ...     ->  documented error, rc=1, no file
+swift_tar -c --encrypt -f a.enc tree < /dev/null   ->  prompt printed, HANGS FOREVER
+                                                       (rc=124 only because timeout killed it)
+```
+
+**Two independent causes, both at the Windows branch / 兩個各自獨立的成因，都在 Windows 分支：**
+
+1. `crypto.swift:847` tests `_isatty(_fileno(stdin))`. On Windows `_isatty` is true
+   for **any character device**, and `< /dev/null` under MSYS becomes the Windows
+   `NUL` device, which is one. A pipe is not, which is exactly why the pipe cases
+   are caught and this one is not. The correct test is `GetConsoleMode()` on the
+   stdin handle, which fails for `NUL`.
+2. `crypto.swift:879` then reads with `_getch()` (conio), which reads the
+   **physical console and ignores stdin redirection entirely**. So nothing can
+   ever satisfy it: it is not waiting on the redirected stdin, it is waiting on a
+   keyboard. That is the infinite part.
+
+1. `crypto.swift:847` 以 `_isatty(_fileno(stdin))` 判斷。Windows 的 `_isatty` 對
+   **任何字元裝置**皆為真，而 `< /dev/null` 在 MSYS 下即 Windows 的 `NUL` 裝置，正
+   屬字元裝置；管線則否——這正是管線擋得住、本例擋不住的原因。正確判法是對 stdin
+   handle 呼叫 `GetConsoleMode()`，其對 `NUL` 會失敗。
+2. `crypto.swift:879` 接著以 `_getch()`（conio）讀取，該函式讀的是**實體主控台，完全
+   無視 stdin 重導向**。故沒有任何輸入能滿足它：它等的不是那個被重導的 stdin，而是鍵盤。
+   這才是「永久」的來源。
+
+**Severity: High for unattended use.** `< /dev/null` is the canonical way to run
+a command non-interactively — it is what cron and many service managers hand a
+job as stdin. The failure shape is the worst kind: no error, no archive, no exit,
+just a job that never finishes.
+
+**嚴重度：無人值守情境下為 High。** `< /dev/null` 正是把命令跑成非互動的標準寫法——
+cron 與許多 service manager 給任務的 stdin 就是它。其失敗形態屬最惡劣的一類：沒有錯誤、
+沒有產出、也不結束，只是一個永遠跑不完的工作。
+
+Related but distinct from the `--keyfile=PATH` inline-option hang recorded above:
+that one never reaches the guard because the value is never parsed; this one
+reaches the guard and the guard wrongly says "terminal".
+
+與上文 `--keyfile=PATH` 的內聯選項卡死相關但不同：那一個是值根本沒被解析，故從未走到
+守門；本項則走到了守門，而守門誤判為「終端機」。
 
 ## zsh port / zsh 移植版
 

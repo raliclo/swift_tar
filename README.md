@@ -435,10 +435,35 @@ which one you get is not a stable interface and may change between builds.
 | `0` | the requested operation completed |
 | non-zero | it did not; the reason goes to stderr |
 
-On failure nothing partial is left behind: a failed create writes no archive, and
-a failed extract writes no files. Verified for a missing archive, a corrupt
-archive, an unknown option, a missing input path, a wrong decryption key and a
-truncated ciphertext — every one of them exits non-zero with an empty result.
+**A non-zero exit does not mean nothing was written.** Work is streamed, not
+staged, so whatever completed before the failure stays on disk:
+
+```sh
+swift_tar -c -f mixed.tar tree/a.txt tree/typo.txt tree/sub/b.txt
+# -> cannot stat 'tree/typo.txt', exit 1
+# -> mixed.tar exists, is a valid readable tar, and contains ONLY tree/a.txt.
+#    tree/sub/b.txt was never reached and is silently absent.
+```
+
+Measured behaviour on failure:
+
+| case | left behind |
+|---|---|
+| create, bad path among good ones | a valid archive holding the entries processed before it |
+| create, bad path first | the archive file, empty (0 bytes) |
+| extract, archive truncated mid-stream | the entries already extracted, complete; the member the cut fell inside is not created at all, so no half-written file is left |
+| create or extract rejected before any work (unknown option, missing archive, wrong key) | nothing |
+
+`-f` is opened once the run is under way, so **a failed create destroys whatever
+archive was already at that path.** Measured: a 365,568-byte archive re-created
+with a mistyped input path became 0 bytes, exit 1. The exception is a failure
+caught during option validation, which happens before `-f` is opened — an unknown
+flag leaves the previous archive intact.
+
+**Treat a non-zero exit as "the output is undefined": delete it and start over.
+Never read it as "the output is untouched".** If the previous archive has to
+survive a failed run, write to a temporary path and move it into place only after
+a zero exit.
 
 Two cases deserve their own line because a script will otherwise get them wrong:
 

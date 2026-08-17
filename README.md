@@ -303,6 +303,15 @@ stdin/stdout).
   name, directory names with or without a trailing `/`). This is a swift_tar
   extension — BSD tar, the `tar` shipped with macOS, has no `--delete`.
 
+Duplicate member names are legal in a tar archive and both `-r` and `-u` can
+create them. Two rules follow, and neither depends on how the duplicate arose:
+
+- **Extraction takes the last copy.** `-r` appends unconditionally, so appending
+  a name that already exists leaves two entries in the listing and extracts the
+  newer one.
+- **`--delete` removes every copy of the name, not just one.** Deleting `a.txt`
+  from an archive holding two `a.txt` entries leaves neither.
+
 ### Extract / list (codec auto-detected)
 
 ```sh
@@ -374,6 +383,12 @@ above produced a 924-byte container, and `--rgb1-raw` returned the payload
 
 Reading files always auto-detects. `--zip` may also be supplied when ZIP input
 comes from stdin, where probing without consuming input is not possible.
+
+**At most one flag from this table.** Two different ones are rejected with
+`at most one codec flag`, exit 1, and no output file. Repeating the same flag
+(`--gzip --gzip`) is accepted. Note that this makes **`--zip64` a codec in its own
+right, not a modifier for `--zip`** — `--zip --zip64` is a conflict and is
+refused, so pass `--zip64` on its own.
 
 | Flag | Equivalent | Notes |
 |------|------------|-------|

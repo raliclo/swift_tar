@@ -834,6 +834,7 @@ import Darwin
 import Glibc
 #elseif os(Windows)
 import ucrt
+import WinSDK
 #endif
 
 enum KeyInput {
@@ -844,7 +845,24 @@ enum KeyInput {
     /// 歷史。stdin 非 TTY 時退回一般讀取（管線請改用 --keyfile）。
     static func promptPassphrase(_ prompt: String, confirm: Bool = false) throws -> String {
 #if os(Windows)
-        let isTerminal = _isatty(_fileno(stdin)) != 0
+        // GetConsoleMode, not _isatty: on Windows _isatty is true for ANY
+        // character device, and `< /dev/null` under MSYS is the NUL device,
+        // which is one. That let an unattended run past this guard and into
+        // readSecretLine, whose _getch reads the physical console and ignores
+        // stdin redirection entirely -- so it waited on a keyboard that was
+        // never coming and hung forever. A pipe is not a character device,
+        // which is why piped stdin was caught and `< /dev/null` was not.
+        // GetConsoleMode succeeds only for a real console handle.
+        // 使用 GetConsoleMode 而非 _isatty：Windows 的 _isatty 對「任何」字元
+        // 裝置皆為真，而 MSYS 下的 `< /dev/null` 即 NUL 裝置，正屬字元裝置。
+        // 於是無人值守的執行會通過此守門進入 readSecretLine，其 _getch 讀的是
+        // 實體主控台、完全無視 stdin 重導向——它等的是一個永遠不會來的按鍵，
+        // 因而永久卡死。管線並非字元裝置，這正是管線擋得住、`< /dev/null`
+        // 擋不住的原因。GetConsoleMode 僅對真正的主控台 handle 成功。
+        var consoleMode: DWORD = 0
+        let stdinHandle = GetStdHandle(STD_INPUT_HANDLE)
+        let isTerminal = stdinHandle != INVALID_HANDLE_VALUE
+            && GetConsoleMode(stdinHandle, &consoleMode)
 #else
         let isTerminal = isatty(fileno(stdin)) == 1
 #endif

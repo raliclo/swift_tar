@@ -2097,6 +2097,20 @@ final class TarWriter {
         }
         while p.hasPrefix("/") { p.removeFirst() }
         while p.hasPrefix("./") && p.count > 2 { p.removeFirst(2) }
+        // Collapse repeated "/" and drop a trailing one. `tar -c tree/` must
+        // store "tree/a.txt" as bsdtar does, but the walker recurses with
+        // path + "/" + child on the argument as given, so a trailing slash
+        // would reach every entry below as an interior "//" -- stripping only
+        // the trailing slash here is therefore not enough. Left unnormalized
+        // this is not cosmetic: --delete could not match the name the user
+        // types, and -u judged every member absent and doubled the archive.
+        // 摺疊重複的 "/" 並去除結尾的 "/"。bsdtar 對 `tar -c tree/` 存的是
+        // "tree/a.txt"，但走訪器是以原引數做 path + "/" + child 遞迴，故尾隨
+        // 斜線會以中間的 "//" 形式抵達底下每一個項目——因此只去尾隨斜線並不
+        // 足夠。若不正規化，這並非外觀問題：--delete 會比對不到使用者鍵入的
+        // 名稱，而 -u 會判定所有成員皆不存在，使封存翻倍。
+        while p.contains("//") { p = p.replacingOccurrences(of: "//", with: "/") }
+        while p.hasSuffix("/") && p.count > 1 { p.removeLast() }
         return p
     }
 
@@ -3415,6 +3429,22 @@ struct SwiftTarMain {
     static func main() {
 #if !os(Windows)
         signal(SIGPIPE, SIG_IGN)   // no SIGPIPE on Windows / Windows 無 SIGPIPE
+#else
+        // Windows opens the CRT's stdout in text mode, so every "\n" that
+        // print() emits leaves as "\r\n". That silently made -t and --identify
+        // disagree with system tar on Windows by one invisible byte per line:
+        // the names matched, `diff` against a bsdtar listing still failed
+        // everywhere, and CR is exactly the byte grep/sed cannot show you.
+        // Archive bytes were never affected -- those go through FileHandle,
+        // which bypasses the CRT -- so this switch only touches the textual
+        // reports, and it fixes them for every print() rather than one by one.
+        // Windows 的 CRT stdout 預設為文字模式，故 print() 送出的每個 "\n" 都會
+        // 變成 "\r\n"。這使得 -t 與 --identify 在 Windows 上與系統 tar 相差每行
+        // 一個看不見的位元組：名稱明明相同，與 bsdtar 列表做 diff 卻全行不符，
+        // 而 CR 正是 grep/sed 無法顯示給你看的那個位元組。封存位元組從未受影響
+        // ——它們走 FileHandle，不經 CRT——故此設定只影響文字報告，且是一次修好
+        // 所有 print()，而非逐一修補。
+        _ = _setmode(_fileno(stdout), _O_BINARY)
 #endif
         // -test 要在 combined short flag 展開之前攔截：展開邏輯會把它拆成
         // -t -e -s -t（長度 5、以 "-" 開頭、非 "--"）。
@@ -3709,6 +3739,25 @@ struct SwiftTarMain {
             exit(1)
         }
 
+        // Read a flag's value in either spelling: `--flag value` or
+        // `--flag=value`. Validation accepts the inline form by comparing only
+        // the name before "=", so every reader has to understand it too --
+        // when they did not, `--zstd-level=19` was silently ignored (the
+        // archive came out byte-identical to the default) and `--keyfile=PATH`
+        // fell through to the interactive prompt and hung an unattended run
+        // with no archive to show for it. Declared here rather than further
+        // down because the codec block below needs it.
+        // 以兩種寫法讀取旗標的值：`--flag value` 或 `--flag=value`。驗證層只比對
+        // "=" 之前的名稱，因而接受內聯形式，故每個讀值端都必須同樣認得它——
+        // 當它們不認得時，`--zstd-level=19` 會被靜默忽略（產出的封存與預設完全
+        // 相同），而 `--keyfile=PATH` 會落到互動式提示並讓無人值守的執行卡死，
+        // 且毫無產出。宣告於此而非更下方，因為下方的 codec 區塊需要它。
+        func optValue(_ flag: String) -> String? {
+            if let i = args.firstIndex(of: flag), i + 1 < args.count { return args[i + 1] }
+            let prefix = flag + "="
+            return args.first(where: { $0.hasPrefix(prefix) }).map { String($0.dropFirst(prefix.count)) }
+        }
+
         // codec flags / 壓縮引擎旗標
         var codec: TarCodec = .none
         var codecCount = 0
@@ -3723,15 +3772,15 @@ struct SwiftTarMain {
         if args.contains("--xz") || args.contains("-J")    { codec = .xz;    codecCount += 1 }
         if args.contains("--lzip")           { codec = .lzip;                  codecCount += 1 }
         if args.contains("--zstd")           { codec = .zstd;                  codecCount += 1 }
-        if let li = args.firstIndex(of: "--zstd-level") {
-            guard li + 1 < args.count, let lv = Int32(args[li + 1]) else {
+        if args.contains(where: { $0 == "--zstd-level" || $0.hasPrefix("--zstd-level=") }) {
+            guard let raw = optValue("--zstd-level"), let lv = Int32(raw) else {
                 FileHandle.standardError.write(Data("swift_tar: --zstd-level needs a number / --zstd-level 需要一個數字\n".utf8))
-                exit(2)
+                exit(1)
             }
             let maxLv = ZSTD_maxCLevel()
             guard lv >= 1 && lv <= maxLv else {
                 FileHandle.standardError.write(Data("swift_tar: --zstd-level must be 1...\(maxLv) / --zstd-level 必須介於 1 至 \(maxLv)\n".utf8))
-                exit(2)
+                exit(1)
             }
             zstdCompressionLevel = lv
         }
@@ -3757,15 +3806,6 @@ struct SwiftTarMain {
 
         let verbose = args.contains("-v")
 
-        func optValue(_ flag: String) -> String? {
-            guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
-            return args[i + 1]
-        }
-        func optValueLong(_ flag: String) -> String? {
-            if let exact = optValue(flag) { return exact }
-            let prefix = flag + "="
-            return args.first(where: { $0.hasPrefix(prefix) }).map { String($0.dropFirst(prefix.count)) }
-        }
         // -stream-in / -stream-out name the archive's stream ends. They are
         // spelled out rather than -si / -so because GNU tar has a real -s
         // (--same-order), so `-so` there parses as -s -o and `-si` as -s -i:
@@ -3884,7 +3924,7 @@ struct SwiftTarMain {
             || args.contains(where: { $0.hasPrefix("--strip-components=") })
         let stripComponents: Int = {
             guard hasStripComponents else { return 0 }
-            guard let raw = optValueLong("--strip-components") else {
+            guard let raw = optValue("--strip-components") else {
                 eprint("Error: --strip-components expects a non-negative integer. / 錯誤：--strip-components 需要非負整數。")
                 exit(1)
             }

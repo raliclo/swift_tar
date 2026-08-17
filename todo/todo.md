@@ -1,35 +1,35 @@
 # swift_tar TODO / 待辦
 
-> **Open items, 2026-08-18 / 尚未處理項目.** In rough order of consequence:
-> `--encrypt` under `< /dev/null` hangs forever on Windows (High),
-> `--keyfile=PATH` hangs an unattended run (High), `--zstd-level=N` is silently
-> ignored (Medium), `lzfse2/run_round.command:50` still calls the pre-rename
-> `compile_tar.sh` and is broken now, `package_win.ps1` is still PowerShell,
-> `sha()` costs 892 s on Windows, `encrypt_mbps_win_output.txt` holds
-> zstd-3 numbers, and a trailing `/` on an input path doubles every separator in
-> the archive, which silently breaks `--delete` and makes `-u` double the archive
-> (Medium-High). Everything above was measured, not inferred; each section below
-> records how.
+> **Fixed 2026-08-18 / 已修復.** Every defect the blind test turned up in the
+> program itself is now fixed, verified, and covered by
+> `test_blind_findings.zsh` (15 checks): the trailing-slash doubled separator and
+> the `--delete` / `-u` breakage it caused, the `< /dev/null` encryption hang,
+> the ignored inline `--flag=value` spellings, `--zstd-level`'s odd exit 2, and
+> CRLF in the `-t` / `--identify` output on Windows. The suite fails 11 of its
+> checks against the previous binary and passes all 15 against this one.
 >
-> **2026-08-18 未處理項目**，依影響程度排序：`--encrypt` 在 `< /dev/null` 下於
-> Windows 永久卡死（High）、`--keyfile=PATH` 會讓無人值守的執行
-> 卡死（High）、`--zstd-level=N` 被靜默忽略（Medium）、
-> `lzfse2/run_round.command:50` 仍呼叫改名前的 `compile_tar.sh` 而現正壞著、
-> `package_win.ps1` 仍是 PowerShell、`sha()` 在 Windows 上耗時 892 秒、
-> `encrypt_mbps_win_output.txt` 仍是 zstd-3 的數字、輸入路徑帶尾隨 `/` 會使封存中
-> 所有分隔符加倍，進而無聲破壞 `--delete` 並使 `-u` 讓封存翻倍（Medium-High）。
-> 以上皆為實測而非推論，各節記錄了測法。
+> **Open items / 尚未處理項目** are now all outside the program:
+> `lzfse2/run_round.command:50` still calls the pre-rename `compile_tar.sh` and
+> is broken, `package_win.ps1` is still PowerShell, `sha()` costs 892 s on
+> Windows, and `encrypt_mbps_win_output.txt` holds zstd-3 numbers. Everything
+> below was measured, not inferred; each section records how.
 >
-> **The `read_easy` blind test has been started but is nowhere near finished:
-> 1 round of a planned 100.** See the section below for what round 1 found. The
-> run stopped on a model usage limit, not on a result, so the remaining 99 rounds
-> are still owed. A reader who only has the README will reach for
-> `--keyfile=key.bin` and `--zstd-level=19`, which is where the two defects above
-> surface — and neither has been exercised by the blind test yet.
-> **`read_easy` 盲測已啟動但遠未完成：計畫 100 回合，目前 1 回合。** round 1 的發現
-> 見下節。中止原因是模型額度上限而非測試結果，故其餘 99 回合仍待補。只讀 README 的
-> 讀者會自然寫出 `--keyfile=key.bin` 與 `--zstd-level=19`，而那正是上述兩個缺陷浮現
-> 之處——且盲測尚未觸及這兩者。
+> **2026-08-18 已修復。** 盲測在程式本身找到的缺陷已全部修復、驗證，並由
+> `test_blind_findings.zsh`（15 項檢查）涵蓋：尾隨斜線造成的分隔符加倍及其引發的
+> `--delete`／`-u` 失效、`< /dev/null` 下的加密卡死、被忽略的內聯 `--flag=value`
+> 寫法、`--zstd-level` 特立獨行的 exit 2，以及 Windows 上 `-t`／`--identify` 輸出
+> 的 CRLF。該套件對舊 binary 有 11 項失敗，對新 binary 15 項全過。
+>
+> **尚未處理項目**現已全部落在程式之外：`lzfse2/run_round.command:50` 仍呼叫改名前
+> 的 `compile_tar.sh` 而現正壞著、`package_win.ps1` 仍是 PowerShell、`sha()` 在
+> Windows 上耗時 892 秒、`encrypt_mbps_win_output.txt` 仍是 zstd-3 的數字。以下皆為
+> 實測而非推論，各節記錄了測法。
+>
+> **The `read_easy` blind test is 17 rounds into a planned 100 and continues.**
+> Rounds that found something are recorded below with the measurement; rounds
+> that found nothing are not, because a clean round adds no fact to check.
+> **`read_easy` 盲測已進行 17 回合（計畫 100），仍在繼續。** 有發現的回合連同實測記
+> 於下方；沒有發現的回合不記錄，因為乾淨的回合並未新增任何可供查核的事實。
 
 Tracked issues that are known, reproduced, and deliberately not fixed yet.
 `verifications/bsdtar_compat.zsh:385` already points here for its XFAIL, so this
@@ -160,7 +160,7 @@ machine can close this — re-run the script there and commit the result.
 - `verifications/rgb1/test_interframe.zsh` — needs the source clip under
   `/Volumes/Windows/...`. 需要 `/Volumes/Windows/...` 下的來源影片。
 
-## Inline `--opt=value` is accepted by validation but ignored by parsing / 內聯 `=value` 通過驗證卻被忽略
+## Inline `--opt=value` is accepted by validation but ignored by parsing / 內聯 `=value` 通過驗證卻被忽略  ▸ ✅ 已修正 2026-08-18
 
 Raised in `review.md` for `--zstd-level`, then measured on 2026-08-16 with the
 build from `9a4df08`. The finding holds and is wider than reported.
@@ -205,15 +205,23 @@ level inline records numbers for a different level and exits 0.
 可接受的形態——它們大聲失敗。`--zstd-level=` 則是靜默的那個：以內聯形式設定等級的
 benchmark 會記下另一個等級的數字，並以 0 結束。
 
-**Two candidate fixes / 兩種修法.** Either make every value reader inline-aware
-(`optValue` -> `optValueLong`, and give `--zstd-level` the same helper), or have
-validation reject the inline form outright. The first is friendlier; the second
-is smaller and closes the gap by construction. Whichever is chosen, add a
-regression case covering both spellings for at least `--keyfile` and
-`--zstd-level`.
-兩條路：讓所有讀值端都支援內聯，或在驗證層直接拒絕內聯形式。前者較友善，後者較小
-且從構造上杜絕落差。無論採哪一種，都應為 `--keyfile` 與 `--zstd-level` 至少各補一
-組涵蓋兩種寫法的回歸測試。
+**Fixed 2026-08-18 by the friendlier of the two routes / 已於 2026-08-18 採較友善
+的一條修正.** `optValue` now reads both spellings itself, which made
+`optValueLong` an exact duplicate — it is gone, and its one caller
+(`--strip-components`) uses `optValue`. `--zstd-level` no longer indexes `args`
+directly; it goes through the same helper, so it gained inline support and lost
+its odd `exit(2)` in the same edit. Declaring `optValue` above the codec block
+rather than below it is what let that last part happen.
+
+`optValue` 現已自行處理兩種寫法，`optValueLong` 因而成為完全重複的實作——已移除，其
+唯一呼叫端（`--strip-components`）改用 `optValue`。`--zstd-level` 不再直接索引
+`args`，改走同一個 helper，故在同一次修改中同時取得內聯支援並去掉了它特立獨行的
+`exit(2)`。能一併處理的關鍵，在於把 `optValue` 宣告於 codec 區塊之上而非其下。
+
+Regression coverage for both spellings of `--keyfile` and `--zstd-level` is in
+`test_blind_findings.zsh`, which fails 11 checks against the previous binary.
+`--keyfile` 與 `--zstd-level` 兩種寫法的回歸測試位於 `test_blind_findings.zsh`，該
+套件對舊 binary 有 11 項失敗。
 
 ## Fallout from the .zsh rename / 改名後的連帶問題
 
@@ -254,7 +262,7 @@ recorded where it differed from mine, because that difference is the useful part
 20260816-150106）每回合做一項測試。以下是我親自重測過的發現；agent 的分類若與我不同
 則一併記錄，因為有價值的正是那個落差。
 
-### Round 1: a trailing slash on the input path doubles every separator / 輸入路徑的尾隨斜線使所有分隔符加倍  ▸ ⬜ 未處理 / open
+### Round 1: a trailing slash on the input path doubles every separator / 輸入路徑的尾隨斜線使所有分隔符加倍  ▸ ✅ 已修正 2026-08-18
 
 The agent reported this round CLEAN. It was not — the defect was sitting in the
 output it pasted, and it read only its own exit code. Measured on 2026-08-16:
@@ -294,7 +302,7 @@ Not a README defect — the README's description of `-c` is accurate. Deliberate
 not fixed in the same pass as the doc work, because it needs a rebuild to verify.
 非 README 缺陷——README 對 `-c` 的描述正確。刻意不與文件工作同批修正，因為驗證需要重建。
 
-### Round 8: the doubled separator breaks every name-matching operation / 加倍的分隔符使所有依名稱比對的操作失效  ▸ ⬜ 未處理 / open
+### Round 8: the doubled separator breaks every name-matching operation / 加倍的分隔符使所有依名稱比對的操作失效  ▸ ✅ 已修正 2026-08-18
 
 Round 1 called the doubled separator cosmetic because extraction survives it.
 Round 8 shows that conclusion was drawn from too narrow a sample. Measured
@@ -348,7 +356,7 @@ would leave the next name-based feature to rediscover this.
 一併解決 `--delete`、`-u`、`-t` 輸出差異，以及日後任何依名稱比對的新功能。逐一修補
 比對端，只會讓下一個依名稱比對的功能重新踩到同一個坑。
 
-### Round 4: `--encrypt` hangs forever on `< /dev/null` (Windows) / `--encrypt` 在 `< /dev/null` 下永久卡死（Windows）  ▸ ⬜ 未處理 / open
+### Round 4: `--encrypt` hangs forever on `< /dev/null` (Windows) / `--encrypt` 在 `< /dev/null` 下永久卡死（Windows）  ▸ ✅ 已修正 2026-08-18
 
 The README promises that swift_tar "refuses to write an archive it cannot key
 rather than silently leaving it unencrypted" when stdin is not a terminal. The
@@ -400,7 +408,7 @@ reaches the guard and the guard wrongly says "terminal".
 與上文 `--keyfile=PATH` 的內聯選項卡死相關但不同：那一個是值根本沒被解析，故從未走到
 守門；本項則走到了守門，而守門誤判為「終端機」。
 
-### Round 6: `--zstd-level` is the only path that exits 2 / 只有 `--zstd-level` 會回傳 2  ▸ ⬜ 未處理 / open
+### Round 6: `--zstd-level` is the only path that exits 2 / 只有 `--zstd-level` 會回傳 2  ▸ ✅ 已修正 2026-08-18
 
 Found while establishing the exit-status contract for the README. Measured
 2026-08-18 across twelve failure modes: every one exits 1 — missing archive,
@@ -426,6 +434,51 @@ stays true either way, but it is a workaround for an inconsistency, not a fix.
 要嘛改為與其他路徑一致的 1，要嘛賦予 2 明確意義並一致套用。README 目前以「請判斷零或
 非零、不要針對特定值分支」迴避此問題——這是誠實的寫法且無論如何都不會過期，但那是對
 不一致的迴避，不是修正。
+
+### Round 17 follow-up: `-t` and `--identify` emitted CRLF on Windows / 在 Windows 上輸出 CRLF  ▸ ✅ 已修正 2026-08-18
+
+Found by the regression test written for round 1, not by the blind agent. The
+test compared swift_tar's listing against system tar's and reported a mismatch
+whose `want` and `got` were visually identical. `od -c` showed why:
+
+由為 round 1 所寫的回歸測試發現，而非盲測 agent。該測試比對 swift_tar 與系統 tar 的
+列表，回報不符，但 `want` 與 `got` 肉眼完全相同。`od -c` 揭示了原因：
+
+```
+swift_tar -t : t r e e / \r \n t r e e / a . t x t \r \n
+system tar   : t r e e / \n    t r e e / a . t x t \n
+```
+
+Windows opens the CRT's stdout in text mode, so every `\n` from `print()` left as
+`\r\n`. This mattered more than it looks: **it defeated the point of the round-1
+fix.** The stored names were finally identical to bsdtar's, yet
+`diff <(swift_tar -t) <(bsdtar -tf)` still differed on every line — and CR is the
+one byte `grep` and `sed` cannot show you, so the cause is invisible to the usual
+tools.
+
+Windows 的 CRT stdout 預設為文字模式，故 `print()` 送出的每個 `\n` 都變成 `\r\n`。
+其影響大於表面：**它使 round 1 的修正失去意義。** 檔內名稱終於與 bsdtar 一致，
+`diff <(swift_tar -t) <(bsdtar -tf)` 卻仍每行都不符——而 CR 正是 `grep` 與 `sed`
+無法顯示給你看的那個位元組，故成因對常用工具而言是隱形的。
+
+Archive bytes were never affected: those go through `FileHandle`, which bypasses
+the CRT entirely. Verified — an archive written to stdout contained zero CR
+bytes, identical to the `-f` path. So the fix is one line at the top of `main()`,
+`_setmode(_fileno(stdout), _O_BINARY)`, which corrects every `print()` at once
+instead of rewriting them one at a time.
+
+封存位元組從未受影響：它們走 `FileHandle`，完全不經 CRT。已驗證——寫至 stdout 的封存
+含 0 個 CR，與 `-f` 路徑相同。故修法是 `main()` 開頭的一行
+`_setmode(_fileno(stdout), _O_BINARY)`，一次修正所有 `print()`，而非逐一改寫。
+
+**The lesson is about the test, not the tool.** A regression test written for one
+defect found a second, unrelated one, because it asserted against an external
+reference (system tar) rather than against the tool's own previous output. A test
+that compares a tool to itself can only catch changes, never wrongness.
+
+**這條教訓關於測試而非工具。** 為某一缺陷所寫的回歸測試，找出了另一個毫不相干的缺陷，
+原因是它以外部參照（系統 tar）為斷言基準，而非以工具自身先前的輸出為基準。拿工具與
+自己比對的測試，只能抓到「變化」，永遠抓不到「本來就錯」。
 
 ## zsh port / zsh 移植版
 

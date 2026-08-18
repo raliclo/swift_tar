@@ -41,26 +41,17 @@ case "$platform" in
         exec ./compile_tar-linux.zsh "$@"
         ;;
     win)
-        # compile_tar-win.bat needs cmd.exe: it loads the MSVC environment
-        # through vcvars64.bat, which only exists as a batch script.
-        # compile_tar-win.bat 需要 cmd.exe：它透過只以批次檔形式存在的
-        # vcvars64.bat 載入 MSVC 環境。
-        if [ $# -gt 0 ]; then
-            echo "[Warn] compile_tar-win.bat takes no arguments; ignoring: $*" >&2
-            echo "[Warn] compile_tar-win.bat 不接受參數，已忽略：$*" >&2
-        fi
-        # `.\` is required, not decoration. Passed as a bare name, cmd.exe
-        # searches PATH and NOT the current directory for an executable, so it
-        # answered "'compile_tar-win.bat' is not recognized as an internal or
-        # external command" from inside the very directory holding the file.
-        # With the prefix it runs. (The `//c` is for the MSYS runtime, which
-        # rewrites it to `/c`; that part was already right.)
-        # `.\` 是必要的，不是裝飾。以裸檔名傳入時，cmd.exe 只搜尋 PATH 而「不」搜尋
-        # 目前目錄，因此即使就在該檔所在的目錄下執行，它仍回答
-        # 「'compile_tar-win.bat' is not recognized as an internal or external
-        # command」。加上前綴即可執行。（`//c` 是給 MSYS runtime 的，它會改寫成
-        # `/c`，那部分原本就正確。）
-        exec cmd.exe //c '.\compile_tar-win.bat'
+        # Straight to zsh -- no cmd.exe in the path any more. The Windows build
+        # used to run through compile_tar-win.bat, which is now a one-line shim
+        # kept only for double-clicking from Explorer; all the logic lives in
+        # compile_tar-win.zsh. cmd.exe is still invoked once *inside* that
+        # script, to read the MSVC environment out of Microsoft's vcvars64.bat,
+        # which exists only as a batch file.
+        # 直接交給 zsh——路徑上已不再有 cmd.exe。Windows 建置原本經由
+        # compile_tar-win.bat，該檔現已縮為一行 shim，僅供在 Explorer 中按兩下啟動；
+        # 所有邏輯位於 compile_tar-win.zsh。cmd.exe 仍會在該腳本「內部」被呼叫一次，
+        # 用以自微軟的 vcvars64.bat 讀出 MSVC 環境——該檔僅以批次檔形式存在。
+        exec ./compile_tar-win.zsh "$@"
         ;;
     *)
         # Not a stub and not a silent fallback to one of the three: each build

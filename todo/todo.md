@@ -878,6 +878,16 @@ ZIP path; all six fail against the vulnerable build.
 stdin。測試可能因為與其宣稱檢查之事毫無關係的理由而通過。現在每個案例都提供金鑰，確保走
 到 ZIP 路徑；六項在有漏洞的建置上全數失敗。
 
+> **Third-party tool defects live in
+> [`verifications/bugs/bugs.md`](../verifications/bugs/bugs.md), not here.** This
+> file tracks swift_tar's own defects. The bsdtar-on-Windows behaviours referenced
+> below — the mangled listing, the pax requirement, the silent ZIP name loss — are
+> recorded there with their reproductions.
+> **第三方工具的缺陷記於
+> [`verifications/bugs/bugs.md`](../verifications/bugs/bugs.md)，不在本檔。** 本檔追蹤的是
+> swift_tar 自身的缺陷。下文提及的 Windows 版 bsdtar 行為——列表亂碼、pax 記錄的必要性、
+> ZIP 名稱的無聲遺失——連同重現步驟皆記於該處。
+
 ## Which `tar` is the reference? / 參照的 `tar` 是哪一個？
 
 Both implementations are installed on this Windows machine, and which one a bare

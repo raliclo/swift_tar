@@ -163,6 +163,45 @@ eq "--zstd-level out of range exits 1" "1" "$rc"
 rc=0; "$ST" -c --zstd --zstd-level=99 -f "$TMP/bad.tzst" -C "$SRC" tree >/dev/null 2>&1 || rc=$?
 eq "--zstd-level=N out of range exits 1" "1" "$rc"
 
+# ---- round 19: extraction must survive a path past Windows MAX_PATH ----
+# swift_tar could write archives it could not extract: the pax long-name
+# encoding on create is fine and GNU tar reads it, but extraction created
+# directories through Foundation, which fails past MAX_PATH -- and the failure
+# was discarded by `try?`, so the first symptom was errno 2 on the *file*.
+# The bug was deterministic but NOT monotonic in path length: 36 of 97 target
+# lengths failed, in bands 12 wide repeating every 31 characters -- one path
+# segment. A single length proves nothing, which is why this sweeps.
+# swift_tar 曾能寫出自己解不開的封存：建立端的 pax 長檔名編碼正確，GNU tar 也讀得
+# 到，但解壓端透過 Foundation 建目錄，而它在超過 MAX_PATH 後即失敗——且該失敗被
+# `try?` 丟棄，故最先出現的症狀是**檔案**的 errno 2。此缺陷雖為決定性，卻不隨路徑
+# 長度單調變化：97 個目標長度中有 36 個失敗，呈寬 12、每 31 字元重複一次的帶狀
+# ——恰為一個路徑分段。單一長度證明不了任何事，故此處採掃描。
+DEEP="$TMP/deep/longpath"
+mkdir -p "$DEEP"
+d="$DEEP"
+for i in $(seq 1 10); do d="$d/segment_of_thirty_chars_long_$i"; done
+mkdir -p "$d"
+printf 'deep\n' > "$d/file_with_a_reasonably_long_name_too.txt"
+( cd "$TMP/deep" && "$ST" -c -f "$TMP/deep.tar" longpath )
+
+lp_fail=0
+for pad in 8 12 17 23 43 50 74 80 85 96; do
+  target="$TMP/$(printf 't%.0s' $(seq 1 $pad))"
+  rm -rf "$target"; mkdir -p "$target"
+  "$ST" -x -f "$TMP/deep.tar" -C "$target" >/dev/null 2>&1 || lp_fail=$((lp_fail + 1))
+  rm -rf "$target"
+done
+eq "long paths extract at every target length" "0" "$lp_fail"
+
+# And the extracted tree must match what system tar makes of the same archive.
+# 且解出的樹必須與系統 tar 對同一封存的結果一致。
+rm -rf "$TMP/lpm" "$TMP/lpg"; mkdir -p "$TMP/lpm" "$TMP/lpg"
+"$ST" -x -f "$TMP/deep.tar" -C "$TMP/lpm" >/dev/null 2>&1 || true
+"$SYS_TAR" -xf "$TMP/deep.tar" -C "$TMP/lpg" >/dev/null 2>&1 || true
+eq "long-path tree matches system tar" \
+   "$(find "$TMP/lpg" -type d | wc -l | tr -d ' ')" \
+   "$(find "$TMP/lpm" -type d | wc -l | tr -d ' ')"
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

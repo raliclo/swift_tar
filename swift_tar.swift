@@ -1725,6 +1725,51 @@ private func winUcrtPath(_ path: String) -> String {
     return p
 }
 
+/// Create `path` and every missing parent, one component at a time, each call
+/// made on a `\\?\`-prefixed absolute path so no single call is bound by
+/// MAX_PATH. Returns whether the directory exists afterwards.
+///
+/// Foundation cannot do this job: measured on Windows,
+/// `createDirectory(atPath:withIntermediateDirectories: true)` fails on a
+/// 503-character target **with or without** the prefix ("The file name is
+/// invalid"). Extraction used it anyway, through `try?`, so a directory that
+/// could not be created failed silently and the first visible symptom was the
+/// *file* write reporting errno 2 (ENOENT) for a parent that had never been
+/// made. swift_tar could therefore write archives it could not extract, while
+/// GNU tar read the very same archives without trouble.
+///
+/// 逐一建立 `path` 及其所有缺失的父層，每次呼叫都用 `\\?\` 前綴的絕對路徑，
+/// 因此沒有任何一次呼叫受 MAX_PATH 限制。回傳該目錄事後是否存在。
+///
+/// Foundation 做不到這件事：Windows 上實測，
+/// `createDirectory(atPath:withIntermediateDirectories: true)` 對 503 字元的
+/// 目標**無論加不加前綴**都失敗（「檔案名稱無效」）。解壓端卻仍使用它，且包在
+/// `try?` 中，於是建不出來的目錄無聲失敗，最先看得見的症狀是**檔案**寫入回報
+/// errno 2（ENOENT）——父層根本不存在。swift_tar 因此會寫出自己解不開的封存，
+/// 而 GNU tar 讀同一批封存卻毫無問題。
+private func winMakeDirectories(_ path: String) -> Bool {
+    var abs = path.replacingOccurrences(of: "/", with: "\\")
+    let u = Array(abs.utf16)
+    let hasDrive = u.count >= 2 && u[1] == UInt16(UInt8(ascii: ":"))
+    if !hasDrive && !abs.hasPrefix("\\\\") { abs = winProcessCwd + "\\" + abs }
+    var comps: [Substring] = []
+    for c in abs.split(separator: "\\", omittingEmptySubsequences: false) {
+        if c == "." || c.isEmpty { continue }
+        if c == ".." { if comps.count > 1 { comps.removeLast() }; continue }
+        comps.append(c)
+    }
+    guard !comps.isEmpty else { return false }
+    var built = String(comps[0])            // drive letter or UNC root
+    for c in comps.dropFirst() {
+        built += "\\" + c
+        // Ignore the return: EEXIST is the common and correct outcome, and the
+        // one answer that matters is the _waccess check below.
+        // 忽略回傳值：EEXIST 是常見且正確的結果，真正算數的是下方的 _waccess。
+        _ = ("\\\\?\\" + built).withCString(encodedAs: UTF16.self) { _wmkdir($0) }
+    }
+    return ("\\\\?\\" + built).withCString(encodedAs: UTF16.self) { _waccess($0, 0) == 0 }
+}
+
 /// Write one extracted regular file with the selected backend; returns an
 /// error message on failure, nil on success. Called from FileWriterPool
 /// workers (distinct paths only, no shared state).
@@ -2546,12 +2591,24 @@ final class TarReader {
 
             let parent = (dest as NSString).deletingLastPathComponent
             if !parent.isEmpty {
+#if os(Windows)
+                guard winMakeDirectories(parent) else {
+                    throw TarError.io("cannot create directory '\(parent)' / 無法建立目錄 '\(parent)'")
+                }
+#else
                 try? fm.createDirectory(atPath: parent, withIntermediateDirectories: true)
+#endif
             }
 
             switch typeflag {
             case UInt8(ascii: "5"):
+#if os(Windows)
+                guard winMakeDirectories(dest) else {
+                    throw TarError.io("cannot create directory '\(dest)' / 無法建立目錄 '\(dest)'")
+                }
+#else
                 try? fm.createDirectory(atPath: dest, withIntermediateDirectories: true)
+#endif
 #if !os(Windows)
                 chmod(dest, mode_t(mode))
 #endif
@@ -2596,7 +2653,13 @@ final class TarReader {
 #endif
             case UInt8(ascii: "0"), 0, UInt8(ascii: "7"):
                 if isDir {   // some writers mark dirs with '0' + trailing "/" / 某些工具以 '0'+尾斜線表目錄
+#if os(Windows)
+                    guard winMakeDirectories(dest) else {
+                        throw TarError.io("cannot create directory '\(dest)' / 無法建立目錄 '\(dest)'")
+                    }
+#else
                     try? fm.createDirectory(atPath: dest, withIntermediateDirectories: true)
+#endif
                     dirTimes.append((dest, mtime))
                     continue
                 }

@@ -480,6 +480,67 @@ that compares a tool to itself can only catch changes, never wrongness.
 原因是它以外部參照（系統 tar）為斷言基準，而非以工具自身先前的輸出為基準。拿工具與
 自己比對的測試，只能抓到「變化」，永遠抓不到「本來就錯」。
 
+### Round 19: swift_tar could not extract archives it had written (Windows, long paths) / 解不開自己寫出的封存（Windows 長路徑）  ▸ ✅ 已修正 2026-08-18
+
+The Highlights section promises "long paths ... interoperable with `bsdtar` /
+GNU `tar`". The write side kept that promise — GNU tar read swift_tar's
+360-character pax entries perfectly. The read side did not: extracting the same
+archive failed with `cannot create '...' (errno 2)` while **GNU tar extracted it
+successfully in the same directory, from the same file, in the same session**.
+
+Highlights 承諾「long paths……與 bsdtar／GNU tar 互通」。建立端守住了承諾——GNU tar
+能完美讀取 swift_tar 寫出的 360 字元 pax 項目。讀取端沒有：解出同一封存時失敗於
+`cannot create '...' (errno 2)`，而**同一目錄、同一檔案、同一階段中的 GNU tar 卻能
+成功解出**。
+
+**The measurement that mattered was the one I nearly did not take.** My first
+reproduction succeeded, and I recorded "not reproducible". That was wrong: the
+defect is deterministic but **not monotonic in path length**. Sweeping the target
+directory name from 4 to 100 characters:
+
+**真正關鍵的那次量測，我差點沒做。** 我第一次重現是成功的，並記下「無法重現」。那是
+錯的：此缺陷雖屬決定性，卻**不隨路徑長度單調變化**。將目標目錄名自 4 掃到 100 字元：
+
+```
+failing lengths: 12-23, 43-54, 74-85     (36 of 97)
+```
+
+Bands 12 wide, repeating every 31 characters — exactly one path segment
+(`segment_of_thirty_chars_long_N/`). A single sample lands inside or outside a
+band by luck, which is why one trial "disproved" a real bug.
+
+帶寬 12、每 31 字元重複一次——恰為一個路徑分段。單次取樣落在帶內或帶外純屬運氣，
+這正是「一次試驗」得以「推翻」一個真實缺陷的原因。
+
+**Root cause.** Extraction created directories with
+`fm.createDirectory(atPath:withIntermediateDirectories: true)` on the raw path,
+while file writes went through `winUcrtPath()`, which adds the `\\?\` prefix past
+260 characters. So files were long-path aware and directories were not. Measured
+directly: Foundation's `createDirectory` fails on a 503-character target **with
+or without** the prefix ("The file name is invalid"), so adding the prefix alone
+would not have fixed it. Worse, all three call sites used `try?`, so the failure
+was discarded and only surfaced later as ENOENT on a file whose parent had never
+been made.
+
+**根因。** 解壓端以 `fm.createDirectory(atPath:withIntermediateDirectories: true)`
+用原始路徑建目錄，檔案寫入卻走 `winUcrtPath()`——後者在超過 260 字元時加上 `\\?\`
+前綴。於是檔案支援長路徑而目錄不支援。直接實測：Foundation 的 `createDirectory` 對
+503 字元的目標**無論加不加前綴**都失敗（「檔案名稱無效」），故單靠加前綴並不能解決。
+更糟的是三處呼叫皆使用 `try?`，失敗被丟棄，直到某個檔案因父層從未建立而回報 ENOENT
+才浮現。
+
+**Fix.** `winMakeDirectories()` walks the components and calls `_wmkdir` on a
+`\\?\`-prefixed absolute path for each, so no single call is bound by MAX_PATH,
+and the three extraction sites now throw instead of swallowing the result. After
+the fix all 97 target lengths extract, and the directory count matches GNU tar's.
+Covered by `test_blind_findings.zsh`, which sweeps ten lengths chosen from inside
+and outside the old failure bands.
+
+**修法。** `winMakeDirectories()` 逐一走訪各層，對每一層以 `\\?\` 前綴的絕對路徑呼叫
+`_wmkdir`，故沒有任何一次呼叫受 MAX_PATH 限制；三處解壓呼叫改為擲出錯誤而非吞掉結果。
+修正後 97 個目標長度全部可解出，目錄數與 GNU tar 一致。由 `test_blind_findings.zsh`
+涵蓋，該測試自舊失敗帶的帶內與帶外各取共十個長度掃描。
+
 ## zsh port / zsh 移植版
 
 ### `:A` does not treat a drive-letter path as absolute / `:A` 不認磁碟機路徑為絕對路徑  ▸ ✅ 已修正(zsh port)

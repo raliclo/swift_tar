@@ -1,6 +1,6 @@
 # swift_tar parallel extraction: correctness
-date      : 2026-08-18T00:55:15Z
-swift_tar : swift_tar 20260818-074043
+date      : 2026-08-18T14:25:28Z
+swift_tar : swift_tar 20260818-222051
 host      : MINGW64_NT-10.0-26200 3.6.10-8fbd9808.x86_64 x86_64
 -n values : 1 2 8 16   repeats: 3
 umask     : 022   (modes must survive it -- see the modes case)
@@ -21,7 +21,7 @@ a regression to umask defaults.
 ## 3. symlink and hardlink
   [PASS] symlink points at its target -- got 'a.txt'
   [PASS] symlink was not overwritten by a queued write -- must still be a symlink, not a regular file
-  [PASS] hardlink shares an inode with its target -- inodes 32369622321981205 / 32369622321981205
+  [PASS] hardlink shares an inode with its target -- inodes 12666373953373917 / 12666373953373917
 ## 4. mtime is restored by the worker (futimens), not the main thread
   a.txt mtime 1577905445 (source 1577905445)
   [PASS] mtime preserved through the pool

@@ -1736,7 +1736,21 @@ private func winUcrtPath(_ path: String) -> String {
     if !hasDrive && !p.hasPrefix("\\\\") {
         p = winProcessCwd + "\\" + p
     }
-    if p.utf16.count >= 260 && !p.hasPrefix("\\\\?\\") {
+    // Always prefix, not only past MAX_PATH. The `\\?\` form does two jobs: it
+    // lifts the length limit, and it turns off DOS path parsing -- including the
+    // reserved device namespace. Applied by length alone, a member named `nul`
+    // (or con, aux, prn, com1, lpt1) resolved to the device instead of a file:
+    // extracting a Linux-made archive holding all seven names wrote six files,
+    // silently dropped `nul` into the null device, and exited 0. GNU tar and
+    // bsdtar both produced seven from the same archive, so this was never a
+    // Windows limitation -- bsdtar is a native Windows binary too.
+    // 一律加上前綴，而非僅在超過 MAX_PATH 時。`\\?\` 形式有兩個作用：解除長度限制，
+    // 以及關閉 DOS 路徑解析——其中包含保留裝置名稱空間。若僅依長度套用，名為 `nul`
+    // 的成員（或 con、aux、prn、com1、lpt1）會解析為裝置而非檔案：解出一個含這七個
+    // 名稱、於 Linux 建立的封存時，只寫出六個檔案，`nul` 被無聲地丟進空裝置，且離開碼
+    // 為 0。GNU tar 與 bsdtar 對同一封存都產出七個，故此非 Windows 的限制——bsdtar
+    // 同樣是原生 Windows 程式。
+    if !p.hasPrefix("\\\\?\\") {
         var comps: [Substring] = []
         for c in p.split(separator: "\\", omittingEmptySubsequences: false) {
             if c == "." { continue }

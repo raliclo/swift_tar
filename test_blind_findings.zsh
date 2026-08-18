@@ -638,6 +638,47 @@ fi
 rc=0; "$ST" -c -f "$TMP/dot.tar" -C "$DASH" ./-report.csv >/dev/null 2>&1 || rc=$?
 eq "./-name still archives a dash-leading name" "0" "$rc"
 
+# ---- DOS reserved device names as member names ----
+# Extracting an archive that holds a member called `nul` wrote six of seven files
+# on Windows, dropped that one into the null device, and exited 0 with no message.
+# GNU tar and bsdtar both produced seven from the same archive, and bsdtar is a
+# native Windows binary too, so it was never a platform limitation -- swift_tar
+# applied the \\?\ prefix only past MAX_PATH, and that prefix is also what turns
+# off DOS device-name parsing.
+#
+# The fixture cannot be built on Windows: the OS refuses to create a file called
+# `nul` in the first place. That is exactly the realistic shape of the bug -- an
+# archive from a non-Windows sender -- so the fixture is built here only when a
+# filesystem that permits the names is available, and skipped otherwise.
+# 解出含名為 `nul` 之成員的封存時，Windows 上只寫出七個檔案中的六個，該檔被丟進空裝置，
+# 且離開碼為 0、毫無訊息。GNU tar 與 bsdtar 對同一封存都產出七個，而 bsdtar 同樣是原生
+# Windows 程式，故此非平台限制——swift_tar 僅在超過 MAX_PATH 時才套用 \\?\ 前綴，而該
+# 前綴同時也是關閉 DOS 裝置名稱解析的機制。
+#
+# 測資無法在 Windows 上建立：作業系統根本不允許建立名為 `nul` 的檔案。這正是此缺陷的
+# 真實形態——一個來自非 Windows 寄件者的封存——故僅在具備允許該類名稱之檔案系統時建立
+# 測資，否則跳過。
+dev_names=(con nul aux prn com1 lpt1 normal)
+DEV="$TMP/dev"
+mkdir -p "$DEV/src"
+dev_ok=1
+for n in $dev_names; do
+  printf 'device-name test\n' > "$DEV/src/$n" 2>/dev/null || dev_ok=0
+done
+
+if [ "$dev_ok" -eq 1 ] && [ "$(ls "$DEV/src" | wc -l | tr -d ' ')" -eq ${#dev_names} ]; then
+  ( cd "$DEV/src" && "$SYS_TAR" -cf "$TMP/dev.tar" . ) >/dev/null 2>&1
+  rm -rf "$TMP/devout"; mkdir -p "$TMP/devout"
+  "$ST" -x -f "$TMP/dev.tar" -C "$TMP/devout" >/dev/null 2>&1
+  eq "reserved device names all extract" "${#dev_names}" \
+     "$(find "$TMP/devout" -type f 2>/dev/null | wc -l | tr -d ' ')"
+  [ -s "$TMP/devout/nul" ] \
+    && ok "a member named 'nul' is a file, not the null device" \
+    || bad "a member named 'nul' is a file, not the null device"
+else
+  echo "SKIP: reserved device names (this filesystem will not hold them)"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

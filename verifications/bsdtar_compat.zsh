@@ -374,6 +374,16 @@ run_unicode_case() {
         return
     fi
     mkdir -p "$out"
+    # No Windows XFAIL branch any more. This case failed on Windows until
+    # 2026-08-18 because swift_tar emitted a short non-ASCII name as bare ustar
+    # bytes with no pax "path" record, and bsdtar then decoded it through the
+    # active code page. It now writes the record and the case passes, so an
+    # XFAIL branch would only serve to downgrade a future regression into an
+    # expected failure -- silently, on the one platform where it used to break.
+    # 已不再保留 Windows 的 XFAIL 分支。本案例在 2026-08-18 之前於 Windows 失敗，
+    # 原因是 swift_tar 將短的非 ASCII 名稱以裸 ustar 位元組寫出、未附 pax "path"
+    # 記錄，bsdtar 遂以當前碼頁解碼。現已寫出該記錄且案例通過，故 XFAIL 分支的唯一
+    # 作用會是把未來的退化降級為預期失敗——而且是在它曾經壞掉的那個平台上無聲降級。
     if run_tool "$BSDTAR_BIN" "-x" "-f" "$archive" "-C" "$out"; then
         set +e
         compare_tree "$src" "$out/src" "unicode-swift-create"
@@ -381,13 +391,9 @@ run_unicode_case() {
         set -e
         if (( rc == RC_OK )); then
             pass "unicode path: swift_tar create -> bsdtar extract"
-        elif (( IS_WINDOWS )); then
-            xfail "unicode path: swift_tar create -> bsdtar extract (tracked in todo/todo.md)"
         else
             record_status "unicode path: swift_tar create -> bsdtar extract" "$rc"
         fi
-    elif (( IS_WINDOWS )); then
-        xfail "unicode path: swift_tar create -> bsdtar extract (tracked in todo/todo.md)"
     else
         record_status "unicode path: swift_tar create -> bsdtar extract" "$?"
     fi

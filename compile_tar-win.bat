@@ -124,8 +124,8 @@ del /Q "%_build_exe:.exe=.lib%" "%_build_exe:.exe=.exp%" > nul 2>&1
 echo [OK] Built release\swift_tar.exe / 已建置 release\swift_tar.exe
 
 :: Package a self-contained swift_tar_win.zip (exe + Swift runtime DLLs) so it
-:: runs on machines without the Swift toolchain installed. See package_win.ps1.
-powershell -NoProfile -ExecutionPolicy Bypass -File package_win.ps1 -ExePath release\swift_tar.exe -OutZip release\swift_tar_win.zip
+:: runs on machines without the Swift toolchain installed. See package_win.zsh.
+zsh .\package_win.zsh --exe release\swift_tar.exe --out release\swift_tar_win.zip
 if errorlevel 1 (
     echo [FAIL] packaging swift_tar_win.zip failed / 打包 swift_tar_win.zip 失敗
     pause

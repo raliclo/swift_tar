@@ -38,16 +38,69 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## Expected failures / 預期失敗
+## Resolved expected failure / 已解決的預期失敗
 
-### Unicode path: swift_tar create -> bsdtar extract (Windows only)
+### Unicode path: swift_tar create -> bsdtar extract (Windows only)  ▸ ✅ 已修正 2026-08-18
 
-`bsdtar_compat.zsh` records this as XFAIL on Windows only; on macOS and Linux the
-same case passes. Not yet diagnosed — the tree comparison after extraction
-differs, but which side normalises the name has not been established.
+Carried as an XFAIL on Windows with the note "not yet diagnosed — which side
+normalises the name has not been established." **Neither side normalised
+anything.** Diagnosed 2026-08-18:
 
-`bsdtar_compat.zsh` 僅在 Windows 上將此列為 XFAIL；macOS 與 Linux 上同一案例通過。
-尚未診斷——解出後的樹比對不一致，但究竟是哪一端對檔名做了正規化仍未確認。
+原先在 Windows 上列為 XFAIL，並註明「尚未診斷——究竟是哪一端對檔名做了正規化仍未
+確認」。**兩端都沒有做任何正規化。** 2026-08-18 診斷結果：
+
+```
+swift_tar -t : src/unicode-資料夾/檔案.txt        correct UTF-8 bytes
+GNU tar  -tf : same                                reads them correctly
+bsdtar   -tf : src/unicode-<mojibake>/...          decodes via the active code page
+bsdtar   -xf : unicode-Φ│çµûÖσñ╛/µ¬öµíê.txt      name corrupted on disk
+```
+
+The decisive comparison was writing the identical tree with GNU tar twice:
+`--format=pax` extracts correctly under bsdtar, `--format=ustar` does not. So the
+difference is the pax record, not the bytes.
+
+決定性的比較是以 GNU tar 對同一棵樹寫兩次：`--format=pax` 在 bsdtar 下解得正確，
+`--format=ustar` 則否。可見差別在於 pax 記錄，而非位元組本身。
+
+**Root cause.** `writeEntryHeader` emitted a pax `path` record only when the name
+did not fit the ustar name/prefix fields — a length test. But pax records are
+defined to be UTF-8, so that record is also the only thing declaring the name's
+encoding. A **short** non-ASCII name fit the ustar fields, got no record, and
+travelled as bare bytes for each reader to guess at. GNU tar passes them through
+and is right by accident; bsdtar consults the code page and is wrong.
+
+**根因。** `writeEntryHeader` 僅在名稱塞不進 ustar 的 name/prefix 欄位時才寫出 pax
+`path` 記錄——那是一個長度判斷。但 pax 記錄依規範即為 UTF-8，故該記錄同時也是唯一
+宣告名稱編碼的東西。**短的**非 ASCII 名稱塞得進 ustar 欄位，因而沒有記錄，只能以裸
+位元組傳遞供各家讀取器猜測。GNU tar 原樣通過而恰好正確；bsdtar 參考碼頁因而出錯。
+
+**Fix.** Emit the `path` record whenever the name contains a byte ≥ 0x80, in
+addition to the existing length case; same for `linkpath`. `bsdtar_compat.zsh`
+now reports 4/4 passed, 0 expected-failed, and its Windows XFAIL branch is
+removed — leaving it would only downgrade a future regression into an expected
+failure, silently, on the one platform where it used to break.
+
+**修法。** 除既有的長度條件外，只要名稱含有 ≥ 0x80 的位元組即寫出 `path` 記錄；
+`linkpath` 比照。`bsdtar_compat.zsh` 現回報 4/4 通過、0 預期失敗，其 Windows XFAIL
+分支已移除——留著它只會把未來的退化無聲降級為預期失敗，而且正是在它曾經壞掉的那個
+平台上。
+
+## Still PowerShell, not yet converted / 仍是 PowerShell，尚未轉換  ▸ ⬜ 未處理 / open
+
+`package_win.ps1` is gone, but two `.ps1` files we own remain and are the same
+policy class — PowerShell is reserved for UAC elevation shims, and neither of
+these elevates:
+
+`package_win.ps1` 已移除，但仍有兩支我方自有的 `.ps1`，屬同一類政策問題——PowerShell
+僅保留作為 UAC 提權 shim，而這兩支都不提權：
+
+- `update_scoop_manifest.ps1`
+- `verifications/measure_peak_ws_win.ps1`
+
+Neither was in this file before, so neither has been measured or converted here;
+they are recorded so the next pass has them.
+兩者先前皆未列入本檔，故此處尚未量測或轉換，僅先記錄，以便下一輪處理。
 
 ## Windows verification run, 2026-08-16 / Windows 驗證執行
 
@@ -123,7 +176,7 @@ vanish.
 `>/dev/null 2>&1` 丟棄兩個輸出串流。執行後只印出 `building full + public binaries...`
 便毫無訊息地結束。本平台雖不適用，但失敗時應指明平台，而不是靜默消失。
 
-### 4. parallel_extract_correctness.zsh takes 892 s on Windows / 在 Windows 上耗時 892 秒  ▸ ⬜ 未處理 / open
+### 4. parallel_extract_correctness.zsh takes 892 s on Windows / 在 Windows 上耗時 892 秒  ▸ ✅ 已修正 2026-08-18（892 s → 220 s）
 
 `verifications/parallel_extract_correctness.zsh:123` hashes with
 `sha() { shasum -a 256 "$1" | cut -d' ' -f1 }` — two process spawns per file.
@@ -225,7 +278,7 @@ Regression coverage for both spellings of `--keyfile` and `--zstd-level` is in
 
 ## Fallout from the .zsh rename / 改名後的連帶問題
 
-### Parent repo still invokes the old name / 父 repo 仍呼叫舊檔名  ▸ ⬜ 未處理 / open
+### Parent repo still invokes the old name / 父 repo 仍呼叫舊檔名  ▸ ✅ 已修正（上游）
 
 `lzfse2/run_round.command:50` runs `./swift_tar/compile_tar.sh`, which no longer
 exists after `1cac313`. That line is an actual invocation in the macOS
@@ -238,7 +291,7 @@ gets a matching commit. `helper_windows/run_round.bat:55` only mentions
 repo 補上對應提交之前，該執行器是壞的。`helper_windows/run_round.bat:55` 僅在註解
 中提及舊名，無妨。
 
-### `package_win.ps1` is still PowerShell / 仍是 PowerShell  ▸ ⬜ 未處理 / open
+### `package_win.ps1` is still PowerShell / 仍是 PowerShell  ▸ ✅ 已修正 2026-08-18
 
 The user-level scripting policy reserves PowerShell for UAC elevation shims.
 `compile_tar-win.bat`'s PowerShell step was replaced by `strip_runcli.zsh` in

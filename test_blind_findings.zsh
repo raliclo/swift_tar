@@ -370,6 +370,54 @@ cmp -s "$TMP/p1" "$TMP/p2" \
   && ok "both encrypted runs decrypt to the same plaintext" \
   || bad "both encrypted runs decrypt to the same plaintext"
 
+# ---- non-ASCII names must carry a pax "path" record ----
+# pax records are defined to be UTF-8, so the record is what tells a reader the
+# name is UTF-8 rather than bytes in some local code page. Without it a short
+# non-ASCII name travels as bare ustar bytes and readers disagree: GNU tar passes
+# them through, bsdtar on Windows decodes through the active code page and
+# produced "unicode-Φ│çµûÖσñ╛" from "unicode-資料夾". The name is deliberately
+# SHORT -- a long one gets a pax record anyway, and would pass without the fix.
+# pax 記錄依規範即為 UTF-8，故該記錄正是「這個名稱是 UTF-8，而非某個本地碼頁的
+# 位元組」的宣告。若缺少它，短的非 ASCII 名稱會以裸 ustar 位元組傳遞，各讀取器結論
+# 不一：GNU tar 原樣通過，Windows 上的 bsdtar 以當前碼頁解碼，把 "unicode-資料夾"
+# 解成 "unicode-Φ│çµûÖσñ╛"。此處的名稱刻意取短——長名稱本來就會附上 pax 記錄，
+# 未修正時也會通過。
+UNI2="$TMP/u2"
+mkdir -p "$UNI2/src/unicode-資料夾"
+printf 'unicode filename\n' > "$UNI2/src/unicode-資料夾/檔案.txt"
+"$ST" -c -f "$TMP/u2.tar" -C "$UNI2" src >/dev/null 2>&1
+
+rm -rf "$TMP/u2s"; mkdir -p "$TMP/u2s"
+if "$ST" -x -f "$TMP/u2.tar" -C "$TMP/u2s" >/dev/null 2>&1 \
+   && diff -r "$UNI2/src" "$TMP/u2s/src" >/dev/null 2>&1; then
+  ok "non-ASCII names round-trip through swift_tar"
+else
+  bad "non-ASCII names round-trip through swift_tar"
+fi
+
+# The interoperability half: read it back with whichever system tar is present.
+# On Windows prefer the OS-bundled bsdtar, which is the reader that used to get
+# this wrong; a bare `tar` there is GNU tar, which passed even before the fix.
+# 互通性的另一半：以現場可用的系統 tar 讀回。Windows 上優先採用作業系統內建的
+# bsdtar，它正是過去會解錯的那個讀取器；該平台上的裸 `tar` 是 GNU tar，未修正前
+# 也會通過。
+# Note: no MSYS2_ARG_CONV_EXCL here. bsdtar is a native Windows binary, so it
+# needs the MSYS runtime to rewrite these POSIX paths into Windows form; with
+# conversion disabled it is handed "/tmp/..." and cannot open anything, which
+# looks exactly like the interoperability failure this case is testing for.
+# 注意：此處不設 MSYS2_ARG_CONV_EXCL。bsdtar 是原生 Windows 執行檔，需要 MSYS
+# runtime 把這些 POSIX 路徑改寫為 Windows 形式；若停用轉換，它收到的是 "/tmp/…"
+# 而完全開不了檔，其外觀與本案例要偵測的互通性失敗一模一樣。
+ref_tar="$SYS_TAR"
+[ -x /c/Windows/System32/tar.exe ] && ref_tar=/c/Windows/System32/tar.exe
+rm -rf "$TMP/u2b"; mkdir -p "$TMP/u2b"
+if "$ref_tar" -xf "$TMP/u2.tar" -C "$TMP/u2b" >/dev/null 2>&1 \
+   && diff -r "$UNI2/src" "$TMP/u2b/src" >/dev/null 2>&1; then
+  ok "non-ASCII names survive extraction by the system tar"
+else
+  bad "non-ASCII names survive extraction by the system tar"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

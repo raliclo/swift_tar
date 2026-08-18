@@ -38,6 +38,14 @@ tmp_review_codecs
 /verifications/rgb1/sample/
 /verifications/rgb1/sample_consecutive/
 
+# Per-run debug artifacts from bsdtar_compat.zsh (manifests, tree diffs, tool
+# listings). The committed record of that run is bsdtar_compat_output.txt; these
+# are only useful while diagnosing a failure that has just happened.
+# bsdtar_compat.zsh 每次執行產生的除錯產物（manifest、樹狀 diff、工具列表輸出）。
+# 該次執行的入版紀錄是 bsdtar_compat_output.txt；這些檔案只在剛發生失敗、正在診斷
+# 時才有用。
+/verifications/bsdtar_compat_logs/
+
 # 4K60 source stills and derived video — large media, regenerate locally
 # 4K60 來源靜態圖與衍生影片 —— 大型媒體，於本機重新產生
 /images/

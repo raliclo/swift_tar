@@ -119,10 +119,15 @@ fi
 # 可攜性輔助。本腳本也要在 Linux guest 上執行，那裡沒有 shasum（perl），且
 # busybox 的 find/sort 對 -print0 / -z 支援不可靠。兩邊都有 zsh，因此改用它的
 # glob、完全不依賴外部工具，而非去猜裝的是哪一種 coreutils。
-if (( $+commands[shasum] )); then
-  sha() { shasum -a 256 "$1" | cut -d' ' -f1 }
-elif (( $+commands[sha256sum] )); then
-  sha() { sha256sum "$1" | cut -d' ' -f1 }
+# Held as a command array, not wrapped in a per-file function: fingerprint()
+# passes the whole file list in one call. Both tools print "<64 hex>  <path>".
+# 以指令陣列保存，而非包成每檔呼叫的函式：fingerprint() 會一次傳入整份檔案清單。
+# 兩種工具的輸出格式皆為「<64 hex>  <path>」。
+typeset -ga hasher
+if (( $+commands[sha256sum] )); then
+  hasher=( sha256sum )
+elif (( $+commands[shasum] )); then
+  hasher=( shasum -a 256 )
 else
   print -ru2 -- "no shasum or sha256sum"; exit 1
 fi
@@ -149,6 +154,29 @@ inodeof() { zstat +inode "$1" }
 fingerprint() {  # stable description of a tree: path, type, mode, content hash
   local d=$1 p
   ( cd $d || return
+    # Hash every regular file in ONE hasher invocation rather than one per file.
+    # Per-file was two process spawns each; across 405 files and several -n arms
+    # that is tens of thousands of spawns, and process creation on Windows costs
+    # far more than on POSIX -- it was the whole reason this script took 892 s
+    # there. The hasher prints "<64 hex>  <path>", so the hash is a fixed-width
+    # field and the path is everything past the two spaces; splitting that way
+    # keeps filenames containing spaces intact.
+    # 以「單次」呼叫雜湊工具處理所有一般檔案，而非每檔一次。原本每檔要 spawn 兩個
+    # 行程；405 個檔案乘以多個 -n 組別即上萬次 spawn，而 Windows 的行程建立成本遠
+    # 高於 POSIX——這正是本腳本在該平台耗時 892 秒的全部原因。雜湊工具輸出
+    # 「<64 hex>  <path>」，雜湊為定寬欄位、路徑則是兩個空格之後的全部內容，如此
+    # 切分可保住含空格的檔名。
+    local -a files
+    files=( **/*(DN.oN) )
+    local -A hashes
+    if (( $#files )); then
+      local line
+      while IFS= read -r line; do
+        [[ -n $line ]] || continue
+        hashes[${line:66}]=${line:0:64}
+      done < <($hasher "${files[@]}")
+    fi
+
     # (D) includes dotfiles, (N) tolerates an empty match, (oN) sorts by name.
     # (D) 含隱藏檔，(N) 容忍無匹配，(oN) 依名稱排序。
     for p in **/*(DN@oN) **/*(DN.oN) **/*(DN/oN); do
@@ -157,7 +185,7 @@ fingerprint() {  # stable description of a tree: path, type, mode, content hash
       elif [[ -d $p ]]; then
         print -r -- "$p D $(modeof $p)"
       else
-        print -r -- "$p F $(modeof $p) $(sha $p)"
+        print -r -- "$p F $(modeof $p) ${hashes[$p]}"
       fi
     done | LC_ALL=C sort )
 }

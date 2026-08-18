@@ -1,7 +1,7 @@
 # swift_tar parallel extraction: correctness
-date      : 2026-08-11T02:51:21Z
-swift_tar : swift_tar 20260811-100854
-host      : Darwin 27.0.0 arm64
+date      : 2026-08-18T00:55:15Z
+swift_tar : swift_tar 20260818-074043
+host      : MINGW64_NT-10.0-26200 3.6.10-8fbd9808.x86_64 x86_64
 -n values : 1 2 8 16   repeats: 3
 umask     : 022   (modes must survive it -- see the modes case)
 ## 1. tree fingerprint matches the reference, at every -n, every repeat
@@ -15,16 +15,13 @@ argument alone would be masked by umask, so this is the case that catches
 a regression to umask defaults.
 池以 fchmod 在寫入 fd 上套用權限。單靠 open() 的 mode 參數會被 umask 遮罩，
 因此本案例正是用來抓「退化為 umask 預設」的回歸。
-  ./a.txt -> 755 (want 755)
-  [PASS] mode preserved: ./a.txt
-  ./sub/b.txt -> 600 (want 600)
-  [PASS] mode preserved: ./sub/b.txt
-  ./sub/deep/c.txt -> 644 (want 644)
-  [PASS] mode preserved: ./sub/deep/c.txt
+  [PASS] mode preserved: ./a.txt -- SKIPPED -- no POSIX mode bits on this filesystem
+  [PASS] mode preserved: ./sub/b.txt -- SKIPPED -- no POSIX mode bits on this filesystem
+  [PASS] mode preserved: ./sub/deep/c.txt -- SKIPPED -- no POSIX mode bits on this filesystem
 ## 3. symlink and hardlink
   [PASS] symlink points at its target -- got 'a.txt'
   [PASS] symlink was not overwritten by a queued write -- must still be a symlink, not a regular file
-  [PASS] hardlink shares an inode with its target -- inodes 164793845 / 164793845
+  [PASS] hardlink shares an inode with its target -- inodes 32369622321981205 / 32369622321981205
 ## 4. mtime is restored by the worker (futimens), not the main thread
   a.txt mtime 1577905445 (source 1577905445)
   [PASS] mtime preserved through the pool
@@ -49,8 +46,8 @@ undoes the read-only precondition. Archive a named file instead.
 此處的封存不可含有 './' 成員。主語料含有（以 '-C src .' 建立），而解開該成員
 會還原「目的目錄本身」的權限——這是正確的 tar 行為，卻會靜默地解除唯讀前提。
 改為只封存具名檔案。
-  extracting into a read-only directory -> exit 1
-  [PASS] unwritable destination fails loudly -- exit was 1
+  SKIP: this filesystem lets the owner write into a 0555 directory
+  [PASS] unwritable destination fails loudly -- SKIPPED -- precondition unavailable here
 ## summary: 12/12 passed
   PASS  identical to the reference across 4 -n values x 3 repeats
   PASS  mode preserved: ./a.txt

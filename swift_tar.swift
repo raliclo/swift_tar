@@ -2120,12 +2120,34 @@ final class TarWriter {
     private func writeEntryHeader(name: String, mode: UInt32, uid: UInt32, gid: UInt32,
                                   size: UInt64, mtime: UInt64,
                                   typeflag: UInt8, linkname: String) throws {
+        // A pax "path" record is required for two separate reasons, and only the
+        // first is about length. pax records are defined to be UTF-8, so the
+        // record is also what tells a reader the name is UTF-8 rather than bytes
+        // in some local code page. Without it a short non-ASCII name travels as
+        // bare ustar bytes and each reader guesses: GNU tar passes them through
+        // and gets it right, while bsdtar on Windows decodes them through the
+        // active code page and extracted "unicode-資料夾/檔案.txt" as
+        // "unicode-Φ│çµûÖσñ╛/µ¬öµíê.txt". Measured: the same tree written by
+        // GNU tar with --format=pax extracts correctly under bsdtar, and with
+        // --format=ustar it does not -- so the pax record is the whole
+        // difference, not anything about the bytes themselves.
+        // pax 的 "path" 記錄有兩個各自獨立的必要理由，只有第一個與長度有關。pax
+        // 記錄依規範即為 UTF-8，故該記錄同時也是「這個名稱是 UTF-8，而非某個本地
+        // 碼頁的位元組」的唯一宣告。若缺少它，短的非 ASCII 名稱會以裸 ustar 位元組
+        // 傳遞，各家讀取器只能自行猜測：GNU tar 原樣通過因而正確，Windows 上的
+        // bsdtar 則以當前碼頁解碼，把 "unicode-資料夾/檔案.txt" 解成
+        // "unicode-Φ│çµûÖσñ╛/µ¬öµíê.txt"。實測：同一棵樹由 GNU tar 以
+        // --format=pax 寫出時 bsdtar 解得正確，以 --format=ustar 寫出則否——可見
+        // 差別全在該 pax 記錄，而不在位元組本身。
+        func isPureASCII(_ s: String) -> Bool { !s.utf8.contains { $0 >= 0x80 } }
+
         var pax = Data()
         var hdrName = name
         var hdrPrefix = ""
         if let split = TarWriter.splitUstarPath(name) {
             hdrPrefix = split.prefix
             hdrName = split.name
+            if !isPureASCII(name) { pax.append(TarWriter.paxRecord("path", name)) }
         } else {
             pax.append(TarWriter.paxRecord("path", name))
             hdrName = String(decoding: Array(name.utf8.prefix(100)), as: UTF8.self)
@@ -2134,6 +2156,8 @@ final class TarWriter {
         if linkname.utf8.count > 100 {
             pax.append(TarWriter.paxRecord("linkpath", linkname))
             hdrLink = String(decoding: Array(linkname.utf8.prefix(100)), as: UTF8.self)
+        } else if !linkname.isEmpty && !isPureASCII(linkname) {
+            pax.append(TarWriter.paxRecord("linkpath", linkname))
         }
         var hdrSize = size
         if size >= (1 << 33) {                       // 8 GiB octal-field ceiling / 八進位欄位上限

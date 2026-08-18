@@ -302,6 +302,19 @@ seek-and-append is impossible. All three need a seekable `-f` archive (not
 stdin/stdout).
 
 - `-r` (append): a missing archive is created (GNU tar semantics).
+
+**A missing `-f` archive is created by the two appending modes and refused by the
+rest**, so which mode you are in decides whether a typo in the archive path is
+caught:
+
+| mode | `-f` archive does not exist |
+|---|---|
+| `-r`, `-u` | created, then the members are appended — exit 0 |
+| `--delete`, `-t`, `-x` | refused: `cannot open '<path>'` — exit 1 |
+
+For `-u` this follows from its own rule rather than being a special case: it
+appends members that are newer *or absent*, and in an archive that does not exist
+yet every member is absent.
 - `-u` (update): appends a member only when it is newer than the archived copy
   (or absent), never rewriting or deleting the old entry — extraction takes the
   last copy.

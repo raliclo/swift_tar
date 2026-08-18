@@ -505,6 +505,30 @@ else
   bad "swift_tar round-trips its own ZIP with a non-ASCII name"
 fi
 
+# ---- a missing -f archive: created by the appenders, refused by the rest ----
+# Documented as a rule rather than two facts, so the test asserts the rule. The
+# split is what makes a typo in the archive path catchable in one mode and
+# silent in the other, which is the part a reader needs.
+# 這是以規則而非兩則事實記載，故測試也斷言該規則。此分野決定了封存路徑打錯時，在某些
+# 模式會被擋下、在另一些模式則無聲通過——那才是讀者需要知道的部分。
+MA="$TMP/missing"
+mkdir -p "$MA"
+printf 'a\n' > "$MA/a.txt"
+
+for mode in -r -u; do
+  rm -f "$TMP/mk.tar"
+  rc=0; "$ST" $mode -f "$TMP/mk.tar" -C "$MA" a.txt >/dev/null 2>&1 || rc=$?
+  eq "$mode creates a missing archive" "0" "$rc"
+  [ -s "$TMP/mk.tar" ] && ok "$mode leaves a non-empty archive" || bad "$mode leaves a non-empty archive"
+done
+
+rm -f "$TMP/none.tar"
+rc=0; "$ST" --delete -f "$TMP/none.tar" a.txt >/dev/null 2>&1 || rc=$?
+eq "--delete refuses a missing archive" "1" "$rc"
+rc=0; "$ST" -t -f "$TMP/none.tar" >/dev/null 2>&1 || rc=$?
+eq "-t refuses a missing archive" "1" "$rc"
+[ ! -e "$TMP/none.tar" ] && ok "refusing modes create no archive" || bad "refusing modes create no archive"
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

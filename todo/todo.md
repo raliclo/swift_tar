@@ -315,6 +315,131 @@ recorded where it differed from mine, because that difference is the useful part
 20260816-150106）每回合做一項測試。以下是我親自重測過的發現；agent 的分類若與我不同
 則一併記錄，因為有價值的正是那個落差。
 
+## REGRESSION: `--zip` and `--zip64` are dead on macOS / macOS 上 `--zip` 與 `--zip64` 完全失效  ▸ 🔴 未處理 / open
+
+Found on 2026-08-18 building current `master` (`20260818-125339`) on macOS 27.0
+arm64. **Every ZIP write fails**, with no working path left:
+
+```
+swift_tar -c --zip   -f o.zip -C w src
+swift_tar -c --zip64 -f o.zip -C w src
+# -> swift_tar: I/O error: set ZIP header charset:
+#    A character-set conversion not fully supported on this platform
+# -> exit 1, no archive produced
+```
+
+Two committed tests fail because of it: `test_blind_findings.zsh`
+(`FAIL: --zip alone still works (want '0', got '1')`) and
+`test_swift_tar_rgb1.zsh`.
+
+**Cause.** `ca4bf0d` added this to `libarchive_zip_bridge.c:200` to fix a real
+Windows defect — a Traditional Chinese filename failed the whole write with
+"Can't translate pathname to current locale":
+
+```c
+archive_write_set_options(writer, "hdrcharset=UTF-8")
+```
+
+But `build_libarchive.zsh:22` and `build_libarchive-win.zsh:30` both configure
+libarchive with `-DENABLE_ICONV=OFF`. Without iconv, libarchive cannot honour an
+explicitly named `hdrcharset`, the call returns non-`ARCHIVE_OK`, and the bridge
+aborts the write. Windows does not hit it because libarchive there converts
+charsets through the Win32 API rather than iconv — which is exactly why a fix
+verified only on Windows could take macOS out without anyone noticing.
+
+This contradicts the Highlights claim that the bundled libarchive "creates and
+reads standard ZIP containers on macOS and Windows".
+
+**Directions worth trying**, in the order I would try them: build macOS
+libarchive with `-DENABLE_ICONV=ON` and confirm the Windows path still passes;
+or treat a failed `hdrcharset` as non-fatal and fall back, which keeps the
+Windows fix where it works and restores macOS, at the cost of the original
+locale-dependence on platforms without iconv; or set the UTF-8 flag on the entry
+rather than through a writer option. The first is the smallest change but adds a
+dependency to the macOS build.
+
+2026-08-18 於 macOS 27.0 arm64 建置當前 `master`（`20260818-125339`）時發現，
+**所有 ZIP 寫入皆失敗**，無任何可用路徑，並導致兩支入版測試失敗。
+
+成因：`ca4bf0d` 為修正 Windows 上的真實缺陷（繁體中文檔名使整個寫入失敗，錯誤為
+"Can't translate pathname to current locale"），在 `libarchive_zip_bridge.c:200`
+加入 `hdrcharset=UTF-8` 選項；但 `build_libarchive.zsh:22` 與
+`build_libarchive-win.zsh:30` 都以 `-DENABLE_ICONV=OFF` 設定 libarchive。沒有
+iconv，libarchive 無法履行明確指定的 hdrcharset，該呼叫回傳非 `ARCHIVE_OK`，
+bridge 遂中止寫入。Windows 不受影響，是因為該平台的 libarchive 透過 Win32 API 而非
+iconv 進行字元集轉換——這正是「僅在 Windows 驗證過的修正」得以在無人察覺下讓 macOS
+停擺的原因。此事亦與 Highlights 中「內附 libarchive 於 macOS 與 Windows 建立並讀取
+標準 ZIP 容器」的宣稱相牴觸。
+
+### macOS run, rounds 1-6 / macOS 端 round 1-6
+
+A second agent under the same rules ran on macOS against build `20260816-014638`,
+independently of the Windows rounds above. It found six documentation gaps, all
+fixed in the READMEs, and four behavioural defects. Re-measured on 2026-08-18
+against the merged build `20260818-125339`, **three of the four were already
+fixed by the Windows-side work** and are noted here only so the overlap is
+visible rather than looking like two unrelated investigations:
+
+| Defect | Status against 20260818-125339 |
+|---|---|
+| `--zstd-level` was the only path exiting 2 | ✅ fixed — `--zstd-level abc` and `-n abc` both exit 1. Same finding as Round 6 above, found independently |
+| `--cat` / `--decrypt-only` exited 1 on a broken pipe | ✅ fixed — `--cat -f p.tar \| head -c 10` now exits 0 with no message |
+| `.tar.gz` truncated to 30 B read as an empty archive | ✅ fixed — now exits 1 |
+
+第二個 agent 在相同規則下於 macOS 對建置 `20260816-014638` 執行，與上方 Windows 回合
+彼此獨立。它找到六項文件缺口（皆已於 README 修正）與四項行為缺陷。2026-08-18 對合併後
+的建置 `20260818-125339` 重測，**四項中已有三項被 Windows 端的工作修好**，此處記錄僅為
+使重疊可見，以免看起來像兩件無關的調查。
+
+The two that remain are below.
+仍存在的兩項如下。
+
+### macOS round 5: raw bytes under 512 still read as an empty archive / 小於 512 bytes 的隨機資料仍被讀成空封存  ▸ ⬜ 未處理 / open
+
+The truncated-`.tar.gz` half of this is fixed. What remains is input that is not
+a recognised codec at all and is shorter than one tar header block:
+
+| Input | bsdtar | swift_tar 20260818-125339 |
+|---|---|---|
+| empty file | `0` | `0` — agreed, this is the convention |
+| 100 B random | `1` `Unrecognized archive format` | **`0`, no output, no error** |
+| 200 B random | `1` | **`0`** |
+| 511 B random | `1` | **`0`** |
+| 512 B random | `1` | `1` `header checksum mismatch` |
+
+The boundary is exact at 512. Below one full header block nothing is examined,
+so the file reads as an empty archive and `-t` prints nothing at exit 0. An empty
+file behaving that way is correct and matches bsdtar; a short file of arbitrary
+bytes is not.
+
+截斷 `.tar.gz` 的那一半已修。仍存在的是「根本不屬任何已知格式、且短於一個 tar 標頭
+區塊」的輸入。分界點精確落在 512：不足一個完整標頭區塊時不作任何檢查，該檔遂被讀成
+空封存，`-t` 不印任何東西並以 0 結束。空檔案如此是正確的、與 bsdtar 一致；任意位元組
+的短檔則不然。
+
+### macOS round 3: `--title` and `--country` lose one byte to nothing / 白白少一個位元組  ▸ ⬜ 未處理 / open
+
+Measured on 20260818-125339: `--title` accepts 63 and rejects 64; `--country`
+accepts 511 and rejects 512; `--creator-email` accepts its full 254.
+
+`validateASCII` tests `count < maxBytesExclusive`. `--title` and `--country` pass
+their raw field sizes (64, 512) so they cap one short; `--creator-email` passes
+`fieldSize + 1` and gets all 254. The reader is `firstIndex(of: 0) ?? endIndex`,
+so it does **not** need a NUL terminator and a completely full field reads back
+correctly. The lost byte buys nothing, and the explicit `+1` on the email path
+suggests full width was the intent.
+
+The READMEs document 63 / 511 / 254 because that is what the program does, and
+say explicitly that those are not typos, so that whichever way this is resolved
+the document does not silently become wrong.
+
+於 20260818-125339 實測：`--title` 接受 63、拒絕 64；`--country` 接受 511、拒絕 512；
+`--creator-email` 用滿自己的 254。`validateASCII` 以 `count < maxBytesExclusive`
+判斷，前兩者傳入原始欄位寬故各少一位元組，email 傳入 `fieldSize + 1` 故完整。讀取端
+為 `firstIndex(of: 0) ?? endIndex`，不需 NUL 終止符，欄位塞滿亦可正確讀回——那一個
+位元組什麼也沒換到，而 email 路徑上明確的 `+1` 顯示原意應為完整寬度。README 依實際
+行為記為 63 / 511 / 254 並註明非筆誤，如此無論此項如何處置，文件都不會靜默變錯。
+
 ### Round 1: a trailing slash on the input path doubles every separator / 輸入路徑的尾隨斜線使所有分隔符加倍  ▸ ✅ 已修正 2026-08-18
 
 The agent reported this round CLEAN. It was not — the defect was sitting in the

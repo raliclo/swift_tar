@@ -147,18 +147,6 @@ swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat|--encrypt-only|--decrypt-only
 `-f -` (or omitting `-f`) reads stdin / writes stdout, so swift_tar composes
 in pipelines.
 
-> **Known defect — a reader that closes early turns success into failure.**
-> `--cat`, `--decrypt-only` and `--encrypt-only` exit `1` and print
-> `swift_tar: The file couldn't be saved.` when the process downstream stops
-> reading before the end, which is what `| head`, `| less`, `| grep -q` and
-> `| od` all do. The bytes already written are correct; only the status is
-> wrong. This matters most on the encrypted path, where the same exit `1` is
-> what a wrong key or a tampered archive produces — so
-> `--decrypt-only … | head` looks exactly like the tampering signature
-> described under [Decrypting](#decrypting). Consume the whole stream
-> (`| wc -c`, `> file`) when the exit status has to mean anything. Tracked in
-> [`todo/todo.md`](todo/todo.md).
-
 ### Create examples
 
 ```sh
@@ -470,34 +458,10 @@ the same behavior as a libarchive built without lzo support.
 | `--version` | Show the fixed build-date version (`yyyyMMdd-HHmmss`) |
 | `--crypto-selftest` | Run the crypto unit tests (published vectors, header parsing, chunk framing), then exit |
 
-### Exit status
-
-| Code | Meaning |
-|---|---|
-| `0` | Success — **but see the caveat below** |
-| `1` | Everything that fails: unknown flag, no mode or two modes, missing file, unreadable/unwritable path, corrupt or truncated archive, wrong key, tampered ciphertext, RGB1 validation failure, `-r` on a compressed archive |
-| `2` | Only from `--zstd-level` validation (out of range, or not a number) |
-
-`2` is not a general "bad argument value" category — it is currently reachable
-from that one flag. `-n abc` and `--strip-components abc` are the same kind of
-error and exit `1`. Script against `!= 0` rather than against a specific code.
-
-Exit `1` is also not decomposable: a wrong passphrase, a tampered archive and a
-missing file are indistinguishable by exit code alone. Read stderr to tell them
-apart.
-
-**Caveat on `0`:** `-t` and `-x` exit `0` with no output on any input under 512
-bytes, including a truncated `.tar.gz` and random bytes — where `bsdtar` exits
-`1` with `Unrecognized archive format`. An empty file exiting `0` is the normal
-convention and matches `bsdtar`; the sub-512-byte garbage case is not, and is
-tracked in [`todo/todo.md`](todo/todo.md). Until it is resolved, do not treat
-exit `0` from `-t` as proof that an archive is intact.
-
 `--zstd-level` is honoured only when `--zstd` is also given. On its own it is
-accepted, exits 0 and writes a plain uncompressed tar — the level is discarded
-with no warning. This is unlike `-r` / `-u` / `--delete`, which reject a codec
-flag outright. Check with `--identify`: an archive built by
-`-c --zstd-level 9 -f out.tar dir` reports `tar`, not `zstd → tar`.
+accepted and writes a plain uncompressed tar, the level discarded. Check with
+`--identify`: an archive built by `-c --zstd-level 9 -f out.tar dir` reports
+`tar`, not `zstd → tar`. See [Exit status](#exit-status) for what the codes mean.
 
 ### Which way `-f` points
 

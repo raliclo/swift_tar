@@ -939,6 +939,53 @@ those are what a divergence would come from.
 九分之九，離開碼皆為 0，每一格的檔案數皆完整。無不相容需要修正。日後若改動
 `archiveName()` 或標頭寫入端，值得重跑此矩陣——不相容會從那裡來。
 
+### The zsh port's bundled `stat` cannot open `/c/...` paths / 移植版自帶的 `stat` 開不了 `/c/...` 路徑  ▸ ✅ 已於腳本端規避 2026-08-18
+
+Found while re-running `encrypt_mbps_win.zsh`, which died on its first size
+lookup with a single line of output:
+
+重跑 `encrypt_mbps_win.zsh` 時發現，它在第一次取檔案大小就死掉，只留下一行輸出：
+
+```
+stat: cannot read file system information for '%z': No such file or directory
+```
+
+Under zsh, `stat` resolves to the port's own copy at
+`.../scoop/apps/zsh/current/stat` (PE32+), not to `/usr/bin/stat`. That binary
+**reports itself as GNU coreutils 8.32 and returns 0 for `--version`**, yet
+cannot open a `/c/...` path at all:
+
+在 zsh 下，`stat` 解析到移植版自帶的 `.../scoop/apps/zsh/current/stat`（PE32+），而非
+`/usr/bin/stat`。該執行檔**自稱 GNU coreutils 8.32，且 `--version` 回傳 0**，卻完全
+開不了 `/c/...` 路徑：
+
+```
+stat -c '%s' /c/Windows/System32/tar.exe
+  -> cannot stat '/c/Windows/System32/tar.exe': No such file or directory
+/usr/bin/stat -c '%s' /c/Windows/System32/tar.exe   -> 92176   (works)
+zstat +size    /c/Windows/System32/tar.exe          -> 92176   (works)
+```
+
+**Why the script's own guard did not help.** It probed `stat --version` to pick
+between the GNU and BSD spellings. That probe passed — and the script still
+failed, because it asked *"is this GNU stat?"* when the question that mattered was
+*"can it open this file?"*. A capability probe that tests identity instead of the
+capability will pass on exactly the build that breaks you.
+
+**該腳本自己的守門為何沒有用。** 它以 `stat --version` 在 GNU 與 BSD 兩種寫法間做選擇，
+該探測通過了，腳本仍然失敗——因為它問的是**「這是不是 GNU stat」**，而真正該問的是
+**「它開不開得了這個檔」**。一個檢測「身分」而非「能力」的探測，恰好會在會弄壞你的那個
+建置上通過。
+
+Worked around by using zsh's `zstat` builtin, which needs no PATH lookup and
+handles both path styles; `parallel_extract_correctness.zsh` already did this.
+The port itself is unchanged — other scripts calling a bare `stat` under zsh on
+Windows will meet the same thing.
+
+已改用 zsh 的 `zstat` builtin 規避，它不做 PATH 查找且兩種路徑寫法皆可處理；
+`parallel_extract_correctness.zsh` 原本就是這個做法。移植版本身未變動——其他在 Windows
+的 zsh 下呼叫裸 `stat` 的腳本仍會遇到同一件事。
+
 ## zsh port / zsh 移植版
 
 ### `:A` does not treat a drive-letter path as absolute / `:A` 不認磁碟機路徑為絕對路徑  ▸ ✅ 已修正(zsh port)

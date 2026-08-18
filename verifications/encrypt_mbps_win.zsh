@@ -44,13 +44,27 @@ if ! [[ "$ROUNDS" =~ '^[1-9][0-9]*$' ]]; then
     exit 1
 fi
 
-stat_size() {
-    if stat --version >/dev/null 2>&1; then
-        stat -c '%s' "$1"
-    else
-        stat -f '%z' "$1"
-    fi
+# zsh's own zstat, not the external stat. The Windows zsh port ships a `stat`
+# that reports itself as GNU coreutils 8.32 and returns 0 for --version, yet
+# cannot open a /c/... path at all:
+#
+#   stat -c '%s' /c/Windows/System32/tar.exe
+#   -> cannot stat '/c/Windows/System32/tar.exe': No such file or directory
+#
+# so the old probe passed and the script still failed on its first size lookup.
+# The probe asked "is this GNU stat?" when the thing that mattered was "can it
+# open this file?". zstat is a shell builtin, needs no PATH lookup, and works on
+# both path styles. parallel_extract_correctness.zsh already does it this way.
+#
+# 使用 zsh 自身的 zstat，而非外部 stat。Windows 的 zsh 移植版自帶一支 `stat`，
+# 它自稱 GNU coreutils 8.32、`--version` 回傳 0，卻完全開不了 /c/... 路徑（如上），
+# 因此舊的探測通過了，腳本仍在第一次取檔案大小時失敗。該探測問的是「這是不是 GNU
+# stat」，但真正該問的是「它開不開得了這個檔」。zstat 是 shell builtin，不做 PATH
+# 查找，且兩種路徑寫法皆可用。parallel_extract_correctness.zsh 已是這個做法。
+zmodload zsh/stat 2>/dev/null || {
+    print -ru2 -- "[Error] zsh/stat module unavailable"; exit 1
 }
+stat_size() { zstat +size "$1" }
 
 elapsed_seconds() {
     local start_ns="$1"

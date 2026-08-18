@@ -1,0 +1,20 @@
+[Info] date: 2026-08-18 13:54:47 TST
+[Info] platform: win
+[Info] host: MINGW64_NT-10.0-26200 3.6.10-8fbd9808.x86_64 x86_64
+[Info] swift_tar: swift_tar 20260818-135056
+[Info] corpus digest: a0243d93783bd9216207152ee9f76d0d969a6e11ade5eb4116c83ad2cdc942b1
+
+== reference tar implementations found / 現場找到的參照實作 ==
+  gnutar  /usr/bin/tar
+         tar (GNU tar) 1.35
+  bsdtar  /c/Windows/System32/tar.exe
+         bsdtar 3.8.4 - libarchive 3.8.4 zlib/1.2.13.1-motley liblzma/5.8.1 bz2lib/1.0.8 libzstd/1.5.7 cng/2.0 libb2/bundled 
+
+== swift_tar writes, each reference reads / swift_tar 寫入，各參照讀取 ==
+
+== each reference writes, swift_tar reads / 各參照寫入，swift_tar 讀取 ==
+
+== listings agree on names / 列表名稱一致 ==
+
+-----------------------------------------
+PASS: 12  FAIL: 0  SKIP: 0

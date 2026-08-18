@@ -49,7 +49,18 @@ case "$platform" in
             echo "[Warn] compile_tar-win.bat takes no arguments; ignoring: $*" >&2
             echo "[Warn] compile_tar-win.bat 不接受參數，已忽略：$*" >&2
         fi
-        exec cmd.exe //c compile_tar-win.bat
+        # `.\` is required, not decoration. Passed as a bare name, cmd.exe
+        # searches PATH and NOT the current directory for an executable, so it
+        # answered "'compile_tar-win.bat' is not recognized as an internal or
+        # external command" from inside the very directory holding the file.
+        # With the prefix it runs. (The `//c` is for the MSYS runtime, which
+        # rewrites it to `/c`; that part was already right.)
+        # `.\` 是必要的，不是裝飾。以裸檔名傳入時，cmd.exe 只搜尋 PATH 而「不」搜尋
+        # 目前目錄，因此即使就在該檔所在的目錄下執行，它仍回答
+        # 「'compile_tar-win.bat' is not recognized as an internal or external
+        # command」。加上前綴即可執行。（`//c` 是給 MSYS runtime 的，它會改寫成
+        # `/c`，那部分原本就正確。）
+        exec cmd.exe //c '.\compile_tar-win.bat'
         ;;
     *)
         # Not a stub and not a silent fallback to one of the three: each build

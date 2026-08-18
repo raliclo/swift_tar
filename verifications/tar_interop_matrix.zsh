@@ -229,11 +229,38 @@ for ((i = 1; i <= ${#REF_PATH}; i++)); do
     ref="${REF_PATH[i]}"; kind="${REF_KIND[i]}"
     ref_list="$TMP/list.$kind"
     "$ref" -tf "$arc" 2>/dev/null | sed 's#/$##' | LC_ALL=C sort > "$ref_list"
-    if diff <(sed 's#/$##' "$st_list") "$ref_list" >/dev/null 2>&1; then
-        ok "$kind lists the same names as swift_tar"
+    # ASCII names only. A tool's *listing* is display output, and on Windows
+    # bsdtar transcodes non-ASCII names to the ANSI code page on the way to
+    # stdout: 中文檔名.txt comes out as CP950 bytes, with or without
+    # `chcp 65001`. The archive is not affected -- the same bsdtar extracts the
+    # name correctly to disk, and the extraction assertions above cover that --
+    # so comparing listing text for those entries measures bsdtar's display
+    # convention, not interoperability. What the comparison is actually for is
+    # name *shape*: trailing slashes, prefixes, path separators. Those are
+    # ASCII, and this keeps testing them.
+    # 僅比對 ASCII 名稱。工具的**列表**屬於顯示輸出，而 Windows 上的 bsdtar 在寫往
+    # stdout 時會把非 ASCII 名稱轉為 ANSI 碼頁：中文檔名.txt 會變成 CP950 位元組，
+    # 且與是否 `chcp 65001` 無關。封存本身不受影響——同一支 bsdtar 解到磁碟上的檔名
+    # 是正確的，上方的解出斷言已涵蓋此點——故就這些項目比對列表文字，量到的是 bsdtar
+    # 的顯示慣例而非互通性。此比對真正要檢查的是名稱的**形狀**：尾隨斜線、prefix、
+    # 路徑分隔符。那些都是 ASCII，此處仍持續檢查它們。
+    ascii_only() { LC_ALL=C grep -v '[^[:print:]]' "$1" | LC_ALL=C grep -v '[^ -~]' }
+    if diff <(ascii_only <(sed 's#/$##' "$st_list")) <(ascii_only "$ref_list") >/dev/null 2>&1; then
+        ok "$kind lists the same ASCII names as swift_tar"
     else
-        bad "$kind lists the same names as swift_tar"
-        diff <(sed 's#/$##' "$st_list") "$ref_list" 2>&1 | head -6 | sed 's/^/        /'
+        bad "$kind lists the same ASCII names as swift_tar"
+        diff <(ascii_only <(sed 's#/$##' "$st_list")) <(ascii_only "$ref_list") 2>&1 | head -6 | sed 's/^/        /'
+    fi
+
+    # The non-ASCII half, asserted where it is actually meaningful: extract with
+    # the reference tool and check the name that lands on disk.
+    # 非 ASCII 的另一半，改在真正有意義之處斷言：以參照工具解出，檢查落地的檔名。
+    uni_out="$TMP/uni.$kind"
+    rm -rf "$uni_out"; mkdir -p "$uni_out"
+    if "$ref" -xf "$arc" -C "$uni_out" >/dev/null 2>&1 && [[ -f "$uni_out/src/中文檔名.txt" ]]; then
+        ok "$kind extracts the non-ASCII name correctly"
+    else
+        bad "$kind extracts the non-ASCII name correctly"
     fi
 done
 

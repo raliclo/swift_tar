@@ -69,6 +69,36 @@ macOS, Windows and WSL, where those tools are the ones users actually have.
 > 自己比對並回報完美互通。這正是矩陣以自我描述辨識每個候選者、並拒絕任何既非
 > bsdtar 亦非 GNU tar 之物的具體理由。
 
+### Consequences of the VM's tar, for anything that runs there
+### VM 的 tar 對在該處執行之物的影響
+
+Two properties follow from that decision, and both are intended:
+
+**busybox tar cannot compress.** `tar -czf` in the guest fails with
+`tar: invalid option -- 'z'`, and so does `-tzf` on read. Use `/usr/bin/bsdtar`
+for anything compressed. This is not a gap to fix — it is why bsdtar is in the
+image at all.
+
+**`tar` in the guest is swift_tar.** Any test that wants a *foreign* archive
+must not reach for `tar` by name there, or it will encrypt, extract or compare
+swift_tar's own output and call it third-party. `test_encrypt.zsh` picks its
+`.tgz` producer by self-description for exactly this reason: it skips anything
+reporting `swift_tar`, skips busybox because it cannot compress, and reports a
+clean SKIP if no compressing third-party tar exists rather than failing on a
+precondition the platform was never meant to meet.
+
+該決定帶來兩個後果，兩者皆為預期：
+
+**busybox tar 不能壓縮。** guest 內的 `tar -czf` 會以
+`tar: invalid option -- 'z'` 失敗，讀取端的 `-tzf` 亦然。需要壓縮時請用
+`/usr/bin/bsdtar`。這不是待補的缺口——bsdtar 之所以在映像中，正是為此。
+
+**guest 內的 `tar` 是 swift_tar。** 任何需要「外來封存」的測試都不可在該處以名稱取用
+`tar`，否則會把 swift_tar 自己的輸出拿去加密、解出或比對，並稱之為第三方。
+`test_encrypt.zsh` 挑選 `.tgz` 產生器時以自我描述為準，正是為此：略過自報 `swift_tar`
+者、略過不能壓縮的 busybox，若不存在可壓縮的第三方 tar 則乾淨跳過並回報，而不是在一個
+該平台本就不預期滿足的前提上失敗。
+
 What the VM *is* for still has one thing worth checking when it is next built:
 its rootfs is UTF-8 only and its buildroot config states plainly
 `# UTF-8-only rootfs: do not pull in libiconv`. libarchive without iconv is

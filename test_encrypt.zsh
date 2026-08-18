@@ -189,7 +189,52 @@ fi
 #     --encrypt-only／--decrypt-only：單獨作用的加密層。解密結果必須仍是壓縮後
 #     的封存，而非原始 tar。
 # ---------------------------------------------------------------------------
-tar -czf "$TMP/outside.tgz" -C "$TMP" src
+# The point of this block is a .tgz swift_tar did NOT make, so the encryption
+# layer is shown to work on a foreign archive. Two ways that goes wrong if the
+# tool is chosen by name:
+#
+#   busybox tar cannot compress at all. On the buildroot Linux VM `tar` is the
+#   busybox applet and `-z` is rejected outright -- intended there, since that
+#   rootfs deliberately omits GNU tar (BR2_PACKAGE_TAR unset) and ships bsdtar
+#   for the compressed cases.
+#
+#   `tar` on that same VM is swift_tar, installed under that name. Using it here
+#   would encrypt swift_tar's own output and call it foreign, which is not a
+#   test of anything.
+#
+# So probe by what each candidate says it is, and skip the block cleanly if no
+# compressing third-party tar exists rather than failing on a precondition the
+# platform was never expected to meet.
+# 本段的重點是取得一個「並非由 swift_tar 產生」的 .tgz，藉以證明加密層對外來封存
+# 同樣成立。若以名稱挑選工具，有兩種出錯方式：
+#
+#   busybox tar 根本不能壓縮。在 buildroot 的 Linux VM 上，`tar` 即為 busybox
+#   applet，`-z` 會被直接拒絕——那是該平台的預期行為，因為該 rootfs 刻意不含
+#   GNU tar（未設 BR2_PACKAGE_TAR），並以 bsdtar 承擔需要壓縮的情況。
+#
+#   同一台 VM 上的 `tar` 就是 swift_tar，以該名稱安裝。在此使用它，等於把 swift_tar
+#   自己的輸出加密後稱之為外來封存，那什麼也證明不了。
+#
+# 故依各候選者的自我描述探測，若不存在可壓縮的第三方 tar 則乾淨跳過本段，而不是在
+# 一個該平台本就不預期滿足的前提上失敗。
+FOREIGN_TAR=""
+for cand in tar bsdtar gtar /usr/bin/bsdtar /c/Windows/System32/tar.exe; do
+  command -v "$cand" >/dev/null 2>&1 || [ -x "$cand" ] || continue
+  ver=$("$cand" --version 2>&1 | head -1)
+  case "$ver" in
+    *swift_tar*) continue ;;                 # ourselves / 我們自己
+    *bsdtar*|*"GNU tar"*) ;;                 # can compress / 能壓縮
+    *) continue ;;                           # busybox and anything unknown
+  esac
+  if "$cand" -czf "$TMP/outside.tgz" -C "$TMP" src 2>/dev/null; then
+    FOREIGN_TAR="$cand"; break
+  fi
+done
+
+if [ -z "$FOREIGN_TAR" ]; then
+  echo "SKIP: no third-party tar here can write a .tgz — --encrypt-only/--decrypt-only on a foreign archive not exercised"
+  echo "跳過：此處沒有能寫出 .tgz 的第三方 tar，未驗證加密層對外來封存的作用"
+else
 "$ST" --encrypt-only --keyfile "$KEY" -f "$TMP/outside.tgz" > "$TMP/outside.tgz.enc"
 [ "$(head -c 8 "$TMP/outside.tgz.enc")" = "SWTARC01" ] \
   && ok "--encrypt-only: output carries the encryption magic" \
@@ -205,9 +250,9 @@ cmp -s "$TMP/outside.tgz" "$TMP/outside.back.tgz" \
 gzip -t "$TMP/outside.back.tgz" 2>/dev/null \
   && ok "--decrypt-only leaves a valid gzip stream (compression preserved)" \
   || bad "--decrypt-only output is not valid gzip"
-tar -tzf "$TMP/outside.back.tgz" >/dev/null 2>&1 \
-  && ok "--decrypt-only output is readable by system tar" \
-  || bad "--decrypt-only output not readable by system tar"
+"$FOREIGN_TAR" -tzf "$TMP/outside.back.tgz" >/dev/null 2>&1 \
+  && ok "--decrypt-only output is readable by $FOREIGN_TAR" \
+  || bad "--decrypt-only output not readable by $FOREIGN_TAR"
 
 # --decrypt-only on a swift_tar-encrypted .tar.gz must return gzip, while --cat
 # on the same file returns the uncompressed tar / 同一檔案上 --decrypt-only 回傳
@@ -226,6 +271,7 @@ must_fail "--decrypt-only on a non-encrypted file is rejected" \
   "$ST" --decrypt-only --keyfile "$KEY" -f "$TMP/outside.tgz"
 must_fail "--decrypt-only with the wrong key is rejected" \
   "$ST" --decrypt-only --keyfile "$WRONG" -f "$TMP/outside.tgz.enc"
+fi   # FOREIGN_TAR
 
 # ---------------------------------------------------------------------------
 # 4) Attacks: every one of these must be rejected, not silently accepted.

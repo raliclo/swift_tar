@@ -560,6 +560,49 @@ rm -f "$TMP/rf1.tar" "$TMP/rf2.tar"
   && ok "repeated -f: the first wins, the second is not created" \
   || bad "repeated -f: the first wins, the second is not created"
 
+# ---- the compress/.Z read filter ----
+# Untested for the whole run because nothing obvious produces LZW: `compress` is
+# absent, and `uncompress` here is gzip's decompressor in disguise (its
+# --version reports "gunzip (gzip) 1.14"), which cannot write .Z at all. The
+# producer that does exist is libarchive's own writer, reached through the
+# Windows-bundled bsdtar -- which also makes it the right fixture, since this
+# filter is a Swift port of libarchive's. Skipped rather than failed where no
+# producer exists.
+# 這條 filter 整輪都沒被測到，因為沒有明顯的 LZW 產生器：`compress` 不存在，而此處的
+# `uncompress` 其實是 gzip 的解壓器偽裝（其 --version 回報「gunzip (gzip) 1.14」），
+# 根本無法寫出 .Z。真正存在的產生器是 libarchive 自己的 writer，經由 Windows 內建的
+# bsdtar 取用——這同時也讓它成為最恰當的測資，因為本 filter 正是 libarchive 對應
+# 實作的 Swift 移植。無產生器的環境下跳過而非失敗。
+z_producer=""
+if [ -x /c/Windows/System32/tar.exe ]; then z_producer=/c/Windows/System32/tar.exe
+elif command -v bsdtar >/dev/null 2>&1; then z_producer=$(command -v bsdtar)
+fi
+
+if [ -n "$z_producer" ]; then
+  ZS="$TMP/zsrc"
+  mkdir -p "$ZS"
+  printf 'alpha\n' > "$ZS/a.txt"
+  head -c 30000 /dev/urandom > "$ZS/c.bin"
+  printf 'u\n' > "$ZS/繁體.txt"
+  "$z_producer" -a -cf "$TMP/z.tar.Z" -C "$ZS" . >/dev/null 2>&1
+
+  # 1f 9d is the LZW magic; if the producer quietly wrote something else the
+  # rest of this block would be testing the wrong filter.
+  # 1f 9d 是 LZW 的 magic；若產生器悄悄寫出別的格式，以下檢查就會在測錯的 filter。
+  eq ".Z fixture really is LZW" "1f 9d" \
+     "$(od -An -tx1 -N2 "$TMP/z.tar.Z" 2>/dev/null | tr -s ' ' | sed 's/^ //;s/ $//')"
+
+  rm -rf "$TMP/zout"; mkdir -p "$TMP/zout"
+  if "$ST" -x -f "$TMP/z.tar.Z" -C "$TMP/zout" >/dev/null 2>&1 \
+     && diff -r "$ZS" "$TMP/zout" >/dev/null 2>&1; then
+    ok ".Z read filter extracts a libarchive-written archive"
+  else
+    bad ".Z read filter extracts a libarchive-written archive"
+  fi
+else
+  echo "SKIP: .Z read filter (no LZW producer on this platform)"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

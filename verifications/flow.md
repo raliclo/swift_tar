@@ -151,19 +151,40 @@ precondition the platform was never meant to meet.
 者、略過不能壓縮的 busybox，若不存在可壓縮的第三方 tar 則乾淨跳過並回報，而不是在一個
 該平台本就不預期滿足的前提上失敗。
 
-What the VM *is* for still has one thing worth checking when it is next built:
-its rootfs is UTF-8 only and its buildroot config states plainly
+### The VM confirmed the macOS ZIP fix, independently
+### VM 獨立確認了 macOS 的 ZIP 修正
+
+Its rootfs is UTF-8 only and its buildroot config states plainly
 `# UTF-8-only rootfs: do not pull in libiconv`. libarchive without iconv is
 exactly the configuration that made `hdrcharset=UTF-8` fail on macOS and took
-every ZIP write with it, so `--zip` in the guest exercises the same path the
-macOS fix was written for. If ZIP works there, that fix is confirmed on a second
-platform that reached the condition independently.
+every ZIP write with it — and this platform arrived at that condition on its own,
+for its own reasons, years of decisions apart from the macOS build.
 
-該 VM 真正的用途裡，仍有一件事值得在下次建置時檢查：其 rootfs 僅支援 UTF-8，
-buildroot 設定明白寫著 `# UTF-8-only rootfs: do not pull in libiconv`。
-「libarchive 不含 iconv」正是使 `hdrcharset=UTF-8` 在 macOS 失敗、並連帶讓所有 ZIP
-寫入一起停擺的那個組態，故在 guest 內執行 `--zip` 會走上 macOS 修正所針對的同一條
-路徑。若該處 ZIP 可用，即等於在一個獨立達到相同條件的第二平台上確認了該修正。
+Measured 2026-08-18 with `swift_tar 20260818-073727`, built in the guest from
+the same source as the macOS fix:
+
+```
+--zip                          exit 0
+swift_tar -t                   src/ · src/中文檔名.txt · src/a.txt
+extract + diff -r              identical
+bsdtar 3.8.8 -tf               the same three names, the non-ASCII one intact
+```
+
+So the fix holds on a second platform that reached the iconv-free condition
+independently. That is worth more than the macOS result on its own: one platform
+passing could mean the fix matched that platform's quirk, two means it matched
+the actual mechanism.
+
+其 rootfs 僅支援 UTF-8，buildroot 設定明白寫著
+`# UTF-8-only rootfs: do not pull in libiconv`。「libarchive 不含 iconv」正是使
+`hdrcharset=UTF-8` 在 macOS 失敗、並連帶讓所有 ZIP 寫入一起停擺的那個組態——而本平台
+是基於自身理由、獨立地走到該條件，與 macOS 的建置決策相隔甚遠。
+
+2026-08-18 以 guest 內建置的 `swift_tar 20260818-073727` 實測，結果如上表。
+
+故該修正在一個獨立達到「無 iconv」條件的第二平台上同樣成立。這比單有 macOS 的結果更有
+價值：單一平台通過，可能只代表修正剛好迎合了該平台的特性；兩個平台通過，才代表它命中的
+是真正的機制。
 
 The matrix identifies each reference by what it says about itself, never by
 filename: `tar` is bsdtar on macOS, GNU tar on most Linux, and on Windows

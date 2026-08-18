@@ -818,6 +818,42 @@ else
   echo "SKIP: path traversal (verifications/make_raw_tar.zsh missing)"
 fi
 
+# ---- a "./" member must not crash extraction ----
+# `tar -C dir .` puts "./" first in the archive, and extracting such an archive
+# without -C died with an illegal instruction (exit 132), no message, no files.
+# Any -C masked it, including `-C .`, so the failure appeared only in the
+# plainest command there is: swift_tar -x -f archive.tar. The extraction below
+# therefore deliberately uses no -C; adding one would make this test pass
+# against the broken binary.
+# `tar -C dir .` 會把 "./" 放在封存最前面，而解出這類封存時若不加 -C，會以非法指令
+# 死亡（離開碼 132），無訊息、無檔案。任何 -C 都會掩蓋它，連 `-C .` 也一樣，故該失敗
+# 只出現在最單純的指令上：swift_tar -x -f archive.tar。因此以下解出刻意不使用 -C；
+# 加上去會讓這個測試對壞掉的 binary 也通過。
+DOT="$TMP/dotsrc"
+mkdir -p "$DOT/sub"
+printf 'a\n' > "$DOT/a.txt"
+printf 'b\n' > "$DOT/sub/b.txt"
+( cd "$DOT" && "$ST" -c -f "$TMP/dot.tar" -C "$DOT" . ) >/dev/null 2>&1
+
+rm -rf "$TMP/dotout"; mkdir -p "$TMP/dotout"
+dot_rc=0
+( cd "$TMP/dotout" && "$ST" -x -f "$TMP/dot.tar" ) >/dev/null 2>&1 || dot_rc=$?
+eq "a './' member extracts without crashing" "0" "$dot_rc"
+eq "a './' archive yields every member" "2" \
+   "$(find "$TMP/dotout" -type f 2>/dev/null | wc -l | tr -d ' ')"
+
+# ...and the "./" entry must not be reported as unsafe. It names the destination
+# itself; a security-shaped warning on almost every archive is how real ones get
+# ignored.
+# ……且 "./" 項目不得被回報為不安全。它指的就是目的地本身；在幾乎每個封存上都掛一則
+# 安全性質的警告，正是真警告被忽略的原因。
+rm -rf "$TMP/dotout2"; mkdir -p "$TMP/dotout2"
+dot_err=$( cd "$TMP/dotout2" && "$ST" -x -f "$TMP/dot.tar" 2>&1 )
+case $dot_err in
+  *unsafe*) bad "a './' member is not called unsafe" ;;
+  *) ok "a './' member is not called unsafe" ;;
+esac
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

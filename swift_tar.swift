@@ -2466,8 +2466,24 @@ final class TarReader {
             p.removeFirst(2)
         }
         while p.hasPrefix("/") { p.removeFirst() }
-        let comps = p.split(separator: "/")
+        var comps = p.split(separator: "/")
         if comps.contains("..") { return nil }
+        // Drop "." components. They carry no meaning in a path, and keeping them
+        // made `./` -- the first entry in every archive written as
+        // `tar -C dir .` -- resolve to a destination of exactly ".", which
+        // crashed extraction with an illegal instruction whenever -C was absent.
+        // `-C anything` masked it, including `-C .`, so the failure only appeared
+        // in the plainest possible command: `swift_tar -x -f archive.tar`.
+        // Dropping them makes `./` resolve to empty, which the caller's
+        // !safeRel.isEmpty guard already skips -- correctly, since that entry
+        // names the destination directory itself.
+        // 丟棄 "." 組件。它在路徑中不帶任何意義，而保留它會使 `./`——凡是以
+        // `tar -C dir .` 寫出的封存，其第一個項目——解析出恰為 "." 的目的地，導致在
+        // 未給 -C 時解出以非法指令崩潰。任何 `-C` 都會掩蓋此問題，連 `-C .` 也一樣，
+        // 因此該失敗只出現在最單純的指令上：`swift_tar -x -f archive.tar`。
+        // 丟棄之後 `./` 解析為空字串，呼叫端既有的 !safeRel.isEmpty 守門便會略過它
+        // ——這是正確的，因為該項目指的就是目的地目錄本身。
+        comps.removeAll { $0 == "." }
         return comps.joined(separator: "/")
     }
 
@@ -2677,8 +2693,22 @@ final class TarReader {
                 continue
             }
 
-            guard let safeRel = TarReader.safeRelativePath(name), !safeRel.isEmpty else {
+            // nil means the name tried to escape; empty means it resolved to the
+            // destination itself, which "./" does -- the first entry of every
+            // archive written as `tar -C dir .`. Only the first deserves a
+            // warning: calling an ordinary "./" entry "unsafe" would put a
+            // security-shaped message on almost every archive, which is how
+            // people learn to ignore the real ones.
+            // nil 代表該名稱意圖逃逸；空字串代表它解析為目的地本身，`./` 即屬此類
+            // ——凡是以 `tar -C dir .` 寫出的封存，其第一個項目都是它。只有前者值得
+            // 警告：把尋常的 `./` 項目稱為「不安全」，等於在幾乎每個封存上都掛一則
+            // 安全性質的訊息，而那正是人們學會忽略真警告的方式。
+            guard let safeRel = TarReader.safeRelativePath(name) else {
                 eprint("swift_tar: skipping unsafe path '\(name)' / 略過不安全路徑 '\(name)'")
+                if !isDir { try skipData(size) }
+                continue
+            }
+            guard !safeRel.isEmpty else {
                 if !isDir { try skipData(size) }
                 continue
             }

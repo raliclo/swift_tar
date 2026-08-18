@@ -136,6 +136,78 @@ is better than either.
 
 ---
 
+## 4. cmd.exe mis-parses an LF-only `.bat` that contains non-ASCII bytes / cmd.exe 會誤解析含非 ASCII 位元組且僅用 LF 的 `.bat`
+
+Not a defect in a tool we compare against, but in the one that runs our build. It
+is here because the failure is loud, looks nothing like its cause, and the obvious
+generalisation from it is wrong in both directions.
+
+這一項不是比對工具的缺陷，而是執行我們建置流程的那個工具的缺陷。記於此處是因為其失敗
+訊息很吵、與成因毫無相似之處，而由它得出的直覺推論在兩個方向上都是錯的。
+
+Converting `compile_tar-win.bat` to LF produced:
+
+將 `compile_tar-win.bat` 轉為 LF 後產生：
+
+```
+'in.bat' is not recognized as an internal or external command,
+'ically.' is not recognized as an internal or external command,
+'s' is not recognized as an internal or external command,
+```
+
+cmd.exe is executing **fragments of comment text** as commands. The same file with
+CRLF parses correctly.
+
+cmd.exe 正把**註解文字的碎片**當成指令執行。同一個檔案在 CRLF 下解析正常。
+
+**Neither half of the rule is what you would guess.** Measured with a batch file
+exercising nested `if`, `for /f` with backticks, a `for` loop, `call`/labels,
+`errorlevel` and delayed expansion:
+
+**這條規則的兩半都不是憑直覺會猜到的。** 以一個涵蓋巢狀 `if`、含反引號的 `for /f`、
+`for` 迴圈、`call`／label、`errorlevel` 與 delayed expansion 的批次檔實測：
+
+| content | line endings | result |
+|---|---|---|
+| ASCII only | LF | **works** — every construct, identical output to CRLF |
+| ASCII only | CRLF | works |
+| contains non-ASCII | **LF** | **breaks**: `'ledelayedexpansion'`, `'ne'` executed as commands |
+| contains non-ASCII | CRLF | works |
+
+So "`.bat` must be CRLF" is false — an ASCII batch file is fine as LF. And "LF is
+safe for `.bat`" is also false. **The rule is the interaction:** a batch file
+carrying non-ASCII bytes needs CRLF; one that does not, does not care.
+
+因此「`.bat` 必須是 CRLF」是錯的——純 ASCII 的批次檔用 LF 沒問題；而「`.bat` 用 LF 是
+安全的」同樣是錯的。**真正的規則在於兩者的交互作用**：帶有非 ASCII 位元組的批次檔需要
+CRLF，不帶的則無所謂。
+
+This project's batch files are bilingual, so most of them carry non-ASCII by
+design. Current state:
+
+本專案的批次檔為雙語，故多數依設計即帶有非 ASCII。目前狀態：
+
+- `compile_tar-win.bat` — 123 non-ASCII bytes → **stays CRLF**
+- `scoop_release.bat` — no non-ASCII → converted to LF
+
+The rule applies only to files cmd.exe *parses*. Data files carry UTF-8 with LF
+without trouble; `.rgb1` fixtures are binary and must not be touched at all.
+
+此規則只適用於 cmd.exe 會**解析**的檔案。資料檔以 UTF-8 搭配 LF 完全沒有問題；
+`.rgb1` fixture 為二進位，絕不可更動。
+
+Audit with byte tools, never `grep`/`sed`/`awk` — MSYS builds strip CR before the
+regex runs, so they report 0 for a file that is entirely CRLF:
+
+請以位元組工具稽核，切勿使用 `grep`／`sed`／`awk`——MSYS 版本會在正則執行前剝除 CR，
+因而對一個全篇 CRLF 的檔案回報 0：
+
+```sh
+lf=$(tr -dc '\n'        < "$f" | wc -c)   # line count
+cr=$(tr -dc '\r'        < "$f" | wc -c)   # 0 = LF, == lf = CRLF, otherwise mixed
+na=$(tr -dc '\200-\377' < "$f" | wc -c)   # non-ASCII bytes
+```
+
 ## Reproducing / 重現
 
 All three need only a file with a non-ASCII name:

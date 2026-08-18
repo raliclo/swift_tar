@@ -327,6 +327,49 @@ else
   bad "-x --zip from stdin matches extraction from a path"
 fi
 
+# ---- reproducible output / 可重現的輸出 ----
+# Not a defect -- a documented property that would break silently. The corpus
+# must span more than one 4 MiB chunk or the -n arms have nothing to reorder and
+# the check proves nothing. Encryption is asserted to be the opposite: an
+# encrypted archive identical across runs would mean a reused nonce.
+# 這不是缺陷，而是一項會無聲失效的既載性質。語料必須橫跨一個以上的 4 MiB 分塊，
+# 否則各 -n 組別根本沒有東西可重排，該檢查也就證明不了任何事。加密則斷言相反的
+# 性質：跨執行相同的加密封存意味著 nonce 被重複使用。
+REPRO="$TMP/repro"
+mkdir -p "$REPRO"
+head -c 9000000 /dev/urandom > "$REPRO/big.bin"
+printf 'small\n' > "$REPRO/a.txt"
+
+for codec in "" "--zstd" "--gzip"; do
+  base=""
+  differing=0
+  for n in 1 4 16; do
+    # shellcheck disable=SC2086
+    "$ST" -c ${=codec} -n "$n" -f "$TMP/r.out" -C "$REPRO" . >/dev/null 2>&1
+    h="$(sha256sum < "$TMP/r.out" | cut -d' ' -f1)"
+    if [ -z "$base" ]; then base="$h"; elif [ "$base" != "$h" ]; then differing=$((differing + 1)); fi
+  done
+  eq "output is byte-identical across -n (${codec:-plain tar})" "0" "$differing"
+done
+
+"$ST" -c --zstd -f "$TMP/run1" -C "$REPRO" . >/dev/null 2>&1
+"$ST" -c --zstd -f "$TMP/run2" -C "$REPRO" . >/dev/null 2>&1
+cmp -s "$TMP/run1" "$TMP/run2" \
+  && ok "output is byte-identical across runs" \
+  || bad "output is byte-identical across runs"
+
+"$ST" -c --encrypt --keyfile "$TMP/k.bin" --zstd -f "$TMP/e1" -C "$REPRO" . >/dev/null 2>&1
+"$ST" -c --encrypt --keyfile "$TMP/k.bin" --zstd -f "$TMP/e2" -C "$REPRO" . >/dev/null 2>&1
+cmp -s "$TMP/e1" "$TMP/e2" \
+  && bad "encrypted output differs across runs (nonce is not reused)" \
+  || ok "encrypted output differs across runs (nonce is not reused)"
+
+"$ST" --cat --keyfile "$TMP/k.bin" -f "$TMP/e1" > "$TMP/p1" 2>/dev/null
+"$ST" --cat --keyfile "$TMP/k.bin" -f "$TMP/e2" > "$TMP/p2" 2>/dev/null
+cmp -s "$TMP/p1" "$TMP/p2" \
+  && ok "both encrypted runs decrypt to the same plaintext" \
+  || bad "both encrypted runs decrypt to the same plaintext"
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

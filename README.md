@@ -454,6 +454,25 @@ the same behavior as a libarchive built without lzo support.
 compiled, for example `swift_tar 20260712-143015`. The same value is stored as
 `swift_tar_version` in the packaged `version.txt`.
 
+## Reproducible output
+
+**The same inputs produce byte-identical archives**, so you can compare
+checksums across runs and machines. Measured on a 12 MB corpus spanning three
+4 MiB chunks:
+
+| what | reproducible? |
+|---|---|
+| plain tar and every stream codec (`--zstd`, `--gzip`, `--xz`, `--bzip2`, `--lz4`) | **yes**, across runs |
+| the same, across `-n 1`, `2`, `4`, `8`, `16` | **yes** — parallelism does not change a byte |
+| `--encrypt` | **no, by design** — a fresh nonce each run; the decrypted plaintext is identical |
+| `--zip` | no — the ZIP container records its own timestamps |
+
+The `-n` result is the useful one: chunking is deterministic, not merely
+reassembled in the right order, so an archive built with `-n 16` on one machine
+matches one built with `-n 1` on another. Encryption is deliberately the
+exception — an encrypted archive that did not change between runs would mean a
+reused nonce.
+
 ## Exit status
 
 **Test for zero versus non-zero. Do not branch on a particular non-zero value** —

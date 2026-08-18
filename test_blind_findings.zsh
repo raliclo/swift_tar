@@ -418,6 +418,93 @@ else
   bad "non-ASCII names survive extraction by the system tar"
 fi
 
+
+# ---- macOS round 7: ZIP must work at all, and flag its UTF-8 names ----
+# Two failures in one place. `hdrcharset=UTF-8` was added to fix a Windows
+# defect but was fatal when it failed, and libarchive implements it through
+# iconv, which both build scripts disable -- so every ZIP write on macOS exited
+# 1 producing nothing. Making it non-fatal restored writing but left general
+# purpose bit 11 clear, because libarchive's other route to that flag asks
+# nl_langinfo(CODESET), and a C program starts in the "C" locale. The names were
+# correct UTF-8 either way; without the flag a reader has to guess, and Python's
+# zipfile guessed wrong.
+# 同一處的兩個失敗。`hdrcharset=UTF-8` 原是為修 Windows 缺陷而加，但失敗時視為致命，
+# 而 libarchive 以 iconv 實作該選項、兩支建置腳本又都停用 iconv——於是 macOS 上所有
+# ZIP 寫入都 exit 1 且不產生檔案。改為非致命後可寫了，但 general purpose bit 11 仍未
+# 設定，因為 libarchive 通往該旗標的另一條路徑查的是 nl_langinfo(CODESET)，而 C 程式
+# 啟動於 "C" locale。兩種情況下名稱都是正確的 UTF-8；少了旗標，讀取端只能猜，而
+# Python 的 zipfile 猜錯了。
+ZIPU="$TMP/zipu"
+mkdir -p "$ZIPU/src"
+printf 'x' > "$ZIPU/src/中文檔名.txt"
+echo plain > "$ZIPU/src/a.txt"
+
+if "$ST" -c --zip -f "$TMP/u.zip" -C "$ZIPU" src >/dev/null 2>&1; then
+  ok "--zip produces an archive at all"
+else
+  bad "--zip produces an archive at all"
+fi
+if "$ST" -c --zip64 -f "$TMP/u64.zip" -C "$ZIPU" src >/dev/null 2>&1; then
+  ok "--zip64 produces an archive at all"
+else
+  bad "--zip64 produces an archive at all"
+fi
+
+# Read the flag straight out of the local file headers rather than trusting any
+# one reader: the point of the fix is what is IN the file.
+# 直接自 local file header 讀出該旗標，而非採信任何單一讀取器：本修正的重點在於
+# 檔案裡實際存了什麼。
+if command -v python3 >/dev/null 2>&1 && [ -f "$TMP/u.zip" ]; then
+  if python3 - "$TMP/u.zip" <<'PYEOF' >/dev/null 2>&1
+import sys, struct
+d = open(sys.argv[1], 'rb').read()
+want = 'src/中文檔名.txt'.encode('utf-8')
+off = 0
+while True:
+    i = d.find(b'PK\x03\x04', off)
+    if i < 0:
+        break
+    flag = struct.unpack_from('<H', d, i + 6)[0]
+    nlen = struct.unpack_from('<H', d, i + 26)[0]
+    name = d[i + 30:i + 30 + nlen]
+    if name == want:
+        sys.exit(0 if flag & 0x800 else 1)
+    off = i + 4
+sys.exit(2)   # the entry was not found under its UTF-8 name
+PYEOF
+  then
+    ok "ZIP sets general purpose bit 11 on a non-ASCII name"
+  else
+    bad "ZIP sets general purpose bit 11 on a non-ASCII name"
+  fi
+
+  # A reader that honours bit 11 must agree with what we wrote. Python's zipfile
+  # is the discriminator: before the fix it returned a mojibake name here.
+  # 遵守 bit 11 的讀取器必須與我們寫出的一致。Python 的 zipfile 是判別式：修正前
+  # 它在此處回傳的是亂碼名稱。
+  if python3 -c "
+import sys, zipfile
+want = 'src/中文檔名.txt'
+sys.exit(0 if want in zipfile.ZipFile(sys.argv[1]).namelist() else 1)
+" "$TMP/u.zip" >/dev/null 2>&1; then
+    ok "an independent reader recovers the non-ASCII name from the ZIP"
+  else
+    bad "an independent reader recovers the non-ASCII name from the ZIP"
+  fi
+fi
+
+# swift_tar must be able to read back what it wrote. Setting the flag only on
+# the write side produced archives bsdtar could read and swift_tar could not.
+# swift_tar 必須讀得回自己寫出的東西。只在寫入端設定旗標，會產出 bsdtar 讀得開而
+# swift_tar 讀不開的封存。
+rm -rf "$TMP/uz"; mkdir -p "$TMP/uz"
+if "$ST" -x -f "$TMP/u.zip" -C "$TMP/uz" >/dev/null 2>&1 \
+   && diff -r "$ZIPU/src" "$TMP/uz/src" >/dev/null 2>&1; then
+  ok "swift_tar round-trips its own ZIP with a non-ASCII name"
+else
+  bad "swift_tar round-trips its own ZIP with a non-ASCII name"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

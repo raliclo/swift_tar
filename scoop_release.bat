@@ -56,7 +56,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File update_scoop_manifest.ps1 -ZipPath release\swift_tar_win.zip -ManifestPath %_manifest%
+zsh .\update_scoop_manifest.zsh --zip release\swift_tar_win.zip --manifest %_manifest%
 if errorlevel 1 (
     echo [FAIL] updating %_manifest% failed
     pause

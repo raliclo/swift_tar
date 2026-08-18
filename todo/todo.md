@@ -86,21 +86,44 @@ failure, silently, on the one platform where it used to break.
 分支已移除——留著它只會把未來的退化無聲降級為預期失敗，而且正是在它曾經壞掉的那個
 平台上。
 
-## Still PowerShell, not yet converted / 仍是 PowerShell，尚未轉換  ▸ ⬜ 未處理 / open
+## PowerShell scripts / PowerShell 腳本  ▸ ✅ 已結案 2026-08-18
 
-`package_win.ps1` is gone, but two `.ps1` files we own remain and are the same
-policy class — PowerShell is reserved for UAC elevation shims, and neither of
-these elevates:
+`package_win.ps1` and `update_scoop_manifest.ps1` are converted and removed.
+**One remains, deliberately: `verifications/measure_peak_ws_win.ps1`.**
 
-`package_win.ps1` 已移除，但仍有兩支我方自有的 `.ps1`，屬同一類政策問題——PowerShell
-僅保留作為 UAC 提權 shim，而這兩支都不提權：
+`package_win.ps1` 與 `update_scoop_manifest.ps1` 已轉換並移除。
+**刻意保留一支：`verifications/measure_peak_ws_win.ps1`。**
 
-- `update_scoop_manifest.ps1`
-- `verifications/measure_peak_ws_win.ps1`
+It is not a UAC shim, so the policy would normally send it to zsh. It stays
+because nothing reachable from zsh can sample a short-lived process often enough
+to see its peak working set. Measured against a 0.6 s swift_tar encode whose true
+peak is ~58–59 MB:
 
-Neither was in this file before, so neither has been measured or converted here;
-they are recorded so the next pass has them.
-兩者先前皆未列入本檔，故此處尚未量測或轉換，僅先記錄，以便下一輪處理。
+它並非 UAC shim，依政策本應改寫為 zsh。保留的原因是：從 zsh 可觸及的任何工具，都無法
+對短命行程取樣到足以看見其峰值 working set 的密度。以一次 0.6 秒、真實峰值約 58–59 MB
+的 swift_tar 編碼實測：
+
+| approach | result |
+|---|---|
+| `tasklist` polled from zsh | 49–255 ms per poll → **1–2 samples** per run; three runs gave 51.9 / 58.1 / **48.1** MB, the last 18% low |
+| `typeperf "\Process(swift_tar)\Working Set Peak"` | the OS tracks the peak, so one read would suffice — but typeperf needs **1504 ms** to emit its first sample and captured **zero** readings |
+| `wmic process get PeakWorkingSetSize` | **removed from Windows 11**; neither `wmic` nor `System32\wbem\WMIC.exe` exists |
+| PowerShell, `WorkingSet64` every 5 ms in-process | ~120 samples, spread under 1.5 MB across repeats |
+
+The fidelity is the whole point of the measurement, so converting it would mean
+keeping the script and losing the number. The reasoning and the figures are
+repeated in the script's own header, so anyone opening the file meets them before
+deciding it was an oversight.
+
+精度正是這項量測的全部意義，改寫等於「腳本留下、數字失真」。相關推理與數據亦重複記於
+該腳本自身的檔頭，讓任何打開該檔的人在判定「這是漏改」之前先讀到它。
+
+Revisit if a zsh-reachable peak counter appears. Whoever revisits should re-run
+the comparison rather than assume — a version that merely runs is not a version
+that measures.
+
+若日後出現 zsh 可觸及的峰值計數器，可重新檢視。屆時請重跑上述比較而非逕行假設——
+「能跑」的版本不等於「量得準」的版本。
 
 ## Windows verification run, 2026-08-16 / Windows 驗證執行
 

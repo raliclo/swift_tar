@@ -40,8 +40,48 @@ purpose is to be ignorant of the answer.
 |---|---|---|---|
 | macOS | `./build.zsh` | `verifications/tar_interop_matrix.zsh` | bsdtar (`/usr/bin/tar`), GNU tar (`gtar`, from `brew install gnu-tar`) |
 | Windows / MSYS | `./build.zsh` | same | bsdtar (`C:\Windows\System32\tar.exe`), GNU tar (MSYS `tar`) |
-| Linux VM on macOS | `~/projWin/VM-test/run.sh` | same, inside the guest | GNU tar; bsdtar only if installed |
 | WSL | via multissh | same | GNU tar; bsdtar only if installed |
+| Linux VM on macOS | `~/projWin/VM-test/run.sh` | **not a matrix platform — see below** | — |
+
+**The Linux VM is deliberately not an interop reference platform.** Its
+buildroot config leaves `BR2_PACKAGE_TAR` unset on purpose, so `tar` there is
+the busybox applet and there is no GNU tar. Do not add the package and do not
+go looking for reference tars in the guest: the VM exists to prove swift_tar
+*builds and runs* on Linux, and interop against GNU tar and bsdtar is covered on
+macOS, Windows and WSL, where those tools are the ones users actually have.
+
+**Linux VM 刻意不作為互通參照平台。** 其 buildroot 設定刻意不設
+`BR2_PACKAGE_TAR`，故該處的 `tar` 是 busybox applet，且沒有 GNU tar。請不要加入該
+套件，也不要在 guest 內尋找參照 tar：這台 VM 的用途是證明 swift_tar 在 Linux 上
+**建置得起來、跑得動**；與 GNU tar 及 bsdtar 的互通由 macOS、Windows 與 WSL 覆蓋，
+那裡的這些工具才是使用者手上實際會有的。
+
+> **Trap, if anyone does probe that guest anyway:** `/usr/bin/tar` in it is
+> **swift_tar itself**, installed under that name — it reports
+> `swift_tar 20260813-080906`, while busybox tar sits at `/bin/tar` and bsdtar
+> 3.8.8 at `/usr/bin/bsdtar`. A matrix that picked its reference by filename
+> would have compared swift_tar against itself and reported flawless interop.
+> This is the concrete reason the matrix identifies every candidate by what it
+> says about itself and rejects anything that is neither bsdtar nor GNU tar.
+> **若仍有人去探測該 guest，這是陷阱：** 其 `/usr/bin/tar` **就是 swift_tar 自己**，
+> 以該名稱安裝，自報為 `swift_tar 20260813-080906`；busybox tar 在 `/bin/tar`，
+> bsdtar 3.8.8 在 `/usr/bin/bsdtar`。以檔名挑選參照工具的矩陣，會拿 swift_tar 與
+> 自己比對並回報完美互通。這正是矩陣以自我描述辨識每個候選者、並拒絕任何既非
+> bsdtar 亦非 GNU tar 之物的具體理由。
+
+What the VM *is* for still has one thing worth checking when it is next built:
+its rootfs is UTF-8 only and its buildroot config states plainly
+`# UTF-8-only rootfs: do not pull in libiconv`. libarchive without iconv is
+exactly the configuration that made `hdrcharset=UTF-8` fail on macOS and took
+every ZIP write with it, so `--zip` in the guest exercises the same path the
+macOS fix was written for. If ZIP works there, that fix is confirmed on a second
+platform that reached the condition independently.
+
+該 VM 真正的用途裡，仍有一件事值得在下次建置時檢查：其 rootfs 僅支援 UTF-8，
+buildroot 設定明白寫著 `# UTF-8-only rootfs: do not pull in libiconv`。
+「libarchive 不含 iconv」正是使 `hdrcharset=UTF-8` 在 macOS 失敗、並連帶讓所有 ZIP
+寫入一起停擺的那個組態，故在 guest 內執行 `--zip` 會走上 macOS 修正所針對的同一條
+路徑。若該處 ZIP 可用，即等於在一個獨立達到相同條件的第二平台上確認了該修正。
 
 The matrix identifies each reference by what it says about itself, never by
 filename: `tar` is bsdtar on macOS, GNU tar on most Linux, and on Windows

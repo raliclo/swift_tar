@@ -679,6 +679,58 @@ else
   echo "SKIP: reserved device names (this filesystem will not hold them)"
 fi
 
+# ---- extraction must not write outside the destination ----
+# Only the POSIX "../" form was caught. Three other shapes wrote outside the -C
+# directory with exit 0 and no message, because the guard split on "/" alone and
+# never normalised what archiveName() normalises on the way in:
+#   ..\..\x    one component to a "/"-split, so the ".." test saw no ".."
+#   C:\...\x   no "/" at all, so the drive letter survived into the Windows layer
+#   /tmp/x     leading "/" stripped, yet still resolved outside the destination
+# An archive is not required to have been written by this tool, so the read side
+# has to assume the name is hostile. No tar CLI will create these names, hence
+# the raw-header helper.
+# 原本只有 POSIX 的 "../" 形式被擋下。另外三種形態會寫到 -C 目錄之外，且離開碼為 0、
+# 毫無訊息，原因是守門僅以 "/" 分割，且未做 archiveName() 在寫入端所做的正規化：
+#   ..\..\x    對「僅以 / 分割」而言是單一組件，".." 的檢查看不到 ".."
+#   C:\...\x   完全不含 "/"，磁碟機代號因而存活至 Windows 層
+#   /tmp/x     開頭的 "/" 雖被去除，結果仍解析到目的地之外
+# 封存不保證由本工具寫出，故讀取端必須假設名稱懷有敵意。沒有任何 tar CLI 會建立這類
+# 名稱，因此需要 raw header 產生器。
+RAW="${0:A:h}/verifications/make_raw_tar.zsh"
+if [ -f "$RAW" ]; then
+  TRAV="$TMP/trav"
+  mkdir -p "$TRAV"
+
+  # name, must-not-appear-at, label
+  esc_fail=0
+  check_traversal() {
+    local member=$1 outside=$2 label=$3
+    zsh "$RAW" "$TMP/trav.tar" "$member" 'traversal payload' >/dev/null 2>&1
+    rm -rf "$TRAV/a"; mkdir -p "$TRAV/a/b"
+    rm -f "$outside"
+    ( cd "$TRAV/a/b" && "$ST" -x -f "$TMP/trav.tar" ) >/dev/null 2>&1
+    # Nothing may appear above the extraction directory, nor at an absolute path.
+    # 解出目錄之上不得出現任何東西，絕對路徑處亦然。
+    local above
+    above=$(find "$TRAV" -type f -not -path "$TRAV/a/b/*" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$above" -ne 0 ] || [ -e "$outside" ]; then
+      bad "traversal blocked: $label"
+      esc_fail=$((esc_fail + 1))
+    else
+      ok "traversal blocked: $label"
+    fi
+    rm -f "$outside" 2>/dev/null
+  }
+
+  check_traversal '../../escaped.txt'            "$TMP/never_posix"   '../ (posix)'
+  check_traversal '..\..\escaped.txt'            "$TMP/never_back"    '..\ (backslash)'
+  check_traversal 'ok/../../escaped.txt'         "$TMP/never_mixed"   'interior ../'
+  check_traversal '/tmp/swift_tar_abs_probe.txt' /tmp/swift_tar_abs_probe.txt      'absolute posix'
+  check_traversal 'C:\Windows\Temp\st_abs.txt'   /c/Windows/Temp/st_abs.txt        'absolute windows'
+else
+  echo "SKIP: path traversal (verifications/make_raw_tar.zsh missing)"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

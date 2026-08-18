@@ -2432,8 +2432,39 @@ final class TarReader {
 
     /// Reject absolute paths and ".." traversal on extract (libarchive-style hardening).
     /// 解出時拒絕絕對路徑與 ".." 逃逸（仿 libarchive 的防護）。
+    /// Reduce an archived member name to a path that cannot escape the
+    /// extraction directory, or nil if it tries to.
+    ///
+    /// This must normalise exactly what `archiveName()` normalises on the way in
+    /// — backslashes, drive letters, leading separators — because an archive is
+    /// not required to have been written by this tool. Splitting on "/" alone
+    /// let three shapes through, each writing outside the target with exit 0 and
+    /// no message:
+    ///
+    ///   ..\..\x.txt        one component to a "/"-only split, so the ".." test
+    ///                      never saw a ".."; landed two levels above the -C dir
+    ///   C:\Windows\...     no "/" at all, so it passed through whole and the
+    ///                      Windows layer then honoured the drive letter
+    ///   /tmp/x.txt         leading "/" was stripped, but the result still
+    ///                      resolved outside the destination
+    ///
+    /// 將封存中的成員名稱化簡為無法逃出解出目錄的路徑，若其意圖逃逸則回傳 nil。
+    ///
+    /// 此處必須正規化的項目，與 `archiveName()` 在寫入端所做的完全相同——反斜線、
+    /// 磁碟機代號、開頭的分隔符——因為封存不保證是本工具寫出的。僅以 "/" 分割會放行
+    /// 三種形態，每一種都會寫到目標之外，且離開碼為 0、毫無訊息：
+    ///
+    ///   ..\..\x.txt        對「僅以 / 分割」而言是單一組件，".." 的檢查根本沒看到
+    ///                      ".."；結果落在 -C 目錄之上兩層
+    ///   C:\Windows\...     完全不含 "/"，整段原樣通過，Windows 層隨後採納了磁碟機代號
+    ///   /tmp/x.txt         開頭的 "/" 雖被去除，結果仍解析到目的地之外
     private static func safeRelativePath(_ name: String) -> String? {
-        var p = name
+        var p = name.replacingOccurrences(of: "\\", with: "/")
+        // Drive-relative and drive-absolute forms both start "X:"; drop it.
+        // "X:" 開頭涵蓋磁碟機相對與絕對兩種形式，一律去除。
+        if p.count >= 2, p[p.startIndex].isLetter, p[p.index(after: p.startIndex)] == ":" {
+            p.removeFirst(2)
+        }
         while p.hasPrefix("/") { p.removeFirst() }
         let comps = p.split(separator: "/")
         if comps.contains("..") { return nil }

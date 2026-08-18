@@ -340,6 +340,19 @@ release/swift_tar -x -f src.tar.bvx3 -C /tmp/out
 release/swift_tar --cat -f package.rpm > payload.cpio          # strip RPM wrapper
 ```
 
+**Extraction stays inside `-C`.** A member name is treated as hostile, because an
+archive need not have been written by this tool:
+
+| member name in the archive | what happens |
+|---|---|
+| `../../x`, `dir/../../x`, `..\..\x` | entry skipped: `skipping unsafe path '<name>'` |
+| `/etc/x`, `C:\Windows\x` | leading `/` and any drive letter dropped; written **inside** the destination |
+
+Nothing an archive can name will be written above the extraction directory. Note
+that a skipped entry does not change the exit code — the run still ends 0 — so a
+script extracting an untrusted archive should read stderr, or compare the
+extracted tree against `-t`, rather than trusting the status alone.
+
 ### Identify an unknown file
 
 Reading never looks at the extension — the codec is auto-detected by magic

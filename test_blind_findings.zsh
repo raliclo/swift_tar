@@ -573,6 +573,17 @@ rm -f "$TMP/rf1.tar" "$TMP/rf2.tar"
 # 根本無法寫出 .Z。真正存在的產生器是 libarchive 自己的 writer，經由 Windows 內建的
 # bsdtar 取用——這同時也讓它成為最恰當的測資，因為本 filter 正是 libarchive 對應
 # 實作的 Swift 移植。無產生器的環境下跳過而非失敗。
+# COPYFILE_DISABLE keeps macOS out of the fixture. bsdtar there writes an
+# AppleDouble `._name` member beside every entry to carry extended attributes,
+# and hides them again in its own listing -- so the archive holds 15 members
+# where `bsdtar -tf` shows 8, and swift_tar, which does not hide them, extracts
+# all 15. Both cases below then measure macOS's xattr convention instead of the
+# thing they name. Windows cannot see this: there is no AppleDouble there.
+# COPYFILE_DISABLE 讓 macOS 的特性不進入測資。該平台的 bsdtar 會在每個項目旁寫入
+# AppleDouble 的 `._名稱` 成員以攜帶延伸屬性，並在自己的列表中再次隱藏它們——於是
+# 封存實際有 15 個成員而 `bsdtar -tf` 只顯示 8 個，而不隱藏它們的 swift_tar 會把
+# 15 個全部解出。下方兩個案例若不設定，量到的就會是 macOS 的 xattr 慣例，而非它們
+# 各自宣稱要測的東西。Windows 上看不到此現象：那裡沒有 AppleDouble。
 z_producer=""
 if [ -x /c/Windows/System32/tar.exe ]; then z_producer=/c/Windows/System32/tar.exe
 elif command -v bsdtar >/dev/null 2>&1; then z_producer=$(command -v bsdtar)
@@ -584,7 +595,7 @@ if [ -n "$z_producer" ]; then
   printf 'alpha\n' > "$ZS/a.txt"
   head -c 30000 /dev/urandom > "$ZS/c.bin"
   printf 'u\n' > "$ZS/繁體.txt"
-  "$z_producer" -a -cf "$TMP/z.tar.Z" -C "$ZS" . >/dev/null 2>&1
+  COPYFILE_DISABLE=1 "$z_producer" -a -cf "$TMP/z.tar.Z" -C "$ZS" . >/dev/null 2>&1
 
   # 1f 9d is the LZW magic; if the producer quietly wrote something else the
   # rest of this block would be testing the wrong filter.
@@ -667,7 +678,7 @@ for n in $dev_names; do
 done
 
 if [ "$dev_ok" -eq 1 ] && [ "$(ls "$DEV/src" | wc -l | tr -d ' ')" -eq ${#dev_names} ]; then
-  ( cd "$DEV/src" && "$SYS_TAR" -cf "$TMP/dev.tar" . ) >/dev/null 2>&1
+  ( cd "$DEV/src" && COPYFILE_DISABLE=1 "$SYS_TAR" -cf "$TMP/dev.tar" . ) >/dev/null 2>&1
   rm -rf "$TMP/devout"; mkdir -p "$TMP/devout"
   "$ST" -x -f "$TMP/dev.tar" -C "$TMP/devout" >/dev/null 2>&1
   eq "reserved device names all extract" "${#dev_names}" \

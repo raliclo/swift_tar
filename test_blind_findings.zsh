@@ -752,6 +752,21 @@ if [ -f "$RAW" ]; then
     bad "traversal blocked: write through a planted symlink"
   fi
 
+  # A hardlink aimed outside is refused safely, but used to be refused in total
+  # silence: no stdout, no stderr, exit 0, entry gone. The same tool already
+  # warned when a hardlink target was merely missing, so the security-relevant
+  # case was the quiet one. Assert the message, not just the absence of a file.
+  # 指向外部的硬連結會被安全地拒絕，但過去是「完全沉默地」拒絕：無 stdout、無 stderr、
+  # 離開碼 0、項目消失。同一支程式對「目標僅是不存在」的硬連結早已會警告，於是與安全
+  # 相關的那個案例反而是沉默的那個。此處斷言訊息本身，而非僅斷言檔案不存在。
+  zsh "$RAW" "$TMP/hard.tar" hard stolen.txt '../../../secret_outside.txt' >/dev/null 2>&1
+  rm -rf "$TRAV/h"; mkdir -p "$TRAV/h/a/b"
+  hard_out=$( cd "$TRAV/h/a/b" && "$ST" -x -f "$TMP/hard.tar" 2>&1 )
+  case $hard_out in
+    *"skipping hardlink"*) ok "an unsafe hardlink target is reported, not dropped in silence" ;;
+    *) bad "an unsafe hardlink target is reported, not dropped in silence" ;;
+  esac
+
   # ...and a legitimate symlink must still survive, or the guard is too blunt.
   # ……而合法的 symlink 必須仍然存活，否則這道守門就過度阻擋了。
   zsh "$RAW" "$TMP/legit.tar" file 'lib/real.so' 'REAL' link 'lib/alias.so' 'real.so' >/dev/null 2>&1

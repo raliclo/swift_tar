@@ -3,7 +3,8 @@
 # 以任意且未經清理的成員名稱與型別建立 ustar 封存。
 #
 #   ./make_raw_tar.zsh <out.tar> file <name> <content>
-#   ./make_raw_tar.zsh <out.tar> link <name> <linkname>
+#   ./make_raw_tar.zsh <out.tar> link <name> <linkname>      # symlink
+#   ./make_raw_tar.zsh <out.tar> hard <name> <linkname>      # hardlink
 #   ./make_raw_tar.zsh <out.tar> link <name> <linkname> file <name> <content> ...
 #   ./make_raw_tar.zsh --help
 #
@@ -40,6 +41,7 @@ emit_entry() {
     case $kind in
         file) typeflag='0'; linkname=''; content=$arg; size=${#content} ;;
         link) typeflag='2'; linkname=$arg; content='';  size=0 ;;
+        hard) typeflag='1'; linkname=$arg; content='';  size=0 ;;
         *) print -ru2 -- "unknown entry kind: $kind"; exit 1 ;;
     esac
 

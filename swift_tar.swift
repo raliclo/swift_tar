@@ -2775,9 +2775,22 @@ final class TarReader {
                 }
 #endif
             case UInt8(ascii: "1"):
+                // Say so when the target is refused. This guard used to drop the
+                // entry with a bare `continue`: a hardlink aimed at
+                // ../../../secret produced no stdout, no stderr and exit 0, so a
+                // caller could not tell the archive had been altered at all.
+                // The same tool already warns when a hardlink target is merely
+                // missing, which made the security-relevant case the quiet one.
+                // GNU tar reports both and exits 2.
+                // 目標遭拒時要說出來。此守門原本以裸 `continue` 丟棄項目：指向
+                // ../../../secret 的硬連結不產生任何 stdout 與 stderr，離開碼為 0，
+                // 呼叫端因而完全無從得知封存曾被更動。同一支程式對「目標僅是不存在」
+                // 的硬連結早已會發出警告，於是與安全相關的那個案例反而是沉默的那個。
+                // GNU tar 兩者皆回報並以 2 結束。
                 guard let safeLink = TarReader.safeRelativePath(linkname),
                       let strippedLink = TarReader.stripComponents(safeLink, count: options.stripComponents),
                       !strippedLink.isEmpty else {
+                    eprint("swift_tar: skipping hardlink '\(rel)': unsafe target '\(linkname)' / 略過硬連結 '\(rel)'：目標不安全 '\(linkname)'")
                     continue
                 }
                 let target = options.destDir.isEmpty ? strippedLink : options.destDir + "/" + strippedLink

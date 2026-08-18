@@ -62,6 +62,17 @@ probe() {
     local p="$1" v kind
     [[ -x "$p" ]] || return 1
     v=$("$p" --version 2>&1 | head -1) || return 1
+    # Strip a trailing CR. The Windows-native bsdtar ends its --version line with
+    # CRLF, and that CR travelled into the recorded file, leaving one stray CR in
+    # an otherwise-LF repository -- and coming back on every --record, so cleaning
+    # the file by hand fixed nothing. It also makes the version string unequal to
+    # the same version captured elsewhere, which would defeat the duplicate check
+    # just below.
+    # 去除結尾的 CR。Windows 內建的 bsdtar 其 --version 行以 CRLF 結尾，該 CR 會一路
+    # 進入紀錄檔，在一個其餘皆為 LF 的程式庫裡留下一個孤立的 CR——且每次 --record 都會
+    # 再回來，故手動清理該檔毫無作用。它同時也會讓此版本字串與他處擷取的同一版本不相等，
+    # 使下方的重複檢查失效。
+    v=${v%$'\r'}
     case "$v" in
         *"bsdtar"*)   kind=bsdtar ;;
         *"GNU tar"*)  kind=gnutar ;;
@@ -93,9 +104,17 @@ STAGE="$TMP/record.txt"
 
 pass=0; fail=0; skip=0
 emit() { print -r -- "$1"; print -r -- "$1" >> "$STAGE" }
-ok()   { print -r -- "  PASS  $1"; pass=$((pass+1)) }
-bad()  { print -r -- "  FAIL  $1"; fail=$((fail+1)) }
-skipc(){ print -r -- "  SKIP  $1"; skip=$((skip+1)) }
+# These go through emit, like the section headers do. They used to print only to
+# stdout, so the recorded file carried the headers, the reference-tool versions
+# and the final tally -- with three empty sections between them. A record that
+# says "PASS: 12" without naming the twelve cannot be compared against the next
+# run: it cannot show which cell changed, only that the count did.
+# 這三者與區段標題一樣改走 emit。它們原本只印到 stdout，故紀錄檔裡有標題、參照工具版本
+# 與最終統計，中間卻是三個空區段。一份只寫「PASS: 12」而不列出那十二項的紀錄，無法與
+# 下一次執行比對：它顯示不出哪一格變了，只顯示得出數字變了。
+ok()   { emit "  PASS  $1"; pass=$((pass+1)) }
+bad()  { emit "  FAIL  $1"; fail=$((fail+1)) }
+skipc(){ emit "  SKIP  $1"; skip=$((skip+1)) }
 
 # ---------------------------------------------------------------------
 # The corpus. Every entry here is a shape that has broken something at least

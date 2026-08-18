@@ -1,0 +1,24 @@
+[Info] date: 2026-08-18 23:45:25 CST
+[Info] platform: linux
+[Info] host: Linux 6.18.33.2-microsoft-standard-WSL2 x86_64
+[Info] swift_tar: swift_tar 20260818-234319
+[Info] corpus digest: f5875925149b74ff8340dae22aaa902e3da462f8b545180ae0d3ae24a8b29c4d
+
+== reference tar implementations found / 現場找到的參照實作 ==
+  gnutar  /usr/bin/tar
+         tar (GNU tar) 1.35
+
+== swift_tar writes, each reference reads / swift_tar 寫入，各參照讀取 ==
+  PASS  gnutar reads swift_tar's plain archive
+  PASS  gnutar reads swift_tar's gzip archive
+
+== each reference writes, swift_tar reads / 各參照寫入，swift_tar 讀取 ==
+  PASS  swift_tar reads gnutar's plain archive
+  PASS  swift_tar reads gnutar's gzip archive
+
+== listings agree on names / 列表名稱一致 ==
+  PASS  gnutar lists the same ASCII names as swift_tar
+  PASS  gnutar extracts the non-ASCII name correctly
+
+-----------------------------------------
+PASS: 6  FAIL: 0  SKIP: 0

@@ -238,6 +238,51 @@ eq "-x -C creates a missing directory for ZIP too" "0" "$rc"
 eq "-x -C ZIP into a missing directory extracts" "1" \
    "$(find "$TMP/znd" -type f 2>/dev/null | wc -l | tr -d ' ')"
 
+# ---- round 23: --zip must never accept an encryption flag it ignores ----
+# The ZIP backend writes through libarchive straight to the file, bypassing the
+# encrypting sink. --encrypt was accepted and had NO effect: exit 0, plain PK
+# magic, and `unzip` recovered the plaintext with no key at all -- the exact
+# outcome the design exists to prevent. Refusing is the safe answer, so these
+# cases assert the refusal, and the last one asserts that nothing was written:
+# a partial file would be worse than none, since it would look like output.
+# ZIP 後端經由 libarchive 直接寫檔，繞過加密 sink。--encrypt 曾被接受且毫無作用：
+# 離開碼 0、PK magic、`unzip` 完全無金鑰即可取回明文——正是本設計要防止的結果。
+# 拒絕才是安全的答案，故以下案例斷言該拒絕，最後一項斷言未寫出任何檔案：半個檔案
+# 比沒有更糟，因為它看起來像產出。
+# Every case supplies a key. `--zip --encrypt` *without* one is a confounded
+# test: it is refused even by a broken build, because the passphrase prompt
+# rejects non-terminal stdin first. Measured -- that variant passed against the
+# vulnerable binary, for the wrong reason. Only a keyed invocation reaches the
+# ZIP path and proves anything.
+# 每個案例都提供金鑰。不帶金鑰的 `--zip --encrypt` 是被混淆的測試：即使在有缺陷的
+# 建置上也會被拒絕，因為密語提示會先擋下非終端機的 stdin。實測顯示該變體在有漏洞的
+# binary 上「通過」了，但理由是錯的。只有帶金鑰的呼叫才會走到 ZIP 路徑並證明什麼。
+for flags in "--zip --encrypt --keyfile $TMP/k.bin" "--zip --keyfile $TMP/k.bin" "--zip64 --encrypt --keyfile $TMP/k.bin"; do
+  rm -f "$TMP/z.out"
+  rc=0
+  # shellcheck disable=SC2086
+  "$ST" -c ${=flags} -f "$TMP/z.out" -C "$SRC" tree < /dev/null >/dev/null 2>&1 || rc=$?
+  eq "'$flags' is refused" "1" "$rc"
+  [ ! -e "$TMP/z.out" ] && ok "'$flags' writes no file" || bad "'$flags' writes no file"
+done
+
+# ...while each half on its own must still work.
+# ……而兩者單獨使用時都必須仍然正常。
+rc=0; "$ST" -c --zip -f "$TMP/plain.zip" -C "$SRC" tree >/dev/null 2>&1 || rc=$?
+eq "--zip alone still works" "0" "$rc"
+rc=0; "$ST" -c --encrypt --keyfile "$TMP/k.bin" -f "$TMP/tar.enc" -C "$SRC" tree >/dev/null 2>&1 || rc=$?
+eq "tar --encrypt alone still works" "0" "$rc"
+
+# And the encrypted tar must genuinely be unreadable without the key, which is
+# the property the ZIP path silently lacked.
+# 且加密後的 tar 必須真的在無金鑰時無法讀取——那正是 ZIP 路徑無聲缺少的性質。
+rm -rf "$TMP/nokey"; mkdir -p "$TMP/nokey"
+if "$ST" -x -f "$TMP/tar.enc" -C "$TMP/nokey" < /dev/null >/dev/null 2>&1; then
+  bad "encrypted tar cannot be extracted without a key"
+else
+  ok "encrypted tar cannot be extracted without a key"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

@@ -166,7 +166,19 @@ tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # （或以管線�
 ### 加密與解密
 
 `--encrypt` 以 **ChaCha20-Poly1305** 加密封存。加密層位於壓縮引擎**之外**，
-因此任何 codec——或純 tar——都能加密，解開時內層的 codec 仍會自動偵測。
+因此任何 **tar** codec——或純 tar——都能加密，解開時內層的 codec 仍會自動偵測。
+
+**`--zip` 與 `--zip64` 無法加密。** ZIP 後端經由 libarchive 直接寫入檔案，完全不會通過
+加密層。此組合會以錯誤與離開碼 1 被拒絕，而非被接受：
+
+```sh
+release/swift_tar -c --zip --encrypt -f out.zip src/
+# -> Error: --encrypt is not supported for ZIP output ...   離開碼 1，不產生檔案
+```
+
+這是刻意的設計。在 ZIP writer 能夠改走加密 sink 之前，拒絕是唯一安全的答案——一個被接受
+卻遭忽略的 `--encrypt` 會以 0 結束，交給你一個「單看離開碼與加密無異」的明文封存。請改用
+tar 壓縮引擎加密（`--zstd`、`--gzip` 或純 tar）。
 
 ```sh
 release/swift_tar -c --encrypt        -f secret.tar.enc src/   # 提示輸入密語

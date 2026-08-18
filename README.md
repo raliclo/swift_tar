@@ -188,8 +188,22 @@ ZIP64 records for compatibility testing or explicit format selection.
 ### Encryption and decryption
 
 `--encrypt` encrypts the archive with **ChaCha20-Poly1305**. The layer sits
-*outside* the compression codec, so any codec — or plain tar — can be
+*outside* the compression codec, so any **tar** codec — or plain tar — can be
 encrypted, and the codec inside is still auto-detected on the way out.
+
+**`--zip` and `--zip64` cannot be encrypted.** The ZIP backend writes through
+libarchive directly to the file and never passes through the encrypting layer.
+The combination is refused with an error and exit 1 rather than accepted:
+
+```sh
+release/swift_tar -c --zip --encrypt -f out.zip src/
+# -> Error: --encrypt is not supported for ZIP output ...   exit 1, no file written
+```
+
+This is deliberate. Until the ZIP writer can be routed through the encrypting
+sink, refusing is the only safe answer — an accepted-but-ignored `--encrypt`
+would exit 0 and hand you a plaintext archive that looks encrypted from the exit
+code alone. Encrypt with a tar codec instead (`--zstd`, `--gzip`, or plain tar).
 
 ```sh
 release/swift_tar -c --encrypt        -f secret.tar.enc src/   # prompts for a passphrase

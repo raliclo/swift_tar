@@ -4028,6 +4028,27 @@ struct SwiftTarMain {
         do {
             if doCreate {
                 if explicitZip || forceZip64 {
+                    // The ZIP backend writes through libarchive straight to the
+                    // archive file; it never passes through the sink that the
+                    // encryption layer wraps. So --encrypt and --keyfile were
+                    // accepted here and had no effect whatsoever: the command
+                    // exited 0 and produced an ordinary ZIP that any unzip reads
+                    // without a key. That is precisely the outcome the design
+                    // exists to prevent -- "refuse to write an archive it cannot
+                    // key rather than silently leave it unencrypted" -- so the
+                    // combination has to fail loudly until the ZIP writer can be
+                    // routed through the encrypting sink. Refusing is safe;
+                    // accepting silently is not.
+                    // ZIP 後端經由 libarchive 直接寫入封存檔，完全不會通過加密層所
+                    // 包覆的 sink。因此 --encrypt 與 --keyfile 在此被接受卻毫無作用：
+                    // 指令以 0 結束，產出的是任何 unzip 都能無金鑰讀取的普通 ZIP。
+                    // 這正是本設計要防止的結果——「寧可拒絕，也不默默寫出未加密的
+                    // 封存」——故在 ZIP writer 能夠改走加密 sink 之前，此組合必須大聲
+                    // 失敗。拒絕是安全的，默默接受不是。
+                    if tarEncryptionSecret != nil || args.contains("--encrypt") {
+                        eprint("Error: --encrypt is not supported for ZIP output; the ZIP backend cannot be encrypted. Use a tar codec (e.g. --zstd) instead. / 錯誤：ZIP 輸出不支援 --encrypt，ZIP 後端無法加密。請改用 tar 壓縮引擎（例如 --zstd）。")
+                        exit(1)
+                    }
                     try runZipCreate(archivePath: archivePath, files: files,
                                      changeDir: destDir, forceZip64: forceZip64,
                                      verbose: verbose)

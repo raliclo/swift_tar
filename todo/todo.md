@@ -597,6 +597,56 @@ documentation to match one backend.
 tar。該敘述對一個後端為真、對另一個為假，故誠實的修法是讓行為符合文件，而非把文件縮限
 成只描述其中一個後端。
 
+### Round 23: `--zip --encrypt` produced a plaintext archive and exited 0 / 產出明文封存卻回傳 0  ▸ ✅ 已修正 2026-08-18
+
+The most serious finding of the run, because it is the exact outcome the design
+states it exists to prevent: "refuses to write an archive it cannot key rather
+than silently leaving it unencrypted."
+
+本輪最嚴重的發現，因為它正是設計本身宣稱要防止的結果：「寧可拒絕，也不默默寫出未加密
+的封存」。
+
+```
+swift_tar -c --zip --encrypt --keyfile k.bin -f z.zip.enc s   ->  rc=0
+magic                                                          ->  50 4b 03 04   (plain PK)
+swift_tar --identify -f z.zip.enc                              ->  "zip"  (no encryption layer)
+unzip -p z.zip.enc s/secret.txt   [no key at all]              ->  TOP SECRET PAYLOAD
+swift_tar -x -f z.zip.enc         [no key, no prompt]          ->  TOP SECRET PAYLOAD
+```
+
+Control, same key, tar instead of ZIP: magic `SWTARC01`, and extraction without
+the key is correctly refused. So the encryption layer works — the ZIP path simply
+never reaches it. `runZipCreate` writes through libarchive straight to the file
+and never passes through the sink that the encrypting thread wraps, so
+`--encrypt` and `--keyfile` were parsed, accepted, and had no effect at all.
+
+對照組（同一把金鑰、改用 tar 而非 ZIP）：magic 為 `SWTARC01`，且無金鑰解壓被正確拒絕。
+可見加密層本身正常——ZIP 路徑根本沒走到它。`runZipCreate` 經由 libarchive 直接寫入檔案，
+完全不通過加密執行緒所包覆的 sink，故 `--encrypt` 與 `--keyfile` 被解析、被接受，卻毫無
+作用。
+
+**Fixed by refusing the combination**, exit 1, no file written. Routing the ZIP
+writer through the encrypting sink is the better long-term answer, but it is not
+a change to make quickly: refusing is safe today, and an accepted-but-ignored
+`--encrypt` is not. The READMEs now scope the "any codec can be encrypted"
+sentence to tar codecs and document the refusal.
+
+**修法為拒絕該組合**，離開碼 1，不寫出任何檔案。把 ZIP writer 改走加密 sink 是較好的長期
+答案，但那不是能倉促進行的變更：今天拒絕是安全的，而「被接受卻遭忽略的 `--encrypt`」不是。
+兩份 README 已將「任何 codec 都能加密」一句限定為 tar codec，並記載此拒絕行為。
+
+**A test-design note worth keeping.** The first version of the regression case
+used `--zip --encrypt` *without* a key. It passed against the vulnerable binary —
+not because the ZIP guard existed, but because the passphrase prompt rejects
+non-terminal stdin first. A test can pass for a reason that has nothing to do
+with what it claims to check. Every case now supplies a key, so it reaches the
+ZIP path; all six fail against the vulnerable build.
+
+**一則值得保留的測試設計筆記。** 回歸案例的第一版使用不帶金鑰的 `--zip --encrypt`。它在
+有漏洞的 binary 上通過了——不是因為 ZIP 守門存在，而是因為密語提示會先擋下非終端機的
+stdin。測試可能因為與其宣稱檢查之事毫無關係的理由而通過。現在每個案例都提供金鑰，確保走
+到 ZIP 路徑；六項在有漏洞的建置上全數失敗。
+
 ## zsh port / zsh 移植版
 
 ### `:A` does not treat a drive-letter path as absolute / `:A` 不認磁碟機路徑為絕對路徑  ▸ ✅ 已修正(zsh port)

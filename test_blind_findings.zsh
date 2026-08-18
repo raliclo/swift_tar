@@ -727,6 +727,39 @@ if [ -f "$RAW" ]; then
   check_traversal 'ok/../../escaped.txt'         "$TMP/never_mixed"   'interior ../'
   check_traversal '/tmp/swift_tar_abs_probe.txt' /tmp/swift_tar_abs_probe.txt      'absolute posix'
   check_traversal 'C:\Windows\Temp\st_abs.txt'   /c/Windows/Temp/st_abs.txt        'absolute windows'
+
+  # Two entries: a symlink out of the tree, then a member written through it.
+  # Neither name contains ".." once the link is resolved, so the name-only check
+  # above passes both while the write lands outside. GNU tar 1.35 refuses this;
+  # bsdtar 3.8.4 does not, so matching bsdtar was never sufficient.
+  # 兩個項目：一個指向樹外的 symlink，接著一個穿過它寫入的成員。連結解析後兩者名稱皆
+  # 不含 ".."，故上方僅檢查名稱的機制會讓兩者通過，而寫入卻落在外面。GNU tar 1.35
+  # 拒絕此組合，bsdtar 3.8.4 不拒絕，故「與 bsdtar 一致」從來就不足夠。
+  # The jail is three levels deep so "../../.." lands exactly on $TRAV/p -- the
+  # search therefore has to start at $TRAV/p, not below it. An earlier version
+  # searched $TRAV/p's subtree only and passed against the vulnerable binary:
+  # the escaped file was sitting one directory above where it was looking.
+  # 監獄有三層深，故 "../../.." 恰好落在 $TRAV/p——因此搜尋必須自 $TRAV/p 起算，而非
+  # 其下。先前的版本只搜尋 $TRAV/p 的子樹，結果對有漏洞的 binary 也通過：逃出去的檔案
+  # 就位在它搜尋範圍上方一層。
+  zsh "$RAW" "$TMP/portal.tar" link portal '../../..' file 'portal/pwned.txt' 'PWNED' >/dev/null 2>&1
+  rm -rf "$TRAV/p"; mkdir -p "$TRAV/p/a/b"
+  rm -f "$TRAV/p/pwned.txt" "$TRAV/pwned.txt" "$TMP/pwned.txt"
+  ( cd "$TRAV/p/a/b" && "$ST" -x -f "$TMP/portal.tar" ) >/dev/null 2>&1
+  if [ ! -e "$TRAV/p/pwned.txt" ] && [ ! -e "$TRAV/pwned.txt" ] && [ ! -e "$TMP/pwned.txt" ]; then
+    ok "traversal blocked: write through a planted symlink"
+  else
+    bad "traversal blocked: write through a planted symlink"
+  fi
+
+  # ...and a legitimate symlink must still survive, or the guard is too blunt.
+  # ……而合法的 symlink 必須仍然存活，否則這道守門就過度阻擋了。
+  zsh "$RAW" "$TMP/legit.tar" file 'lib/real.so' 'REAL' link 'lib/alias.so' 'real.so' >/dev/null 2>&1
+  rm -rf "$TRAV/legit"; mkdir -p "$TRAV/legit"
+  "$ST" -x -f "$TMP/legit.tar" -C "$TRAV/legit" >/dev/null 2>&1
+  [ -e "$TRAV/legit/lib/real.so" ] && [ -e "$TRAV/legit/lib/alias.so" ] \
+    && ok "a legitimate symlink still extracts" \
+    || bad "a legitimate symlink still extracts"
 else
   echo "SKIP: path traversal (verifications/make_raw_tar.zsh missing)"
 fi

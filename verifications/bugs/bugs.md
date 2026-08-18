@@ -230,3 +230,40 @@ extracted name is correct.
 
 再與 swift_tar 寫出、帶有 pax 記錄的封存對照：列表仍是亂碼（缺陷 1 屬顯示層，無法避免），
 但解出的檔名正確。
+
+---
+
+## 5. bsdtar 3.8.4 writes outside the extraction directory through a planted symlink / bsdtar 3.8.4 會經由植入的 symlink 寫到解出目錄之外
+
+Found in round 42 while testing swift_tar's own defences. An archive carrying two
+entries — a symlink `portal -> ../../..`, then a regular member
+`portal/pwned.txt` — makes the extractor resolve the second path through the
+first, landing the write three directories above the target:
+
+於 round 42 測試 swift_tar 自身防禦時發現。一個攜帶兩個項目的封存——symlink
+`portal -> ../../..`，接著一般成員 `portal/pwned.txt`——會讓解出端經由前者解析後者的
+路徑，使寫入落在目標之上三層：
+
+```
+extract into jail/a/b, archive contains portal -> ../../.. and portal/pwned.txt
+
+  GNU tar 1.35    rc=2, refuses          nothing escapes
+  bsdtar 3.8.4    rc=0, no message       pwned.txt written outside the target
+  swift_tar       rc=0, entry skipped    nothing escapes   (since 2026-08-18)
+```
+
+Neither member name contains `..` once the link is resolved, so a check that only
+sanitises names passes both. swift_tar had the same hole and now refuses the
+second entry; **bsdtar still has it.**
+
+在連結解析後，兩個成員名稱皆不含 `..`，故僅清理名稱的檢查會讓兩者通過。swift_tar 原有
+同一個破口，現已拒絕第二個項目；**bsdtar 仍然存在此問題。**
+
+Relevant when bsdtar is used as a reference: matching it is not evidence of
+safety here, because GNU tar — the other implementation this project claims
+interoperability with — declines the same archive. That asymmetry is what settled
+the question when swift_tar's own behaviour was under review.
+
+以 bsdtar 作為參照時需留意：在此與它一致並不構成安全性的證據，因為 GNU tar——本專案同樣
+宣稱互通的另一個實作——會拒絕同一個封存。當初判定 swift_tar 自身行為時，正是這個不對稱
+定了案。

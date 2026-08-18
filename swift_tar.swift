@@ -2471,6 +2471,47 @@ final class TarReader {
         return comps.joined(separator: "/")
     }
 
+    /// True when any directory on the way to `dest` is a symlink, meaning a
+    /// write there would land wherever that link points.
+    ///
+    /// Sanitising the member's own name is not enough. An archive can carry two
+    /// entries — a symlink `portal -> ../../..`, then a regular file
+    /// `portal/pwned.txt` — and neither name contains `..` after the link is
+    /// resolved, so a name-only check passes both while the write lands three
+    /// directories above the destination. Measured on that exact pair: GNU tar
+    /// 1.35 refuses with exit 2, bsdtar 3.8.4 lets it through, and swift_tar used
+    /// to as well. Matching bsdtar is not a defence when the other reference this
+    /// project claims interoperability with declines.
+    ///
+    /// Only the components below the destination are examined: `-C` itself may
+    /// legitimately be reached through a symlink the user chose.
+    ///
+    /// 當通往 `dest` 路徑上的任一目錄為 symlink 時回傳 true，代表寫入該處會落到該
+    /// 連結所指之地。
+    ///
+    /// 只清理成員自身的名稱並不足夠。封存可攜帶兩個項目——symlink `portal -> ../../..`，
+    /// 接著一個一般檔案 `portal/pwned.txt`——在連結解析後兩者的名稱皆不含 `..`，故僅
+    /// 檢查名稱會讓兩者都通過，而寫入卻落在目的地之上三層。以該組合實測：GNU tar 1.35
+    /// 以離開碼 2 拒絕，bsdtar 3.8.4 放行，swift_tar 過去亦然。當本專案同樣宣稱互通的
+    /// 另一個參照拒絕它時，「與 bsdtar 一致」並不構成辯護。
+    ///
+    /// 僅檢查目的地之下的各層：`-C` 本身可能是使用者自行選擇、經由 symlink 抵達的路徑。
+    private static func passesThroughSymlink(dest: String, below root: String) -> Bool {
+        let fm = FileManager.default
+        let rootPrefix = root.isEmpty ? "" : (root.hasSuffix("/") ? root : root + "/")
+        var walked = rootPrefix
+        let tail = rootPrefix.isEmpty ? dest : String(dest.dropFirst(rootPrefix.count))
+        for comp in tail.split(separator: "/").dropLast() {
+            walked += (walked.isEmpty || walked.hasSuffix("/")) ? String(comp) : "/" + String(comp)
+            if let attrs = try? fm.attributesOfItem(atPath: walked),
+               attrs[.type] as? FileAttributeType == .typeSymbolicLink {
+                return true
+            }
+            walked += "/"
+        }
+        return false
+    }
+
     private static func stripComponents(_ rel: String, count: Int) -> String? {
         guard count > 0 else { return rel }
         let comps = rel.split(separator: "/", omittingEmptySubsequences: true)
@@ -2650,6 +2691,17 @@ final class TarReader {
                 print("x \(rel)")
             }
             let dest = options.destDir.isEmpty ? rel : options.destDir + "/" + rel
+
+            // Refuse to write through a symlink planted by an earlier entry in
+            // this same archive. See passesThroughSymlink for the two-entry
+            // attack this stops.
+            // 拒絕穿過「同一封存中較早項目所植入的 symlink」寫入。該兩項目攻擊的說明見
+            // passesThroughSymlink。
+            if TarReader.passesThroughSymlink(dest: dest, below: options.destDir) {
+                eprint("swift_tar: skipping '\(rel)': path passes through a symlink / 略過 '\(rel)'：路徑穿過 symlink")
+                if !isDir { try skipData(size) }
+                continue
+            }
 
             // -so is handled before any filesystem call: no parent directories,
             // no symlinks, no hardlinks, nothing removed. Only the contents of

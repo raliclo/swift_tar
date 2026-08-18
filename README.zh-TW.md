@@ -310,6 +310,11 @@ release/swift_tar --cat -f package.rpm > payload.cpio          # 剝除 RPM 外�
 |---|---|
 | `../../x`、`dir/../../x`、`..\..\x` | 略過該項目：`skipping unsafe path '<name>'` |
 | `/etc/x`、`C:\Windows\x` | 去除開頭的 `/` 與磁碟機代號，寫入目的地**之內** |
+| 路徑穿過「較早項目所建立之 symlink」的成員 | 略過該項目：`path passes through a symlink` |
+
+最後一列是與第一列不同的攻擊：封存可攜帶一個 symlink `portal -> ../../..`，接著一個成員
+`portal/pwned.txt`，而在連結解析後兩者的名稱皆不含 `..`。不會通往解出目標之外的 symlink
+不受影響，照常解出。
 
 封存能指定的任何名稱，都不會被寫到解出目錄之上。惟需注意：被略過的項目**不會**改變離開碼
 ——整次執行仍以 0 結束——故解出不受信任的封存時，腳本應讀取 stderr，或將解出的樹與 `-t`

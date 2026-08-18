@@ -347,6 +347,12 @@ archive need not have been written by this tool:
 |---|---|
 | `../../x`, `dir/../../x`, `..\..\x` | entry skipped: `skipping unsafe path '<name>'` |
 | `/etc/x`, `C:\Windows\x` | leading `/` and any drive letter dropped; written **inside** the destination |
+| a member whose path runs through a symlink an earlier entry created | entry skipped: `path passes through a symlink` |
+
+That last row is a separate attack from the first: an archive can carry a symlink
+`portal -> ../../..` and then a member `portal/pwned.txt`, and neither name
+contains `..` once the link is resolved. Symlinks that do not lead out of the
+extraction target are unaffected and extract normally.
 
 Nothing an archive can name will be written above the extraction directory. Note
 that a skipped entry does not change the exit code — the run still ends 0 — so a

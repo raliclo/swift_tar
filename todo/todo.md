@@ -541,6 +541,62 @@ and outside the old failure bands.
 修正後 97 個目標長度全部可解出，目錄數與 GNU tar 一致。由 `test_blind_findings.zsh`
 涵蓋，該測試自舊失敗帶的帶內與帶外各取共十個長度掃描。
 
+### Round 22: two defects in the ZIP backend / ZIP 後端的兩個缺陷  ▸ ✅ 已修正 2026-08-18
+
+**A non-ASCII filename failed the whole `--zip` write.** `繁體.txt` round-trips
+through plain tar and every stream codec, but `--zip` died with
+`archive_write_header: Can't translate pathname to current locale`, exit 1, and
+left a 162-byte partial `.zip` behind. **bsdtar writes the same name to ZIP
+without complaint, and bsdtar uses the same libarchive** — so this was never a
+libarchive limitation. bsdtar calls `setlocale()` at startup; a library backend
+must not, so the bridge now sets `hdrcharset=UTF-8` on the writer instead. That
+is also the more portable answer: the archive stops depending on whichever locale
+happened to be active when it was written.
+
+**非 ASCII 檔名會讓整個 `--zip` 寫入失敗。** `繁體.txt` 在純 tar 與各串流 codec 中都
+能正常往返，`--zip` 卻以
+`archive_write_header: Can't translate pathname to current locale` 失敗、離開碼 1，
+並留下 162 bytes 的半成品 `.zip`。**bsdtar 寫同一個名稱到 ZIP 毫無問題，而 bsdtar 用
+的是同一套 libarchive**——故此事從來不是 libarchive 的限制。bsdtar 在啟動時呼叫
+`setlocale()`；函式庫後端不應如此，故 bridge 改為在 writer 上設定
+`hdrcharset=UTF-8`。這也是較可攜的答案：封存不再取決於寫入當下恰好生效的 locale。
+
+Verified: the write now succeeds, system `unzip` lists `uni/繁體.txt` correctly,
+and the round-trip is `diff -r` identical. **One caveat recorded honestly:** the
+ZIP general-purpose flag word is still `00 00`, so the EFS bit (11) that
+advertises UTF-8 names is not set. Readers that consult it may fall back to the
+local code page. The hard failure is gone and the common readers agree; strict
+EFS conformance is not claimed.
+
+已驗證：寫入成功，系統 `unzip` 正確列出 `uni/繁體.txt`，往返 `diff -r` 完全一致。
+**如實記錄一項但書**：ZIP 的 general purpose flag 仍為 `00 00`，亦即標示 UTF-8 名稱的
+EFS bit（11）並未設定。會參考該位元的讀取器可能退回本地碼頁。硬性失敗已消除、常見讀取
+器結果一致，但不宣稱完全符合 EFS 規範。
+
+**`-C` did not auto-create for ZIP, only for tar.** Same flag, same command
+shape, opposite outcome: `-x -f x.zip -C nodir/a/b` failed with
+`cannot chdir to 'nodir/a/b'`, while `-x -f x.tar -C nodir/a/b` created the whole
+chain and exited 0. The two backends reach the destination differently — tar
+joins `-C` into each entry's path, so the directory-creation step builds it on
+the way, while ZIP hands `-C` to libarchive to `chdir()` into. `runZipRead` now
+creates it first.
+
+**`-C` 對 ZIP 不會自動建立，只有 tar 會。** 同一旗標、同樣的指令形狀，結果相反：
+`-x -f x.zip -C nodir/a/b` 失敗於 `cannot chdir to 'nodir/a/b'`，而
+`-x -f x.tar -C nodir/a/b` 會建出整條路徑並回傳 0。兩個後端抵達目的地的方式不同——
+tar 是把 `-C` 併入每個項目的路徑，故建立目錄那一步會沿途建好；ZIP 則是把 `-C` 交給
+libarchive 去 `chdir()`。`runZipRead` 現在會先建立它。
+
+**No README change for the second one, deliberately.** The `-C` table already
+said the directory is created when missing, without scoping that to tar. The
+statement was true of one backend and false of the other, so the honest repair is
+to make the behaviour match the documentation rather than narrow the
+documentation to match one backend.
+
+**第二項刻意不改 README。** `-C` 表格原本就寫著目錄不存在時會被建立，且未限定僅適用
+tar。該敘述對一個後端為真、對另一個為假，故誠實的修法是讓行為符合文件，而非把文件縮限
+成只描述其中一個後端。
+
 ## zsh port / zsh 移植版
 
 ### `:A` does not treat a drive-letter path as absolute / `:A` 不認磁碟機路徑為絕對路徑  ▸ ✅ 已修正(zsh port)

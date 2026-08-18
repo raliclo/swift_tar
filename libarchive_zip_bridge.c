@@ -178,6 +178,29 @@ int swift_tar_zip_create(const char *archive_path,
         set_archive_error(error_buffer, error_capacity, "enable ZIP64", writer);
         goto cleanup;
     }
+    /* Store entry names as UTF-8 and set the ZIP "language encoding" flag
+       (general purpose bit 11) that says so. Without this libarchive tries to
+       translate each pathname into the process's current locale charset, and a
+       name it cannot represent there fails the whole write with
+       "Can't translate pathname to current locale" -- measured on Windows with
+       a Traditional Chinese filename that tar, gzip and bsdtar's own ZIP writer
+       all handled without complaint. bsdtar succeeds because it calls
+       setlocale() at startup; this backend is a library and must not, so it
+       names the charset explicitly instead, which is also the more portable of
+       the two answers: the archive no longer depends on the locale that
+       happened to be active when it was written.
+       將項目名稱以 UTF-8 儲存，並設定 ZIP 的語言編碼旗標（general purpose bit
+       11）加以標示。若不這麼做，libarchive 會嘗試把每個路徑名轉換為行程當前
+       locale 的字元集，遇到無法表示的名稱便會讓整個寫入失敗，錯誤訊息為
+       "Can't translate pathname to current locale"——已在 Windows 上以繁體中文
+       檔名實測，而同一檔名在 tar、gzip 以及 bsdtar 自己的 ZIP 寫入器中皆無異狀。
+       bsdtar 之所以成功，是因為它在啟動時呼叫 setlocale()；本後端是函式庫，不應
+       如此，故改為明確指定字元集。這也是兩者中較可攜的答案：封存不再取決於寫入
+       當下恰好生效的 locale。 */
+    if (archive_write_set_options(writer, "hdrcharset=UTF-8") != ARCHIVE_OK) {
+        set_archive_error(error_buffer, error_capacity, "set ZIP header charset", writer);
+        goto cleanup;
+    }
 
     status = archive_write_open_filename(writer,
         archive_path != NULL && strcmp(archive_path, "-") != 0 ? archive_path : NULL);

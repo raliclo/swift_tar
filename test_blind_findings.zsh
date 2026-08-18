@@ -202,6 +202,42 @@ eq "long-path tree matches system tar" \
    "$(find "$TMP/lpg" -type d | wc -l | tr -d ' ')" \
    "$(find "$TMP/lpm" -type d | wc -l | tr -d ' ')"
 
+# ---- round 22: the ZIP backend must accept the names tar already accepts ----
+# A Traditional Chinese filename round-trips through tar and every stream codec,
+# but --zip failed the whole write with "Can't translate pathname to current
+# locale" and left a partial .zip behind. libarchive was translating names into
+# the process locale; bsdtar avoids this by calling setlocale() at startup,
+# which a library must not do, so the backend now names the charset instead.
+# 繁體中文檔名在 tar 與各串流 codec 中都能正常往返，--zip 卻會讓整個寫入失敗於
+# "Can't translate pathname to current locale" 並留下半個 .zip。原因是 libarchive
+# 正把名稱轉換為行程 locale；bsdtar 靠啟動時呼叫 setlocale() 迴避，而函式庫不應
+# 這麼做，故本後端改為明確指定字元集。
+UNI="$TMP/uni"
+mkdir -p "$UNI"
+printf 'unicode\n' > "$UNI/繁體.txt"
+rc=0; "$ST" -c --zip -f "$TMP/uni.zip" -C "$TMP" uni >/dev/null 2>&1 || rc=$?
+eq "--zip accepts a non-ASCII filename" "0" "$rc"
+
+rm -rf "$TMP/uzx"; mkdir -p "$TMP/uzx"
+if "$ST" -x -f "$TMP/uni.zip" -C "$TMP/uzx" >/dev/null 2>&1 \
+   && diff -r "$UNI" "$TMP/uzx/uni" >/dev/null 2>&1; then
+  ok "--zip round-trips a non-ASCII filename"
+else
+  bad "--zip round-trips a non-ASCII filename"
+fi
+
+# -C's documented auto-create must hold for ZIP too, not only for tar. The two
+# backends reach the destination differently -- tar joins -C into each entry
+# path, ZIP hands it to libarchive to chdir() into -- and only tar created it.
+# `-C` 記載的自動建立行為必須同樣適用於 ZIP，而不只是 tar。兩個後端抵達目的地的
+# 方式不同——tar 是把 -C 併入每個項目路徑，ZIP 則交給 libarchive 去 chdir()——而
+# 過去只有 tar 會建立它。
+rm -rf "$TMP/znd"
+rc=0; "$ST" -x -f "$TMP/uni.zip" -C "$TMP/znd/a/b" >/dev/null 2>&1 || rc=$?
+eq "-x -C creates a missing directory for ZIP too" "0" "$rc"
+eq "-x -C ZIP into a missing directory extracts" "1" \
+   "$(find "$TMP/znd" -type f 2>/dev/null | wc -l | tr -d ' ')"
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

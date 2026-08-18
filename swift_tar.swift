@@ -153,6 +153,29 @@ private func runZipCreate(archivePath: String, files: [String], changeDir: Strin
 
 private func runZipRead(archivePath: String, extract: Bool, destDir: String,
                         verbose: Bool, restoreMtime: Bool) throws {
+    // Create -C's target first. The tar extract path reaches its destination by
+    // joining -C into each entry's path, so the directory-creation step makes
+    // the whole chain on the way; the ZIP path hands -C to libarchive, which
+    // chdir()s into it and fails outright if it is not already there. Same flag,
+    // same command shape, opposite outcome -- and the README documents the
+    // auto-creating one without scoping it to tar. Creating it here makes the
+    // behaviour match the documentation rather than narrowing the documentation
+    // to match one backend.
+    // 先建立 -C 的目標。tar 解出路徑是把 -C 併入每個項目的路徑，故建立目錄那一步
+    // 會沿途把整條路徑建出來；ZIP 路徑則是把 -C 交給 libarchive，由它 chdir() 進去，
+    // 目錄不存在便直接失敗。同一個旗標、同樣的指令形狀，結果卻相反——而 README 記載
+    // 的是會自動建立的那一種，且未限定只適用 tar。在此建立目錄，是讓行為符合文件，
+    // 而非把文件縮限成只描述其中一個後端。
+    if extract && !destDir.isEmpty && destDir != "." {
+#if os(Windows)
+        guard winMakeDirectories(destDir) else {
+            throw TarError.io("cannot create directory '\(destDir)' / 無法建立目錄 '\(destDir)'")
+        }
+#else
+        try? FileManager.default.createDirectory(atPath: destDir,
+                                                 withIntermediateDirectories: true)
+#endif
+    }
     var error = [CChar](repeating: 0, count: 4096)
     let status = archivePath.withCString { archive in
         destDir.withCString { directory in

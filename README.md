@@ -454,6 +454,20 @@ the same behavior as a libarchive built without lzo support.
 
 ## Options
 
+**`--` ends the options.** Everything after it is treated as a file name, which
+is how you archive a name that begins with a dash:
+
+```sh
+swift_tar -c -f out.tar -- -report.csv notes.txt   # archives -report.csv
+swift_tar -c -f out.tar ./-report.csv              # also works, without --
+swift_tar -c -f out.tar -report.csv                # rejected: read as short flags
+```
+
+Without `--`, a leading dash is read as a cluster of short options, so
+`-report.csv` reports `unknown option -e` — a flag this tool does not have. Names
+beginning with a dash arrive by ordinary means: downloads, extraction from someone
+else's archive, generated report names.
+
 **Repeat an option and the first occurrence wins**, not the last. This is the
 opposite of the usual convention, and it applies to every option that takes a
 value, not just one of them:

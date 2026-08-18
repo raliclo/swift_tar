@@ -3581,7 +3581,19 @@ struct SwiftTarMain {
         //   traditional POSIX form (first operand, all letters, no dash): czf → -c -z -f
         let args: [String] = {
             var out: [String] = [CommandLine.arguments[0]]
+            // Everything after a bare "--" is an operand, so cluster expansion has
+            // to stop there too, not just the option check further down. A file
+            // named "-report.csv" would otherwise be shredded into -r -e -p -o -r
+            // -t ... before the "--" was ever honoured, and the user would be told
+            // "unknown option -e" about a flag that does not exist in this tool.
+            // 裸 "--" 之後的一切皆為運算元，故叢集展開也必須在此停止，而不只是下方的
+            // 選項檢查。否則名為 "-report.csv" 的檔案會在 "--" 生效之前就被拆成
+            // -r -e -p -o -r -t …，而使用者收到的是關於一個本工具根本沒有的旗標
+            // 「unknown option -e」。
+            var pastEndOfOptions = false
             for (idx, a) in CommandLine.arguments.dropFirst().enumerated() {
+                if pastEndOfOptions { out.append(a); continue }
+                if a == "--" { pastEndOfOptions = true; out.append(a); continue }
                 // Single-dash flags that are words, not clusters of short
                 // options, must survive intact: -write_ucrt and -write_foundation
                 // carry "_", while -stream-in and -stream-out carry "-", which
@@ -3716,8 +3728,21 @@ struct SwiftTarMain {
 
         var files: [String] = []
         var skipNext = true   // args[0] is the binary path / args[0] 是執行檔路徑
+        // POSIX end-of-options. Without it there is no way to name a file whose
+        // name begins with "-" other than by spelling it "./-name", which works
+        // but which nobody thinks of first: the conventional escape is "--", every
+        // other tar has it, and swift_tar answered "unknown option --". A leading
+        // dash is not an exotic filename -- browsers, extractors and report
+        // generators all produce them.
+        // POSIX 的選項結束標記。若無此支援，要指名以 "-" 開頭的檔案就只剩 "./-name"
+        // 這種寫法；它確實可行，但沒有人會先想到：慣用的逃生口是 "--"，其他 tar 都
+        // 有，而 swift_tar 回答的是「unknown option --」。開頭是減號並非罕見檔名——
+        // 瀏覽器、解壓工具與報表產生器都會產出這種名稱。
+        var endOfOptions = false
         for a in args {
             if skipNext { skipNext = false; continue }
+            if endOfOptions { files.append(a); continue }
+            if a == "--" { endOfOptions = true; continue }
             if valueOptions.contains(a) { skipNext = true; continue }
             if a.hasPrefix("-") {
                 // "-" alone is the stdin/stdout archive path, not an option.

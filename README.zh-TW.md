@@ -409,6 +409,18 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 
 ## 選項
 
+**`--` 表示選項到此為止。** 其後的一切皆視為檔名，這正是封存「以減號開頭的名稱」的方法：
+
+```sh
+swift_tar -c -f out.tar -- -report.csv notes.txt   # 封存 -report.csv
+swift_tar -c -f out.tar ./-report.csv              # 不用 -- 也可行
+swift_tar -c -f out.tar -report.csv                # 遭拒：被讀成短旗標叢集
+```
+
+若不加 `--`，開頭的減號會被讀成短旗標叢集，於是 `-report.csv` 回報 `unknown option -e`
+——一個本工具並不存在的旗標。以減號開頭的檔名是循正常途徑產生的：下載、自他人封存中解出、
+自動產生的報表名稱。
+
 **同一個選項重複出現時，生效的是第一個，而非最後一個。** 這與一般慣例相反，且適用於所有
 帶值的選項，不只某一個：
 

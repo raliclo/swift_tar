@@ -603,6 +603,41 @@ else
   echo "SKIP: .Z read filter (no LZW producer on this platform)"
 fi
 
+# ---- "--" ends the options ----
+# A dash-leading filename was unarchivable by the obvious route: bare, it is read
+# as a short-flag cluster and reports "unknown option -e", a flag this tool does
+# not have; and "--", the POSIX escape every other tar accepts, was itself
+# rejected as an unknown option. The fix has to cover the cluster expansion as
+# well as the option check -- expansion runs first, so without it the name is
+# already shredded before "--" is honoured.
+# 以減號開頭的檔名，走顯而易見的路是封存不了的：裸寫會被讀成短旗標叢集並回報
+# 「unknown option -e」——一個本工具並不存在的旗標；而 POSIX 的逃生口 "--"（其他 tar
+# 都接受）本身又被當成未知選項拒絕。修正必須同時涵蓋叢集展開與選項檢查——展開先執行，
+# 若不處理，檔名在 "--" 生效之前就已被拆散。
+DASH="$TMP/dash"
+mkdir -p "$DASH"
+printf 'data\n' > "$DASH/-report.csv"
+printf 'ok\n'   > "$DASH/normal.txt"
+
+rc=0; "$ST" -c -f "$TMP/dash.tar" -C "$DASH" -- -report.csv normal.txt >/dev/null 2>&1 || rc=$?
+eq "-- lets a dash-leading name be archived" "0" "$rc"
+eq "-- archives every operand after it" "2" \
+   "$("$ST" -t -f "$TMP/dash.tar" 2>/dev/null | wc -l | tr -d ' ')"
+
+rm -rf "$TMP/dashx"; mkdir -p "$TMP/dashx"
+if "$ST" -x -f "$TMP/dash.tar" -C "$TMP/dashx" >/dev/null 2>&1 \
+   && cmp -s "$DASH/-report.csv" "$TMP/dashx/-report.csv"; then
+  ok "-- round-trips the dash-leading name intact"
+else
+  bad "-- round-trips the dash-leading name intact"
+fi
+
+# The ./ form must keep working: it is the other way out, and the one that
+# already worked before "--" existed.
+# ./ 形式必須持續可用：那是另一條出路，也是 "--" 出現之前就已可行的那一條。
+rc=0; "$ST" -c -f "$TMP/dot.tar" -C "$DASH" ./-report.csv >/dev/null 2>&1 || rc=$?
+eq "./-name still archives a dash-leading name" "0" "$rc"
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

@@ -1019,6 +1019,37 @@ Windows will meet the same thing.
 `parallel_extract_correctness.zsh` 原本就是這個做法。移植版本身未變動——其他在 Windows
 的 zsh 下呼叫裸 `stat` 的腳本仍會遇到同一件事。
 
+## Recorded behaviour, not a defect / 記錄行為，非缺陷
+
+### A zero-byte archive is an empty archive, not a malformed one / 0 bytes 的封存視為空封存而非損毀
+
+Found while probing `-f` targets in round 33. The three implementations do not
+agree, and swift_tar sides with the majority:
+
+於 round 33 探測 `-f` 目標時發現。三種實作並不一致，而 swift_tar 站在多數一方：
+
+```
+-t on a 0-byte file    swift_tar  rc=0, empty listing
+                       bsdtar     rc=0, empty listing
+                       GNU tar    rc=2, "This does not look like a tar archive"
+```
+
+Two of three treat zero bytes as an archive with no members, which is the reading
+swift_tar takes. **Recorded rather than changed**: it is defensible, it matches
+bsdtar, and nothing in the project depends on the GNU answer.
+
+三家有兩家把 0 bytes 視為「沒有成員的封存」，swift_tar 採取的正是此解讀。**記錄而不更動**：
+該解讀站得住、與 bsdtar 一致，且本專案並無任何部分依賴 GNU 的答案。
+
+It is here so that neither of two mistakes gets made later: "fixing" it into
+GNU-compatibility without noticing bsdtar disagrees, and writing a test that
+asserts an empty input must fail. A script that pipes a possibly-empty stream
+into `-t` gets exit 0 and no output, so emptiness has to be checked separately.
+
+記於此處，是為了避免日後兩種錯誤：在未察覺 bsdtar 立場不同的情況下把它「修」成與 GNU
+相容；以及寫出「空輸入必須失敗」的測試。將可能為空的串流灌入 `-t` 的腳本會得到離開碼 0
+與空輸出，故「是否為空」必須另行判斷。
+
 ## zsh port / zsh 移植版
 
 ### `:A` does not treat a drive-letter path as absolute / `:A` 不認磁碟機路徑為絕對路徑  ▸ ✅ 已修正(zsh port)

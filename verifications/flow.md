@@ -69,6 +69,58 @@ macOS, Windows and WSL, where those tools are the ones users actually have.
 > 自己比對並回報完美互通。這正是矩陣以自我描述辨識每個候選者、並拒絕任何既非
 > bsdtar 亦非 GNU tar 之物的具體理由。
 
+### Running something in the VM / 在 VM 內執行東西
+
+`~/projWin/VM-test/run.sh 'command'` boots, runs one command, powers off. Three
+things about it are worth knowing before writing that command:
+
+**It boots into a root shell.** `run.sh` passes `init=/bin/sh` and does the
+setup inline: the three pseudo-filesystems, `/workspace` from `/dev/vdb`, and
+the Swift environment. That first half is lifted from LinuxCS's `/init-server`,
+which is the file that had already solved this. The second half of that file —
+building and starting `multisshd` — is deliberately not reproduced, and it also
+never spawns a console shell, so it cannot be reused as-is by a harness that
+works by typing a command at one.
+
+Root is not a convenience here. Everything under `/workspace` is owned by
+`501:20`, the macOS build user: buildroot cannot fakeroot on macOS, so the
+chown, permissions-table and mknod steps are stripped from the generated script
+(LinuxCS's `fix_image_ownership.zsh` exists for exactly this). The guest's `dev`
+is uid 100, so as `dev` the workspace is readable and entirely unwritable, and
+sudo does not help — this rootfs grants `dev` one sudo command, `poweroff`.
+
+**`/tmp` is tmpfs and every invocation is a fresh boot.** Anything built there
+is gone by the next call. Build under `/workspace`, which persists — the point
+of doing so is that the next run can reuse the result instead of rebuilding.
+
+**A previous build is usually already there.** LinuxCS's convention puts the
+source at `/workspace/multissh/swift_tar` and the binary at its `release/`.
+Check that before building anything: it may be current enough for what you need,
+and the only way to know is to compare its `--version` against the change you
+are trying to verify.
+
+`~/projWin/VM-test/run.sh 'command'` 會開機、執行一道指令、關機。寫那道指令之前，
+有三件事值得先知道：
+
+**它會開機進入 root shell。** `run.sh` 傳入 `init=/bin/sh`，並在行內完成環境設定：
+三個虛擬檔案系統、自 `/dev/vdb` 掛載 `/workspace`，以及 Swift 環境。這前半段取自
+LinuxCS 的 `/init-server`——那個檔早已解決過同一問題。該檔的後半段（建置並啟動
+`multisshd`）刻意不予重現；而且它從不開啟主控台 shell，故無法被「靠輸入指令運作」的
+測試框架原樣沿用。
+
+此處的 root 並非圖方便。`/workspace` 底下所有檔案的擁有者是 `501:20`，即 macOS 的
+建置使用者：buildroot 在 macOS 上無法 fakeroot，chown、權限表與 mknod 三個步驟會從
+產生的腳本中被剝除（LinuxCS 的 `fix_image_ownership.zsh` 正是為此而存在）。guest 的
+`dev` 是 uid 100，故以 `dev` 身分該 workspace 讀得到、完全寫不了，而 sudo 也幫不上忙
+——本 rootfs 只授予 `dev` 一道 sudo 指令，即 `poweroff`。
+
+**`/tmp` 是 tmpfs，且每次呼叫都是全新開機。** 建在那裡的東西下次呼叫就不見了。請建在
+會持久保存的 `/workspace`——這麼做的意義正在於下次可以重用結果而不必重建。
+
+**先前的建置多半已經在那裡。** LinuxCS 的慣例是原始碼放 `/workspace/multissh/swift_tar`、
+執行檔放其 `release/`。動手建置前先看那裡：它可能已足夠新，而唯一的判斷方式是把它的
+`--version` 與你想驗證的那項改動相比。
+
 ### Consequences of the VM's tar, for anything that runs there
 ### VM 的 tar 對在該處執行之物的影響
 

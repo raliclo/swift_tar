@@ -42,6 +42,23 @@ emit_entry() {
         file) typeflag='0'; linkname=''; content=$arg; size=${#content} ;;
         link) typeflag='2'; linkname=$arg; content='';  size=0 ;;
         hard) typeflag='1'; linkname=$arg; content='';  size=0 ;;
+        # A pax extended header: typeflag 'x', payload is "<len> key=value\n"
+        # where <len> counts its own digits. The caller passes "key=value" and
+        # the length is computed here, because getting that self-reference wrong
+        # produces a header every tar silently ignores -- which would look like
+        # the reader defending itself.
+        # pax 擴充標頭：typeflag 'x'，內容為 "<len> key=value\n"，其中 <len> 包含自身
+        # 的位數。呼叫端傳入 "key=value"，長度在此計算——因為算錯這個自我指涉會產生一個
+        # 所有 tar 都會靜默忽略的標頭，而那看起來會很像「讀取端擋下了它」。
+        pax)
+            typeflag='x'; linkname=''
+            local body=" $arg"$'\n' len=0 n=1
+            while (( len != n )); do n=$len; len=$(( ${#body} + ${#n} )); done
+            content="${len}${body}"; size=${#content} ;;
+        # GNU long name / long link: typeflag 'L' / 'K', payload is the name.
+        # GNU 長名稱／長連結：typeflag 'L'／'K'，內容即為該名稱。
+        gnuname) typeflag='L'; linkname=''; content="$arg"$'\0'; size=${#content} ;;
+        gnulink) typeflag='K'; linkname=''; content="$arg"$'\0'; size=${#content} ;;
         *) print -ru2 -- "unknown entry kind: $kind"; exit 1 ;;
     esac
 

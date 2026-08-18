@@ -767,6 +767,34 @@ if [ -f "$RAW" ]; then
     *) bad "an unsafe hardlink target is reported, not dropped in silence" ;;
   esac
 
+  # The same write-through attack, with the portal built by the two override
+  # mechanisms rather than a plain symlink header: a pax "linkpath" record and a
+  # GNU 'K' long-link entry. Both are separate parse paths, and the guard covers
+  # them because it runs at write time rather than while parsing a name -- worth
+  # pinning, since a refactor that moved the check into name handling would pass
+  # the plain case and reopen these two. bsdtar escapes on both.
+  # 同一個穿透寫入攻擊，但 portal 改由兩種覆寫機制建立，而非單純的 symlink 標頭：
+  # pax 的 "linkpath" 記錄與 GNU 的 'K' 長連結項目。兩者是各自獨立的解析路徑，而守門
+  # 之所以涵蓋它們，是因為它在寫入時執行、而非在解析名稱時——值得釘住，因為若有人重構
+  # 把檢查移進名稱處理，單純案例仍會通過，這兩條卻會重新打開。bsdtar 兩者皆逃逸。
+  for mech in pax gnu; do
+    if [ "$mech" = pax ]; then
+      zsh "$RAW" "$TMP/ovr.tar" pax 'PaxHeaders/p' 'linkpath=../../..' \
+          link portal placeholder file 'portal/pwned_ovr.txt' 'PWNED' >/dev/null 2>&1
+    else
+      zsh "$RAW" "$TMP/ovr.tar" gnulink './@LongLink' '../../..' \
+          link portal placeholder file 'portal/pwned_ovr.txt' 'PWNED' >/dev/null 2>&1
+    fi
+    rm -rf "$TRAV/o"; mkdir -p "$TRAV/o/a/b"
+    rm -f "$TRAV/o/pwned_ovr.txt" "$TRAV/pwned_ovr.txt" "$TMP/pwned_ovr.txt"
+    ( cd "$TRAV/o/a/b" && "$ST" -x -f "$TMP/ovr.tar" ) >/dev/null 2>&1
+    if [ ! -e "$TRAV/o/pwned_ovr.txt" ] && [ ! -e "$TRAV/pwned_ovr.txt" ] && [ ! -e "$TMP/pwned_ovr.txt" ]; then
+      ok "traversal blocked: portal via $mech override"
+    else
+      bad "traversal blocked: portal via $mech override"
+    fi
+  done
+
   # ...and a legitimate symlink must still survive, or the guard is too blunt.
   # ……而合法的 symlink 必須仍然存活，否則這道守門就過度阻擋了。
   zsh "$RAW" "$TMP/legit.tar" file 'lib/real.so' 'REAL' link 'lib/alias.so' 'real.so' >/dev/null 2>&1

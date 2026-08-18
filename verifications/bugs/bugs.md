@@ -267,3 +267,14 @@ the question when swift_tar's own behaviour was under review.
 以 bsdtar 作為參照時需留意：在此與它一致並不構成安全性的證據，因為 GNU tar——本專案同樣
 宣稱互通的另一個實作——會拒絕同一個封存。當初判定 swift_tar 自身行為時，正是這個不對稱
 定了案。
+
+**Update, round 44: the hole is wider than a plain symlink header.** The same
+write-through works when the portal is created through either override mechanism
+— a pax `linkpath` record, or a GNU `K` long-link entry. bsdtar escapes on both;
+swift_tar refuses both, because its guard runs at write time rather than while
+parsing a name, so it covers parse paths it was never specifically written for.
+
+**round 44 補充：此破口比單純的 symlink 標頭更廣。** 當 portal 改由任一種覆寫機制建立
+——pax 的 `linkpath` 記錄，或 GNU 的 `K` 長連結項目——同樣的穿透寫入依然成立。bsdtar 兩者
+皆逃逸；swift_tar 兩者皆拒絕，因為其守門在寫入時執行，而非在解析名稱時，故能涵蓋它從未
+被特別設計去防的解析路徑。

@@ -529,6 +529,37 @@ rc=0; "$ST" -t -f "$TMP/none.tar" >/dev/null 2>&1 || rc=$?
 eq "-t refuses a missing archive" "1" "$rc"
 [ ! -e "$TMP/none.tar" ] && ok "refusing modes create no archive" || bad "refusing modes create no archive"
 
+# ---- repeated options: the first occurrence wins ----
+# Documented because it is the opposite of the usual last-wins convention and
+# nothing is reported when the later value is dropped. Asserted across three
+# different options so the test pins the rule rather than one flag's quirk --
+# it was found on -C alone, and only probing the neighbours showed it was general.
+# 之所以記載，是因為它與一般「最後一個生效」的慣例相反，且捨棄較後的值時毫無提示。
+# 此處跨三個不同選項斷言，使測試釘住的是規則而非單一旗標的怪癖——它最初是在 -C 上
+# 發現的，探過鄰居才知道那是通則。
+REP="$TMP/rep"
+mkdir -p "$REP/c1" "$REP/c2"
+printf 'from c1\n' > "$REP/c1/f.txt"
+printf 'from c2\n' > "$REP/c2/f.txt"
+
+"$ST" -c -f "$TMP/rep.tar" -C "$REP/c1" -C "$REP/c2" f.txt >/dev/null 2>&1
+rm -rf "$TMP/repx"; mkdir -p "$TMP/repx"
+"$ST" -x -f "$TMP/rep.tar" -C "$TMP/repx" >/dev/null 2>&1
+eq "repeated -C: the first wins" "from c1" "$(cat "$TMP/repx/f.txt" 2>/dev/null)"
+
+head -c 400000 /dev/urandom > "$REP/c1/big.bin"
+"$ST" -c --zstd --zstd-level 1 --zstd-level 19 -f "$TMP/rl.tzst" -C "$REP/c1" big.bin >/dev/null 2>&1
+"$ST" -c --zstd --zstd-level 1                 -f "$TMP/r1.tzst" -C "$REP/c1" big.bin >/dev/null 2>&1
+cmp -s "$TMP/rl.tzst" "$TMP/r1.tzst" \
+  && ok "repeated --zstd-level: the first wins" \
+  || bad "repeated --zstd-level: the first wins"
+
+rm -f "$TMP/rf1.tar" "$TMP/rf2.tar"
+"$ST" -c -f "$TMP/rf1.tar" -f "$TMP/rf2.tar" -C "$REP/c1" f.txt >/dev/null 2>&1
+[ -s "$TMP/rf1.tar" ] && [ ! -e "$TMP/rf2.tar" ] \
+  && ok "repeated -f: the first wins, the second is not created" \
+  || bad "repeated -f: the first wins, the second is not created"
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

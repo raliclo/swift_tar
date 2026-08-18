@@ -454,6 +454,22 @@ the same behavior as a libarchive built without lzo support.
 
 ## Options
 
+**Repeat an option and the first occurrence wins**, not the last. This is the
+opposite of the usual convention, and it applies to every option that takes a
+value, not just one of them:
+
+```sh
+swift_tar -c -f out.tar -C c1 -C c2 f.txt        # archives c1/f.txt
+swift_tar -c --zstd --zstd-level 1 --zstd-level 19 ...   # compresses at level 1
+swift_tar -c -f first.tar -f second.tar ...      # writes first.tar; second.tar is not created
+```
+
+Nothing is reported when a later occurrence is dropped — the command exits 0 and
+produces an archive built from the earlier value. A duplicate introduced by
+editing a long command line, or by a script that appends a flag to an existing
+argument list, therefore takes effect silently and in the direction most people
+would not predict.
+
 | Option | Meaning |
 |--------|---------|
 | `-f <path>` | Archive file (`-` = stdin/stdout; default `-`) |

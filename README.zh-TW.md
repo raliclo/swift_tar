@@ -409,6 +409,19 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 
 ## 選項
 
+**同一個選項重複出現時，生效的是第一個，而非最後一個。** 這與一般慣例相反，且適用於所有
+帶值的選項，不只某一個：
+
+```sh
+swift_tar -c -f out.tar -C c1 -C c2 f.txt        # 封存的是 c1/f.txt
+swift_tar -c --zstd --zstd-level 1 --zstd-level 19 ...   # 以等級 1 壓縮
+swift_tar -c -f first.tar -f second.tar ...      # 寫出 first.tar；second.tar 不會被建立
+```
+
+較後出現的那一個被捨棄時不會有任何提示——指令以 0 結束，產出的是依較早的值建立的封存。
+因此，編輯長命令列時多打的一個重複選項，或是把旗標附加到既有引數清單的腳本，都會無聲地
+生效，且方向與多數人的預期相反。
+
 | 選項 | 意義 |
 |------|------|
 | `-f <path>` | 封存檔路徑（`-` 表標準輸入／輸出；預設 `-`） |

@@ -283,6 +283,50 @@ else
   ok "encrypted tar cannot be extracted without a key"
 fi
 
+# ---- round 24: reading a ZIP from stdin lost entries silently ----
+# The README documents --zip as the way to read ZIP from a non-seekable stream.
+# It did not work, and the damage varied with the input: a small archive failed
+# outright, while a 300 KB one holding three files listed two entries and
+# extracted exactly one -- exit 0 both times. libarchive was choosing its
+# seekable ZIP reader, which wants a central directory it cannot seek to on a
+# pipe. Both sizes are tested because one of them looked like a clean error and
+# the other like success.
+# README 記載 --zip 是從不可 seek 的串流讀取 ZIP 的方法。它並不管用，且損害隨輸入而
+# 異：小型封存直接失敗，而一個含三個檔案的 300 KB 封存列出兩個項目、只解出一個檔案
+# ——兩次離開碼皆為 0。原因是 libarchive 選用了 seekable ZIP reader，它需要 central
+# directory，而在 pipe 上無法 seek 過去。兩種大小都要測，因為其中一種看起來像乾淨的
+# 錯誤，另一種看起來像成功。
+ZS="$TMP/zs"
+mkdir -p "$ZS/s/sub"
+printf 'a\n' > "$ZS/s/a.txt"
+printf 'b\n' > "$ZS/s/sub/b.txt"
+head -c 300000 /dev/urandom > "$ZS/s/big.bin"
+( cd "$ZS" && "$ST" -c --zip -f "$TMP/big.zip" s ) >/dev/null 2>&1
+mkdir -p "$ZS/small/sub"
+printf 'a\n' > "$ZS/small/a.txt"
+printf 'b\n' > "$ZS/small/sub/b.txt"
+( cd "$ZS" && "$ST" -c --zip -f "$TMP/small.zip" small ) >/dev/null 2>&1
+
+for z in big small; do
+  want="$("$ST" -t --zip -f "$TMP/$z.zip" | wc -l | tr -d ' ')"
+  got="$(cat "$TMP/$z.zip" | "$ST" -t --zip -f - | wc -l | tr -d ' ')"
+  eq "-t --zip from stdin lists every entry ($z)" "$want" "$got"
+done
+
+# Extraction must produce the same tree from stdin as from a path. Counting
+# entries is not enough on its own -- the listing could be right while the
+# writes are not.
+# 從 stdin 解出的樹必須與從路徑解出的相同。只數項目數並不足夠——列表可能正確而寫出
+# 的內容不正確。
+rm -rf "$TMP/zf" "$TMP/zp"; mkdir -p "$TMP/zf" "$TMP/zp"
+"$ST" -x --zip -f "$TMP/big.zip" -C "$TMP/zf" >/dev/null 2>&1
+cat "$TMP/big.zip" | "$ST" -x --zip -f - -C "$TMP/zp" >/dev/null 2>&1
+if diff -r "$TMP/zf" "$TMP/zp" >/dev/null 2>&1; then
+  ok "-x --zip from stdin matches extraction from a path"
+else
+  bad "-x --zip from stdin matches extraction from a path"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

@@ -293,7 +293,31 @@ int swift_tar_zip_read(const char *archive_path,
         goto cleanup;
     }
     archive_read_support_filter_all(reader);
-    archive_read_support_format_zip(reader);
+    {
+        /* On a real file, register both ZIP readers and let libarchive pick the
+           seekable one, which reads the central directory and therefore sees
+           every entry. On stdin there is no central directory to seek to, and
+           letting it choose produced silent data loss rather than an error: a
+           300 KB archive holding three files listed two entries and extracted
+           exactly one, with exit 0 both times, while the same archive read from
+           a path gave all three. A smaller archive failed outright instead, so
+           the damage varied with the input -- the worst kind, since a script
+           sees success either way. Naming the streamable reader explicitly is
+           what makes stdin read local headers front to back.
+           對真實檔案註冊兩種 ZIP reader，由 libarchive 挑選 seekable 的那個，它會
+           讀取 central directory，因而看得到每一個項目。stdin 上沒有 central
+           directory 可供 seek，而放任它自行挑選造成的是靜默資料遺失而非錯誤：一個
+           含三個檔案的 300 KB 封存列出兩個項目、只解出一個檔案，兩次離開碼皆為 0，
+           而同一封存以路徑讀取時三個檔案齊全。較小的封存則是直接失敗，故損害隨輸入
+           而異——這是最糟的一類，因為腳本在兩種情況下看到的都是成功。明確指定
+           streamable reader，才能讓 stdin 由前往後逐一讀取 local header。 */
+        int from_stdin = (archive_path == NULL || strcmp(archive_path, "-") == 0);
+        if (from_stdin) {
+            archive_read_support_format_zip_streamable(reader);
+        } else {
+            archive_read_support_format_zip(reader);
+        }
+    }
 
     status = archive_read_open_filename(reader,
         archive_path != NULL && strcmp(archive_path, "-") != 0 ? archive_path : NULL,

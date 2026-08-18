@@ -164,20 +164,16 @@ relative `-f` path is still created relative to the original invocation
 directory. Using `-C <parent> <leaf>` keeps parent paths and `..` out of archive
 entry names.
 
-The two sides of `-C` differ on a missing directory, and neither matches system
-tar, so check this before porting a script:
+The two sides of `-C` treat a missing directory differently:
 
 | mode | `-C` target does not exist | |
 |---|---|---|
 | extract (`-x`) | **created, including intermediate levels**, then extracted into | exit 0 |
 | create (`-c`) | refused: `cannot chdir to '<dir>'` | exit 1 |
-| bsdtar / GNU tar, extract | refused: `Cannot open: No such file or directory` | exit 2 |
 
-The consequence is worth stating plainly: with system tar a typo in the `-C` path
-is caught for you, because extraction fails. With `swift_tar -x` the typo
-succeeds — a whole new directory tree appears at the mistyped path and the exit
-code is 0. If your script relies on that failure as a guard, test the directory
-yourself before extracting.
+Because extraction creates the directory rather than failing, a mistyped `-C`
+path produces a new tree at the mistyped location and exits 0. Check the
+directory yourself before extracting if your script needs to catch that.
 
 The output format is selected by the codec flag, not by the filename
 extension. For example, `--gzip -f archive.zip` still writes a gzip-compressed
@@ -191,19 +187,15 @@ ZIP64 records for compatibility testing or explicit format selection.
 *outside* the compression codec, so any **tar** codec — or plain tar — can be
 encrypted, and the codec inside is still auto-detected on the way out.
 
-**`--zip` and `--zip64` cannot be encrypted.** The ZIP backend writes through
-libarchive directly to the file and never passes through the encrypting layer.
-The combination is refused with an error and exit 1 rather than accepted:
+**`--zip` and `--zip64` cannot be encrypted.** Encryption applies to the tar
+codecs only. Combining it with ZIP output is refused:
 
 ```sh
 release/swift_tar -c --zip --encrypt -f out.zip src/
 # -> Error: --encrypt is not supported for ZIP output ...   exit 1, no file written
 ```
 
-This is deliberate. Until the ZIP writer can be routed through the encrypting
-sink, refusing is the only safe answer — an accepted-but-ignored `--encrypt`
-would exit 0 and hand you a plaintext archive that looks encrypted from the exit
-code alone. Encrypt with a tar codec instead (`--zstd`, `--gzip`, or plain tar).
+Encrypt with a tar codec instead (`--zstd`, `--gzip`, or plain tar).
 
 ```sh
 release/swift_tar -c --encrypt        -f secret.tar.enc src/   # prompts for a passphrase
@@ -456,9 +448,26 @@ compiled, for example `swift_tar 20260712-143015`. The same value is stored as
 
 ## Reproducible output
 
-**The same inputs produce byte-identical archives**, so you can compare
-checksums across runs and machines. Measured on a 12 MB corpus spanning three
-4 MiB chunks:
+**Nothing about how swift_tar runs changes the bytes it writes** — not the
+parallelism, not the run. What does change them is the metadata tar stores, and
+**file mtimes are part of that**:
+
+```sh
+# same content, same name, same permissions -- only mtime differs
+swift_tar -c -f a.tar -C a f.txt
+swift_tar -c -f b.tar -C b f.txt
+cmp a.tar b.tar     # -> differ at byte 138
+```
+
+Since tar headers carry each file's mtime, that timestamp is part of the input.
+**A `git clone`, an extracted tarball or a CI checkout sets mtimes to the time of
+the operation**, so two machines archiving byte-identical trees still produce
+different archives. There is no `--mtime` flag and `SOURCE_DATE_EPOCH` is not
+consulted; normalise the timestamps yourself if you need checksums to match
+across machines.
+
+With the timestamps held fixed, the guarantee below holds. Measured on a 12 MB
+corpus spanning three 4 MiB chunks:
 
 | what | reproducible? |
 |---|---|
@@ -521,7 +530,7 @@ Two cases deserve their own line because a script will otherwise get them wrong:
   does **not** mean "x is an archive" — match the printed text if that is what
   you need to know.
 - **`-x` with `-C` pointing at a missing directory exits `0`** and creates the
-  directory, where system tar would fail. See the `-C` table above.
+  directory. See the `-C` table above.
 
 ## Layout
 

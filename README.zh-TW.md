@@ -146,17 +146,15 @@ tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # （或以管線�
 語意與系統 tar 一致。相對 `-f` 路徑仍以原始呼叫目錄為基準建立。使用
 `-C <parent> <leaf>` 可避免封存項目名稱包含 parent path 或 `..`。
 
-`-C` 在目標目錄不存在時，兩側行為並不相同，且都與系統 tar 不同，移植腳本前請先確認：
+`-C` 在目標目錄不存在時，兩側行為並不相同：
 
 | 模式 | `-C` 目標不存在時 | |
 |---|---|---|
 | 解壓（`-x`） | **自動建立，含中間各層**，再解出至該處 | exit 0 |
 | 建立（`-c`） | 拒絕：`cannot chdir to '<dir>'` | exit 1 |
-| bsdtar／GNU tar 解壓 | 拒絕：`Cannot open: No such file or directory` | exit 2 |
 
-其後果值得明講：使用系統 tar 時，`-C` 路徑打錯會因解壓失敗而被擋下；使用
-`swift_tar -x` 則會成功——在打錯的路徑上長出一整棵新的目錄樹，離開碼為 0。若您的腳本
-是靠那個失敗當作守門，請在解壓前自行檢查目錄是否存在。
+由於解壓端會建立目錄而非失敗，`-C` 路徑打錯時會在打錯的位置長出一棵新的目錄樹，且離開碼
+為 0。若您的腳本需要攔下這種情形，請在解壓前自行檢查目錄是否存在。
 
 輸出格式由 codec 旗標決定，不是由副檔名決定。例如
 `--gzip -f archive.zip` 寫出的仍是 gzip 壓縮 tar stream（magic `1f 8b`），
@@ -168,17 +166,14 @@ tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # （或以管線�
 `--encrypt` 以 **ChaCha20-Poly1305** 加密封存。加密層位於壓縮引擎**之外**，
 因此任何 **tar** codec——或純 tar——都能加密，解開時內層的 codec 仍會自動偵測。
 
-**`--zip` 與 `--zip64` 無法加密。** ZIP 後端經由 libarchive 直接寫入檔案，完全不會通過
-加密層。此組合會以錯誤與離開碼 1 被拒絕，而非被接受：
+**`--zip` 與 `--zip64` 無法加密。** 加密僅適用於 tar 壓縮引擎，與 ZIP 輸出併用會被拒絕：
 
 ```sh
 release/swift_tar -c --zip --encrypt -f out.zip src/
 # -> Error: --encrypt is not supported for ZIP output ...   離開碼 1，不產生檔案
 ```
 
-這是刻意的設計。在 ZIP writer 能夠改走加密 sink 之前，拒絕是唯一安全的答案——一個被接受
-卻遭忽略的 `--encrypt` 會以 0 結束，交給你一個「單看離開碼與加密無異」的明文封存。請改用
-tar 壓縮引擎加密（`--zstd`、`--gzip` 或純 tar）。
+請改用 tar 壓縮引擎加密（`--zstd`、`--gzip` 或純 tar）。
 
 ```sh
 release/swift_tar -c --encrypt        -f secret.tar.enc src/   # 提示輸入密語
@@ -411,8 +406,22 @@ compress/LZW（`.Z`）· lzma · lzip · xz · lz4 · zstandard · LZFSE 家族
 
 ## 可重現的輸出
 
-**相同輸入會產生位元組完全相同的封存**，因此可跨執行、跨機器比對 checksum。以橫跨三個
-4 MiB 分塊的 12 MB 語料實測：
+**swift_tar 的執行方式不會改變它寫出的位元組**——平行度不會，重跑也不會。真正會改變它們
+的是 tar 所儲存的中繼資料，而**檔案的 mtime 正是其中之一**：
+
+```sh
+# 內容、檔名、權限皆相同，只有 mtime 不同
+swift_tar -c -f a.tar -C a f.txt
+swift_tar -c -f b.tar -C b f.txt
+cmp a.tar b.tar     # -> 第 138 個位元組起不同
+```
+
+由於 tar 標頭會帶有每個檔案的 mtime，該時間戳本身即屬於輸入的一部分。
+**`git clone`、解開 tarball、CI checkout 都會把 mtime 設為當次操作的時間**，因此兩台機器
+即使打包內容完全相同的樹，仍會得到不同的封存。本工具沒有 `--mtime` 旗標，也不參考
+`SOURCE_DATE_EPOCH`；若您需要跨機器比對 checksum，請先自行將時間戳正規化。
+
+在時間戳固定的前提下，以下保證成立。以橫跨三個 4 MiB 分塊的 12 MB 語料實測：
 
 | 項目 | 可重現？ |
 |---|---|
@@ -467,8 +476,8 @@ swift_tar -c -f mixed.tar tree/a.txt tree/typo.txt tree/sub/b.txt
   `<file>: unrecognized (not tar) / 無法辨識（非 tar）` 並視為成功，與 `file` 的精神
   一致。只有檔案讀不到才會失敗。故 `swift_tar --identify -f x && ...` **不代表**
   「x 是封存檔」——若您要判斷的是這件事，請比對印出的文字。
-- **`-x` 搭配指向不存在目錄的 `-C` 會回傳 `0`** 並自動建立該目錄，而系統 tar 在此會
-  失敗。詳見上方 `-C` 對照表。
+- **`-x` 搭配指向不存在目錄的 `-C` 會回傳 `0`** 並自動建立該目錄。詳見上方 `-C`
+  對照表。
 
 ## 檔案結構
 

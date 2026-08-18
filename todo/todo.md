@@ -272,9 +272,22 @@ agent 將本回合報為 CLEAN。並非如此——缺陷就在它自己貼出�
 
 ```
 swift_tar -c -f a.tar tree/   ->  -t prints  tree//a.txt     diverges
-swift_tar -c -f b.tar tree    ->  -t prints  tree/a.txt      matches bsdtar
-bsdtar    -cf c.tar tree/     ->  -t prints  tree/a.txt
+swift_tar -c -f b.tar tree    ->  -t prints  tree/a.txt      matches the reference
+GNU tar   -cf c.tar tree/     ->  -t prints  tree/a.txt      (both spellings)
+bsdtar    -cf c.tar tree/     ->  refuses: "Couldn't visit directory"
+bsdtar    -cf c.tar tree      ->  -t prints  tree/a.txt
 ```
+
+The reference here is **GNU tar 1.35**, which is what `/usr/bin/tar` is under Git
+Bash — not bsdtar, as this entry originally said. Re-measured against the real
+bsdtar (`/c/Windows/System32/tar.exe`, 3.8.4): it rejects the trailing-slash form
+outright and agrees with GNU tar on the other. The conclusion is unchanged —
+`tree//a.txt` matched neither reference — but the attribution was wrong.
+
+此處的參照是 **GNU tar 1.35**，即 Git Bash 下 `/usr/bin/tar` 的實體，而非本條目原先所寫
+的 bsdtar。以真正的 bsdtar（`/c/Windows/System32/tar.exe`，3.8.4）重測：它直接拒絕尾隨
+斜線的寫法，另一種寫法則與 GNU tar 一致。結論不變——`tree//a.txt` 與兩個參照皆不符——
+但工具歸屬原先寫錯了。
 
 `archiveName()` at `swift_tar.swift:2093` normalises backslashes, the drive
 letter, and leading `/` and `./`, but not a **trailing** `/`. The walker at
@@ -546,12 +559,52 @@ and outside the old failure bands.
 **A non-ASCII filename failed the whole `--zip` write.** `繁體.txt` round-trips
 through plain tar and every stream codec, but `--zip` died with
 `archive_write_header: Can't translate pathname to current locale`, exit 1, and
-left a 162-byte partial `.zip` behind. **bsdtar writes the same name to ZIP
-without complaint, and bsdtar uses the same libarchive** — so this was never a
-libarchive limitation. bsdtar calls `setlocale()` at startup; a library backend
-must not, so the bridge now sets `hdrcharset=UTF-8` on the writer instead. That
-is also the more portable answer: the archive stops depending on whichever locale
-happened to be active when it was written.
+left a 162-byte partial `.zip` behind. The bridge now sets `hdrcharset=UTF-8` on
+the writer, which stores the name as UTF-8 instead of translating it into
+whatever code page happens to be active.
+
+> **Correction, 2026-08-18.** The original entry justified this by claiming
+> "bsdtar writes the same name to ZIP without complaint, so it was never a
+> libarchive limitation." **Both halves were wrong**, and the error was caught by
+> a single question — *which* tar was the comparison actually run against?
+>
+> `/usr/bin/tar` in Git Bash is **GNU tar 1.35**, not bsdtar. GNU tar has no ZIP
+> writer at all: `tar -a -cf out.zip` does not recognise the suffix, falls back to
+> uncompressed, and writes a **tar** file named `.zip` — exit 0, which is what
+> made the check look like it passed. `od -c` on that artifact shows a ustar
+> filename field at offset 0, not `PK`.
+>
+> Re-run against the real bsdtar (`/c/Windows/System32/tar.exe`, bsdtar 3.8.4 /
+> libarchive 3.8.4), the result is the opposite of what was claimed:
+>
+> ```
+> bsdtar --format zip, 繁體.txt  ->  "Can't translate Pathname to CP437"
+>                                    rc=0, archive written, name stored as "??.txt"
+> ```
+>
+> So it **is** libarchive's default behaviour and bsdtar hits it too — bsdtar just
+> degrades worse: it warns, mangles the filename, and still exits 0. swift_tar's
+> original hard failure was the safer of the two. The fix remains correct and is
+> now known to be better than both: swift_tar stores `繁體.txt` intact and system
+> `unzip` reads it, where bsdtar yields `??.txt`.
+
+> **2026-08-18 更正。** 原始條目的理由是「bsdtar 寫同一個名稱到 ZIP 毫無問題，故此事
+> 從來不是 libarchive 的限制」。**兩個半句都是錯的**，而揪出錯誤的只是一個問題——那個
+> 對照究竟是拿哪一個 tar 跑的？
+>
+> Git Bash 的 `/usr/bin/tar` 是 **GNU tar 1.35**，不是 bsdtar。GNU tar 根本沒有 ZIP
+> writer：`tar -a -cf out.zip` 不認得該副檔名，退回不壓縮，寫出的是一個**叫做 .zip 的
+> tar 檔**——離開碼 0，這正是該檢查看起來通過的原因。對該產物執行 `od -c` 可見位移 0
+> 處是 ustar 檔名欄位，而非 `PK`。
+>
+> 改以真正的 bsdtar（`/c/Windows/System32/tar.exe`，bsdtar 3.8.4／libarchive 3.8.4）
+> 重跑，結果與原先宣稱相反：它同樣失敗於 `Can't translate Pathname to CP437`，回傳 0，
+> 寫出封存，並把名稱存成 `??.txt`。
+>
+> 故這**確實**是 libarchive 的預設行為，bsdtar 也會中招——只是它降級得更糟：發出警告、
+> 毀掉檔名，然後仍以 0 結束。swift_tar 原本的硬性失敗反而是兩者中較安全的。修正本身仍
+> 然正確，且現已知比兩者都好：swift_tar 完整存下 `繁體.txt`，系統 `unzip` 讀得正確，而
+> bsdtar 給出的是 `??.txt`。
 
 **非 ASCII 檔名會讓整個 `--zip` 寫入失敗。** `繁體.txt` 在純 tar 與各串流 codec 中都
 能正常往返，`--zip` 卻以
@@ -646,6 +699,67 @@ ZIP path; all six fail against the vulnerable build.
 有漏洞的 binary 上通過了——不是因為 ZIP 守門存在，而是因為密語提示會先擋下非終端機的
 stdin。測試可能因為與其宣稱檢查之事毫無關係的理由而通過。現在每個案例都提供金鑰，確保走
 到 ZIP 路徑；六項在有漏洞的建置上全數失敗。
+
+## Which `tar` is the reference? / 參照的 `tar` 是哪一個？
+
+Both implementations are installed on this Windows machine, and which one a bare
+`tar` resolves to depends on the shell:
+
+本 Windows 機器上兩種實作皆已安裝，而 `tar` 這個名字解析到哪一個取決於 shell：
+
+| path | implementation |
+|---|---|
+| `/usr/bin/tar` (shipped with Git for Windows) | **GNU tar 1.35** |
+| `C:\Windows\System32\tar.exe` (shipped with Windows) | **bsdtar 3.8.4 / libarchive 3.8.4** |
+
+In Git Bash, `tar` is GNU tar — `/usr/bin` precedes `System32` on `PATH`, so the
+Windows-native bsdtar is shadowed. **The common shorthand "GNU on Linux, bsdtar
+on Windows and macOS" does not hold here**, and every ad-hoc comparison in this
+file that said "bsdtar" while invoking a bare `tar` was in fact measuring GNU tar.
+Those attributions have been corrected in place.
+
+在 Git Bash 中，`tar` 是 GNU tar——`PATH` 上 `/usr/bin` 排在 `System32` 之前，Windows
+內建的 bsdtar 因而被遮蔽。**常見的簡化說法「Linux 用 GNU、Windows 與 macOS 用 bsdtar」
+在此並不成立**，而本檔中所有以裸 `tar` 執行卻寫成 bsdtar 的臨時比較，實際量到的都是
+GNU tar。相關歸屬已就地更正。
+
+`verifications/bsdtar_compat.zsh` was already correct: it defaults `BSDTAR_BIN`
+to `C:\Windows\System32\tar.exe` on Windows and refuses to run if the binary does
+not report itself as bsdtar. The ad-hoc measurements were the ones at fault, not
+the committed harness.
+
+`verifications/bsdtar_compat.zsh` 原本就是對的：它在 Windows 上將 `BSDTAR_BIN` 預設為
+`C:\Windows\System32\tar.exe`，且若該執行檔的版本字串不是 bsdtar 便拒絕執行。出錯的是
+臨時量測，不是入版的測試框架。
+
+### Three-way interoperability matrix / 三方互通矩陣  ▸ ✅ 無不相容 / no incompatibility
+
+Run 2026-08-18 on a corpus holding a Unicode filename, a hardlinked pair, a
+50 KB binary and a 360-character path. Every writer's output was read by every
+reader:
+
+2026-08-18 執行，語料包含 Unicode 檔名、一組硬連結、50 KB 二進位檔與 360 字元路徑。
+每個寫入端的產物都由每個讀取端讀過：
+
+```
+writer  ->  reader        rc   files
+swift_tar -> swift_tar     0     6
+swift_tar -> GNU tar       0     6
+swift_tar -> bsdtar        0     6
+GNU tar   -> swift_tar     0     6
+GNU tar   -> GNU tar       0     6
+GNU tar   -> bsdtar        0     6
+bsdtar    -> swift_tar     0     6
+bsdtar    -> GNU tar       0     6
+bsdtar    -> bsdtar        0     6
+```
+
+Nine of nine, exit 0, full file count in every cell. No incompatibility to fix.
+Worth re-running after any change to `archiveName()` or the header writer, since
+those are what a divergence would come from.
+
+九分之九，離開碼皆為 0，每一格的檔案數皆完整。無不相容需要修正。日後若改動
+`archiveName()` 或標頭寫入端，值得重跑此矩陣——不相容會從那裡來。
 
 ## zsh port / zsh 移植版
 

@@ -319,6 +319,46 @@ must_fail_fast "--encrypt without a TTY and without --keyfile fails" \
                            || bad "an archive was written without a key"
 
 # ---------------------------------------------------------------------------
+# A rejected --keyfile must say which of the three things went wrong.
+# `contents(atPath:)` returns nil for a missing path, a directory and an
+# unreadable file alike, and the first two used to be reported with identical
+# text. That is a common mix-up -- two shell variables, one holding a directory
+# and one a file path, swapped -- and an identical message leaves the user to go
+# and `ls` the path to find out which mistake they made. Unlike the destination
+# conflicts elsewhere in this suite there is no errno here to fall back on, so
+# the wording is the entire diagnosis. Each check asserts a distinct phrase, so
+# two causes collapsing back into one message fails rather than passing.
+#
+# 遭拒的 --keyfile 必須說出是三者中的哪一種出錯。`contents(atPath:)` 對「路徑不存在」
+# 「是目錄」「檔案讀不到」一律回傳 nil，而前兩者原本以相同文字回報。那是常見的混淆
+# ——兩個 shell 變數，一個裝目錄、一個裝檔案路徑，弄反了——而相同的訊息會讓使用者只能
+# 自己去 `ls` 該路徑才知道犯的是哪個錯。與本套件他處的目的地衝突不同，此處沒有 errno
+# 可退而求其次，措辭就是診斷的全部。每項檢查斷言一個相異詞組，故兩種成因若又併回同一
+# 則訊息，會在此失敗而非通過。
+KTMP="$TMP/keyfile_reasons"
+mkdir -p "$KTMP/a_directory"
+printf 'payload\n' > "$KTMP/p.txt"
+: > "$KTMP/empty.bin"
+
+keyfile_err() {
+  "$ST" -c --encrypt --keyfile "$1" -f "$KTMP/out.enc" "$KTMP/p.txt" 2>&1
+}
+
+check_key_reason() {   # label, expected phrase, actual message
+  case "$3" in
+    *"$2"*) ok "$1" ;;
+    *) bad "$1 (got: $(printf '%s' "$3" | grep -i 'keyfile' | head -1 | cut -c1-80))" ;;
+  esac
+}
+
+check_key_reason "a keyfile that is a directory says so" \
+  "is a directory, not a file" "$(keyfile_err "$KTMP/a_directory")"
+check_key_reason "a keyfile that does not exist says so" \
+  "does not exist" "$(keyfile_err "$KTMP/no_such_file.bin")"
+check_key_reason "an empty keyfile still says it is empty" \
+  "is empty" "$(keyfile_err "$KTMP/empty.bin")"
+
+# ---------------------------------------------------------------------------
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

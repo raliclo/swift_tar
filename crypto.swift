@@ -937,7 +937,35 @@ enum KeyInput {
     /// Key material from a keyfile: the file's raw bytes. / keyfile 的金鑰材料：檔案原始位元組。
     static func keyfileMaterial(path: String) throws -> [UInt8] {
         guard let data = FileManager.default.contents(atPath: path) else {
-            throw TarCryptoError.io("cannot read keyfile '\(path)' / 無法讀取 keyfile '\(path)'")
+            // Say which of the three it is. `contents(atPath:)` returns nil for a
+            // missing path, a directory, and an unreadable file alike, and the
+            // first two are a common mix-up: two shell variables, one holding a
+            // directory and one a file, swapped. Reported identically, the user
+            // has to go and `ls` the path to learn which mistake they made --
+            // the same shape as an RGB1 field reported only as "invalid" and a
+            // blocked destination reported only as an errno. Here there is not
+            // even an errno to blame, so the wording is the whole diagnosis.
+            //
+            // 說出是三者中的哪一種。`contents(atPath:)` 對「路徑不存在」「是目錄」
+            // 「檔案讀不到」一律回傳 nil，而前兩者是常見的混淆：兩個 shell 變數，
+            // 一個裝目錄、一個裝檔案路徑，弄反了。若回報得一模一樣，使用者只能自己
+            // 去 `ls` 該路徑才知道犯的是哪個錯——這與「RGB1 欄位只說 invalid」及
+            // 「目的地受阻只給 errno」是同一形狀。此處連 errno 都沒有，措辭就是
+            // 診斷的全部。
+            let fm = FileManager.default
+            var isDir: ObjCBool = false
+            if !fm.fileExists(atPath: path, isDirectory: &isDir) {
+                throw TarCryptoError.io(
+                    "keyfile '\(path)' does not exist / keyfile '\(path)' 不存在")
+            }
+            if isDir.boolValue {
+                throw TarCryptoError.io(
+                    "keyfile '\(path)' is a directory, not a file / "
+                    + "keyfile '\(path)' 是目錄而非檔案")
+            }
+            throw TarCryptoError.io(
+                "keyfile '\(path)' exists but could not be read / "
+                + "keyfile '\(path)' 存在但無法讀取")
         }
         guard !data.isEmpty else {
             throw TarCryptoError.io("keyfile '\(path)' is empty / keyfile '\(path)' 是空的")

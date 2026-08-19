@@ -1182,6 +1182,63 @@ eq "a member before the blocked one still extracts" \
 eq "a member after the blocked one still extracts" \
    "content" "$(cat "$TMP/dirout/zz.txt" 2>/dev/null)"
 
+# ---- a trailing slash on an operand does not break the ZIP backend ----
+# `-c --zip -f out.zip src/` failed with libarchive's "Couldn't visit directory"
+# and left a 22-byte empty ZIP behind, while `src` and `.` both worked. The tar
+# codecs were unaffected, because TarWriter.archiveName strips the trailing
+# slash before the walk -- only the ZIP backend saw the raw operand.
+#
+# It matters more than an odd operand form would suggest: the README's own ZIP
+# examples are written WITH the trailing slash, so copying either line verbatim
+# failed. Sixteen expert blind-test rounds never hit it, because they typed their
+# own commands; a newcomer following the document hit it on the first run. The
+# forms below are therefore the documented ones, not invented ones.
+#
+# The 22-byte leftover is the second half of the problem: `-t` reads it at exit 0
+# with zero entries, so the README's own "confirm with -t" advice showed a clean
+# empty archive rather than a failure.
+#
+# `-c --zip -f out.zip src/` 會以 libarchive 的 "Couldn't visit directory" 失敗，並留下
+# 一個 22 位元組的空 ZIP，而 `src` 與 `.` 都正常。tar 各編碼器不受影響，因為
+# TarWriter.archiveName 在走訪前就去掉了尾隨斜線——只有 ZIP 後端看得到原始運算元。
+#
+# 其重要性超過「一種奇怪的運算元寫法」：README 自己的 ZIP 範例就帶著尾隨斜線，因此照抄
+# 任一行都會失敗。十六個熟練盲測回合從未碰到，因為它們打的是自己的指令；一個照著文件走
+# 的新手第一輪就中。故下列形式取自文件本身，而非自行編造。
+#
+# 那個 22 位元組的殘骸是問題的另一半：`-t` 讀它會以 0 結束且零個項目，於是 README 自己
+# 「用 -t 確認」的建議，顯示的是一個乾淨的空封存而不是一次失敗。
+mkdir -p "$TMP/zipsrc/sub"
+printf 'a\n' > "$TMP/zipsrc/a.txt"
+printf 'b\n' > "$TMP/zipsrc/sub/b.txt"
+# The suffix drives both the operand and its label. An earlier version built the
+# label with `$([ ... ] && printf /)`, which under this file's `set -e` aborted
+# the whole suite the moment the test was false: the substitution exited
+# non-zero, so the assignment did, so the script stopped -- silently, with no
+# summary line and no failure reported.
+# 由後綴同時決定運算元與其標籤。先前的版本以 `$([ ... ] && printf /)` 組出標籤，在本檔
+# 的 `set -e` 之下，只要該測試為假就會中止整個套件：替換回傳非 0，賦值即非 0，腳本便停
+# 住——而且是靜默停住，沒有總結行，也沒有回報任何失敗。
+for suffix in "" "/"; do
+  form="$TMP/zipsrc$suffix"
+  label="zipsrc$suffix"
+  for codec in --zip --zip64; do
+    rm -f "$TMP/z.zip"
+    rc=0; "$ST" -c "$codec" -f "$TMP/z.zip" "$form" >/dev/null 2>&1 || rc=$?
+    eq "$codec with operand '$label' succeeds" "0" "$rc"
+    # Name the members rather than counting them: a ZIP listing includes the
+    # directory entries too, so a count encodes an assumption about how many of
+    # those there are. The first version asserted 3 and failed against a correct
+    # archive holding 4.
+    # 指名成員而不是數數：ZIP 的列表也包含目錄項目，故數量等於把「有幾個目錄項目」這個
+    # 假設寫死。第一版斷言 3，結果在一份正確、含 4 個項目的封存上失敗。
+    eq "$codec with operand '$label' stores the nested file" \
+       "1" "$("$ST" -t -f "$TMP/z.zip" 2>/dev/null | grep -c 'sub/b.txt')"
+    eq "$codec with operand '$label' stores the top-level file" \
+       "1" "$("$ST" -t -f "$TMP/z.zip" 2>/dev/null | grep -c 'zipsrc/a.txt')"
+  done
+done
+
 # ---- the archive does not end up inside itself ----
 # `tar -cf backup.tar .` run inside the directory being backed up is a standing
 # footgun: the output is created first, the walk then finds it, and a truncated

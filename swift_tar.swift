@@ -143,6 +143,43 @@ private func runZipCreate(archivePath: String, files: [String], changeDir: Strin
     guard !files.isEmpty else {
         throw TarError.io("no files to archive / 未指定要打包的檔案")
     }
+    // Normalise operands the way the tar path already does. `src/` with a
+    // trailing slash reached libarchive's disk reader unchanged and failed with
+    // "Couldn't visit directory", leaving a 22-byte empty ZIP behind -- while
+    // `src` and `.` both worked. The tar codecs were unaffected because
+    // TarWriter.archiveName strips the trailing slash before the walk, so only
+    // the ZIP backend saw the raw operand.
+    //
+    // Found by a newcomer blind test on its first run, because the README's own
+    // ZIP examples are written with the trailing slash: copying either line
+    // verbatim failed. Sixteen expert rounds never hit it -- they were typing
+    // their own commands rather than the documented ones.
+    //
+    // 以 tar 路徑既有的方式正規化運算元。帶尾隨斜線的 `src/` 原封抵達 libarchive 的
+    // disk reader 並以 "Couldn't visit directory" 失敗，留下一個 22 位元組的空 ZIP，
+    // 而 `src` 與 `.` 都正常。tar 各編碼器不受影響，是因為 TarWriter.archiveName 在
+    // 走訪前就把尾隨斜線去掉了，故只有 ZIP 後端看得到原始運算元。
+    //
+    // 由新手盲測第一輪發現，因為 README 自己的 ZIP 範例就寫著尾隨斜線：照抄任一行都會
+    // 失敗。十六個熟練回合從未碰到——它們打的是自己的指令，不是文件裡的那些。
+    // Only the trailing separator, deliberately. TarWriter.archiveName cannot be
+    // reused here: it also strips a leading "/" and a drive letter, which is
+    // right for a name stored inside an archive and would break an absolute path
+    // used as a filesystem operand. "/" and "C:/" keep their last separator,
+    // since removing it leaves something that names a different thing or nothing.
+    // 刻意只處理尾隨分隔符。此處不能沿用 TarWriter.archiveName：它同時會剝掉開頭的
+    // "/" 與磁碟機代號，那對「存在封存內的名稱」是對的，卻會弄壞作為檔案系統運算元的
+    // 絕對路徑。"/" 與 "C:/" 保留其最後一個分隔符，因為拿掉之後指的會是別的東西或什麼
+    // 都不是。
+    let files = files.map { (operand: String) -> String in
+        var p = operand
+        while p.count > 1, p.hasSuffix("/") || p.hasSuffix("\\") {
+            let head = String(p.dropLast())
+            if head.hasSuffix(":") { break }      // "C:/" -> keep
+            p = head
+        }
+        return p
+    }
     var error = [CChar](repeating: 0, count: 4096)
     let status = archivePath.withCString { archive in
         changeDir.withCString { directory in

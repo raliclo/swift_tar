@@ -1234,6 +1234,45 @@ Windows 分支是以原始 ustar fixture 涵蓋（`make_raw_tar.zsh` 新增 `fif
 靠 `mkfifo`——否則唯一無法建立管線的平台，就會是唯一其分支從未被任何測試執行到的平台，
 而那正是 round 49 缺陷得以出貨的方式。
 
+## The ZIP backend stores its own output file / ZIP 後端會把自己的輸出檔收進封存  ▸ 🔴 未決 / open
+
+Found while verifying the trailing-slash fix, not reported by any test agent.
+`-c --zip -f out.zip .` from inside the directory being archived lists
+`./out.zip` among the members. The tar path stopped doing this when the writer
+learned to compare file identity against the archive being written; the ZIP path
+never learned, because libarchive walks the tree itself and the comparison would
+have to happen inside `libarchive_zip_bridge.c`.
+
+```
+swift_tar -c --zip -f o.zip .
+swift_tar -t -f o.zip
+# -> ./  ./o.zip  ./src/  ./src/a.txt      <- ./o.zip should not be there
+```
+
+Consequences are the same as they were on the tar side: a truncated snapshot of
+the archive inside the archive, growing with it, and useless on extraction. GNU
+tar refuses this outright ("archive cannot contain itself; not dumped"); bsdtar
+stores it, as we do here.
+
+Not fixed in the same change as the trailing slash, deliberately: that change was
+a one-line normalisation in Swift with a documented reproduction, and this needs
+an identity comparison inside the C bridge, where `archive_entry_pathname` is
+relative to the walk root and the archive path is not. Two different problems
+that happen to live near each other.
+
+於驗證尾隨斜線修正時發現，並非任何測試 agent 回報。在被封存的目錄內執行
+`-c --zip -f out.zip .`，`./out.zip` 會出現在成員清單中。tar 路徑在寫入端學會以檔案身分
+與「正在寫出的封存」比對之後便不再如此；ZIP 路徑從未學會，因為走訪由 libarchive 自行
+進行，該比對必須發生在 `libarchive_zip_bridge.c` 之內。
+
+後果與當初 tar 端相同：封存內含一份截斷的自身快照，隨封存一起變大，解出時毫無用處。
+GNU tar 直接拒絕（"archive cannot contain itself; not dumped"）；bsdtar 會存進去，與此處
+現況相同。
+
+刻意不與尾隨斜線一併修正：後者是 Swift 端一行正規化、且有明確的重現步驟，而此項需要在
+C bridge 內做身分比對，該處的 `archive_entry_pathname` 相對於走訪根目錄，封存路徑則否。
+兩個恰好相鄰的不同問題。
+
 ## zsh port / zsh 移植版
 
 ### `:A` does not treat a drive-letter path as absolute / `:A` 不認磁碟機路徑為絕對路徑  ▸ ✅ 已修正(zsh port)

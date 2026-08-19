@@ -1117,9 +1117,22 @@ fi
 # README 表格中唯一會中止東西的一列。它必須恰好只中止一個成員：先前唯讀那個情形
 # 會中止整次解出，使其後所有成員停在舊內容，此檢查即為防止該失敗重演。
 mkdir -p "$TMP/dirout/mm.txt"
-rc=0; "$ST" -x -f "$TMP/ro.tar" -C "$TMP/dirout" >/dev/null 2>&1 || rc=$?
+rc=0; dirmsg=$("$ST" -x -f "$TMP/ro.tar" -C "$TMP/dirout" 2>&1) || rc=$?
 [ "$rc" -ne 0 ] && ok "a directory in the way ends the run non-zero" \
                 || bad "a directory in the way ends the run non-zero (got rc=0)"
+# The message must name the cause, not an errno. Windows reports EACCES (13) here
+# and POSIX EISDIR, and a reader given only the number goes to look at
+# permissions. bsdtar says "Can't remove already-existing dir: Directory not
+# empty" and GNU tar says "Cannot open: File exists"; ours was the least
+# informative of the three until it named the directory outright.
+# 訊息必須指出成因而非 errno。Windows 於此回報 EACCES（13）、POSIX 回報 EISDIR，只拿到
+# 數字的讀者會跑去查權限。bsdtar 說 "Can't remove already-existing dir: Directory not
+# empty"、GNU tar 說 "Cannot open: File exists"；在我們明白指出「那是個目錄」之前，
+# 本工具的訊息是三者中最不具資訊量的。
+case "$dirmsg" in
+  *"a directory is already there"*) ok "the message says a directory is in the way" ;;
+  *) bad "the message says a directory is in the way (got: $(printf '%s' "$dirmsg" | grep -i error | head -1 | cut -c1-70))" ;;
+esac
 eq "a member before the blocked one still extracts" \
    "content" "$(cat "$TMP/dirout/aa.txt" 2>/dev/null)"
 eq "a member after the blocked one still extracts" \

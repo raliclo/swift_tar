@@ -1841,7 +1841,7 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
             do {
                 try data.write(to: URL(fileURLWithPath: dest), options: [])
             } catch {
-                return "cannot write '\(dest)': \(error) / 無法寫入 '\(dest)'"
+                return createFailureMessage(dest, errnoValue: Int32(errno))
             }
         }
         if restoreMtime {
@@ -1878,7 +1878,7 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
             openErr = openIt()
         }
         guard openErr == 0, fd >= 0 else {
-            return "cannot create '\(dest)' (errno \(openErr)) / 無法建立 '\(dest)'"
+            return createFailureMessage(dest, errnoValue: openErr)
         }
         var writeOK = true
         data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
@@ -2009,6 +2009,41 @@ private func ensureDirectory(_ path: String) -> Bool {
     return makeDirectories(path)
 }
 
+/// Explain why a member could not be written at `dest`. The errno alone
+/// misleads when a directory occupies the name: Windows reports EACCES (13) and
+/// POSIX EISDIR, and neither number says "something is already there, and it is
+/// a directory". Refusing is correct and unanimous -- measured on one archive,
+/// bsdtar says `Can't remove already-existing dir: Directory not empty` and GNU
+/// tar says `Cannot open: File exists`, both preserving the directory's contents
+/// exactly as this tool does -- so the behaviour was never the problem. Only the
+/// message was, and it was the least informative of the three.
+///
+/// This is the third message of the same shape found in one blind-test run: an
+/// RGB1 field reported as "invalid" without saying which rule, a blocked parent
+/// directory reported as errno 2, and this. A number that names a symptom is
+/// worse than no number, because it sends the reader to look at permissions.
+///
+/// 說明成員為何無法寫到 `dest`。當該名稱被一個目錄占用時，單看 errno 會誤導：Windows
+/// 回報 EACCES（13）、POSIX 回報 EISDIR，兩個數字都沒說出「那裡已經有東西，而且是個
+/// 目錄」。拒絕本身是正確且三方一致的——以同一份封存實測，bsdtar 說
+/// `Can't remove already-existing dir: Directory not empty`、GNU tar 說
+/// `Cannot open: File exists`，且都與本工具一樣完整保留該目錄的內容——所以問題從來不在
+/// 行為，只在訊息，而它是三者中最不具資訊量的一個。
+///
+/// 這是同一次盲測中找到的第三則同形狀訊息：RGB1 欄位僅回報「invalid」而不說違反哪條規則、
+/// 被擋住的父目錄回報 errno 2，以及本則。一個只點出症狀的數字比沒有數字更糟，因為它會把
+/// 讀者引去查權限。
+private func createFailureMessage(_ dest: String, errnoValue: Int32) -> String {
+    var isDir: ObjCBool = false
+    if FileManager.default.fileExists(atPath: dest, isDirectory: &isDir), isDir.boolValue {
+        return "cannot write '\(dest)': a directory is already there and this archive "
+             + "holds a file of that name; remove the directory if you meant to replace it / "
+             + "無法寫入 '\(dest)'：該處已是一個目錄，而本封存持有同名的檔案；"
+             + "若確實要取代，請先移除該目錄"
+    }
+    return "cannot create '\(dest)' (errno \(errnoValue)) / 無法建立 '\(dest)'"
+}
+
 /// The platform's "create with intermediates", as one name.
 /// 平台各自的「連同中間層一起建立」，收攏為單一名稱。
 private func makeDirectories(_ path: String) -> Bool {
@@ -2092,7 +2127,7 @@ private func posixWriteFile(dest: String, data: Data, mtime: UInt64, mode: UInt3
         fd = dest.withCString { open($0, O_WRONLY | O_CREAT | O_TRUNC, mode_t(mode)) }
     }
     guard fd >= 0 else {
-        return "cannot create '\(dest)' (errno \(errno)) / 無法建立 '\(dest)'"
+        return createFailureMessage(dest, errnoValue: errno)
     }
     defer { close(fd) }
 
@@ -3285,7 +3320,7 @@ final class TarReader {
                         handle = FileHandle(forWritingAtPath: dest)
                     }
                     guard let out = handle else {
-                        throw TarError.io("cannot create '\(dest)' / 無法建立 '\(dest)'")
+                        throw TarError.io(createFailureMessage(dest, errnoValue: Int32(errno)))
                     }
                     var remaining = size
                     while remaining > 0 {

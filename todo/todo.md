@@ -338,7 +338,7 @@ recorded where it differed from mine, because that difference is the useful part
 20260816-150106）每回合做一項測試。以下是我親自重測過的發現；agent 的分類若與我不同
 則一併記錄，因為有價值的正是那個落差。
 
-## REGRESSION: `--zip` and `--zip64` are dead on macOS / macOS 上 `--zip` 與 `--zip64` 完全失效  ▸ 🔴 未處理 / open
+## REGRESSION: `--zip` and `--zip64` are dead on macOS / macOS 上 `--zip` 與 `--zip64` 完全失效  ▸ ✅ 已修正 2026-08-19 / fixed
 
 Found on 2026-08-18 building current `master` (`20260818-125339`) on macOS 27.0
 arm64. **Every ZIP write fails**, with no working path left:
@@ -393,6 +393,26 @@ bridge 遂中止寫入。Windows 不受影響，是因為該平台的 libarchive
 iconv 進行字元集轉換——這正是「僅在 Windows 驗證過的修正」得以在無人察覺下讓 macOS
 停擺的原因。此事亦與 Highlights 中「內附 libarchive 於 macOS 與 Windows 建立並讀取
 標準 ZIP 容器」的宣稱相牴觸。
+
+**Resolved by `101584d`, verified 2026-08-19.** The chosen answer was neither of
+the first two directions above: `hdrcharset` is now best-effort -- a non-`OK`
+return is reported only under `--verbose`, cleared, and the write continues --
+and a `setlocale(LC_CTYPE, "")` on non-Windows lets libarchive take its other
+branch, setting general purpose bit 11 from `nl_langinfo(CODESET)` instead.
+`-DENABLE_ICONV=ON` was measured and rejected: it does not repair this platform,
+it activates a destructive `C`-locale conversion that turns every byte of
+`中文檔名.txt` into U+FFFD, so the option was previously failing to initialise
+rather than doing harm. Windows keeps the option, which is the mechanism that
+works there. `test_blind_findings.zsh` passes on Linux (85/0) and Windows (84/0);
+macOS was verified by the author of the fix.
+
+**由 `101584d` 修正，2026-08-19 複核。** 採用的並非上列前兩個方向：`hdrcharset`
+改為盡力而為——回傳非 `OK` 時僅在 `--verbose` 下回報、清除錯誤後繼續——並在非
+Windows 平台加上 `setlocale(LC_CTYPE, "")`，讓 libarchive 改走另一條分支，依
+`nl_langinfo(CODESET)` 設定 general purpose bit 11。`-DENABLE_ICONV=ON` 經實測後
+否決：它並未修好本平台，而是啟動了一個破壞性的 `C` locale 轉換，使
+`中文檔名.txt` 的每個位元組都變成 U+FFFD；換言之該選項先前是連初始化都失敗，而非
+造成損害。Windows 維持使用該選項，因為那正是在該平台有效的機制。
 
 ### macOS run, rounds 1-6 / macOS 端 round 1-6
 
@@ -1121,6 +1141,46 @@ correct, and the surviving content is the same in all three.
 至於**哪一個**大小寫存活的差異雖屬真實，但無實質影響：swift_tar 開啟並截斷既有的目錄
 項目，保留最先出現的大小寫；另外兩者則是刪除後重建，因而採用最後出現的。兩種做法並無
 對錯之分，且三者存活的內容相同。
+
+## FIFO members are skipped on every platform / FIFO 成員在所有平台皆被跳過  ▸ 🔴 未決 / open
+
+The `default:` branch that skips unsupported entry types is not platform-scoped,
+so `typeflag='6'` is skipped on Linux and macOS too, where `mkfifo` needs no
+privilege and GNU tar creates the pipe. Device nodes (`3`, `4`) genuinely need
+privilege and are a separate case; a FIFO is not.
+
+Cost is not the objection. Measured on WSL with GNU tar, 2000 entries each:
+
+```
+fifos  extract: 22 ms average of 3   (2000 created)
+files  extract: 25 ms average of 3   (2000 created)
+```
+
+A FIFO is marginally *cheaper* than an empty regular file -- one `mknod`, with
+no open/write/close. Supporting it is free.
+
+What the investigation did produce was two real defects, now fixed in `335d20e`:
+extracting a regular member onto an existing FIFO hung forever, and a read-only
+destination aborted the whole extract. Both were about writing *over* something,
+not about creating pipes, and both are closed.
+
+Awaiting a decision on whether to create FIFOs on POSIX (Windows would keep
+skipping). Not implemented unprompted: it adds a member type the tool has never
+written, which is a feature, not a fix.
+
+跳過不支援項目型別的 `default:` 分支未區分平台，因此 `typeflag='6'` 在 Linux 與
+macOS 上同樣被跳過——而該處 `mkfifo` 不需任何權限，GNU tar 會確實建出管線。裝置節點
+（`3`、`4`）確實需要權限，屬另一回事；FIFO 不是。
+
+成本不是反對理由。於 WSL 以 GNU tar 實測（各 2000 個項目）：FIFO 22 ms、一般空檔
+25 ms——FIFO 反而略便宜，只有一次 `mknod`，沒有 open/write/close。支援它是免費的。
+
+此次調查真正產出的是兩個已修正的缺陷（`335d20e`）：把一般成員解到既存 FIFO 上會
+永久卡住，以及唯讀目的地會中止整個解壓。兩者都關於「覆蓋既有東西」而非建立管線，
+均已結案。
+
+是否要在 POSIX 上建立 FIFO（Windows 維持跳過）待決定。未擅自實作：那會新增一種本
+工具從未寫出過的成員型別，屬新功能而非修正。
 
 ## zsh port / zsh 移植版
 

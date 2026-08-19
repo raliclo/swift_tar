@@ -1138,6 +1138,52 @@ eq "a member before the blocked one still extracts" \
 eq "a member after the blocked one still extracts" \
    "content" "$(cat "$TMP/dirout/zz.txt" 2>/dev/null)"
 
+# ---- the archive does not end up inside itself ----
+# `tar -cf backup.tar .` run inside the directory being backed up is a standing
+# footgun: the output is created first, the walk then finds it, and a truncated
+# snapshot of the archive is stored in the archive. Measured on one tree before
+# the fix -- GNU tar refuses it ("archive cannot contain itself; not dumped"),
+# while bsdtar and this tool both stored it. The embedded copy is useless and
+# grows with the archive, so this follows the reference that guards.
+# Identity is compared, not the path string, so a second check uses a different
+# spelling of the same file to prove a path-equality shortcut would not pass.
+#
+# 在要備份的目錄內執行 `tar -cf backup.tar .` 是長年的陷阱：輸出先被建立，走訪隨後找到
+# 它，於是封存的一份截斷快照被存進封存。修正前以同一棵樹實測——GNU tar 會拒絕
+# （"archive cannot contain itself; not dumped"），而 bsdtar 與本工具都會存進去。內嵌的
+# 副本無用且會隨封存變大，故此處跟隨會防守的那個參照實作。比對的是身分而非路徑字串，
+# 因此第二項檢查以同一檔案的不同寫法驗證「只比字串」的作法無法通過。
+SELF="$TMP/selfref"
+mkdir -p "$SELF"
+printf 'alpha\n' > "$SELF/a.txt"
+printf 'beta\n'  > "$SELF/b.txt"
+( cd "$SELF" && "$ST" -c -f backup.tar . >/dev/null 2>&1 )
+eq "the archive is not stored inside itself" \
+   "" "$("$ST" -t -f "$SELF/backup.tar" 2>/dev/null | grep 'backup.tar')"
+eq "the other members are all still stored" \
+   "3" "$("$ST" -t -f "$SELF/backup.tar" 2>/dev/null | wc -l | tr -d ' ')"
+
+# The same file reached by a different spelling must still be recognised.
+# 以不同寫法走到的同一個檔案，仍必須被辨識出來。
+SELF2="$TMP/selfref2"
+mkdir -p "$SELF2"
+printf 'alpha\n' > "$SELF2/a.txt"
+( cd "$SELF2" && "$ST" -c -f "./out/../backup2.tar" . >/dev/null 2>&1 || \
+  "$ST" -c -f "$SELF2/backup2.tar" -C "$SELF2" . >/dev/null 2>&1 )
+eq "a differently spelled path to the archive is still excluded" \
+   "" "$("$ST" -t -f "$SELF2/backup2.tar" 2>/dev/null | grep 'backup2.tar')"
+
+# Guard against over-triggering: an unrelated .tar inside the tree must still be
+# archived. Excluding "the archive" must mean this archive, not any archive.
+# 防止過度觸發：樹內不相關的 .tar 仍必須被收進去。排除「該封存」必須指這一個封存，
+# 而非任何封存。
+mkdir -p "$TMP/selfsrc"
+printf 'alpha\n' > "$TMP/selfsrc/a.txt"
+"$ST" -c -f "$TMP/selfsrc/unrelated.tar" -C "$SELF" a.txt >/dev/null 2>&1
+"$ST" -c -f "$TMP/outside.tar" -C "$TMP/selfsrc" . >/dev/null 2>&1
+eq "an unrelated tar inside the tree is still archived" \
+   "1" "$("$ST" -t -f "$TMP/outside.tar" 2>/dev/null | grep -c 'unrelated.tar')"
+
 # ---- a typeflag '6' entry from a raw fixture ----
 # This runs on every platform, including Windows, which is the point: the
 # platform that cannot create a FIFO is the one whose branch would otherwise

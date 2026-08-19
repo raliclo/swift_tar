@@ -2261,11 +2261,38 @@ final class TarWriter {
     /// 更新（-u）基準：檔內名稱 → mtime。設定後，mtime 未比封存副本新的非目錄
     /// 項目會被略過（GNU tar --update 語意）。純追加（-r）／建立（-c）為 nil。
     private let updateBaseline: [String: UInt64]?
+    /// Filesystem identity of the archive being written, so the walk can leave
+    /// it out of itself. `tar -cf backup.tar .` run inside the directory being
+    /// backed up is a standing footgun: the output file is created first, the
+    /// directory scan then finds it, and a partial snapshot of the archive ends
+    /// up inside the archive. Measured on the same tree -- GNU tar refuses it
+    /// (`./backup.tar: archive cannot contain itself; not dumped`), while
+    /// bsdtar and this tool both stored it. Matching the reference that guards:
+    /// the embedded copy is truncated, useless, and grows with the archive.
+    ///
+    /// Identity, not the path string: a name can reach the same file through a
+    /// symlink, `./`, or a different spelling of the same directory, and the
+    /// dedup key already in use for hardlinks answers exactly this question.
+    /// nil when writing to stdout, which cannot be walked into.
+    ///
+    /// 正在寫出的封存的檔案系統身分，讓走訪能把它排除在自己之外。在要備份的目錄內執行
+    /// `tar -cf backup.tar .` 是長年的陷阱：輸出檔先被建立，目錄掃描隨後找到它，於是
+    /// 封存的一份半截快照就進到封存裡面。以同一棵樹實測——GNU tar 會拒絕
+    /// （`./backup.tar: archive cannot contain itself; not dumped`），而 bsdtar 與本
+    /// 工具都會存進去。此處跟隨會防守的那個參照實作：內嵌的副本是截斷的、無用的，且會
+    /// 隨封存一起變大。
+    ///
+    /// 比對的是身分而非路徑字串：同一個檔案可以透過 symlink、`./`、或同一目錄的不同
+    /// 寫法被走到，而硬連結去重已在使用的鍵正是回答這個問題的東西。寫往 stdout 時為
+    /// nil，因為那走不進去。
+    private let archiveIdentity: String?
 
-    init(sink: ParallelChunkSink, verbose: Bool, updateBaseline: [String: UInt64]? = nil) {
+    init(sink: ParallelChunkSink, verbose: Bool, updateBaseline: [String: UInt64]? = nil,
+         archivePath: String? = nil) {
         self.sink = sink
         self.verbose = verbose
         self.updateBaseline = updateBaseline
+        self.archiveIdentity = archivePath.flatMap { TarWriter.fileIdentity($0) }
     }
 
     /// -u gate: true ⟺ an archived copy exists and is at least as new, so this
@@ -2454,11 +2481,29 @@ final class TarWriter {
         return p
     }
 
+    /// The key that answers "are these two names the same file", reused from the
+    /// hardlink dedup rather than invented.
+    /// 回答「這兩個名稱是不是同一個檔案」的鍵，沿用硬連結去重的作法而非另創一套。
+    private static func fileIdentity(_ path: String) -> String? {
+#if os(Windows)
+        guard let st = winStat(path) else { return nil }
+        return "\(st.volumeSerial)/\(st.fileIndex)"
+#else
+        var st = stat()
+        guard lstat(path, &st) == 0 else { return nil }
+        return "\(st.st_dev)/\(st.st_ino)"
+#endif
+    }
+
     func add(path: String) throws {
         let name = TarWriter.archiveName(path)
 #if os(Windows)
         guard let st = winStat(path) else {
             throw TarError.io("cannot stat '\(path)' / 無法讀取 '\(path)' 的檔案資訊")
+        }
+        if let ai = archiveIdentity, ai == "\(st.volumeSerial)/\(st.fileIndex)" {
+            eprint("swift_tar: skipping '\(name)': it is the archive being written / 略過 '\(name)'：它就是正在寫出的封存")
+            return
         }
         // No Unix permission bits on Windows; use conventional defaults.
         // Windows 沒有 Unix 權限位元，使用慣例預設值。
@@ -2528,6 +2573,10 @@ final class TarWriter {
         var st = stat()
         guard lstat(path, &st) == 0 else {
             throw TarError.io("cannot stat '\(path)' / 無法讀取 '\(path)' 的檔案資訊")
+        }
+        if let ai = archiveIdentity, ai == "\(st.st_dev)/\(st.st_ino)" {
+            eprint("swift_tar: skipping '\(name)': it is the archive being written / 略過 '\(name)'：它就是正在寫出的封存")
+            return
         }
         let mode = UInt32(st.st_mode & 0o7777)
         let uid = UInt32(st.st_uid), gid = UInt32(st.st_gid)
@@ -4754,6 +4803,16 @@ struct SwiftTarMain {
         // 先開啟封存輸出再套用建立端 -C，與系統 tar 一致：相對 -f 路徑仍以
         // 呼叫時目錄為基準，輸入路徑則改由指定目錄解析。
         let originalDir = FileManager.default.currentDirectoryPath
+        // Resolve the archive's own path here, before the chdir: TarWriter looks
+        // it up to keep the archive out of itself, and per the note above a
+        // relative -f stays relative to the invocation directory, so resolving
+        // it after -C would name a different file or nothing at all.
+        // 在 chdir 之前於此解析封存自身的路徑：TarWriter 會查詢它以將封存排除在自己
+        // 之外，而依上方註記，相對的 -f 仍以呼叫時目錄為基準，因此在 -C 之後才解析
+        // 會指到另一個檔案、或根本不存在的東西。
+        let archiveAbsolute: String? = archivePath == "-" ? nil
+            : ((archivePath as NSString).isAbsolutePath
+               ? archivePath : originalDir + "/" + archivePath)
         if !changeDir.isEmpty && !FileManager.default.changeCurrentDirectoryPath(changeDir) {
             throw TarError.io("cannot chdir to '\(changeDir)' / 無法切換至 '\(changeDir)'")
         }
@@ -4789,7 +4848,8 @@ struct SwiftTarMain {
         }
 
         let sink = ParallelChunkSink(codec: codec, output: sinkOutput, inflight: inflight)
-        let writer = TarWriter(sink: sink, verbose: verbose)
+        let writer = TarWriter(sink: sink, verbose: verbose,
+                               archivePath: archiveAbsolute)
         for f in files {
             try writer.add(path: f)
         }
@@ -4906,6 +4966,14 @@ struct SwiftTarMain {
         try output.truncate(atOffset: eofOffset)   // drop the old zero-block terminator / 移除舊的零塊結尾
         try output.seek(toOffset: eofOffset)
 
+        // Resolve the archive's own path before the chdir below. TarWriter looks
+        // it up to keep the archive out of itself, and a relative path resolved
+        // after -C would name a different file -- or nothing.
+        // 在下方 chdir 之前解析封存自身的路徑。TarWriter 會查詢它以將封存排除在自己
+        // 之外，而在 -C 之後才解析的相對路徑，指到的會是另一個檔案——或什麼都不是。
+        let archiveAbsolute = (archivePath as NSString).isAbsolutePath
+            ? archivePath : fm.currentDirectoryPath + "/" + archivePath
+
         // Apply create-side -C after opening the archive, same as runCreate.
         // 開啟封存後再套用建立端 -C，與 runCreate 一致。
         let originalDir = fm.currentDirectoryPath
@@ -4918,7 +4986,8 @@ struct SwiftTarMain {
 
         let sink = ParallelChunkSink(codec: .none, output: output, inflight: inflight)
         let writer = TarWriter(sink: sink, verbose: verbose,
-                               updateBaseline: update ? baseline : nil)
+                               updateBaseline: update ? baseline : nil,
+                               archivePath: archiveAbsolute)
         for f in files {
             try writer.add(path: f)
         }

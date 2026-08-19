@@ -1,8 +1,8 @@
-[Info] date: 2026-08-18 13:21:27 CST
+[Info] date: 2026-08-19 10:13:15 CST
 [Info] platform: mac
 [Info] host: Darwin 27.0.0 arm64
-[Info] swift_tar: swift_tar 20260818-131456
-[Info] corpus digest: 10714dd9bb4a404f865a7bbde3a7c77e3536c6db1181fc17c571b6b0c7ec9c81
+[Info] swift_tar: swift_tar 20260819-101255
+[Info] corpus digest: 997967f72f0d472d86db46df5bee16cfca5a70e02c241a6f213af52947a63f21
 
 == reference tar implementations found / 現場找到的參照實作 ==
   bsdtar  /usr/bin/tar
@@ -11,10 +11,22 @@
          tar (GNU tar) 1.35
 
 == swift_tar writes, each reference reads / swift_tar 寫入，各參照讀取 ==
+  PASS  bsdtar reads swift_tar's plain archive
+  PASS  gnutar reads swift_tar's plain archive
+  PASS  bsdtar reads swift_tar's gzip archive
+  PASS  gnutar reads swift_tar's gzip archive
 
 == each reference writes, swift_tar reads / 各參照寫入，swift_tar 讀取 ==
+  PASS  swift_tar reads bsdtar's plain archive
+  PASS  swift_tar reads bsdtar's gzip archive
+  PASS  swift_tar reads gnutar's plain archive
+  PASS  swift_tar reads gnutar's gzip archive
 
 == listings agree on names / 列表名稱一致 ==
+  PASS  bsdtar lists the same ASCII names as swift_tar
+  PASS  bsdtar extracts the non-ASCII name correctly
+  PASS  gnutar lists the same ASCII names as swift_tar
+  PASS  gnutar extracts the non-ASCII name correctly
 
 == macOS AppleDouble note / macOS AppleDouble 說明 ==
   An archive written by /usr/bin/tar WITHOUT COPYFILE_DISABLE lists:
@@ -25,6 +37,7 @@
   creating on macOS if the archive is for anything but bsdtar.
   swift_tar 在此與 GNU tar 一致。若封存的對象不是 bsdtar，於 macOS 建立時
   請設定 COPYFILE_DISABLE=1。
+  PASS  swift_tar and GNU tar agree on AppleDouble members
 
 -----------------------------------------
-PASS: 11  FAIL: 0  SKIP: 0
+PASS: 13  FAIL: 0  SKIP: 0

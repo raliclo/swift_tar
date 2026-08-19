@@ -570,12 +570,12 @@ would not predict.
 | `--strip-components <N>` | (`-x` tar extraction only) Remove N leading path components before writing entries; also accepts `--strip-components=N` |
 | `--zstd-level <N>` | (`--zstd` only) Compression level, `1`…`22`, default `9`. Out of range or non-numeric exits **2**. Silently ignored if `--zstd` is not also given — see below |
 | `-n <N>`    | In-flight parallel chunks (default: one per core, capped at 4 × cores) |
-| `-v`        | Verbose (list entries / show the applied filter chain) |
+| `-v`        | Name each member as it is processed, on stderr, and print the detected filter chain. **It does not produce a long listing** — there are no sizes, modes or timestamps, and `-t -v` prints the same names as `-t` plus one filter-chain line. If you arrived from `tar -tvf` expecting a table, this is not it. |
 | `--touch`   | (`-x` only) Do **not** restore the archived mtime; extracted files get the current time |
 | `-i`, `--ignore-zeros` | (`-x`, `-t`) Read past the zero blocks that end an archive, so concatenated archives are read as one |
 | `-o`, `--no-same-owner` | Accepted for `tar` compatibility and does nothing: swift_tar never restores ownership, with or without it |
 | `--encrypt` | (`-c` only) Encrypt with ChaCha20-Poly1305; prompts for a passphrase |
-| `--keyfile <path>` | Use the file's bytes as key material instead of a passphrase (create and read; required when stdin is not a terminal) |
+| `--keyfile <path>` | Use the file's bytes as key material instead of a passphrase (create and read; required when stdin is not a terminal). **On create it turns encryption on by itself** — `-c --keyfile k.bin -f out.enc src/` encrypts; you do not also need `--encrypt`. |
 | `--force`   | (`-x` only) Allow a member to overwrite one written earlier in the *same* extraction; without it that case is refused |
 | `-h`        | Help |
 | `--version` | Show the fixed build-date version (`yyyyMMdd-HHmmss`) |

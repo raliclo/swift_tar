@@ -5396,8 +5396,32 @@ struct SwiftTarMain {
         // without liblzo2): report the detected filter without probing further.
         // 有 bidder 認領但無法解碼（例如缺 liblzo2 的 lzop）：只回報偵測到的 filter。
         guard result.ok else {
+            // The identification goes to stdout; why it could not be taken
+            // further goes to stderr. They used to be joined by an em dash on
+            // one stdout line, so `--identify` on an encrypted archive with no
+            // key printed
+            //
+            //   file: encrypted (ChaCha20-Poly1305) — stdin is not a terminal —
+            //   pass the key with --keyfile <path>
+            //
+            // at exit 0: half answer, half error, in the field a script reads.
+            // The README tells scripts to match the printed text, so gluing an
+            // advisory onto it breaks the one contract this command has. What it
+            // did identify is still true and still worth printing -- the file IS
+            // encrypted -- so the exit code stays 0, as it does for
+            // "unrecognized".
+            //
+            // 辨識結果送 stdout；無法再往下的原因送 stderr。兩者原本以破折號併在同一行
+            // stdout 上，因此對加密封存且未提供金鑰執行 `--identify` 時，會在離開碼 0 之下
+            // 印出「一半是答案、一半是錯誤」的內容，而那正是腳本要讀的欄位。README 要求
+            // 腳本比對印出的文字，把建議句黏上去便破壞了這個命令唯一的約定。它確實辨識到
+            // 的部分仍然為真、仍值得印出——該檔案的確是加密的——故離開碼維持 0，與
+            // 「unrecognized」的情形一致。
             let chain = stream.names.isEmpty ? "unknown" : stream.names.joined(separator: " → ")
-            print("\(label): \(chain) — \(result.message ?? "cannot decode / 無法解碼")")
+            print("\(label): \(chain)")
+            if let why = result.message {
+                eprint("swift_tar: cannot look inside '\(label)': \(why)")
+            }
             return
         }
 

@@ -358,6 +358,73 @@ check_key_reason "a keyfile that does not exist says so" \
 check_key_reason "an empty keyfile still says it is empty" \
   "is empty" "$(keyfile_err "$KTMP/empty.bin")"
 
+# ---- --keyfile alone turns encryption on when creating ----
+# The Options table used to read as though --keyfile only changed where the key
+# comes from, leaving --encrypt to decide whether to encrypt at all; the example
+# below it showed --keyfile being sufficient on its own. Two readings, and only
+# the example disambiguated. The table now says so outright, so this backs that
+# sentence: without --encrypt anywhere on the line, the result must still be
+# encrypted.
+# Options 表原本讀起來像是 --keyfile 只改變金鑰的來源，而是否加密仍由 --encrypt 決定；
+# 其下方的範例卻顯示 --keyfile 單獨即足夠。兩種讀法，只有範例能消歧。現在表格已直接寫明，
+# 故此處為那句話提供依據：整行沒有 --encrypt，結果仍必須是加密的。
+KONLY="$TMP/keyfile_alone"
+mkdir -p "$KONLY/src"
+printf 'plain\n' > "$KONLY/src/a.txt"
+printf 'k' > "$KONLY/k.bin"
+"$ST" -c --keyfile "$KONLY/k.bin" -f "$KONLY/out.enc" -C "$KONLY/src" . >/dev/null 2>&1
+case "$("$ST" --identify -f "$KONLY/out.enc" 2>/dev/null)" in
+  *encrypted*) ok "--keyfile alone encrypts on create, without --encrypt" ;;
+  *) bad "--keyfile alone encrypts on create (got: $("$ST" --identify -f "$KONLY/out.enc" 2>/dev/null))" ;;
+esac
+# And it must round-trip with the same key, or "it encrypts" is only half true.
+# 且必須能以同一把金鑰完整往返，否則「它會加密」只說對了一半。
+mkdir -p "$KONLY/back"
+"$ST" -x --keyfile "$KONLY/k.bin" -f "$KONLY/out.enc" -C "$KONLY/back" >/dev/null 2>&1
+case "$(cat "$KONLY/back/a.txt" 2>/dev/null)" in
+  plain) ok "an archive made with --keyfile alone decrypts with that key" ;;
+  *) bad "an archive made with --keyfile alone decrypts with that key" ;;
+esac
+
+# ---- --identify keeps stdout parseable when it cannot look inside ----
+# The identification belongs on stdout; the reason it could go no further
+# belongs on stderr. They used to be joined by an em dash on one stdout line, so
+# `--identify` on an encrypted archive with no key printed
+# "<file>: encrypted (ChaCha20-Poly1305) — stdin is not a terminal — pass the
+# key with --keyfile <path>" at exit 0 -- half answer, half error, in the field
+# the README tells scripts to match. The exit code stays 0 because the file WAS
+# identified, the same as the "unrecognized" case.
+# 辨識結果屬於 stdout；無法再往下的原因屬於 stderr。兩者原本以破折號併在同一行 stdout
+# 上，因此對加密封存且未提供金鑰執行 `--identify` 時，會在離開碼 0 之下印出
+# 「<檔案>: encrypted (ChaCha20-Poly1305) — stdin is not a terminal — …」——一半是答案、
+# 一半是錯誤，而那正是 README 要求腳本比對的欄位。離開碼維持 0，因為該檔案確實被辨識了，
+# 與 "unrecognized" 的情形相同。
+IDTMP="$TMP/identify_split"
+mkdir -p "$IDTMP/src"
+printf 'secret\n' > "$IDTMP/src/a.txt"
+printf 'k' > "$IDTMP/k.bin"
+"$ST" -c --keyfile "$IDTMP/k.bin" --gzip -f "$IDTMP/e.tgz.enc" -C "$IDTMP/src" . >/dev/null 2>&1
+id_out=$("$ST" --identify -f "$IDTMP/e.tgz.enc" 2>/dev/null)
+id_err=$("$ST" --identify -f "$IDTMP/e.tgz.enc" 2>&1 >/dev/null)
+rc=0; "$ST" --identify -f "$IDTMP/e.tgz.enc" >/dev/null 2>&1 || rc=$?
+[ "$rc" -eq 0 ] && ok "--identify without a key still exits 0" \
+                || bad "--identify without a key still exits 0 (got rc=$rc)"
+case "$id_out" in
+  *keyfile*|*terminal*) bad "stdout carries only the identification (it carries advice too)" ;;
+  *"encrypted (ChaCha20-Poly1305)"*) ok "stdout carries only the identification" ;;
+  *) bad "stdout carries only the identification (got: $id_out)" ;;
+esac
+case "$id_err" in
+  *"--keyfile"*) ok "stderr says how to look inside" ;;
+  *) bad "stderr says how to look inside (got: $id_err)" ;;
+esac
+# With the key, the chain must still be reported in full on stdout.
+# 提供金鑰時，完整的鏈仍必須完整回報於 stdout。
+case "$("$ST" --identify --keyfile "$IDTMP/k.bin" -f "$IDTMP/e.tgz.enc" 2>/dev/null)" in
+  *"encrypted (ChaCha20-Poly1305) → gzip → tar"*) ok "with a key the full chain is still reported" ;;
+  *) bad "with a key the full chain is still reported" ;;
+esac
+
 # ---------------------------------------------------------------------------
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"

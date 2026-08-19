@@ -278,6 +278,29 @@ check_reason "-f under a missing directory names that directory" \
 [ -d "$TMP/rgb_outdir" ] && ok "the existing directory is left alone" \
                          || bad "the existing directory is left alone"
 
+# The same wording problem on the READ side, and on --rgb1-pack's payload input.
+# The point of checking all three is that the text is Foundation's, not ours:
+# every place its descriptions reach the user unmodified carries the same defect,
+# so fixing only the one that was reported would have left two behind. A
+# directory read as input reported "You don't have permission" -- false, and it
+# sends the reader to check ownership; a missing path reported "The file doesn't
+# exist" without naming any path.
+# 同樣的措辭問題也在**讀取**端，以及 --rgb1-pack 的 payload 輸入。三處都檢查的理由是：
+# 那段文字出自 Foundation 而非我們，凡其描述原封抵達使用者的地方都帶有相同缺陷，因此
+# 只修被回報的那一處會留下另外兩處。以目錄作為輸入讀取時回報「您沒有權限」——是假的，
+# 且會使讀者跑去查擁有者；路徑不存在時回報「檔案不存在」，卻沒點名任何路徑。
+check_reason "--rgb1-info on a directory says it is a directory" \
+  "is a directory, not a file to read" "$("$ST" --rgb1-info -f "$TMP/rgb_outdir" 2>&1)"
+check_reason "--rgb1-raw on a directory says it is a directory" \
+  "is a directory, not a file to read" "$("$ST" --rgb1-raw -f "$TMP/rgb_outdir" 2>&1)"
+check_reason "--rgb1-info on a missing path names the path" \
+  "does not exist" "$("$ST" --rgb1-info -f "$TMP/no_such.rgb1" 2>&1)"
+check_reason "a directory as the pack payload says it is a directory" \
+  "is a directory, not a file to read" \
+  "$("$ST" --rgb1-pack --width 4 --height 3 --lat 25.0 --lng 121.0 --height-m 12.0 \
+        --title Fine --country Taiwan --creator-email photog@example.com --right CcBy \
+        --created-ms 1700000000123 -f "$TMP/payload_dir.rgb1" "$TMP/rgb_outdir" 2>&1)"
+
 # A real sampled video frame, not a synthetic pattern. This used to be a 4 KiB
 # random block repeated 768 times, which is perfectly periodic: every codec with
 # a window of 4 KiB or more finds an exact match at once and the table reported

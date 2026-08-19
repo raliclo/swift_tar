@@ -392,7 +392,11 @@ func runRGB1Pack(
     if inputPath == "-" {
         payload = FileHandle.standardInput.readDataToEndOfFile()
     } else {
-        payload = try Data(contentsOf: URL(fileURLWithPath: inputPath))
+        // The raw payload input for --rgb1-pack, same treatment: a directory
+        // here reported "You don't have permission" too.
+        // --rgb1-pack 的原始 payload 輸入，比照辦理：此處若是目錄，同樣會回報
+        // 「您沒有權限」。
+        payload = try rgb1ReadFile(inputPath)
     }
     let latitudeE7 = try rgb1ScaledGeo(latitude, scale: 10_000_000, min: -90, max: 90)
     let longitudeE7 = try rgb1ScaledGeo(longitude, scale: 10_000_000, min: -180, max: 180)
@@ -456,8 +460,41 @@ func runRGB1Pack(
     }
 }
 
+/// Read a file for the RGB1 commands, saying what is wrong when it cannot be.
+/// `Data(contentsOf:)` describes a directory as "You don't have permission" and
+/// a missing path as "The file doesn't exist" -- the first is false and sends
+/// the reader to check ownership or re-run elevated, and the second names no
+/// path at all. Found on the write side first (round 63) and confirmed here on
+/// the read side, which is the point: the wording is Foundation's, so every
+/// place its descriptions reach the user unmodified carries the same defect,
+/// and that is a different search than "where do we format our own errors".
+///
+/// 為 RGB1 各命令讀取檔案，並在讀不到時說出原因。`Data(contentsOf:)` 把目錄描述為
+/// 「您沒有權限」、把不存在的路徑描述為「檔案不存在」——前者是假的，會使讀者跑去查
+/// 擁有者或改用系統管理員身分重跑，後者則完全沒點名任何路徑。此問題先在寫入端發現
+/// （round 63），並於此在讀取端獲得確認，而這正是重點：措辭出自 Foundation，因此凡是
+/// 其描述原封抵達使用者的地方都帶有相同的缺陷，而那與「我們自己格式化錯誤的地方」是
+/// 兩個不同的搜尋範圍。
+func rgb1ReadFile(_ path: String) throws -> Data {
+    do {
+        return try Data(contentsOf: URL(fileURLWithPath: path))
+    } catch {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        if fm.fileExists(atPath: path, isDirectory: &isDir) {
+            if isDir.boolValue {
+                throw RGB1Error.io("-f '\(path)' is a directory, not a file to read / "
+                                   + "-f '\(path)' 是目錄，不是可讀取的檔案")
+            }
+            throw RGB1Error.io("cannot read '\(path)': \(error.localizedDescription) / "
+                               + "無法讀取 '\(path)'")
+        }
+        throw RGB1Error.io("'\(path)' does not exist / '\(path)' 不存在")
+    }
+}
+
 func runRGB1Info(inputPath: String) throws {
-    let data = try Data(contentsOf: URL(fileURLWithPath: inputPath))
+    let data = try rgb1ReadFile(inputPath)
     let image = try RGB1Image(fileData: data)
     print("format=RGB1")
     print("width=\(image.width)")
@@ -476,7 +513,7 @@ func runRGB1Info(inputPath: String) throws {
 }
 
 func runRGB1Raw(inputPath: String) throws {
-    let data = try Data(contentsOf: URL(fileURLWithPath: inputPath))
+    let data = try rgb1ReadFile(inputPath)
     let image = try RGB1Image(fileData: data)
     try FileHandle.standardOutput.write(contentsOf: image.payload)
 }

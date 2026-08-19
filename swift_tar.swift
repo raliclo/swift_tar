@@ -55,6 +55,16 @@ import zlib
 // _futime64 直接設定在已開啟的 fd 上——syscall 輪廓同 bsdtar）。這是 C
 // runtime module，並非 R44-Win 已移除的 WinSDK。
 import ucrt
+// WinSDK on top of it, for GetFileAttributesW/DeleteFileW/RemoveDirectoryW.
+// It was dropped in R44-Win when the ucrt backend replaced the WinSDK file
+// I/O, not because it is unwelcome -- crypto.swift imports it in this same
+// binary. The CRT has no lstat, so detecting a reparse point at a destination
+// (see clearNonRegular) cannot be done without it.
+// 在其之上再加 WinSDK，供 GetFileAttributesW/DeleteFileW/RemoveDirectoryW 使用。
+// R44-Win 移除它是因為 ucrt 後端取代了 WinSDK 的檔案 I/O，並非不歡迎它——
+// crypto.swift 在同一個 binary 中就有 import。CRT 沒有 lstat，因此若不引入它，
+// 就無法偵測目的地上的 reparse point（見 clearNonRegular）。
+import WinSDK
 #endif
 
 #if os(Linux)
@@ -1814,6 +1824,7 @@ private func winMakeDirectories(_ path: String) -> Bool {
 /// FileWriterPool 的 worker 呼叫（路徑各自獨立，無共享狀態）。
 private func winWriteFile(dest: String, data: Data, mtime: UInt64,
                           backend: WriteBackend, restoreMtime: Bool = true) -> String? {
+    clearNonRegular(dest)
     switch backend {
     case .foundation:
         // Single-call create+write+close (ONE open), then mtime via
@@ -1823,7 +1834,15 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
         do {
             try data.write(to: URL(fileURLWithPath: dest), options: [])
         } catch {
-            return "cannot write '\(dest)': \(error) / 無法寫入 '\(dest)'"
+            // A read-only destination is replaceable; retry once with the
+            // attribute cleared before treating this as a real failure.
+            // 唯讀目的地是可取代的；在視為真正失敗之前，清除屬性後重試一次。
+            winClearReadOnly(dest)
+            do {
+                try data.write(to: URL(fileURLWithPath: dest), options: [])
+            } catch {
+                return "cannot write '\(dest)': \(error) / 無法寫入 '\(dest)'"
+            }
         }
         if restoreMtime {
             try? FileManager.default.setAttributes([.modificationDate:
@@ -1837,9 +1856,26 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
         // 每檔僅一次 CRT 開檔；mtime 直接設在同一 fd 上——零額外開檔。
         // （_wsopen 本身是可變參數，Swift 無法呼叫；_wsopen_s 為固定參數版。）
         var fd: Int32 = -1
-        let openErr = winUcrtPath(dest).withCString(encodedAs: UTF16.self) { w in
-            _wsopen_s(&fd, w, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY | _O_SEQUENTIAL,
-                      _SH_DENYNO, _S_IREAD | _S_IWRITE)
+        let openIt: () -> Int32 = {
+            winUcrtPath(dest).withCString(encodedAs: UTF16.self) { w in
+                _wsopen_s(&fd, w, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY | _O_SEQUENTIAL,
+                          _SH_DENYNO, _S_IREAD | _S_IWRITE)
+            }
+        }
+        var openErr = openIt()
+        if openErr == EACCES {
+            // Found by the round 49 blind test: re-extracting over a tree whose
+            // files had been marked read-only stopped at the first such file
+            // with errno 13, and every later member was left stale. The POSIX
+            // side of this was fixed in 335d20e; this path was missed because
+            // the regression test had been grouped behind an mkfifo guard that
+            // Windows skips.
+            // 由 round 49 盲測發現：重新解出到已被標為唯讀的樹時，會停在第一個
+            // 這種檔案並回報 errno 13，其後所有成員維持舊內容。POSIX 端已於
+            // 335d20e 修正；此路徑當時被遺漏，因為該回歸測試被歸在 Windows 會
+            // 跳過的 mkfifo 守衛之下。
+            winClearReadOnly(dest)
+            openErr = openIt()
         }
         guard openErr == 0, fd >= 0 else {
             return "cannot create '\(dest)' (errno \(openErr)) / 無法建立 '\(dest)'"
@@ -1887,10 +1923,58 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
 /// 解析掉這裡正要抓的那個 symlink。定義在平台條件之外，因為呼叫它的 inline 串流
 /// 路徑是共用的；在沒有 FIFO 的 Windows 上其內容為空操作。
 private func clearNonRegular(_ dest: String) {
-#if !os(Windows)
+#if os(Windows)
+    // Windows has no FIFOs, but it does have symlinks, and `_wsopen_s` follows
+    // one at the final component exactly as `open` does: found by the test
+    // backing the README's "a symlink is removed, not followed" row, which
+    // passed on Linux and failed here -- the link's target received the
+    // member's bytes while the destination kept a harmless-looking link. A
+    // symlink already sitting at the destination is enough; the archive does
+    // not have to carry one. A directory symlink needs RemoveDirectoryW, since
+    // DeleteFileW refuses it.
+    // Windows 沒有 FIFO，但有 symlink，而 `_wsopen_s` 對最後一段的 symlink 會如同
+    // `open` 一樣跟隨：由撐住 README「symlink 會被移除而非跟隨」那一列的測試發現，
+    // 該測試在 Linux 通過、在此失敗——連結目標收到了成員的內容，而目的地留下一個
+    // 看似無害的連結。目的地上已存在的 symlink 就足以觸發，封存不必自帶。目錄
+    // symlink 需用 RemoveDirectoryW，因為 DeleteFileW 拒絕它。
+    let wide = Array(winUcrtPath(dest).utf16) + [0]
+    let attrs = wide.withUnsafeBufferPointer { GetFileAttributesW($0.baseAddress!) }
+    guard attrs != INVALID_FILE_ATTRIBUTES,
+          attrs & UInt32(FILE_ATTRIBUTE_REPARSE_POINT) != 0 else { return }
+    if attrs & UInt32(FILE_ATTRIBUTE_DIRECTORY) != 0 {
+        _ = wide.withUnsafeBufferPointer { RemoveDirectoryW($0.baseAddress!) }
+    } else {
+        _ = wide.withUnsafeBufferPointer { DeleteFileW($0.baseAddress!) }
+    }
+#else
     var st = stat()
     guard dest.withCString({ lstat($0, &st) }) == 0 else { return }
     if st.st_mode & S_IFMT != S_IFREG { _ = dest.withCString { unlink($0) } }
+#endif
+}
+
+/// Clear the read-only attribute on `dest` so an existing file there can be
+/// replaced. Write permission on a file is not needed to replace it -- only on
+/// its directory -- but Windows enforces the attribute on open *and* on delete,
+/// so the POSIX answer of unlinking first does not work here: that is exactly
+/// why bsdtar reports "Can't unlink already-existing object: Permission denied"
+/// and leaves the member unwritten. Clearing the attribute is the Windows
+/// analogue of that unlink. Called only after a failed open, never before.
+/// Outside the platform conditional for the same reason as `clearNonRegular`:
+/// the shared inline streaming path calls it, and the body is empty elsewhere.
+///
+/// 清除 `dest` 的唯讀屬性，使該處既有檔案可被取代。取代一個檔案不需要對該檔有
+/// 寫入權——只需要對其目錄有——但 Windows 在開檔**與刪除**兩處都會強制該屬性，
+/// 因此 POSIX 那套「先 unlink」在此行不通：這正是 bsdtar 回報
+/// "Can't unlink already-existing object: Permission denied" 並讓該成員未被寫入的
+/// 原因。清除屬性即為該 unlink 在 Windows 上的對應作法。僅在開檔失敗後呼叫，
+/// 絕不預先呼叫。置於平台條件之外的理由與 `clearNonRegular` 相同：共用的 inline
+/// 串流路徑會呼叫它，而在其他平台其內容為空。
+private func winClearReadOnly(_ dest: String) {
+#if os(Windows)
+    _ = winUcrtPath(dest).withCString(encodedAs: UTF16.self) { w in
+        _wchmod(w, _S_IREAD | _S_IWRITE)
+    }
 #endif
 }
 
@@ -3009,7 +3093,24 @@ final class TarReader {
                         }
                         data = d
                     }
-                    if let f = pool.failure { throw TarError.io(f) }
+                    // No mid-loop failure check. There used to be one here, and
+                    // because the workers are asynchronous it made the result a
+                    // race: whether a member *after* a failing one got written
+                    // depended on when that worker's error became visible.
+                    // Measured on Windows with a directory blocking one member,
+                    // 10 identical runs: the following member landed in 1 of
+                    // them. A nondeterministic tree is worse than either policy,
+                    // so the failure is now surfaced only by the drain at the
+                    // end of the run -- every member is attempted, each failure
+                    // is reported, and the run still exits non-zero. That is
+                    // also what GNU tar and bsdtar do.
+                    // 此處不做迴圈中的失敗檢查。原本有一個，而因為 worker 是非同步的，
+                    // 它使結果成為競態：失敗成員**之後**的成員會不會被寫出，取決於該
+                    // worker 的錯誤何時變得可見。在 Windows 上以一個目錄擋住某成員實測，
+                    // 相同條件跑 10 次：後續成員只有 1 次落地。不確定的結果比任一種
+                    // 政策都糟，故失敗改為僅由執行結尾的 drain 浮現——每個成員都會嘗試、
+                    // 每個失敗都會回報，且整次執行仍以非 0 結束。GNU tar 與 bsdtar
+                    // 亦是如此。
                     if !submitted.insert(dest).inserted {
                         // Duplicate path: earlier queued write must land first
                         // so the later entry wins (tar overwrite semantics).
@@ -3043,8 +3144,12 @@ final class TarReader {
                     if handle == nil {
                         // Same read-only destination as posixWriteFile: remove
                         // it and create anew rather than failing the extract.
+                        // The attribute has to be cleared first on Windows,
+                        // where it blocks the delete as well as the open.
                         // 與 posixWriteFile 相同的唯讀目的地情形：移除後重建，
-                        // 而不是讓整個解壓失敗。
+                        // 而不是讓整個解壓失敗。在 Windows 上必須先清除該屬性，
+                        // 因為它同時擋住開檔與刪除。
+                        winClearReadOnly(dest)
                         try? fm.removeItem(atPath: dest)
                         _ = fm.createFile(atPath: dest, contents: nil)
                         handle = FileHandle(forWritingAtPath: dest)

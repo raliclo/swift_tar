@@ -377,6 +377,24 @@ that a skipped entry does not change the exit code — the run still ends 0 — 
 script extracting an untrusted archive should read stderr, or compare the
 extracted tree against `-t`, rather than trusting the status alone.
 
+**Extracting over an existing tree replaces what it finds.** Re-running an
+extraction to refresh a directory is a normal thing to do, and the destination is
+rarely pristine:
+
+| what is already at the destination | what happens |
+|---|---|
+| a writable regular file | overwritten |
+| a read-only file (`chmod 444`, or the Windows read-only attribute) | overwritten — permission to replace a file comes from its directory, not from the file |
+| a FIFO, socket, or device node | removed, then the member is written in its place |
+| a symlink | removed, **not** followed — the member is never written through it to the link's target |
+| a directory, where the archive holds a file of that name | that member fails; the rest of the archive still extracts, and the run ends non-zero |
+
+Only the last row stops anything, and it stops only that member. A member that
+cannot be written is named on stderr; the others still land. Note that `-v`
+lists members as it processes them, so a failing member appears in the `-v`
+output too — read stderr and the exit status to tell what was actually written,
+not the `-v` list alone.
+
 ### Identify an unknown file
 
 Reading never looks at the extension — the codec is auto-detected by magic

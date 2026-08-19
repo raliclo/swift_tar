@@ -939,24 +939,85 @@ if command -v mkfifo >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1 &&
        "content" "$(cat "$TMP/fifoout/member.txt" 2>/dev/null)"
   fi
 
-  # ---- a read-only destination is replaced ----
-  # Write permission on a file is not needed to replace it, only on its
-  # directory. Opening 0444 for writing gives EACCES, which aborted the whole
-  # extract: found against the claw-code corpus, where git stores loose objects
-  # 0444, so re-extracting any tree holding a .git stopped at the first object
-  # (errno 13) while GNU tar completed.
-  # 取代一個檔案不需要對該檔有寫入權，只需要對其目錄有。以寫入開啟 0444 會得到
-  # EACCES，並使整個解壓中止：以 claw-code 語料發現，git 的鬆散物件為 0444，因此
-  # 重新解出任何含 .git 的樹都會停在第一個物件（errno 13），而 GNU tar 能完成。
-  mkdir -p "$TMP/roout" && printf 'stale\n' > "$TMP/roout/member.txt"
-  chmod 0444 "$TMP/roout/member.txt"
-  rc=0; "$ST" -x -f "$TMP/fifo.tar" -C "$TMP/roout" >/dev/null 2>&1 || rc=$?
-  eq "a read-only destination does not abort the extract" "0" "$rc"
-  eq "a read-only destination is overwritten" \
-     "content" "$(cat "$TMP/roout/member.txt" 2>/dev/null)"
 else
-  echo "SKIP: FIFO and read-only destination tests (need mkfifo and timeout)"
+  echo "SKIP: FIFO destination test (needs mkfifo and timeout)"
 fi
+
+# ---- a read-only destination is replaced, and later members still land ----
+# Write permission on a file is not needed to replace it, only on its directory.
+# Opening 0444 for writing gives EACCES, which aborted the whole extract: found
+# against the claw-code corpus, where git stores loose objects 0444, so
+# re-extracting any tree holding a .git stopped at the first object (errno 13)
+# while GNU tar completed. Windows enforces the attribute on delete too, so
+# clearing it -- not unlinking -- is the fix there; bsdtar does unlink and so
+# reports "Can't unlink already-existing object".
+#
+# This must NOT sit behind the mkfifo guard above. It did, for one commit, and
+# Windows -- which has no mkfifo -- skipped it and shipped the defect: the
+# round 49 blind test found the Windows path still aborting after the POSIX one
+# was fixed. A test that the affected platform silently skips is not coverage.
+#
+# 取代一個檔案不需要對該檔有寫入權，只需要對其目錄有。以寫入開啟 0444 會得到
+# EACCES，並使整個解壓中止：以 claw-code 語料發現，git 的鬆散物件為 0444，因此
+# 重新解出任何含 .git 的樹都會停在第一個物件（errno 13），而 GNU tar 能完成。
+# Windows 在刪除時同樣強制該屬性，故該平台的修法是清除屬性而非 unlink；bsdtar
+# 採 unlink，因而回報 "Can't unlink already-existing object"。
+#
+# 此段**不可**放在上方的 mkfifo 守衛之內。它曾如此放置一個提交之久，而沒有 mkfifo
+# 的 Windows 便跳過它並帶著缺陷出貨：round 49 盲測發現 POSIX 端修好之後，Windows
+# 端仍會中止。一個會被受影響平台靜默跳過的測試不算涵蓋。
+mkdir -p "$TMP/rosrc"
+printf 'content\n' > "$TMP/rosrc/aa.txt"
+printf 'content\n' > "$TMP/rosrc/mm.txt"
+printf 'content\n' > "$TMP/rosrc/zz.txt"
+"$ST" -c -f "$TMP/ro.tar" -C "$TMP/rosrc" . >/dev/null 2>&1
+mkdir -p "$TMP/roout"
+for f in aa mm zz; do printf 'stale\n' > "$TMP/roout/$f.txt"; done
+chmod 0444 "$TMP/roout/mm.txt"
+rc=0; "$ST" -x -f "$TMP/ro.tar" -C "$TMP/roout" >/dev/null 2>&1 || rc=$?
+eq "a read-only destination does not abort the extract" "0" "$rc"
+eq "a read-only destination is overwritten" \
+   "content" "$(cat "$TMP/roout/mm.txt" 2>/dev/null)"
+# The member sorted after the read-only one is the one that was silently left
+# stale, so it is the check that matters most.
+# 排在唯讀成員之後的那個，正是先前被靜默留在舊內容的檔案，故此檢查最關鍵。
+eq "a member after the read-only one still extracts" \
+   "content" "$(cat "$TMP/roout/zz.txt" 2>/dev/null)"
+
+# ---- a symlink at the final component is replaced, not written through ----
+# The traversal tests above cover a symlink among the *parent* components. A
+# symlink at the member's own name is a different case: `open` follows it, so
+# without the unlink the member's bytes land on the link's target, outside the
+# destination, while the destination keeps a link that looks harmless.
+# 上方的穿透測試涵蓋的是位於**上層**元件的 symlink。位於成員自身名稱上的 symlink
+# 是另一回事：`open` 會跟隨它，因此若不先 unlink，成員的內容會落在連結目標上——
+# 在目的地之外——而目的地留下的是一個看似無害的連結。
+mkdir -p "$TMP/lnout"
+printf 'untouched\n' > "$TMP/lntarget.txt"
+if ln -s "$TMP/lntarget.txt" "$TMP/lnout/mm.txt" 2>/dev/null; then
+  rc=0; "$ST" -x -f "$TMP/ro.tar" -C "$TMP/lnout" >/dev/null 2>&1 || rc=$?
+  eq "a symlink destination does not divert the member" \
+     "untouched" "$(cat "$TMP/lntarget.txt" 2>/dev/null)"
+  eq "a symlink destination receives the member itself" \
+     "content" "$(cat "$TMP/lnout/mm.txt" 2>/dev/null)"
+else
+  echo "SKIP: symlink destination test (cannot create symlinks here)"
+fi
+
+# ---- a directory in the way fails that member only ----
+# The one row of the README table that stops anything. It must stop exactly one
+# member: earlier the read-only case aborted the whole extract, leaving every
+# later member stale, which is the failure this guards against recurring.
+# README 表格中唯一會中止東西的一列。它必須恰好只中止一個成員：先前唯讀那個情形
+# 會中止整次解出，使其後所有成員停在舊內容，此檢查即為防止該失敗重演。
+mkdir -p "$TMP/dirout/mm.txt"
+rc=0; "$ST" -x -f "$TMP/ro.tar" -C "$TMP/dirout" >/dev/null 2>&1 || rc=$?
+[ "$rc" -ne 0 ] && ok "a directory in the way ends the run non-zero" \
+                || bad "a directory in the way ends the run non-zero (got rc=0)"
+eq "a member before the blocked one still extracts" \
+   "content" "$(cat "$TMP/dirout/aa.txt" 2>/dev/null)"
+eq "a member after the blocked one still extracts" \
+   "content" "$(cat "$TMP/dirout/zz.txt" 2>/dev/null)"
 
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"

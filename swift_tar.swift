@@ -1864,6 +1864,36 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
 
 #endif // os(Windows)
 
+/// Remove whatever sits at `dest` unless it is a regular file, before a member
+/// is written there. Opening a FIFO for writing blocks until a reader appears,
+/// so extracting a regular member over an existing pipe hangs forever rather
+/// than failing: measured at rc=124 under a 10 s timeout, where GNU tar --
+/// which unlinks first -- finished in 110 ms. A pre-existing pipe is enough to
+/// trigger it; the archive does not have to be hostile. The same unlink closes
+/// a second hole, because a symlink at the *final* component would otherwise
+/// be followed by `open` and the member written through it to the target.
+/// Directories are left alone: `unlink` refuses them, and an error there is
+/// the correct outcome. lstat, never stat -- stat would resolve the symlink
+/// this exists to catch. Defined outside the platform conditional because the
+/// inline streaming path that calls it is shared; the body is a no-op on
+/// Windows, which has no FIFOs.
+///
+/// 在寫入成員之前，移除 `dest` 上任何非一般檔案的東西。對 FIFO 開啟寫入會阻塞
+/// 到有讀者出現，因此在既有管線上解出一般成員不會失敗、而是永久卡住：實測在
+/// 10 秒 timeout 下 rc=124，而先 unlink 的 GNU tar 只花 110 ms。觸發它只需要
+/// 一個既存的管線，封存本身不必有惡意。同一個 unlink 也堵住第二個洞——否則
+/// 位於**最後一段**的 symlink 會被 open 跟隨，成員就穿透寫到目標去。目錄不動：
+/// unlink 本來就拒絕目錄，在那裡報錯才是對的結果。用 lstat 而非 stat——stat 會
+/// 解析掉這裡正要抓的那個 symlink。定義在平台條件之外，因為呼叫它的 inline 串流
+/// 路徑是共用的；在沒有 FIFO 的 Windows 上其內容為空操作。
+private func clearNonRegular(_ dest: String) {
+#if !os(Windows)
+    var st = stat()
+    guard dest.withCString({ lstat($0, &st) }) == 0 else { return }
+    if st.st_mode & S_IFMT != S_IFREG { _ = dest.withCString { unlink($0) } }
+#endif
+}
+
 #if !os(Windows)
 /// Write one extracted regular file on POSIX; returns an error message on
 /// failure, nil on success. Called from FileWriterPool workers (distinct
@@ -1891,7 +1921,25 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
 /// 檔案時更完全不會被修正。
 private func posixWriteFile(dest: String, data: Data, mtime: UInt64, mode: UInt32,
                             restoreMtime: Bool) -> String? {
-    let fd = dest.withCString { open($0, O_WRONLY | O_CREAT | O_TRUNC, mode_t(mode)) }
+    clearNonRegular(dest)
+    var fd = dest.withCString { open($0, O_WRONLY | O_CREAT | O_TRUNC, mode_t(mode)) }
+    if fd < 0 && (errno == EACCES || errno == EPERM) {
+        // The destination exists but its mode forbids writing. Write permission
+        // on a file is not needed to replace it -- only on the directory -- so
+        // unlink and create anew, which is what GNU tar does. Found against the
+        // claw-code corpus: git stores loose objects 0444, so re-extracting any
+        // tree containing a .git aborted on the first such object with errno 13
+        // while GNU tar completed. Only after a failed open, never before: the
+        // unconditional unlink would break a hard-linked member for no reason.
+        //
+        // 目的地存在但其權限不允許寫入。取代一個檔案不需要對該檔有寫入權——只需要
+        // 對其目錄有——所以 unlink 後重建，這也是 GNU tar 的作法。以 claw-code
+        // 語料發現：git 的鬆散物件為 0444，因此重新解出任何含 .git 的樹都會在第一個
+        // 這種物件上以 errno 13 中止，而 GNU tar 能完成。僅在 open 失敗後才做，
+        // 絕不預先做：無條件 unlink 會平白拆掉硬連結成員。
+        _ = dest.withCString { unlink($0) }
+        fd = dest.withCString { open($0, O_WRONLY | O_CREAT | O_TRUNC, mode_t(mode)) }
+    }
     guard fd >= 0 else {
         return "cannot create '\(dest)' (errno \(errno)) / 無法建立 '\(dest)'"
     }
@@ -2989,8 +3037,19 @@ final class TarReader {
                     // 大檔（或列出模式）：inline 串流。同名的佇列中寫入必須先落地，
                     // 否則 worker 會覆蓋掉此處串流出來的內容。
                     if submitted.contains(dest) { pool?.drain() }
+                    clearNonRegular(dest)
                     _ = fm.createFile(atPath: dest, contents: nil)
-                    guard let out = FileHandle(forWritingAtPath: dest) else {
+                    var handle = FileHandle(forWritingAtPath: dest)
+                    if handle == nil {
+                        // Same read-only destination as posixWriteFile: remove
+                        // it and create anew rather than failing the extract.
+                        // 與 posixWriteFile 相同的唯讀目的地情形：移除後重建，
+                        // 而不是讓整個解壓失敗。
+                        try? fm.removeItem(atPath: dest)
+                        _ = fm.createFile(atPath: dest, contents: nil)
+                        handle = FileHandle(forWritingAtPath: dest)
+                    }
+                    guard let out = handle else {
                         throw TarError.io("cannot create '\(dest)' / 無法建立 '\(dest)'")
                     }
                     var remaining = size

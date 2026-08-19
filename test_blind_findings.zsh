@@ -914,6 +914,50 @@ for n in 100 511; do
   eq "$n random bytes is not an empty archive" "1" "$rc"
 done
 
+# ---- a destination that is not a regular file is replaced, not written through ----
+# Opening a FIFO for writing blocks until a reader appears, so extracting a
+# regular member onto an existing pipe hung forever instead of failing: measured
+# rc=124 under a 10 s timeout where GNU tar finished in 110 ms. A pre-existing
+# pipe suffices; the archive need not be hostile. The timeout is the assertion
+# here -- without it a regression does not fail the suite, it stops it.
+# 對 FIFO 開啟寫入會阻塞到有讀者出現，因此把一般成員解到既有管線上不是失敗、而是
+# 永久卡住：實測 10 秒 timeout 下 rc=124，而 GNU tar 只花 110 ms。只要有一個既存
+# 管線就會觸發，封存不必有惡意。此處的斷言就是那個 timeout——沒有它，回歸不會讓
+# 測試失敗，而是讓測試停住。
+if command -v mkfifo >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1 &&
+   mkfifo "$TMP/probe.fifo" 2>/dev/null; then
+  rm -f "$TMP/probe.fifo"
+  mkdir -p "$TMP/fifosrc" && printf 'content\n' > "$TMP/fifosrc/member.txt"
+  "$ST" -c -f "$TMP/fifo.tar" -C "$TMP/fifosrc" . >/dev/null 2>&1
+  mkdir -p "$TMP/fifoout" && mkfifo "$TMP/fifoout/member.txt"
+  rc=0; timeout 10 "$ST" -x -f "$TMP/fifo.tar" -C "$TMP/fifoout" >/dev/null 2>&1 || rc=$?
+  eq "extracting onto an existing FIFO does not hang" "0" "$rc"
+  if [ -p "$TMP/fifoout/member.txt" ]; then
+    bad "the FIFO is replaced by the archived regular file"
+  else
+    eq "the FIFO is replaced by the archived regular file" \
+       "content" "$(cat "$TMP/fifoout/member.txt" 2>/dev/null)"
+  fi
+
+  # ---- a read-only destination is replaced ----
+  # Write permission on a file is not needed to replace it, only on its
+  # directory. Opening 0444 for writing gives EACCES, which aborted the whole
+  # extract: found against the claw-code corpus, where git stores loose objects
+  # 0444, so re-extracting any tree holding a .git stopped at the first object
+  # (errno 13) while GNU tar completed.
+  # 取代一個檔案不需要對該檔有寫入權，只需要對其目錄有。以寫入開啟 0444 會得到
+  # EACCES，並使整個解壓中止：以 claw-code 語料發現，git 的鬆散物件為 0444，因此
+  # 重新解出任何含 .git 的樹都會停在第一個物件（errno 13），而 GNU tar 能完成。
+  mkdir -p "$TMP/roout" && printf 'stale\n' > "$TMP/roout/member.txt"
+  chmod 0444 "$TMP/roout/member.txt"
+  rc=0; "$ST" -x -f "$TMP/fifo.tar" -C "$TMP/roout" >/dev/null 2>&1 || rc=$?
+  eq "a read-only destination does not abort the extract" "0" "$rc"
+  eq "a read-only destination is overwritten" \
+     "content" "$(cat "$TMP/roout/member.txt" 2>/dev/null)"
+else
+  echo "SKIP: FIFO and read-only destination tests (need mkfifo and timeout)"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

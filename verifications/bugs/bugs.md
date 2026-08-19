@@ -278,3 +278,39 @@ parsing a name, so it covers parse paths it was never specifically written for.
 ——pax 的 `linkpath` 記錄，或 GNU 的 `K` 長連結項目——同樣的穿透寫入依然成立。bsdtar 兩者
 皆逃逸；swift_tar 兩者皆拒絕，因為其守門在寫入時執行，而非在解析名稱時，故能涵蓋它從未
 被特別設計去防的解析路徑。
+
+---
+
+## 6. bsdtar silently discards a file entry that a later entry needs to be a directory / 靜默丟棄「後續項目需要它是目錄」的檔案項目
+
+Found in round 47. An archive can name `thing` as a regular file and then
+`thing/inner.txt`, which requires `thing` to be a directory. The two cannot both
+exist. What the tools do about it depends on the order, and in one order bsdtar
+resolves it by destroying data without saying anything:
+
+於 round 47 發現。封存可先將 `thing` 命名為一般檔案，接著出現 `thing/inner.txt`，後者要求
+`thing` 必須是目錄。兩者無法並存。各工具的處置取決於順序，而在其中一種順序下，bsdtar 以
+「摧毀資料且不出聲」的方式化解：
+
+```
+file entry first, then the nested one
+  swift_tar   rc=1   thing stays a file, nested entry refused, error printed
+  GNU tar     rc=2   same in substance
+  bsdtar      rc=0   thing becomes a DIRECTORY, the file entry's content is gone,
+                     no warning, no error
+
+nested entry first, then the file
+  all three   rc≠0   thing is a directory, the file entry is refused, error printed
+```
+
+**Why this belongs here rather than in the tracker.** A tester comparing the two
+sees "bsdtar succeeds where swift_tar fails" and is one step from filing
+swift_tar as defective. The opposite is true: swift_tar and GNU tar decline to
+choose between two contradictory entries, while bsdtar picks one and drops the
+other's content silently. Only the first ordering exposes it, which is why
+testing both is worth the extra minute.
+
+**此項記於此處而非追蹤清單的理由。** 比較兩者的測試者會看到「bsdtar 成功、swift_tar 失敗」，
+距離把 swift_tar 判為有缺陷只差一步。事實正好相反：swift_tar 與 GNU tar 拒絕在兩個互相矛盾
+的項目之間代為選擇，bsdtar 則選了一個、並無聲丟棄另一個的內容。只有第一種順序會暴露此點，
+這正是「兩種順序都測」值得多花那一分鐘的原因。

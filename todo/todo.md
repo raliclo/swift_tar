@@ -1050,6 +1050,61 @@ into `-t` gets exit 0 and no output, so emptiness has to be checked separately.
 相容；以及寫出「空輸入必須失敗」的測試。將可能為空的串流灌入 `-t` 的腳本會得到離開碼 0
 與空輸出，故「是否為空」必須另行判斷。
 
+### Case-only-differing names collapse on Windows, silently / 僅大小寫不同的名稱在 Windows 上無聲併合  ▸ ⬜ 記錄，未處理 / recorded, not actioned
+
+An archive built on a case-sensitive filesystem can hold `file.txt`, `File.txt`
+and `FILE.TXT` as three distinct members. Extracted on NTFS they are one name.
+Measured 2026-08-19 with a three-member archive built on WSL's ext4:
+
+在區分大小寫的檔案系統上建立的封存，可以同時持有 `file.txt`、`File.txt` 與
+`FILE.TXT` 三個相異成員。在 NTFS 上解出時，它們是同一個名稱。2026-08-19 以 WSL ext4
+建立的三成員封存實測：
+
+| tool | files on disk | surviving name | content |
+|---|---|---|---|
+| swift_tar | 1 of 3 | `file.txt` — the **first** entry's case | the last entry's |
+| GNU tar 1.35 | 1 of 3 | `FILE.TXT` — the **last** entry's case | the last entry's |
+| bsdtar 3.8.4 | 1 of 3 | `FILE.TXT` — the last entry's case | the last entry's |
+
+**All three exit 0 with no message**, so two members' data is discarded silently
+by every one of them. **Recorded, not actioned**, and the reasoning matters
+because it is the opposite of round 42's:
+
+**三者皆以 0 結束且無任何訊息**，故兩個成員的資料在每一個工具中都被無聲丟棄。
+**記錄而不處理**，其推理值得說明，因為它與 round 42 的情況正好相反：
+
+- There, swift_tar matched bsdtar while **GNU tar refused** — so "matching a
+  reference" was not a defence, and it was fixed.
+- Here **no implementation defends**, because nothing can: the collision is a
+  property of the destination filesystem, and any tool writing those three names
+  onto NTFS ends with one file.
+
+- 在該處，swift_tar 與 bsdtar 一致，而 **GNU tar 拒絕**——故「與某個參照一致」不構成
+  辯護，因而修正。
+- 在此則是**沒有任何實作能防守**，因為防不了：碰撞是目的地檔案系統的性質，任何工具把
+  這三個名稱寫上 NTFS，結果都只會剩一個檔案。
+
+What swift_tar *could* add is a warning — it knows the names it has written this
+run, so a case-insensitive collision is detectable. That would turn silent data
+loss into visible data loss, which is worth something. It is not done here
+because it is a new feature with a per-entry memory cost, not the repair of a
+defect, and nobody has asked for it. Noted so the option is on record rather
+than rediscovered.
+
+swift_tar **可以**加的是一則警告——它知道本次執行已寫出哪些名稱，故不分大小寫的碰撞是
+可偵測的。那會把無聲的資料遺失變成看得見的資料遺失，確有價值。此處未做，是因為那是一項
+帶有逐項記憶體成本的新功能，而非修復缺陷，且無人提出此需求。記於此處，使該選項留有紀錄，
+而非日後重新發現。
+
+The divergence in *which* case survives is real but inconsequential: swift_tar
+opens and truncates the existing directory entry, keeping the case first seen,
+while the other two unlink and recreate, adopting the last. Neither is more
+correct, and the surviving content is the same in all three.
+
+至於**哪一個**大小寫存活的差異雖屬真實，但無實質影響：swift_tar 開啟並截斷既有的目錄
+項目，保留最先出現的大小寫；另外兩者則是刪除後重建，因而採用最後出現的。兩種做法並無
+對錯之分，且三者存活的內容相同。
+
 ## zsh port / zsh 移植版
 
 ### `:A` does not treat a drive-letter path as absolute / `:A` 不認磁碟機路徑為絕對路徑  ▸ ✅ 已修正(zsh port)

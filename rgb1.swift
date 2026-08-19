@@ -13,7 +13,20 @@ enum RGB1Error: LocalizedError {
     case badDimensions
     case badGeo
     case badMagic
-    case badText(String)
+    /// Field name, then why it was rejected, in English and Traditional
+    /// Chinese. The reason is carried rather than derived because one `guard`
+    /// used to cover four separate causes -- non-ASCII, empty, too long, and a
+    /// control character -- and reported all of them as "invalid". Measured:
+    /// a CJK title, a title with a curly quote pasted from a word processor, a
+    /// 70-byte title and an empty one produced byte-identical messages, so the
+    /// only way to find out which rule was broken was to re-read the flag table.
+    ///
+    /// 欄位名稱，以及遭拒的原因（英文與繁體中文）。原因採「帶入」而非「推導」，是因為
+    /// 原本一個 `guard` 涵蓋了四種各自獨立的成因——非 ASCII、空白、過長、控制字元——
+    /// 卻一律回報為「無效」。實測：CJK 標題、從文書軟體貼上的彎引號標題、70 位元組的
+    /// 標題與空標題，產生的訊息逐位元組相同，因此要知道違反了哪一條規則，只能回頭重讀
+    /// 旗標表。
+    case badText(String, String, String)
     case shortHeader(Int)
     case payloadSizeMismatch(expected: Int, actual: Int)
     case missingArgument(String)
@@ -27,8 +40,9 @@ enum RGB1Error: LocalizedError {
             return "RGB1 geo fields are out of range. / RGB1 地理欄位超出範圍。"
         case .badMagic:
             return "Not an RGB1 file. / 不是 RGB1 檔案。"
-        case .badText(let field):
-            return "RGB1 text field is invalid: \(field). / RGB1 文字欄位無效：\(field)。"
+        case .badText(let field, let reasonEN, let reasonZH):
+            return "RGB1 text field '\(field)' is invalid: \(reasonEN). / "
+                 + "RGB1 文字欄位 '\(field)' 無效：\(reasonZH)。"
         case .shortHeader(let actual):
             return "RGB1 header is incomplete (\(actual) of \(RGB1Image.headerSize) bytes). / RGB1 標頭不完整（\(actual) / \(RGB1Image.headerSize) bytes）。"
         case .payloadSizeMismatch(let expected, let actual):
@@ -277,12 +291,33 @@ struct RGB1Image {
         field: String,
         maxBytesExclusive: Int
     ) throws {
-        guard let bytes = value.data(using: .ascii),
-              !bytes.isEmpty,
-              bytes.count < maxBytesExclusive,
-              bytes.allSatisfy({ $0 >= 0x20 && $0 <= 0x7e })
-        else {
-            throw RGB1Error.badText(field)
+        // One guard per rule, so the message names the rule that was broken.
+        // The curly-quote note is not padding: a title pasted from a word
+        // processor carries U+2018/U+2019 or an em dash, which look like ASCII
+        // on screen and are the likeliest way an English-speaking user reaches
+        // this error at all.
+        // 每條規則各一個 guard，訊息才能指出被違反的是哪一條。彎引號那句不是湊字數：
+        // 從文書軟體貼上的標題會帶有 U+2018/U+2019 或破折號，它們在畫面上看起來就是
+        // ASCII，而那正是英文使用者最可能碰到此錯誤的途徑。
+        guard let bytes = value.data(using: .ascii) else {
+            throw RGB1Error.badText(field,
+                "must be ASCII, and this contains a character that is not "
+                + "(a curly quote or dash pasted from a word processor counts)",
+                "必須是 ASCII，而此值含有非 ASCII 字元"
+                + "（從文書軟體貼上的彎引號或破折號亦屬之）")
+        }
+        guard !bytes.isEmpty else {
+            throw RGB1Error.badText(field, "must not be empty", "不可為空")
+        }
+        guard bytes.count < maxBytesExclusive else {
+            throw RGB1Error.badText(field,
+                "must be at most \(maxBytesExclusive - 1) bytes, and this is \(bytes.count)",
+                "最多 \(maxBytesExclusive - 1) 個位元組，而此值為 \(bytes.count) 個")
+        }
+        guard bytes.allSatisfy({ $0 >= 0x20 && $0 <= 0x7e }) else {
+            throw RGB1Error.badText(field,
+                "must contain only printable ASCII, and this contains a control character",
+                "只能包含可列印的 ASCII，而此值含有控制字元")
         }
     }
 
@@ -295,7 +330,10 @@ struct RGB1Image {
               at != value.index(before: value.endIndex),
               value[value.index(after: at)...].contains(".")
         else {
-            throw RGB1Error.badText("creator_email")
+            throw RGB1Error.badText("creator_email",
+                "must look like an address: no spaces, one '@' with text on both "
+                + "sides, and a '.' after it",
+                "必須具備位址的形式：不含空白、有一個前後皆有文字的 '@'，且其後含 '.'")
         }
     }
 
@@ -308,7 +346,9 @@ struct RGB1Image {
                   || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "z"))
               })
         else {
-            throw RGB1Error.badText("right")
+            throw RGB1Error.badText("right",
+                "must be 1 to \(rightFieldSize) ASCII letters, nothing else",
+                "必須是 1 到 \(rightFieldSize) 個 ASCII 字母，不含其他字元")
         }
     }
 
@@ -317,7 +357,10 @@ struct RGB1Image {
         let end = bytes.firstIndex(of: 0) ?? bytes.endIndex
         let field = Data(bytes[..<end])
         guard let value = String(data: field, encoding: .ascii) else {
-            throw RGB1Error.badText("ascii")
+            throw RGB1Error.badText("ascii",
+                "the file holds bytes that are not ASCII at offset \(offset); "
+                + "it was probably not written by this tool",
+                "檔案在位移 \(offset) 處存有非 ASCII 位元組；很可能並非由本工具寫出")
         }
         return value
     }

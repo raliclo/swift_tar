@@ -4271,7 +4271,11 @@ struct SwiftTarMain {
                     let timezoneOffsetMinutes: Int16
                     if let timezoneRaw = optValue("--tz-offset-min") {
                         guard let parsed = Int16(timezoneRaw) else {
-                            throw RGB1Error.badText("tz_offset_min")
+                            throw RGB1Error.badText("tz_offset_min",
+                                "must be a whole number of minutes between "
+                                + "\(Int16.min) and \(Int16.max), and '\(timezoneRaw)' is not",
+                                "必須是介於 \(Int16.min) 與 \(Int16.max) 之間的整數分鐘數，"
+                                + "而 '\(timezoneRaw)' 不是")
                         }
                         timezoneOffsetMinutes = parsed
                     } else {

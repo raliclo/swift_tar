@@ -186,6 +186,72 @@ else
   echo "[Info] 僅量測，不寫入 $(basename "$RESULTS")（要更新請加 --record）"
 fi
 
+# ---------------------------------------------------------------------------
+# A rejected text field must say which rule it broke.
+# Four separate causes -- non-ASCII, empty, over the byte limit, and a control
+# character -- used to produce byte-identical messages ("RGB1 text field is
+# invalid: title"), so the only way to learn which rule applied was to re-read
+# the flag table. The curly-quote case matters most in practice: a title pasted
+# from a word processor looks like ASCII on screen. Each check asserts a
+# distinct substring, so two causes collapsing back into one message fails here
+# rather than passing quietly.
+#
+# Placed ABOVE the codec-table section on purpose: that section exits the script
+# outright when no sampled frame corpus is present, which is the common case on
+# a fresh checkout. Put below it, these checks printed nothing and the suite
+# still reported success -- the same shape as a test skipped by a platform
+# guard, and just as invisible.
+#
+# 遭拒的文字欄位必須說出它違反了哪一條規則。
+# 四種各自獨立的成因——非 ASCII、空白、超出位元組上限、控制字元——原本產生逐位元組
+# 相同的訊息（「RGB1 text field is invalid: title」），因此要知道適用哪條規則，只能
+# 回頭重讀旗標表。實務上最要緊的是彎引號：從文書軟體貼上的標題，在畫面上看起來就是
+# ASCII。每項檢查斷言一個相異的子字串，故兩種成因若又併回同一則訊息，會在此失敗而非
+# 悄悄通過。
+#
+# 刻意置於 codec 比較表一節**之前**：該節在沒有取樣影格語料時會直接結束整個腳本，而
+# 那正是全新取出的儲存庫上的常態。放在其後時，這些檢查什麼都不會印，而測試套件仍回報
+# 成功——與被平台守衛跳過的測試是同一個形狀，也同樣看不見。
+# ---------------------------------------------------------------------------
+pack_err() {
+  "$ST" --rgb1-pack --width 4 --height 3 \
+        --lat 25.0 --lng 121.0 --height-m 12.0 \
+        --title "$1" --country "${2:-Taiwan}" \
+        --creator-email "${3:-photog@example.com}" --right "${4:-CcBy}" \
+        --created-ms 1700000000123 \
+        -f "$TMP/reject.rgb1" "$RAW" 2>&1
+}
+
+check_reason() {   # label, expected substring, actual message
+  case "$3" in
+    *"$2"*) ok "$1" ;;
+    *) bad "$1 (got: $(printf '%s' "$3" | head -1 | cut -c1-90))" ;;
+  esac
+}
+
+check_reason "a non-ASCII title says it must be ASCII" \
+  "must be ASCII" "$(pack_err '台北資料')"
+check_reason "a curly quote is reported the same way as any other non-ASCII" \
+  "must be ASCII" "$(pack_err 'the “title”')"
+check_reason "an over-long title reports the limit and the actual size" \
+  "at most 64 bytes, and this is 70" "$(pack_err "$(printf 'x%.0s' {1..70})")"
+check_reason "an empty title says it must not be empty" \
+  "must not be empty" "$(pack_err '')"
+check_reason "a malformed email says what an address looks like" \
+  "one '@' with text on both sides" "$(pack_err 'Fine' 'Taiwan' 'not-an-email')"
+check_reason "a bad --right says what it accepts" \
+  "ASCII letters" "$(pack_err 'Fine' 'Taiwan' 'photog@example.com' 'CcBy1')"
+# A second field, to prove the message names the field that actually failed
+# rather than always saying "title". Non-ASCII rather than empty: `${2:-Taiwan}`
+# above substitutes the default for an empty argument as well as a missing one,
+# so passing '' would have tested nothing and did -- it packed successfully and
+# this check failed against a correct build.
+# 換一個欄位，以證明訊息指出的是真正失敗的那個欄位，而非一律說 "title"。用非 ASCII
+# 而不用空字串：上方的 `${2:-Taiwan}` 對空引數與缺少引數同樣會代入預設值，因此傳 ''
+# 什麼也沒測到——實際上它成功打包了，並使此檢查在一份正確的建置上失敗。
+check_reason "the message names the field that failed, not always 'title'" \
+  "'country'" "$(pack_err 'Fine' '台灣')"
+
 # A real sampled video frame, not a synthetic pattern. This used to be a 4 KiB
 # random block repeated 768 times, which is perfectly periodic: every codec with
 # a window of 4 KiB or more finds an exact match at once and the table reported
@@ -339,6 +405,23 @@ else
   emit "# LZFSE codecs unavailable in this build (--no-lzfse); skipped / 此建置無 LZFSE codec（--no-lzfse），略過"
 fi
 
+# ---------------------------------------------------------------------------
+# A rejected text field must say which rule it broke.
+# Four separate causes -- non-ASCII, empty, over the byte limit, and a control
+# character -- used to produce byte-identical messages ("RGB1 text field is
+# invalid: title"), so the only way to learn which rule applied was to re-read
+# the flag table. The curly-quote case is the one that matters most in practice:
+# a title pasted from a word processor looks like ASCII on screen.
+# Each check asserts a distinct substring, so two causes collapsing back into
+# one message fails here rather than passing quietly.
+#
+# 遭拒的文字欄位必須說出它違反了哪一條規則。
+# 四種各自獨立的成因——非 ASCII、空白、超出位元組上限、控制字元——原本產生逐位元組
+# 相同的訊息（「RGB1 text field is invalid: title」），因此要知道適用哪條規則，只能
+# 回頭重讀旗標表。實務上最要緊的是彎引號那個案例：從文書軟體貼上的標題，在畫面上看
+# 起來就是 ASCII。每項檢查斷言一個相異的子字串，故兩種成因若又併回同一則訊息，會在
+# 此失敗而非悄悄通過。
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Only a fully passing run may publish. A table produced by a run that also
 # reported failures is a measurement of a build known to be wrong.

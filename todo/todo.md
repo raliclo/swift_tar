@@ -135,14 +135,37 @@ succeeded twice in a row.
 以 `a753ab7` 的建置在 Windows 上執行 12 支驗證腳本。結果：8 支乾淨、2 支有實質發現、
 3 支在本平台不適用。`swift_tar.exe -test` 全數通過，`compile_tar-win.bat` 連續兩次成功。
 
-Status as of 2026-08-16: items 1, 2 and 3 were fixed in `74dd2b4` and are kept
-below with the fix recorded, because the reasoning is what makes the fix
-checkable. Item 4 is still open — `sha()` at
-`parallel_extract_correctness.zsh:123` remains two process spawns per file.
+Status as of 2026-08-19: **all four items are fixed.** Items 1, 2 and 3 were
+fixed in `74dd2b4`; they are kept below with the fix recorded, because the
+reasoning is what makes the fix checkable.
 
-2026-08-16 狀態：項目 1、2、3 已於 `74dd2b4` 修正，仍保留於下並記錄修法，因為可供
-查核的是其推理而非結論。項目 4 尚未處理——`parallel_extract_correctness.zsh:123`
-的 `sha()` 仍是每檔兩個行程。
+Item 4 is now fixed too, and this note was simply stale — the per-file `sha()`
+no longer exists. `fingerprint()` hashes every regular file in **one** hasher
+invocation, keeping the results in an associative array keyed by path, and the
+hasher is held as a command array (`sha256sum` or `shasum -a 256`) rather than
+wrapped in a per-file function. Re-measured on Windows 2026-08-19: the whole
+script runs in **270 s**, against the 892 s recorded when it spawned two
+processes per file across 405 files and four `-n` arms. All checks PASS.
+
+One thing worth knowing before running it here: on Windows the script looks for
+`release/swift_tar`, not `release/swift_tar.exe`, and stops with
+`no swift_tar at … (set SWIFT_TAR=)`. It says exactly what to do, so this is a
+rough edge rather than a defect, but it differs from `test_blind_findings.zsh`,
+which picks the right name from `uname -s`.
+
+2026-08-19 狀態：**四個項目皆已修正。** 項目 1、2、3 於 `74dd2b4` 修正，仍保留於下
+並記錄修法，因為可供查核的是其推理而非結論。
+
+項目 4 亦已修正，此註記只是過期了——每檔呼叫的 `sha()` 已不存在。`fingerprint()`
+以**單次**呼叫雜湊工具處理所有一般檔案，結果存入以路徑為鍵的關聯陣列，而雜湊工具本身
+以指令陣列保存（`sha256sum` 或 `shasum -a 256`），不再包成每檔呼叫的函式。
+2026-08-19 於 Windows 重新量測：整支腳本 **270 秒**，對比每檔 spawn 兩個行程時所記錄的
+892 秒（405 個檔案乘以四個 `-n` 組別）。所有檢查皆 PASS。
+
+在此執行前值得先知道一件事：Windows 上該腳本找的是 `release/swift_tar` 而非
+`release/swift_tar.exe`，會以 `no swift_tar at …（set SWIFT_TAR=）` 停下。它明確說出
+該怎麼做，故屬粗糙處而非缺陷，但與依 `uname -s` 選對檔名的 `test_blind_findings.zsh`
+不一致。
 
 ### 1. encrypt_windows_correctness.zsh reports success but exits 1 / 報成功卻回傳 1  ▸ ✅ 已修正 74dd2b4
 

@@ -939,8 +939,64 @@ if command -v mkfifo >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1 &&
        "content" "$(cat "$TMP/fifoout/member.txt" 2>/dev/null)"
   fi
 
+  # ---- FIFO members round-trip ----
+  # mkfifo needs no privilege on any POSIX system, so a FIFO entry can always be
+  # restored -- unlike a device node, which needs root. Both directions are
+  # checked, because storing and restoring are separate branches: the writer
+  # used to drop the entry with "skipping special file" and the reader with
+  # "skipping type '6' entry", so an archive could lose its pipes at either end.
+  # 任何 POSIX 系統上的 mkfifo 都不需權限，故 FIFO 項目必定還原得回來——這與需要
+  # root 的裝置節點不同。兩個方向都要檢查，因為存入與還原是各自獨立的分支：寫入端
+  # 原本以「skipping special file」丟棄該項目，讀取端則以「skipping type '6' entry」
+  # 丟棄，因此封存在任一端都可能失去它的管線。
+  mkdir -p "$TMP/fifosrc2" && mkfifo "$TMP/fifosrc2/pipe"
+  printf 'plain\n' > "$TMP/fifosrc2/normal.txt"
+  "$ST" -c -f "$TMP/rt.tar" -C "$TMP/fifosrc2" . >/dev/null 2>&1
+  eq "a FIFO is listed in an archive we wrote" \
+     "1" "$("$ST" -t -f "$TMP/rt.tar" 2>/dev/null | grep -c 'pipe')"
+  mkdir -p "$TMP/rtout"
+  rc=0; "$ST" -x -f "$TMP/rt.tar" -C "$TMP/rtout" >/dev/null 2>&1 || rc=$?
+  eq "extracting a FIFO member succeeds" "0" "$rc"
+  [ -p "$TMP/rtout/pipe" ] && ok "a FIFO member is restored as a FIFO" \
+                           || bad "a FIFO member is restored as a FIFO"
+
+  # mkfifo's mode argument is masked by umask exactly as open's is, so without
+  # an explicit chmod a 0666 pipe arrives as 0666 & ~umask. Forcing a umask that
+  # would bite makes the difference visible; 0600 has no bits umask can clear,
+  # so 0666 is the mode that actually tests this.
+  # mkfifo 的 mode 參數與 open 一樣會被 umask 遮罩，故若無明確的 chmod，0666 的管線
+  # 會變成 0666 & ~umask。刻意設一個會咬到的 umask 才看得出差別；0600 沒有 umask
+  # 清得掉的位元，因此 0666 才是真正能測到這件事的權限。
+  rm -rf "$TMP/msrc" "$TMP/mout"
+  mkdir -p "$TMP/msrc" && mkfifo -m 0666 "$TMP/msrc/p666"
+  "$ST" -c -f "$TMP/m.tar" -C "$TMP/msrc" . >/dev/null 2>&1
+  mkdir -p "$TMP/mout"
+  ( umask 077; "$ST" -x -f "$TMP/m.tar" -C "$TMP/mout" >/dev/null 2>&1 )
+  # The leading 'p' is part of the assertion: it says the entry is a FIFO, so
+  # one comparison covers both the type and the mode.
+  # 開頭的 'p' 也是斷言的一部分：它表示該項目是 FIFO，故一次比對同時涵蓋型別與權限。
+  eq "a FIFO's mode survives umask" \
+     "prw-rw-rw-" "$(ls -l "$TMP/mout/p666" 2>/dev/null | cut -c1-10)"
+
+  # Interoperability both ways: a pipe written by GNU tar must come back as a
+  # pipe here, and one written here must come back as a pipe under GNU tar.
+  # 雙向互通：GNU tar 寫出的管線在此必須還原為管線，此處寫出的在 GNU tar 下亦然。
+  if command -v "$SYS_TAR" >/dev/null 2>&1; then
+    rm -rf "$TMP/gout" "$TMP/sout"
+    "$SYS_TAR" -c -f "$TMP/gnu.tar" -C "$TMP/fifosrc2" . 2>/dev/null
+    mkdir -p "$TMP/gout"
+    "$ST" -x -f "$TMP/gnu.tar" -C "$TMP/gout" >/dev/null 2>&1
+    [ -p "$TMP/gout/pipe" ] && ok "a FIFO from the system tar extracts as a FIFO" \
+                            || bad "a FIFO from the system tar extracts as a FIFO"
+    mkdir -p "$TMP/sout"
+    "$SYS_TAR" -x -f "$TMP/rt.tar" -C "$TMP/sout" 2>/dev/null
+    [ -p "$TMP/sout/pipe" ] && ok "the system tar reads back a FIFO we wrote" \
+                            || bad "the system tar reads back a FIFO we wrote"
+  else
+    echo "SKIP: FIFO interoperability (no system tar)"
+  fi
 else
-  echo "SKIP: FIFO destination test (needs mkfifo and timeout)"
+  echo "SKIP: FIFO tests (need mkfifo and timeout)"
 fi
 
 # ---- a read-only destination is replaced, and later members still land ----
@@ -1018,6 +1074,37 @@ eq "a member before the blocked one still extracts" \
    "content" "$(cat "$TMP/dirout/aa.txt" 2>/dev/null)"
 eq "a member after the blocked one still extracts" \
    "content" "$(cat "$TMP/dirout/zz.txt" 2>/dev/null)"
+
+# ---- a typeflag '6' entry from a raw fixture ----
+# This runs on every platform, including Windows, which is the point: the
+# platform that cannot create a FIFO is the one whose branch would otherwise
+# never be executed by any test. The fixture is a raw ustar stream, so no
+# mkfifo is needed to produce a FIFO *entry* -- only to produce a FIFO on disk.
+# Either way the run must end 0 and the ordinary member beside it must land.
+# 本段在每個平台上都會執行，Windows 亦然，而這正是重點：無法建立 FIFO 的那個平台，
+# 正是其分支否則永遠不會被任何測試執行到的平台。此 fixture 是原始 ustar 位元流，
+# 因此產生一個 FIFO **項目**不需要 mkfifo——只有在磁碟上產生 FIFO 才需要。無論
+# 哪個平台，該次執行都必須以 0 結束，且其旁的一般成員必須落地。
+if [ -f "$RAW" ]; then
+  zsh "$RAW" "$TMP/rawfifo.tar" fifo pipe '' file beside.txt 'hello' 2>/dev/null
+  mkdir -p "$TMP/rawout"
+  out=$("$ST" -x -f "$TMP/rawfifo.tar" -C "$TMP/rawout" 2>&1); rc=$?
+  eq "a typeflag '6' entry does not fail the run" "0" "$rc"
+  eq "the member beside a FIFO entry still extracts" \
+     "hello" "$(cat "$TMP/rawout/beside.txt" 2>/dev/null)"
+  case "$(uname -s)" in
+    MSYS*|MINGW*|CYGWIN*)
+      case "$out" in
+        *"skipping FIFO"*) ok "Windows names the FIFO it skipped" ;;
+        *) bad "Windows names the FIFO it skipped (got: $(printf '%s' "$out" | head -1))" ;;
+      esac ;;
+    *)
+      [ -p "$TMP/rawout/pipe" ] && ok "a raw typeflag '6' entry becomes a FIFO" \
+                               || bad "a raw typeflag '6' entry becomes a FIFO" ;;
+  esac
+else
+  echo "SKIP: raw typeflag '6' fixture (verifications/make_raw_tar.zsh missing)"
+fi
 
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"

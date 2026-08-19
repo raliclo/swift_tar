@@ -2493,6 +2493,20 @@ final class TarWriter {
             }
             let rem = Int(size % UInt64(TAR_BLOCK))
             if rem != 0 { try sink.write(Data(count: TAR_BLOCK - rem)) }
+        case S_IFIFO:
+            // A FIFO carries no data: size 0, no payload, no block padding --
+            // the same shape as the symlink case above. It is stored rather
+            // than skipped because `mkfifo` needs no privilege on any POSIX
+            // system, so the entry can always be restored. Device nodes and
+            // sockets stay in `default:` below: the first needs root, and a
+            // socket cannot be meaningfully recreated from an archive.
+            // FIFO 不帶資料：size 為 0、無內容、無區塊填補——與上方 symlink 相同的
+            // 形狀。之所以存下而非略過，是因為任何 POSIX 系統上的 `mkfifo` 都不需
+            // 權限，該項目必定還原得回來。裝置節點與 socket 留在下方的 `default:`：
+            // 前者需要 root，後者無法由封存有意義地重建。
+            if verbose { eprint("a \(name)") }
+            try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
+                                 size: 0, mtime: mtime, typeflag: UInt8(ascii: "6"), linkname: "")
         default:
             eprint("swift_tar: skipping special file '\(path)' / 略過特殊檔案 '\(path)'")
         }
@@ -3029,6 +3043,52 @@ final class TarReader {
 #else
                 if symlink(linkname, dest) != 0 {
                     throw TarError.io("symlink failed for '\(dest)' / 建立符號連結失敗")
+                }
+#endif
+            case UInt8(ascii: "6"):
+#if os(Windows)
+                // Windows has no FIFOs at all, so this is reported and skipped
+                // rather than failed: an archive holding one is a perfectly
+                // ordinary archive, and the rest of it extracts correctly. The
+                // exit code is deliberately left alone, matching how a skipped
+                // unsupported type has always behaved.
+                // Windows 完全沒有 FIFO，故此處回報後略過而非失敗：含有 FIFO 的封存
+                // 是再尋常不過的封存，其餘部分都能正確解出。離開碼刻意不變，與一向
+                // 略過未支援型別的作法一致。
+                eprint("swift_tar: skipping FIFO '\(rel)': Windows has no FIFOs / 略過 FIFO '\(rel)'：Windows 沒有 FIFO")
+#else
+                // Same queue hazard as the symlink case: a pool write to this
+                // name must land first, or the worker recreates a regular file
+                // on top of the pipe we are about to make.
+                // 與 symlink 相同的佇列風險：同名的寫入池工作須先落地，否則 worker
+                // 會在我們即將建立的管線之上又蓋回一個一般檔案。
+                if submitted.contains(dest) { pool?.drain() }
+                try? fm.removeItem(atPath: dest)
+                if mkfifo(dest, mode_t(mode)) != 0 {
+                    // Warn and carry on rather than throw. Not every filesystem
+                    // has FIFOs -- DrvFs under /mnt/c, FAT and exFAT do not --
+                    // and extracting there is a normal thing to do. Aborting the
+                    // whole run over one unsupported entry would rebuild exactly
+                    // the failure fixed in 1eb21d4, where a single unwritable
+                    // member left every later one stale.
+                    // 警告後繼續，而非丟出例外。並非每個檔案系統都有 FIFO——/mnt/c 的
+                    // DrvFs、FAT 與 exFAT 都沒有——而解出到那些地方是尋常操作。為單一
+                    // 不支援的項目中止整次執行，等於重建 1eb21d4 修掉的那個失敗：一個
+                    // 寫不進去的成員讓其後每一個都停在舊內容。
+                    eprint("swift_tar: cannot create FIFO '\(rel)' (errno \(errno)) / 無法建立 FIFO '\(rel)'")
+                    continue
+                }
+                // mkfifo's mode argument is masked by umask, exactly as open's
+                // is (see posixWriteFile). Without this chmod a 0666 pipe comes
+                // out 0666 & ~umask, which is a silent difference from what the
+                // archive recorded.
+                // mkfifo 的 mode 參數會被 umask 遮罩，與 open 完全相同（見
+                // posixWriteFile）。少了這個 chmod，0666 的管線會變成 0666 & ~umask，
+                // 與封存所記錄的內容產生一個無聲的差異。
+                chmod(dest, mode_t(mode))
+                if options.restoreMtime {
+                    try? fm.setAttributes([.modificationDate:
+                        Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
                 }
 #endif
             case UInt8(ascii: "1"):

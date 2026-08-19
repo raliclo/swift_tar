@@ -10,7 +10,7 @@
 ## 特色
 
 - **ustar + pax** 容器：支援長路徑、大於 8 GiB 的檔案、符號連結、硬連結
-  去重，可與 `bsdtar` / GNU `tar` 互通。
+  去重、FIFO（POSIX），可與 `bsdtar` / GNU `tar` 互通。
 - **多核心壓縮**：封存位元組串流切成 4 MiB 分塊併發壓縮、再按序寫回——
   與 `lzfse2` 的 `runParallelEncode` 為同一套併發骨架。
 - **libarchive 式讀取 filter**：依 magic 位元組自動偵測格式，且 filter
@@ -333,6 +333,25 @@ release/swift_tar -x -f from-linux.tar
 封存能指定的任何名稱，都不會被寫到解出目錄之上。惟需注意：被略過的項目**不會**改變離開碼
 ——整次執行仍以 0 結束——故解出不受信任的封存時，腳本應讀取 stderr，或將解出的樹與 `-t`
 的結果比對，而非只信任狀態碼。
+
+**哪些項目型別會被存下與還原。** 一般檔案、目錄、符號連結、硬連結與 FIFO。納入 FIFO 是因為
+任何 POSIX 系統上的 `mkfifo` 都不需權限，該項目必定還原得回來——而且不花成本：它只是一次
+`mknod`，比一個空的一般檔案還略便宜。裝置節點與 socket 則不納入：前者需要 root，後者無法由
+封存有意義地重建。兩者皆會回報後略過：
+
+```sh
+release/swift_tar -c -f out.tar /dev/null
+# -> swift_tar: skipping special file '/dev/null' / 略過特殊檔案 '/dev/null'
+```
+
+在 Windows 上，FIFO 成員會在 stderr 上被指名並略過，因為該平台沒有 FIFO。**離開碼不會改變**
+——含有管線的封存是再尋常不過的封存，其中其餘一切都照常解出：
+
+```sh
+release/swift_tar -x -f from-linux.tar -C out
+# -> swift_tar: skipping FIFO 'pipe': Windows has no FIFOs / 略過 FIFO 'pipe'：Windows 沒有 FIFO
+# -> 離開碼 0，其餘每個成員皆已解出
+```
 
 **解出到既有的樹上會取代所遇到的東西。** 重跑一次解出以更新某個目錄是很平常的事，而目的地
 很少是乾淨的：

@@ -42,6 +42,9 @@ emit_entry() {
         file) typeflag='0'; linkname=''; content=$arg; size=${#content} ;;
         link) typeflag='2'; linkname=$arg; content='';  size=0 ;;
         hard) typeflag='1'; linkname=$arg; content='';  size=0 ;;
+        # A FIFO carries no data and no link target -- the header alone is the
+        # whole entry. / FIFO 不帶資料也無連結目標——整個項目就只有標頭。
+        fifo) typeflag='6'; linkname=''; content='';  size=0 ;;
         # A pax extended header: typeflag 'x', payload is "<len> key=value\n"
         # where <len> counts its own digits. The caller passes "key=value" and
         # the length is computed here, because getting that self-reference wrong

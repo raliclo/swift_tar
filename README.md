@@ -10,7 +10,7 @@ compression engine and modeled on **libarchive**'s filter architecture.
 ## Highlights
 
 - **ustar + pax** container: long paths, files > 8 GiB, symlinks, hardlink
-  dedup — interoperable with `bsdtar` / GNU `tar`.
+  dedup, FIFOs (POSIX) — interoperable with `bsdtar` / GNU `tar`.
 - **Multi-core compression**: the archive byte stream is split into 4 MiB
   chunks compressed concurrently and written back in order — the same
   concurrency skeleton as `lzfse2`'s `runParallelEncode`.
@@ -376,6 +376,29 @@ Nothing an archive can name will be written above the extraction directory. Note
 that a skipped entry does not change the exit code — the run still ends 0 — so a
 script extracting an untrusted archive should read stderr, or compare the
 extracted tree against `-t`, rather than trusting the status alone.
+
+**Which entry types are stored and restored.** Regular files, directories,
+symlinks, hardlinks and FIFOs. A FIFO is included because `mkfifo` needs no
+privilege on any POSIX system, so the entry can always be restored — and it
+costs nothing: it is one `mknod`, marginally cheaper than an empty regular
+file. Device nodes and sockets are not: the first needs root, and a socket
+cannot be meaningfully recreated from an archive. Either is reported and
+skipped:
+
+```sh
+release/swift_tar -c -f out.tar /dev/null
+# -> swift_tar: skipping special file '/dev/null'
+```
+
+On Windows a FIFO member is named on stderr and skipped, because the platform
+has no FIFOs. **The exit code does not change** — an archive holding a pipe is
+an ordinary archive, and everything else in it extracts normally:
+
+```sh
+release/swift_tar -x -f from-linux.tar -C out
+# -> swift_tar: skipping FIFO 'pipe': Windows has no FIFOs
+# -> exit 0, every other member extracted
+```
 
 **Extracting over an existing tree replaces what it finds.** Re-running an
 extraction to refresh a directory is a normal thing to do, and the destination is

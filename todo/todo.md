@@ -1142,7 +1142,7 @@ correct, and the surviving content is the same in all three.
 項目，保留最先出現的大小寫；另外兩者則是刪除後重建，因而採用最後出現的。兩種做法並無
 對錯之分，且三者存活的內容相同。
 
-## FIFO members are skipped on every platform / FIFO 成員在所有平台皆被跳過  ▸ 🔴 未決 / open
+## FIFO members are skipped on every platform / FIFO 成員在所有平台皆被跳過  ▸ ✅ 已實作 2026-08-19 / done
 
 The `default:` branch that skips unsupported entry types is not platform-scoped,
 so `typeflag='6'` is skipped on Linux and macOS too, where `mkfifo` needs no
@@ -1179,8 +1179,37 @@ macOS 上同樣被跳過——而該處 `mkfifo` 不需任何權限，GNU tar �
 永久卡住，以及唯讀目的地會中止整個解壓。兩者都關於「覆蓋既有東西」而非建立管線，
 均已結案。
 
-是否要在 POSIX 上建立 FIFO（Windows 維持跳過）待決定。未擅自實作：那會新增一種本
-工具從未寫出過的成員型別，屬新功能而非修正。
+**Implemented 2026-08-19.** Both directions: `-c` stores `typeflag='6'` for a
+FIFO it walks over, `-x` recreates it with `mkfifo`. Scope stayed at FIFOs
+only; device nodes and sockets remain in the `default:` skip. On Windows the
+entry is named on stderr and skipped with the exit code unchanged, since the
+platform has no FIFOs.
+
+Two things that were not obvious going in. `mkfifo`'s mode argument is masked by
+umask exactly as `open`'s is, so an explicit `chmod` after it is required or a
+0666 pipe arrives as `0666 & ~umask` — there is a test that fails without it. And
+a failed `mkfifo` warns and continues rather than throwing: DrvFs under `/mnt/c`,
+FAT and exFAT have no FIFOs, and aborting there would rebuild the failure fixed
+in `1eb21d4`, where one unwritable member left every later one stale.
+
+The Windows branch is covered by a raw ustar fixture (`make_raw_tar.zsh` gained a
+`fifo` kind), not by `mkfifo` — otherwise the one platform that cannot create a
+pipe would be the one platform whose branch no test ever executes, which is
+exactly how the round 49 defect shipped.
+
+**2026-08-19 已實作。** 雙向皆備：`-c` 走訪到 FIFO 時存下 `typeflag='6'`，`-x` 以
+`mkfifo` 重建。範圍維持僅 FIFO；裝置節點與 socket 仍留在 `default:` 的略過分支。
+Windows 上該項目會在 stderr 被指名並略過，離開碼不變，因為該平台沒有 FIFO。
+
+事前不明顯的兩件事：`mkfifo` 的 mode 參數與 `open` 一樣會被 umask 遮罩，因此其後必須
+明確 `chmod`，否則 0666 的管線會變成 `0666 & ~umask`——有一項測試在缺少它時會失敗。
+以及 `mkfifo` 失敗時警告後繼續而非丟出例外：`/mnt/c` 的 DrvFs、FAT 與 exFAT 都沒有
+FIFO，在那裡中止等於重建 `1eb21d4` 修掉的失敗——一個寫不進去的成員讓其後每一個都停在
+舊內容。
+
+Windows 分支是以原始 ustar fixture 涵蓋（`make_raw_tar.zsh` 新增 `fifo` kind），而非
+靠 `mkfifo`——否則唯一無法建立管線的平台，就會是唯一其分支從未被任何測試執行到的平台，
+而那正是 round 49 缺陷得以出貨的方式。
 
 ## zsh port / zsh 移植版
 

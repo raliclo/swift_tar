@@ -1983,11 +1983,21 @@ private func clearNonRegular(_ dest: String) {
 ///
 /// 先做存在性檢查，因為那是常見情形且只花一次 stat；逐段走訪僅在建立已經失敗時才執行，
 /// 故尋常的解出永遠不必為它付出代價。
-private func ensureDirectory(_ path: String) -> Bool {
+private func ensureDirectory(_ path: String, below root: String = "") -> Bool {
     let fm = FileManager.default
+    // Never clear the destination root itself. Everything this function removes
+    // is a name the archive claims; the root is a name the user typed, and
+    // deleting it would turn a mistyped `-C notes.txt` into data loss. The
+    // caller checks that case up front too -- this is the second line, kept
+    // because the first one lives far away from here.
+    // 絕不清除目的地根目錄本身。本函式所移除的一切，都是封存自己聲稱的名稱；根目錄
+    // 則是使用者鍵入的名稱，刪掉它會讓打錯的 `-C notes.txt` 變成資料遺失。呼叫端亦
+    // 已在前方檢查該情形——此處是第二道防線，之所以保留，是因為第一道離這裡很遠。
+    let isRoot = !root.isEmpty && path == root
     var isDir: ObjCBool = false
     if fm.fileExists(atPath: path, isDirectory: &isDir) {
         if isDir.boolValue { return true }
+        if isRoot { return false }
         winClearReadOnly(path)
         try? fm.removeItem(atPath: path)
     }
@@ -3165,7 +3175,7 @@ final class TarReader {
                 // 父目錄無法建立時只略過此成員而不中止整次執行：封存其餘部分不受影響，
                 // 理應照常落地。POSIX 端原本完全忽略該失敗（`try?`），因此真正的原因
                 // 從未被回報，而該成員稍後才以 ENOENT 死去。
-                guard ensureDirectory(parent) else {
+                guard ensureDirectory(parent, below: options.destDir) else {
                     eprint("swift_tar: skipping '\(rel)': cannot make '\(parent)' a directory / 略過 '\(rel)'：無法使 '\(parent)' 成為目錄")
                     if !isDir { try skipData(size) }
                     continue
@@ -3174,7 +3184,7 @@ final class TarReader {
 
             switch typeflag {
             case UInt8(ascii: "5"):
-                guard ensureDirectory(dest) else {
+                guard ensureDirectory(dest, below: options.destDir) else {
                     eprint("swift_tar: skipping directory '\(rel)': cannot create it / 略過目錄 '\(rel)'：無法建立")
                     continue
                 }
@@ -5193,6 +5203,37 @@ struct SwiftTarMain {
                         toStdout: Bool = false,
                         ignoreZeros: Bool = false,
                         force: Bool = false) throws {
+        // `-C` must name a directory, or nothing at all. It may not name an
+        // existing file. Both reference tars refuse outright -- bsdtar with
+        // "could not chdir to '<path>'", GNU tar with "Cannot open: Not a
+        // directory" -- and both leave the file untouched.
+        //
+        // This has to be checked here, before extraction, because the tar path
+        // folds -C into each member's path rather than chdir()ing: the -C target
+        // then arrives at the parent-directory step as an ordinary parent to be
+        // created, and `ensureDirectory` clears a non-directory that blocks a
+        // directory. That is right for a name the archive claims and wrong for
+        // the destination root the user typed. Without this guard, `-C notes.txt`
+        // instead of `-C notes/` deleted the file and exited 0.
+        //
+        // `-C` 必須指向目錄，或指向不存在的路徑，不得指向既有的檔案。兩個參照實作都
+        // 直接拒絕——bsdtar 回 "could not chdir to '<path>'"，GNU tar 回
+        // "Cannot open: Not a directory"——且都不動該檔案。
+        //
+        // 必須在解出之前於此檢查，因為 tar 路徑是把 -C 併入每個成員的路徑而非
+        // chdir()：該 -C 目標於是以「一個待建立的普通父目錄」的身分抵達父目錄建立那一
+        // 步，而 `ensureDirectory` 會清掉擋住目錄的非目錄。那對「封存所聲稱的名稱」是
+        // 對的，對「使用者鍵入的目的地根目錄」則是錯的。少了這道守門，把 `-C notes/`
+        // 打成 `-C notes.txt` 會刪掉該檔案並以 0 結束。
+        if extract && !destDir.isEmpty {
+            var destIsDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: destDir, isDirectory: &destIsDir),
+               !destIsDir.boolValue {
+                throw TarError.io(
+                    "-C '\(destDir)' is not a directory; nothing was extracted / "
+                    + "-C '\(destDir)' 不是目錄；未解出任何內容")
+            }
+        }
         let input = try openInput(archivePath)
         defer { if archivePath != "-" { try? input.close() } }
 

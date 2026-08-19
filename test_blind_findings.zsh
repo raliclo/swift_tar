@@ -1040,6 +1040,50 @@ eq "a read-only destination is overwritten" \
 eq "a member after the read-only one still extracts" \
    "content" "$(cat "$TMP/roout/zz.txt" 2>/dev/null)"
 
+# ---- -C must not destroy an existing file ----
+# `-C notes.txt` instead of `-C notes/` is an ordinary typo. Measured before the
+# fix: the file was replaced by a directory and the run exited 0, with no output
+# at all -- silent destruction of data the archive never claimed. Both reference
+# tars refuse and leave the file alone (bsdtar "could not chdir to '<path>'",
+# GNU tar "Cannot open: Not a directory").
+#
+# The mechanism is worth knowing, because it is the cost of an earlier fix: the
+# tar path folds -C into each member's path rather than chdir()ing, so the -C
+# target arrives at the parent-creation step looking like an ordinary parent
+# directory to be made, and clearing a non-directory that blocks a directory is
+# correct there -- for names the archive claims. The destination root is not one
+# of those. It is checked up front now, and ensureDirectory additionally refuses
+# to clear the root itself.
+#
+# `-C notes/` 打成 `-C notes.txt` 是尋常的打字錯誤。修正前實測：該檔案被目錄取代、
+# 執行以 0 結束、完全沒有輸出——無聲地摧毀了封存從未聲稱過的資料。兩個參照實作都拒絕
+# 並保留該檔案（bsdtar 為 "could not chdir to '<path>'"，GNU tar 為
+# "Cannot open: Not a directory"）。
+#
+# 其成因值得記，因為它是先前一項修正的代價：tar 路徑是把 -C 併入每個成員的路徑而非
+# chdir()，故 -C 目標會以「一個待建立的普通父目錄」的樣貌抵達父目錄建立那一步，而在
+# 該處清除擋住目錄的非目錄是正確的——對封存所聲稱的名稱而言。目的地根目錄不屬於那一類。
+# 現在於前方檢查，且 ensureDirectory 另外拒絕清除根目錄本身。
+mkdir -p "$TMP/cdest"
+printf 'PRECIOUS\n' > "$TMP/cdest/victim.txt"
+"$ST" -c -f "$TMP/cdest/src.tar" -C "$TMP/fdsrc" . >/dev/null 2>&1 || \
+  { mkdir -p "$TMP/cdsrc" && printf 'payload\n' > "$TMP/cdsrc/p.txt" && \
+    "$ST" -c -f "$TMP/cdest/src.tar" -C "$TMP/cdsrc" . >/dev/null 2>&1; }
+rc=0; "$ST" -x -f "$TMP/cdest/src.tar" -C "$TMP/cdest/victim.txt" >/dev/null 2>&1 || rc=$?
+[ "$rc" -ne 0 ] && ok "-C pointing at a file ends the run non-zero" \
+                || bad "-C pointing at a file ends the run non-zero (got rc=0)"
+[ -f "$TMP/cdest/victim.txt" ] && ok "-C pointing at a file leaves the file alone" \
+                               || bad "-C pointing at a file leaves the file alone (it was destroyed)"
+eq "the file's content is untouched" \
+   "PRECIOUS" "$(cat "$TMP/cdest/victim.txt" 2>/dev/null)"
+# The documented behaviour on the other side of the same flag must survive:
+# a -C directory that does not exist is still created.
+# 同一個旗標另一側的既有文件行為必須維持：不存在的 -C 目錄仍會被建立。
+rc=0; "$ST" -x -f "$TMP/cdest/src.tar" -C "$TMP/cdest/made/deep" >/dev/null 2>&1 || rc=$?
+eq "a missing -C directory is still created" "0" "$rc"
+[ -d "$TMP/cdest/made/deep" ] && ok "the missing -C directory really exists" \
+                              || bad "the missing -C directory really exists"
+
 # ---- a plain file where the archive holds a directory is replaced ----
 # A project whose `config` file becomes a `config/` directory is an ordinary
 # event, not an edge case. Both reference tars replace the file: measured on one

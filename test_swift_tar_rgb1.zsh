@@ -252,6 +252,32 @@ check_reason "a bad --right says what it accepts" \
 check_reason "the message names the field that failed, not always 'title'" \
   "'country'" "$(pack_err 'Fine' '台灣')"
 
+# A bad -f must say what is wrong with it. Foundation's own descriptions here do
+# not merely fail to help, they misdirect: writing onto an existing directory
+# reported "You don't have permission", sending the reader to check ownership or
+# re-run elevated when the only problem is that -f names a directory; a missing
+# parent reported "The file doesn't exist", naming no file and pointing at the
+# output rather than the directory above it. Nothing is destroyed either way --
+# the behaviour was always safe, only the wording was wrong.
+# 錯誤的 -f 必須說出它哪裡不對。Foundation 自帶的描述在此不只是幫不上忙，而是誤導：
+# 寫到既有目錄上會回報「您沒有權限」，使讀者跑去查擁有者或改用系統管理員身分重跑，
+# 而唯一的問題只是 -f 指向了目錄；父目錄不存在則回報「檔案不存在」，既沒點名任何檔案，
+# 指的方向也是輸出本身而非其上層目錄。兩種情形都不會破壞任何東西——行為一向安全，
+# 錯的只有措辭。
+mkdir -p "$TMP/rgb_outdir"
+out_err() {
+  "$ST" --rgb1-pack --width 4 --height 3 \
+        --lat 25.0 --lng 121.0 --height-m 12.0 \
+        --title Fine --country Taiwan --creator-email photog@example.com --right CcBy \
+        --created-ms 1700000000123 -f "$1" "$RAW" 2>&1
+}
+check_reason "-f at an existing directory says it is a directory" \
+  "is a directory, not a file to write" "$(out_err "$TMP/rgb_outdir")"
+check_reason "-f under a missing directory names that directory" \
+  "does not exist" "$(out_err "$TMP/rgb_nodir/out.rgb1")"
+[ -d "$TMP/rgb_outdir" ] && ok "the existing directory is left alone" \
+                         || bad "the existing directory is left alone"
+
 # A real sampled video frame, not a synthetic pattern. This used to be a 4 KiB
 # random block repeated 768 times, which is perfectly periodic: every codec with
 # a window of 4 KiB or more finds an exact match at once and the table reported

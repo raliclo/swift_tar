@@ -1,4 +1,4 @@
-swift_tar_version=20260819-190756
+swift_tar_version=20260819-191444
 zlib_so_version=1
 zlib_path=/usr/lib/libz.so.1
 zlib_linkage=dynamic

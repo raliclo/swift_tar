@@ -421,7 +421,38 @@ func runRGB1Pack(
     if outputPath == "-" {
         try FileHandle.standardOutput.write(contentsOf: data)
     } else {
-        try data.write(to: URL(fileURLWithPath: outputPath), options: [])
+        do {
+            try data.write(to: URL(fileURLWithPath: outputPath), options: [])
+        } catch {
+            // Say what is actually wrong. Foundation's own descriptions here are
+            // not merely unhelpful, they misdirect: writing onto an existing
+            // directory reports "You don't have permission", which sends the
+            // reader to check ownership or re-run elevated when the only problem
+            // is that -f names a directory. A missing parent reports "The file
+            // doesn't exist", which names no file and points at the output
+            // rather than the directory above it.
+            //
+            // 說出真正出錯的地方。Foundation 自帶的描述在此不只是無用，而是誤導：
+            // 寫到既有目錄上會回報「您沒有權限」，使讀者跑去查擁有者或改用系統管理員
+            // 身分重跑，而唯一的問題只是 -f 指向了一個目錄。父目錄不存在則回報
+            // 「檔案不存在」，既沒點名任何檔案，指的方向也是輸出本身而非其上層目錄。
+            let fm = FileManager.default
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: outputPath, isDirectory: &isDir), isDir.boolValue {
+                throw RGB1Error.io(
+                    "-f '\(outputPath)' is a directory, not a file to write / "
+                    + "-f '\(outputPath)' 是目錄，不是可寫入的檔案")
+            }
+            let parent = (outputPath as NSString).deletingLastPathComponent
+            if !parent.isEmpty, !fm.fileExists(atPath: parent) {
+                throw RGB1Error.io(
+                    "cannot write '\(outputPath)': its directory '\(parent)' does not exist / "
+                    + "無法寫入 '\(outputPath)'：其所在目錄 '\(parent)' 不存在")
+            }
+            throw RGB1Error.io(
+                "cannot write '\(outputPath)': \(error.localizedDescription) / "
+                + "無法寫入 '\(outputPath)'")
+        }
     }
 }
 

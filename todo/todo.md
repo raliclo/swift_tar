@@ -8,11 +8,11 @@
 > CRLF in the `-t` / `--identify` output on Windows. The suite fails 11 of its
 > checks against the previous binary and passes all 15 against this one.
 >
-> **Open items / 尚未處理項目** are now all outside the program:
-> `lzfse2/run_round.command:50` still calls the pre-rename `compile_tar.sh` and
-> is broken, `package_win.ps1` is still PowerShell, `sha()` costs 892 s on
-> Windows, and `encrypt_mbps_win_output.txt` holds zstd-3 numbers. Everything
-> below was measured, not inferred; each section records how.
+> **Nothing is open, 2026-08-19.** Every defect recorded below is fixed and under
+> regression test — `test_blind_findings.zsh` is at 84 checks, all passing, and it
+> fails against every earlier binary. The one entry marked "recorded, not
+> actioned" is the case-collision *warning* option, which is a feature choice and
+> is written up with the reasoning rather than left as a task.
 >
 > **2026-08-18 已修復。** 盲測在程式本身找到的缺陷已全部修復、驗證，並由
 > `test_blind_findings.zsh`（15 項檢查）涵蓋：尾隨斜線造成的分隔符加倍及其引發的
@@ -20,10 +20,10 @@
 > 寫法、`--zstd-level` 特立獨行的 exit 2，以及 Windows 上 `-t`／`--identify` 輸出
 > 的 CRLF。該套件對舊 binary 有 11 項失敗，對新 binary 15 項全過。
 >
-> **尚未處理項目**現已全部落在程式之外：`lzfse2/run_round.command:50` 仍呼叫改名前
-> 的 `compile_tar.sh` 而現正壞著、`package_win.ps1` 仍是 PowerShell、`sha()` 在
-> Windows 上耗時 892 秒、`encrypt_mbps_win_output.txt` 仍是 zstd-3 的數字。以下皆為
-> 實測而非推論，各節記錄了測法。
+> **2026-08-19：已無未處理項目。** 以下記錄的每一項缺陷皆已修復並納入回歸測試——
+> `test_blind_findings.zsh` 現有 84 項檢查、全數通過，且對先前每一版 binary 都會失敗。
+> 唯一標為「記錄，未處理」的是大小寫碰撞的「警告」選項，那是功能取捨，已連同理由寫明，
+> 而非留作待辦。
 >
 > **The `read_easy` blind test is 17 rounds into a planned 100 and continues.**
 > Rounds that found something are recorded below with the measurement; rounds
@@ -211,7 +211,7 @@ list in one `sha256sum` invocation would remove nearly all of it.
 spawn，而 Windows 的行程建立成本遠高於 POSIX。改以單次 `sha256sum` 處理整份清單即可
 去掉絕大部分成本。
 
-### 5. encrypt_mbps_win_output.txt still holds zstd-3 numbers / 仍是 zstd-3 的數字  ▸ ⬜ 未處理 / open
+### 5. encrypt_mbps_win_output.txt still holds zstd-3 numbers / 仍是 zstd-3 的數字  ▸ ✅ 已重測 2026-08-18
 
 `c24c139` pinned `--zstd-level 9` in the measurement scripts and re-measured
 every affected record. The macOS record `encrypt_mbps_rss_output.txt` was
@@ -417,7 +417,7 @@ visible rather than looking like two unrelated investigations:
 The two that remain are below.
 仍存在的兩項如下。
 
-### macOS round 5: raw bytes under 512 still read as an empty archive / 小於 512 bytes 的隨機資料仍被讀成空封存  ▸ ⬜ 未處理 / open
+### macOS round 5: raw bytes under 512 still read as an empty archive / 小於 512 bytes 的隨機資料仍被讀成空封存  ▸ ✅ 已修正 2026-08-19
 
 The truncated-`.tar.gz` half of this is fixed. What remains is input that is not
 a recognised codec at all and is shorter than one tar header block:
@@ -440,7 +440,7 @@ bytes is not.
 空封存，`-t` 不印任何東西並以 0 結束。空檔案如此是正確的、與 bsdtar 一致；任意位元組
 的短檔則不然。
 
-### macOS round 3: `--title` and `--country` lose one byte to nothing / 白白少一個位元組  ▸ ⬜ 未處理 / open
+### macOS round 3: `--title` and `--country` lose one byte to nothing / 白白少一個位元組  ▸ ✅ 已修正 2026-08-19
 
 Measured on 20260818-125339: `--title` accepts 63 and rejects 64; `--country`
 accepts 511 and rejects 512; `--creator-email` accepts its full 254.
@@ -1050,7 +1050,7 @@ into `-t` gets exit 0 and no output, so emptiness has to be checked separately.
 相容；以及寫出「空輸入必須失敗」的測試。將可能為空的串流灌入 `-t` 的腳本會得到離開碼 0
 與空輸出，故「是否為空」必須另行判斷。
 
-### Case-only-differing names collapse on Windows, silently / 僅大小寫不同的名稱在 Windows 上無聲併合  ▸ ⬜ 記錄，未處理 / recorded, not actioned
+### Case-only-differing names collapse on Windows, silently / 僅大小寫不同的名稱在 Windows 上無聲併合  ▸ ✅ 已修正 2026-08-19
 
 An archive built on a case-sensitive filesystem can hold `file.txt`, `File.txt`
 and `FILE.TXT` as three distinct members. Extracted on NTFS they are one name.
@@ -1091,10 +1091,27 @@ because it is a new feature with a per-entry memory cost, not the repair of a
 defect, and nobody has asked for it. Noted so the option is on record rather
 than rediscovered.
 
-swift_tar **可以**加的是一則警告——它知道本次執行已寫出哪些名稱，故不分大小寫的碰撞是
-可偵測的。那會把無聲的資料遺失變成看得見的資料遺失，確有價值。此處未做，是因為那是一項
-帶有逐項記憶體成本的新功能，而非修復缺陷，且無人提出此需求。記於此處，使該選項留有紀錄，
-而非日後重新發現。
+**Actioned 2026-08-19, going further than the note above proposed.** Extraction
+now **refuses** the second member rather than warning, and `--force` allows it.
+Refusing was chosen over warning because the loss is silent and total: a warning
+on stderr is easy to miss in a script, while a non-zero exit is not.
+
+**2026-08-19 已處理，且比上文所提更進一步。** 解出端現在對第二個成員採**拒絕**而非警告，
+並以 `--force` 允許。選擇拒絕而非警告，是因為該遺失既無聲又徹底：stderr 上的一則警告在
+腳本中很容易被忽略，非零離開碼則不會。
+
+Two things the guard deliberately does not do. It does not fire on a **genuine
+duplicate name** — the same spelling twice is legal tar and the last copy wins by
+design, which round 16 documented. And it does not **guess** whether the
+filesystem folds case: a folded match with a different spelling is only a
+collision if the path already exists, which asks the filesystem instead of
+assuming. Verified on WSL's ext4, where all three names extract as three files
+with no warning and exit 0.
+
+此守門刻意不做兩件事。其一，不對**真正的同名成員**觸發——相同拼法出現兩次是合法的 tar，
+依設計由最後一份勝出，round 16 已載明。其二，不**猜測**檔案系統是否摺疊大小寫：摺疊後
+相同但拼法不同者，唯有該路徑已經存在時才算碰撞——此舉是詢問檔案系統，而非逕行假設。已於
+WSL 的 ext4 上驗證：三個名稱全部解出為三個檔案，無警告，離開碼 0。
 
 The divergence in *which* case survives is real but inconsequential: swift_tar
 opens and truncates the existing directory entry, keeping the case first seen,

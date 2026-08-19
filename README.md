@@ -342,6 +342,22 @@ release/swift_tar -x -f src.tar.bvx3 -C /tmp/out
 release/swift_tar --cat -f package.rpm > payload.cpio          # strip RPM wrapper
 ```
 
+**Two members of one archive may not land on the same file.** An archive written
+on a case-sensitive filesystem can hold `file.txt` and `File.txt`; on a
+destination that does not distinguish case the second would destroy the first.
+That is refused:
+
+```sh
+release/swift_tar -x -f from-linux.tar
+# -> 'File.txt' would overwrite 'file.txt', written earlier in this archive
+#    (the destination does not distinguish case); pass --force to allow it
+```
+
+`--force` restores the overwrite. A file already on disk from a *previous* run is
+overwritten as usual — this covers only collisions inside one extraction. The
+same name appearing twice in an archive is legal and unaffected: the last copy
+wins, as documented above.
+
 **Extraction stays inside `-C`.** A member name is treated as hostile, because an
 archive need not have been written by this tool:
 
@@ -416,8 +432,8 @@ release/swift_tar --rgb1-raw  -f out.rgb1 > back.rgb   # byte-identical to raw.r
 | `--lat <deg>` | WGS84 degrees, −90…90 | required; negative values are fine |
 | `--lng <deg>` | WGS84 degrees, −180…180 | required; negative values are fine |
 | `--height-m <m>` | metres | required; **stored in the header as millimetres** |
-| `--title <text>` | ASCII, under 64 bytes | required |
-| `--country <text>` | ASCII, under 512 bytes | required |
+| `--title <text>` | ASCII, at most 64 bytes | required |
+| `--country <text>` | ASCII, at most 512 bytes | required |
 | `--creator-email <email>` | ASCII, at most 254 bytes | required |
 | `--right <text>` | 1–4 English letters | required |
 | `--created-ms <unix_ms>` | Int64, UTC Unix milliseconds | required |
@@ -518,6 +534,7 @@ would not predict.
 | `-o`, `--no-same-owner` | Accepted for `tar` compatibility and does nothing: swift_tar never restores ownership, with or without it |
 | `--encrypt` | (`-c` only) Encrypt with ChaCha20-Poly1305; prompts for a passphrase |
 | `--keyfile <path>` | Use the file's bytes as key material instead of a passphrase (create and read; required when stdin is not a terminal) |
+| `--force`   | (`-x` only) Allow a member to overwrite one written earlier in the *same* extraction; without it that case is refused |
 | `-h`        | Help |
 | `--version` | Show the fixed build-date version (`yyyyMMdd-HHmmss`) |
 | `--crypto-selftest` | Run the crypto unit tests (published vectors, header parsing, chunk framing), then exit |

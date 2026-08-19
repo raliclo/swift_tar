@@ -305,6 +305,18 @@ release/swift_tar -x -f src.tar.bvx3 -C /tmp/out
 release/swift_tar --cat -f package.rpm > payload.cpio          # 剝除 RPM 外包裝
 ```
 
+**同一封存的兩個成員不得落到同一個檔案。** 在區分大小寫的檔案系統上寫出的封存可同時持有
+`file.txt` 與 `File.txt`；在不區分大小寫的目的地上，後者會摧毀前者。此情形會被拒絕：
+
+```sh
+release/swift_tar -x -f from-linux.tar
+# -> 'File.txt' would overwrite 'file.txt', written earlier in this archive
+#    (the destination does not distinguish case); pass --force to allow it
+```
+
+加上 `--force` 即恢復覆寫。**先前**執行留在磁碟上的既有檔案照常覆寫——本機制僅涵蓋單次解出
+之內的碰撞。同一名稱在封存中出現兩次屬合法且不受影響：由最後一份勝出，如上文所述。
+
 **解出行為不會離開 `-C` 指定的目錄。** 成員名稱一律視為懷有敵意，因為封存不保證是由本工具
 寫出的：
 
@@ -373,8 +385,8 @@ release/swift_tar --rgb1-raw  -f out.rgb1 > back.rgb   # 與 raw.rgb 位元組�
 | `--lat <deg>` | WGS84 度，−90…90 | 必要；可為負值 |
 | `--lng <deg>` | WGS84 度，−180…180 | 必要；可為負值 |
 | `--height-m <m>` | 公尺 | 必要；**標頭中以毫米儲存** |
-| `--title <text>` | ASCII，小於 64 bytes | 必要 |
-| `--country <text>` | ASCII，小於 512 bytes | 必要 |
+| `--title <text>` | ASCII，最多 64 bytes | 必要 |
+| `--country <text>` | ASCII，最多 512 bytes | 必要 |
 | `--creator-email <email>` | ASCII，最多 254 bytes | 必要 |
 | `--right <text>` | 1–4 個英文字母 | 必要 |
 | `--created-ms <unix_ms>` | Int64，UTC Unix 毫秒 | 必要 |
@@ -466,6 +478,7 @@ swift_tar -c -f first.tar -f second.tar ...      # 寫出 first.tar；second.tar
 | `-o`、`--no-same-owner` | 為與 `tar` 相容而接受，實際不做任何事：swift_tar 從不還原擁有者，加不加都一樣 |
 | `--encrypt` | （僅 `-c`）以 ChaCha20-Poly1305 加密，並提示輸入密語 |
 | `--keyfile <path>` | 以檔案位元組作為金鑰材料取代密語（建立與讀取皆適用；stdin 非終端機時為必要） |
+| `--force`   | （僅 `-x`）允許某成員覆蓋**同一次**解出中較早寫出的檔案；未加時該情形會被拒絕 |
 | `-h`        | 顯示說明 |
 | `--version` | 顯示固定的建置日期版本（`yyyyMMdd-HHmmss`） |
 | `--crypto-selftest` | 執行密碼學單元測試（公開向量、標頭解析、分塊切分）後結束 |

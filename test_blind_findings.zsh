@@ -854,6 +854,66 @@ case $dot_err in
   *) ok "a './' member is not called unsafe" ;;
 esac
 
+# ---- case collisions within one extraction ----
+# An archive from a case-sensitive filesystem can hold file.txt and File.txt.
+# On a case-folding destination the second silently destroyed the first: exit 0,
+# no message, one file where the archive had two. Extraction now refuses unless
+# --force. The fixture is built with the raw-header helper because no tar CLI on
+# a case-insensitive filesystem can create both names to archive them.
+# 來自區分大小寫檔案系統的封存可同時持有 file.txt 與 File.txt。在會摺疊大小寫的目的地
+# 上，後者會無聲摧毀前者：離開碼 0、無訊息、封存有兩個而磁碟只剩一個。解出現已拒絕，
+# 除非加上 --force。測資以 raw header 產生器建立，因為在不區分大小寫的檔案系統上，沒有
+# 任何 tar CLI 能先造出這兩個名稱再打包。
+if [ -f "$RAW" ]; then
+  zsh "$RAW" "$TMP/case.tar" file file.txt LOWER file File.txt UPPER >/dev/null 2>&1
+  rm -rf "$TMP/caseout"; mkdir -p "$TMP/caseout"
+  case_rc=0
+  ( cd "$TMP/caseout" && "$ST" -x -f "$TMP/case.tar" ) >/dev/null 2>&1 || case_rc=$?
+  landed="$(ls "$TMP/caseout" | wc -l | tr -d ' ')"
+
+  if [ "$landed" -eq 2 ]; then
+    # Case-sensitive destination: both names are distinct files and the guard
+    # must stay out of the way entirely.
+    # 區分大小寫的目的地：兩個名稱是相異檔案，此守門必須完全不介入。
+    eq "case-sensitive destination: both members extract" "0" "$case_rc"
+  else
+    eq "case collision is refused without --force" "1" "$case_rc"
+
+    rm -rf "$TMP/caseforce"; mkdir -p "$TMP/caseforce"
+    force_rc=0
+    ( cd "$TMP/caseforce" && "$ST" -x -f "$TMP/case.tar" --force ) >/dev/null 2>&1 || force_rc=$?
+    eq "--force allows the collision" "0" "$force_rc"
+  fi
+
+  # A genuine duplicate -- the same spelling twice -- is legal tar and must keep
+  # working: last copy wins, no refusal. The guard keys on a folded match with a
+  # *different* spelling precisely so this case is untouched.
+  # 真正的同名成員——相同拼法出現兩次——是合法的 tar，必須維持可用：最後一份勝出、不得
+  # 拒絕。此守門以「摺疊後相同但拼法不同」為條件，正是為了不影響這個情形。
+  zsh "$RAW" "$TMP/dup2.tar" file dup.txt FIRST file dup.txt SECOND >/dev/null 2>&1
+  rm -rf "$TMP/dupout"; mkdir -p "$TMP/dupout"
+  dup_rc=0
+  ( cd "$TMP/dupout" && "$ST" -x -f "$TMP/dup2.tar" ) >/dev/null 2>&1 || dup_rc=$?
+  eq "a genuine duplicate name still extracts" "0" "$dup_rc"
+  eq "a genuine duplicate keeps the last copy" "SECOND" "$(cat "$TMP/dupout/dup.txt" 2>/dev/null)"
+fi
+
+# ---- input shorter than one header block is not an empty archive ----
+# Zero bytes is an empty archive by convention, and bsdtar agrees. A short run of
+# arbitrary bytes is not, but was read the same way: nothing examined, no output,
+# exit 0 -- an unrecognised file passing for a valid one.
+# 零位元組依慣例是空封存，bsdtar 亦同。一小段任意位元組則不是，但先前被以相同方式看待：
+# 不檢查任何東西、無輸出、離開碼 0——一個無法辨識的檔案被當成合法封存。
+: > "$TMP/empty.bin"
+rc=0; "$ST" -t -f "$TMP/empty.bin" >/dev/null 2>&1 || rc=$?
+eq "an empty file is an empty archive" "0" "$rc"
+
+for n in 100 511; do
+  head -c "$n" /dev/urandom > "$TMP/short.bin"
+  rc=0; "$ST" -t -f "$TMP/short.bin" >/dev/null 2>&1 || rc=$?
+  eq "$n random bytes is not an empty archive" "1" "$rc"
+done
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

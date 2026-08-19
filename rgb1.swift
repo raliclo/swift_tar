@@ -101,8 +101,18 @@ struct RGB1Image {
         guard payload.count == expected else {
             throw RGB1Error.payloadSizeMismatch(expected: expected, actual: payload.count)
         }
-        try Self.validateASCII(title, field: "title", maxBytesExclusive: Self.titleFieldSize)
-        try Self.validateASCII(country, field: "country", maxBytesExclusive: Self.countryFieldSize)
+        // `+ 1` because the bound is exclusive and the field takes its full
+        // width. Without it these two capped one byte short -- 63 of 64, 511 of
+        // 512 -- while creator_email, which already passed fieldSize + 1, used
+        // all 254. The reader is `firstIndex(of: 0) ?? endIndex`, so no NUL
+        // terminator is required and a completely full field reads back intact;
+        // the lost byte bought nothing.
+        // 使用 `+ 1`，因為此上界為排他且欄位可用滿其寬度。若無此項，這兩者各少一個
+        // 位元組——64 只能用 63、512 只能用 511——而已傳入 fieldSize + 1 的
+        // creator_email 則用滿 254。讀取端為 `firstIndex(of: 0) ?? endIndex`，不需
+        // NUL 終止符，欄位塞滿亦可完整讀回；那個少掉的位元組什麼也沒換到。
+        try Self.validateASCII(title, field: "title", maxBytesExclusive: Self.titleFieldSize + 1)
+        try Self.validateASCII(country, field: "country", maxBytesExclusive: Self.countryFieldSize + 1)
         try Self.validateEmail(creatorEmail)
         try Self.validateRight(right)
         self.width = width

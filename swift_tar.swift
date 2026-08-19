@@ -2401,6 +2401,13 @@ final class TarReader {
         self.pending.append(prefix)
     }
 
+    /// Bytes left over after a read failed to fill its request. readExactly
+    /// leaves what it did get in `pending`, so this distinguishes "the source
+    /// ended exactly on a boundary" from "the source ended part-way through".
+    /// 某次讀取未能填滿其請求後所餘的位元組數。readExactly 會把已取得的部分留在
+    /// `pending`，故此值可區分「來源正好在邊界結束」與「來源在中途結束」。
+    private var leftover: Int { pending.count - offset }
+
     private func readExactly(_ n: Int) -> Data? {
         while pending.count - offset < n {
             // Compact the consumed prefix before growing (subdata copies into
@@ -2528,6 +2535,37 @@ final class TarReader {
         return false
     }
 
+    /// Return the earlier member this one would destroy, or nil.
+    ///
+    /// `seen` maps the case-folded destination to the spelling written under it.
+    /// A hit with the *same* spelling is an ordinary duplicate name and is not a
+    /// clash. A hit with a different spelling is only a clash if the file is
+    /// already there, which is asked of the filesystem rather than assumed --
+    /// on a case-sensitive volume the two names are separate files and nothing
+    /// is lost. `drain` flushes queued writes first, so the existence test sees
+    /// what has actually landed.
+    ///
+    /// 回傳本成員將摧毀的較早成員，若無則回傳 nil。
+    ///
+    /// `seen` 將摺疊大小寫後的目的地對應到實際寫出的拼法。以「相同」拼法命中者屬一般
+    /// 的同名成員，不算碰撞。以不同拼法命中者，唯有該檔案確實已存在時才算碰撞——此點
+    /// 詢問檔案系統而非逕行假設：在區分大小寫的卷宗上，那兩個名稱是各自獨立的檔案，
+    /// 不會有任何損失。`drain` 先讓佇列中的寫入落地，使存在性檢查看到的是實際已寫出的
+    /// 狀態。
+    private static func caseClash(dest: String, seen: inout [String: String],
+                                  drain: () -> Void) -> String? {
+        let folded = dest.lowercased()
+        if let previous = seen[folded], previous != dest {
+            drain()
+            if FileManager.default.fileExists(atPath: dest) {
+                seen[folded] = dest
+                return previous
+            }
+        }
+        seen[folded] = dest
+        return nil
+    }
+
     private static func stripComponents(_ rel: String, count: Int) -> String? {
         guard count > 0 else { return rel }
         let comps = rel.split(separator: "/", omittingEmptySubsequences: true)
@@ -2561,6 +2599,14 @@ final class TarReader {
         // -i / --ignore-zeros：略過標示封存結尾的兩個零區塊繼續讀取，用於串接的
         // 封存或中途截斷的封存。語意與 bsdtar、GNU tar 相同。
         var ignoreZeros: Bool = false
+        // --force: allow a member to overwrite one written earlier in this same
+        // extraction. Only that case; a file already on disk from a previous run
+        // is overwritten as usual, which is what every tar does. Declared last so
+        // the memberwise initializer's argument order matches the call site.
+        // --force：允許某成員覆蓋「同一次解出中較早寫出」的檔案。僅限此情形；先前執行
+        // 留下的既有檔案照常覆寫，與所有 tar 的行為一致。宣告於最後，使 memberwise
+        // initializer 的引數順序與呼叫端一致。
+        var force: Bool = false
     }
 
     func run(options: Options) throws {
@@ -2587,6 +2633,30 @@ final class TarReader {
             ? FileWriterPool(backend: options.writeBackend, inflight: options.inflight,
                              restoreMtime: options.restoreMtime) : nil
         var submitted = Set<String>()
+        // Case-folded path -> the exact spelling written under it. Used to catch
+        // two members of one archive landing on the same file because the
+        // destination filesystem folds case: an archive from Linux can hold
+        // file.txt and File.txt, and on NTFS (or a default macOS volume) the
+        // second silently destroys the first, exit 0, no message.
+        //
+        // Two things this must NOT do. It must not fire on a genuine duplicate
+        // name -- the same spelling twice is legal tar and the last copy wins by
+        // design. And it must not guess whether the filesystem folds case: on
+        // Linux those two names are distinct files and refusing would be wrong.
+        // So a folded hit with a different spelling is only a collision if the
+        // path we are about to write already exists, which is the filesystem
+        // answering the question instead of us assuming it.
+        //
+        // 大小寫摺疊後的路徑 -> 實際寫出的拼法。用於偵測「同一封存的兩個成員因目的地
+        // 檔案系統摺疊大小寫而落到同一個檔案」：來自 Linux 的封存可同時持有 file.txt
+        // 與 File.txt，在 NTFS（或預設設定的 macOS 卷宗）上，後者會無聲摧毀前者，
+        // 離開碼 0、毫無訊息。
+        //
+        // 有兩件事它絕不能做。不得對真正的同名成員觸發——相同拼法出現兩次是合法的 tar，
+        // 且依設計由最後一份勝出。也不得「猜測」檔案系統是否摺疊大小寫：在 Linux 上那
+        // 兩個名稱是相異檔案，擋下它是錯的。故「摺疊後相同但拼法不同」唯有在即將寫入的
+        // 路徑已經存在時才算碰撞——那是由檔案系統回答此問題，而非由我們假設。
+        var foldedWritten: [String: String] = [:]
 
         func skipData(_ size: UInt64) throws {
             var remaining = Int((size + UInt64(TAR_BLOCK) - 1) / UInt64(TAR_BLOCK)) * TAR_BLOCK
@@ -2599,7 +2669,32 @@ final class TarReader {
             }
         }
 
-        while let block = readExactly(TAR_BLOCK) {
+        // A source shorter than one header block is not an empty archive. Zero
+        // bytes is -- that is the convention, and bsdtar agrees -- but 100 bytes
+        // of arbitrary data was read the same way: nothing was examined, `-t`
+        // printed nothing and exited 0, so an unrecognised file passed for a
+        // valid empty one. The boundary was exact at 512, because that is where
+        // the first readExactly could finally fail on content rather than on
+        // length. bsdtar rejects every size below it with "Unrecognized archive
+        // format".
+        // 短於一個標頭區塊的來源並不是空封存。零位元組才是——那是慣例，bsdtar 亦同——
+        // 但 100 位元組的任意資料先前被以相同方式看待：不檢查任何東西，`-t` 不印任何
+        // 內容並以 0 結束，於是一個無法辨識的檔案被當成合法的空封存。分界點精確落在
+        // 512，因為那正是第一次 readExactly 得以因「內容」而非因「長度」失敗之處。
+        // bsdtar 對其下的每一種大小都以「Unrecognized archive format」拒絕。
+        while true {
+            guard let block = readExactly(TAR_BLOCK) else {
+                // Ran out mid-block. Zero bytes left means the source ended on a
+                // clean boundary, which for an empty file is a legal empty
+                // archive. Anything left is a partial header: the source is
+                // shorter than one block, or ends part-way through one.
+                // 在區塊中途耗盡。餘 0 表示來源在乾淨的邊界結束，對空檔案而言即合法的
+                // 空封存。有殘餘則代表標頭不完整：來源短於一個區塊，或在區塊中途結束。
+                if leftover > 0 {
+                    throw TarError.format("not an archive: ends after \(leftover) bytes, mid-header / 並非封存：於第 \(leftover) 位元組處中止，標頭不完整")
+                }
+                break
+            }
             if block.allSatisfy({ $0 == 0 }) {
                 zeroBlocks += 1
                 if zeroBlocks >= 2 && !options.ignoreZeros { break }
@@ -2873,6 +2968,17 @@ final class TarReader {
                         // 重複路徑：先前佇列中的寫入須先落地，後者才能覆蓋
                         // （tar 的覆蓋語意）。
                         pool.drain()
+                    }
+                    if let clash = TarReader.caseClash(dest: dest, seen: &foldedWritten,
+                                                       drain: { pool.drain() }) {
+                        guard options.force else {
+                            throw TarError.io(
+                                "'\(rel)' would overwrite '\(clash)', written earlier in this archive "
+                                + "(the destination does not distinguish case); pass --force to allow it / "
+                                + "'\(rel)' 會覆蓋本封存稍早寫出的 '\(clash)'（目的地不區分大小寫）；"
+                                + "如要允許請加上 --force")
+                        }
+                        eprint("swift_tar: warning: '\(rel)' overwrites '\(clash)' (case-insensitive destination) / 警告：'\(rel)' 覆蓋了 '\(clash)'（目的地不區分大小寫）")
                     }
                     pool.submit(dest: dest, data: data, mtime: mtime, mode: mode)
                     wroteViaPool = true
@@ -3814,7 +3920,7 @@ struct SwiftTarMain {
             // options / 選項
             "-f", "-C", "-n", "-v", "-h", "--touch", "--keyfile", "--encrypt",
             "-stream-in", "-stream-out", "-O", "--to-stdout", "-i", "--ignore-zeros",
-            "-o", "--no-same-owner",
+            "-o", "--no-same-owner", "--force",
             "--strip-components", "--zstd-level",
             "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
             // codecs / 壓縮引擎
@@ -4280,7 +4386,8 @@ struct SwiftTarMain {
                                 destDir: destDir, inflight: inflightN, verbose: verbose,
                                 writeBackend: writeBackend, restoreMtime: restoreMtime,
                                 stripComponents: stripComponents,
-                                toStdout: toStdout, ignoreZeros: ignoreZeros)
+                                toStdout: toStdout, ignoreZeros: ignoreZeros,
+                                force: args.contains("--force"))
                 }
             }
         } catch {
@@ -4682,7 +4789,8 @@ struct SwiftTarMain {
                         restoreMtime: Bool = true,
                         stripComponents: Int = 0,
                         toStdout: Bool = false,
-                        ignoreZeros: Bool = false) throws {
+                        ignoreZeros: Bool = false,
+                        force: Bool = false) throws {
         let input = try openInput(archivePath)
         defer { if archivePath != "-" { try? input.close() } }
 
@@ -4703,7 +4811,8 @@ struct SwiftTarMain {
                                         stripComponents: stripComponents,
                                         restoreMtime: restoreMtime,
                                         toStdout: toStdout,
-                                        ignoreZeros: ignoreZeros)
+                                        ignoreZeros: ignoreZeros,
+                                        force: force)
         try TarReader(input: stream.handle, prefix: stream.prefix).run(options: options)
         group.wait()
         guard result.ok else {

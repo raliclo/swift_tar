@@ -1953,6 +1953,73 @@ private func clearNonRegular(_ dest: String) {
 #endif
 }
 
+/// Make sure a directory exists at `path`, removing a non-directory that stands
+/// in its way. A project whose `config` file becomes a `config/` directory is an
+/// ordinary event, and the archive says plainly which one it holds. Both
+/// reference tars replace the file: measured on the same archive, `bsdtar` and
+/// GNU `tar` both end 0 with `config` a directory, while this tool ended 1 with
+/// the member unwritten and reported `errno 2` -- ENOENT, which names neither
+/// the path that was occupied nor the fact that something occupied it.
+///
+/// Refusing was not a policy, it was an omission: extraction already replaces a
+/// read-only file, a FIFO and a symlink at a destination (see `clearNonRegular`),
+/// so singling out "a file where a directory is wanted" was the inconsistency.
+/// Nothing new is exposed -- only names the archive itself claims, inside the
+/// destination, are touched.
+///
+/// The existence check comes first because it is the common case and costs one
+/// stat; the component walk runs only when creation has already failed, so an
+/// ordinary extraction never pays for it.
+///
+/// 確保 `path` 處存在一個目錄，並移除擋在路上的非目錄。一個專案的 `config` 檔案演變成
+/// `config/` 目錄是尋常事件，而封存本身已明白指出它持有的是哪一種。兩個參照實作都會
+/// 取代該檔案：以同一份封存實測，`bsdtar` 與 GNU `tar` 皆以 0 結束且 `config` 成為
+/// 目錄，而本工具以 1 結束、成員未寫入，並回報 `errno 2`——ENOENT，既沒指出被占用的
+/// 路徑，也沒說明有東西占用了它。
+///
+/// 拒絕並非政策，而是遺漏：解出時本就會取代目的地上的唯讀檔案、FIFO 與 symlink（見
+/// `clearNonRegular`），因此單獨把「該是目錄之處卻是檔案」挑出來拒絕，才是不一致之處。
+/// 這不會擴大任何暴露面——被動到的只有封存自己聲稱的名稱，且都在目的地之內。
+///
+/// 先做存在性檢查，因為那是常見情形且只花一次 stat；逐段走訪僅在建立已經失敗時才執行，
+/// 故尋常的解出永遠不必為它付出代價。
+private func ensureDirectory(_ path: String) -> Bool {
+    let fm = FileManager.default
+    var isDir: ObjCBool = false
+    if fm.fileExists(atPath: path, isDirectory: &isDir) {
+        if isDir.boolValue { return true }
+        winClearReadOnly(path)
+        try? fm.removeItem(atPath: path)
+    }
+    if makeDirectories(path) { return true }
+
+    // An interior component is a non-directory, not the last one. Clear each
+    // blocker along the way and try once more.
+    // 擋路的是中間某一段而非最後一段。逐段清掉阻礙後再試一次。
+    var prefix = ""
+    for comp in path.split(separator: "/", omittingEmptySubsequences: false) {
+        prefix = prefix.isEmpty ? String(comp) : prefix + "/" + comp
+        if prefix.isEmpty { continue }
+        var interior: ObjCBool = false
+        if fm.fileExists(atPath: prefix, isDirectory: &interior), !interior.boolValue {
+            winClearReadOnly(prefix)
+            try? fm.removeItem(atPath: prefix)
+        }
+    }
+    return makeDirectories(path)
+}
+
+/// The platform's "create with intermediates", as one name.
+/// 平台各自的「連同中間層一起建立」，收攏為單一名稱。
+private func makeDirectories(_ path: String) -> Bool {
+#if os(Windows)
+    return winMakeDirectories(path)
+#else
+    return (try? FileManager.default.createDirectory(
+        atPath: path, withIntermediateDirectories: true)) != nil
+#endif
+}
+
 /// Clear the read-only attribute on `dest` so an existing file there can be
 /// replaced. Write permission on a file is not needed to replace it -- only on
 /// its directory -- but Windows enforces the attribute on open *and* on delete,
@@ -3006,24 +3073,27 @@ final class TarReader {
 
             let parent = (dest as NSString).deletingLastPathComponent
             if !parent.isEmpty {
-#if os(Windows)
-                guard winMakeDirectories(parent) else {
-                    throw TarError.io("cannot create directory '\(parent)' / 無法建立目錄 '\(parent)'")
+                // Skip just this member when its parent cannot be made a
+                // directory, rather than aborting: the rest of the archive is
+                // unaffected and should still land. The POSIX side used to
+                // ignore the failure entirely (`try?`), so the real cause was
+                // never reported and the member died later with ENOENT.
+                // 父目錄無法建立時只略過此成員而不中止整次執行：封存其餘部分不受影響，
+                // 理應照常落地。POSIX 端原本完全忽略該失敗（`try?`），因此真正的原因
+                // 從未被回報，而該成員稍後才以 ENOENT 死去。
+                guard ensureDirectory(parent) else {
+                    eprint("swift_tar: skipping '\(rel)': cannot make '\(parent)' a directory / 略過 '\(rel)'：無法使 '\(parent)' 成為目錄")
+                    if !isDir { try skipData(size) }
+                    continue
                 }
-#else
-                try? fm.createDirectory(atPath: parent, withIntermediateDirectories: true)
-#endif
             }
 
             switch typeflag {
             case UInt8(ascii: "5"):
-#if os(Windows)
-                guard winMakeDirectories(dest) else {
-                    throw TarError.io("cannot create directory '\(dest)' / 無法建立目錄 '\(dest)'")
+                guard ensureDirectory(dest) else {
+                    eprint("swift_tar: skipping directory '\(rel)': cannot create it / 略過目錄 '\(rel)'：無法建立")
+                    continue
                 }
-#else
-                try? fm.createDirectory(atPath: dest, withIntermediateDirectories: true)
-#endif
 #if !os(Windows)
                 chmod(dest, mode_t(mode))
 #endif

@@ -410,7 +410,8 @@ rarely pristine:
 | a read-only file (`chmod 444`, or the Windows read-only attribute) | overwritten — permission to replace a file comes from its directory, not from the file |
 | a FIFO, socket, or device node | removed, then the member is written in its place |
 | a symlink | removed, **not** followed — the member is never written through it to the link's target |
-| a directory, where the archive holds a file of that name | that member fails; the rest of the archive still extracts, and the run ends non-zero |
+| a plain file, where the archive holds a **directory** of that name | removed, and the directory created in its place — a `config` file becoming a `config/` directory is an ordinary event, and GNU tar and bsdtar both do the same |
+| a directory, where the archive holds a **file** of that name | that member fails; the rest of the archive still extracts, and the run ends non-zero |
 
 Only the last row stops anything, and it stops only that member. A member that
 cannot be written is named on stderr; the others still land. Note that `-v`

@@ -1040,6 +1040,56 @@ eq "a read-only destination is overwritten" \
 eq "a member after the read-only one still extracts" \
    "content" "$(cat "$TMP/roout/zz.txt" 2>/dev/null)"
 
+# ---- a plain file where the archive holds a directory is replaced ----
+# A project whose `config` file becomes a `config/` directory is an ordinary
+# event, not an edge case. Both reference tars replace the file: measured on one
+# archive, bsdtar and GNU tar each ended 0 with `config` a directory, while this
+# tool ended 1 with the member unwritten, reporting errno 2 -- ENOENT, which
+# named neither the occupied path nor the fact that anything occupied it.
+# Refusing was an omission rather than a policy: extraction already replaces a
+# read-only file, a FIFO and a symlink at a destination.
+# The members either side of the conflict are checked too, because "the rest of
+# the archive still lands" is the half a failing extraction most often loses.
+#
+# 一個專案的 `config` 檔案演變成 `config/` 目錄是尋常事件，不是邊界案例。兩個參照實作
+# 都會取代該檔案：以同一份封存實測，bsdtar 與 GNU tar 皆以 0 結束且 `config` 成為目錄，
+# 而本工具以 1 結束、成員未寫入，並回報 errno 2——ENOENT，既沒指出被占用的路徑，也沒
+# 說明有東西占用了它。拒絕並非政策而是遺漏：解出時本就會取代目的地上的唯讀檔案、FIFO
+# 與 symlink。衝突兩側的成員一併檢查，因為「封存其餘部分仍會落地」正是失敗的解出最常
+# 丟掉的那一半。
+mkdir -p "$TMP/fdsrc/config"
+printf 'new aa\n'     > "$TMP/fdsrc/aa.txt"
+printf 'new conf\n'   > "$TMP/fdsrc/config/a.conf"
+printf 'new zz\n'     > "$TMP/fdsrc/zz.txt"
+"$ST" -c -f "$TMP/fd.tar" -C "$TMP/fdsrc" . >/dev/null 2>&1
+mkdir -p "$TMP/fdout"
+printf 'old aa\n'     > "$TMP/fdout/aa.txt"
+printf 'old config\n' > "$TMP/fdout/config"     # a plain FILE where a dir is wanted
+printf 'old zz\n'     > "$TMP/fdout/zz.txt"
+rc=0; "$ST" -x -f "$TMP/fd.tar" -C "$TMP/fdout" >/dev/null 2>&1 || rc=$?
+eq "a file where a directory is wanted does not fail the run" "0" "$rc"
+[ -d "$TMP/fdout/config" ] && ok "the blocking file becomes a directory" \
+                           || bad "the blocking file becomes a directory"
+eq "the directory's member is written" \
+   "new conf" "$(cat "$TMP/fdout/config/a.conf" 2>/dev/null)"
+eq "the member before the conflict is refreshed" \
+   "new aa" "$(cat "$TMP/fdout/aa.txt" 2>/dev/null)"
+eq "the member after the conflict is refreshed" \
+   "new zz" "$(cat "$TMP/fdout/zz.txt" 2>/dev/null)"
+
+# The same conflict one level up: the blocker is an interior component, so the
+# exact-name check does not see it and the component walk has to.
+# 同樣的衝突發生在上一層：阻礙者是中間段，逐名比對看不到它，必須靠逐段走訪處理。
+mkdir -p "$TMP/deepsrc/a/b"
+printf 'deep\n' > "$TMP/deepsrc/a/b/c.txt"
+"$ST" -c -f "$TMP/deep.tar" -C "$TMP/deepsrc" . >/dev/null 2>&1
+mkdir -p "$TMP/deepout"
+printf 'blocker\n' > "$TMP/deepout/a"           # a FILE two levels above the member
+rc=0; "$ST" -x -f "$TMP/deep.tar" -C "$TMP/deepout" >/dev/null 2>&1 || rc=$?
+eq "an interior blocking file does not fail the run" "0" "$rc"
+eq "a member below an interior blocker is written" \
+   "deep" "$(cat "$TMP/deepout/a/b/c.txt" 2>/dev/null)"
+
 # ---- a symlink at the final component is replaced, not written through ----
 # The traversal tests above cover a symlink among the *parent* components. A
 # symlink at the member's own name is a different case: `open` follows it, so

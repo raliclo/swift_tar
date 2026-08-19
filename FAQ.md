@@ -136,12 +136,42 @@ sliding-window format: byte N cannot be decoded without the window that
 precedes it. Against bsdtar's single-member archive there is no parallelism to
 exploit at all.
 
-**But that does not explain the whole gap** — and this is where I had to correct
-myself again. swift_tar's own archives *are* multi-member and therefore *could*
-be decoded in parallel, yet bsdtar still extracts them 2.8× faster. So on this
-corpus the remainder is per-entry overhead in swift_tar's extract path, not the
-format. Confirming that would need profiling inside the guest, which has not
-been done; it is stated here as an open question rather than a conclusion.
+**But that does not explain the whole gap**, and the obvious explanations turn
+out to be wrong. swift_tar's own archives *are* multi-member and therefore
+*could* be decoded in parallel, yet bsdtar still extracts them ~3× faster.
+Three hypotheses were tested and three failed:
+
+*Per-entry overhead in swift_tar's extract path.* Disproven. Per-entry cost
+would grow with the number of entries; the gap does the opposite. Total size
+held at ~160 MB, entry count varied, medians of five on macOS and best-of-three
+in the guest:
+
+| entries × size | macOS ST | macOS bsdtar | ratio | VM ST | VM bsdtar | ratio |
+|---|---:|---:|---:|---:|---:|---:|
+| 20 × 8 MB | 166 ms | 74 ms | 2.24× | 138 ms | 40 ms | 3.45× |
+| 200 × 800 KB | 114 ms | 83 ms | 1.37× | 105 ms | 42 ms | 2.50× |
+| 2000 × 80 KB | 259 ms | 276 ms | **0.94×** | 183 ms | 118 ms | 1.55× |
+
+The gap shrinks as entries multiply, and on macOS it reverses — swift_tar wins
+at 2000 entries.
+
+*A chunk-boundary effect at 4 MiB.* Disproven. Holding the total at 128 MB and
+sweeping the single-file size across the boundary shows no discontinuity:
+1 MB 1.16×, 4 MB 1.65×, 8 MB 1.58×, 32 MB 2.17×, 128 MB 1.56×.
+
+*Something about the VM.* Disproven. The same curve appears on macOS, on real
+disk, with no emulation involved.
+
+What the measurements do support is narrower and duller: **swift_tar's extract
+path has a lower throughput ceiling than bsdtar's, roughly independent of the
+archive's shape.** swift_tar lands between 95 and 130 ms across every shape
+above while bsdtar ranges from 60 to 82 ms, improving as the files get larger
+and more sequential. And the gap is *widest* where I/O is cheapest — the guest
+writes to tmpfs and shows worse ratios than macOS writing to disk — which points
+at CPU-side work in the extract path rather than at I/O.
+
+Naming that work would need profiling, which has not been done. Recorded as a
+bounded open question, not a conclusion.
 
 An earlier note in `build_multissh_in_linux_vm.zsh` recorded
 `swift_tar -x 89 s vs bsdtar -xzf 52 s` and concluded swift_tar was slower. That
@@ -158,10 +188,24 @@ files, not decoding — where no choice of tar helps.
 封存有 5 個 gzip 成員，bsdtar 只有 1 個）；**單一串流的解壓無法並行**（deflate 為滑動
 視窗格式，第 N 個位元組必須先有其前的視窗）。
 
-**但這無法解釋全部差距**——此處我必須再次更正自己。swift_tar 自己的封存**是**多成員、
-理論上**可以**並行解碼，bsdtar 卻仍快 2.8 倍。故在本語料上，餘下的差距來自 swift_tar
-解壓路徑的逐項開銷而非格式。要確認需在 guest 內做 profiling，尚未進行；此處列為未決
-問題而非結論。
+**但這無法解釋全部差距**，而顯而易見的那些解釋經檢驗皆不成立。swift_tar 自己的封存
+**是**多成員、理論上**可以**並行解碼，bsdtar 卻仍快約 3 倍。三個假設，三個皆被否證：
+
+*swift_tar 解壓路徑的逐項開銷。* 否證。逐項成本應隨項目數增加而擴大，實測方向相反
+（上表：總量固定約 160 MB、僅改項目數，macOS 取五次中位數、guest 取三次最佳）。差距
+隨項目變多而縮小，在 macOS 上並於 2000 項時反轉——swift_tar 反而較快。
+
+*4 MiB 分塊邊界效應。* 否證。總量固定 128 MB、單檔大小跨越該邊界掃描，未見不連續：
+1 MB 1.16×、4 MB 1.65×、8 MB 1.58×、32 MB 2.17×、128 MB 1.56×。
+
+*與 VM 有關。* 否證。同樣的曲線在 macOS 的實體磁碟上就有，不涉及任何模擬。
+
+量測真正支持的結論較窄也較平淡：**swift_tar 的解壓路徑吞吐量上限低於 bsdtar，且大致
+與封存形狀無關。** 上述所有形狀下 swift_tar 落在 95–130 毫秒之間，bsdtar 則為 60–82
+毫秒，且隨檔案變大、越趨循序而變快。而差距**在 I/O 最便宜時最大**——guest 寫入 tmpfs
+的比值比 macOS 寫入磁碟更差——這指向解壓路徑的 CPU 側工作，而非 I/O。
+
+要指出那是什麼工作需要 profiling，尚未進行。此處記為一個範圍明確的未決問題，而非結論。
 
 `build_multissh_in_linux_vm.zsh` 先前記錄的 `swift_tar -x 89 秒 vs bsdtar -xzf 52 秒`
 觀察無誤、推理亦無誤，但它只涵蓋解壓，卻被推廣為「swift_tar 在 VM 裡較慢」，而上方的
@@ -190,6 +234,16 @@ On the numbers above, for one 160 MB payload, ignoring the network:
 
 The packing side dominates, which is why the mixed pairing wins: swift_tar's
 parallel compression saves far more than bsdtar's faster extraction does.
+
+**The size of the win depends on the payload's shape.** The table above uses
+20 entries of 8 MB, which is where swift_tar's extraction is at its worst. With
+many small files the extraction gap nearly closes — at 2000 × 80 KB on macOS
+swift_tar is actually the faster extractor — so the mixed pairing matters most
+for a few large files and hardly at all for a source tree.
+
+**負載的形狀會改變優勢幅度。** 上表使用 20 個 8 MB 的項目，正是 swift_tar 解壓最不利
+的形狀。檔案多而小時解壓差距幾乎消失——macOS 上 2000 × 80 KB 時 swift_tar 反而是較快
+的解壓端——故混搭組合在「少數大檔」時效益最大，對一棵原始碼樹則幾乎無差別。
 
 Three things that change the answer:
 

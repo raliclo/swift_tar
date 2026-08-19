@@ -121,6 +121,12 @@ LinuxCS 的 `/init-server`——那個檔早已解決過同一問題。該檔的
 執行檔放其 `release/`。動手建置前先看那裡：它可能已足夠新，而唯一的判斷方式是把它的
 `--version` 與你想驗證的那項改動相比。
 
+Performance in the guest — core count, the cost of running without
+`-accel`, and why bsdtar wins on extraction while swift_tar wins on
+compression — is measured in [`../FAQ.md`](../FAQ.md).
+guest 內的效能——核心數、未啟用 `-accel` 的代價，以及為何解壓是 bsdtar 快而壓縮
+是 swift_tar 快——的實測數字見 [`../FAQ.md`](../FAQ.md)。
+
 ### Consequences of the VM's tar, for anything that runs there
 ### VM 的 tar 對在該處執行之物的影響
 

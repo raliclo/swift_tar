@@ -4,6 +4,8 @@
 並仿照 **libarchive** 的 filter 架構設計。
 
 - **English: [README.md](./README.md)**
+- **[FAQ.md](./FAQ.md)** — VM 核心數、模擬成本，以及傳輸時該用 swift_tar 還是
+  bsdtar 打包，皆附實測數字
 
 ## 特色
 

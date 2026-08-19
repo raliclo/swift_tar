@@ -4,6 +4,8 @@ A multi-core `tar` archiver written in Swift, built on the `lzfse2`
 compression engine and modeled on **libarchive**'s filter architecture.
 
 - **繁體中文說明： [README.zh-TW.md](./README.zh-TW.md)**
+- **[FAQ.md](./FAQ.md)** — measured answers on VM cores, emulation cost, and
+  whether to pack with swift_tar or bsdtar when transferring
 
 ## Highlights
 

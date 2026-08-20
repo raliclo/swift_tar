@@ -3718,7 +3718,7 @@ private func printTarUsage() {
       -v              : Verbose; on read also prints the detected compression
                         format ("none" if uncompressed)
                         詳細輸出；讀取時另印出偵測到的壓縮格式（未壓縮則印 none）
-      --touch         : (-x only) do not restore archive mtimes; extracted
+      -m, --touch     : (-x only) do not restore archive mtimes; extracted
                         entries keep the current time (GNU tar semantics)
                         （僅 -x）不還原封存的 mtime，解出項目維持目前時間
                         （GNU tar 語意）
@@ -4404,7 +4404,7 @@ struct SwiftTarMain {
             "--encrypt-only", "--decrypt-only",
             "--rgb1-pack", "--rgb1-info", "--rgb1-raw",
             // options / 選項
-            "-f", "-C", "-n", "-v", "-h", "--touch", "--keyfile", "--encrypt",
+            "-f", "-C", "-n", "-v", "-h", "--touch", "-m", "--keyfile", "--encrypt",
             "-stream-in", "-stream-out", "-O", "--to-stdout", "-i", "--ignore-zeros",
             "-o", "--no-same-owner", "--force",
             "-p", "--same-permissions", "--no-same-permissions",
@@ -4789,8 +4789,13 @@ struct SwiftTarMain {
         }()
 
         // --touch: leave extracted entries at the current time (GNU tar
-        // semantics). / --touch：解出項目維持目前時間（GNU tar 語意）。
-        let restoreMtime = !args.contains("--touch")
+        // semantics). `-m` is the same option; every other tar spells it that
+        // way, and a caller reaching for the short form got "unknown option -m"
+        // from a tool that already did exactly what they were asking for.
+        // --touch：解出項目維持目前時間（GNU tar 語意）。`-m` 是同一個選項；其他 tar
+        // 都是這麼寫，而使用短寫的呼叫端得到的是「unknown option -m」——來自一個本來
+        // 就會照做的工具。
+        let restoreMtime = !(args.contains("--touch") || args.contains("-m"))
 
         // --no-same-permissions: apply the umask to extracted modes, which is
         // GNU tar's default for a non-root user. `-p` / `--same-permissions`

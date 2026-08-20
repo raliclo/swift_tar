@@ -100,10 +100,31 @@ done
 # LZFSE 為私有並以 submodule 形式提供；沒有它時，產出的執行檔既不能建立也不能讀取
 # LZFSE 家族，與 ./compile_tar.zsh --no-lzfse 相同。此處以偵測而非寫死決定：設備上沒有
 # lzfse2 checkout，完整 clone 則有。
+# EXCLUDE_LZFSE=1 in the environment forces exclusion even where lzfse2 is
+# checked out, matching `./compile_tar.zsh --no-lzfse`.
+#
+# Detection alone cannot express "I have the engine and do not want it", and
+# there are callers in exactly that position: multissh builds its own copy of
+# swift_tar with -DEXCLUDE_LZFSE on macOS, and had no way to ask for the same
+# thing here. On a full clone this script therefore built WITH the private
+# engine, and on WSL that failed outright -- the shim redeclares
+# `autoreleasepool(invoking:)`, which that Swift already provides on Linux. The
+# caller was left with a build it never asked for and could not turn off.
+#
+# 在環境中設定 EXCLUDE_LZFSE=1，即使 lzfse2 已 checkout 也強制排除，
+# 與 `./compile_tar.zsh --no-lzfse` 一致。
+#
+# 單靠偵測無法表達「我有這個引擎，但我不要它」，而確實有呼叫端正處於這個位置：
+# multissh 在 macOS 上是以 -DEXCLUDE_LZFSE 建置自己那份 swift_tar 的，卻無從在此提出
+# 相同要求。於是在完整 clone 上，本腳本會帶著私有引擎建置，而在 WSL 上那會直接失敗——
+# 該 shim 重複宣告了 `autoreleasepool(invoking:)`，而那個 Swift 在 Linux 上本就提供它。
+# 呼叫端因此得到一個它從未要求、也關不掉的建置。
 SWIFT_DEFINES=(-DEXCLUDE_LZFSE)
 CLI_SRC=()
 TEMP_CLI=""
-if [[ -f lzfse2/lzfse-cli.swift ]]; then
+if [[ -n ${EXCLUDE_LZFSE:-} && ${EXCLUDE_LZFSE} != 0 ]]; then
+    log_msg "EXCLUDE_LZFSE 已設定；不含 LZFSE 引擎 / set; building with -DEXCLUDE_LZFSE"
+elif [[ -f lzfse2/lzfse-cli.swift ]]; then
     TEMP_CLI="$(mktemp -t lzfse-cli-lib.XXXXXX).swift"
     grep -v "^runCLI()$" lzfse2/lzfse-cli.swift > "$TEMP_CLI"
     CLI_SRC=("$TEMP_CLI")

@@ -748,6 +748,33 @@ func lzipCompressStream(_ input: Data, level: Int32 = 6) -> Data? {
 /// C API 無此限制，故此處的 `--zstd-level 22` 確實是 22。
 var zstdCompressionLevel: Int32 = 9
 
+/// 解出檔案時是否原樣還原封存中的權限位元。
+///
+/// 預設為 true，也就是既有行為：`posixWriteFile` 一直是無條件以封存的 mode 開檔並
+/// `fchmod`，等同 GNU tar 恆常帶著 `-p`。改變這個預設會改變今天所有能運作的用法，
+/// 因此新增的是另一側——`--no-same-permissions` 讓權限改為套用行程的 umask，這正是
+/// GNU tar 以非 root 身分解壓時的預設。
+///
+/// 為何以檔案層級變數而非逐層傳參：`posixWriteFile` 只有一個呼叫點，但它與旗標解析
+/// 之間隔著約十個簽章。本檔已有 `zstdCompressionLevel` 等同樣形式的設定，沿用它比
+/// 為一個布林值穿過整條呼叫鏈更小、也更貼近既有寫法。
+///
+/// Whether extraction restores the archive's permission bits verbatim.
+///
+/// Defaults to true, which is the existing behaviour: `posixWriteFile` has always
+/// opened with the archive's mode and `fchmod`ed to it unconditionally, the
+/// equivalent of GNU tar with `-p` always on. Changing that default would change
+/// every use that works today, so what is added is the other side --
+/// `--no-same-permissions` applies the process umask instead, which is what GNU
+/// tar does by default when extracting as a non-root user.
+///
+/// A file-scope variable rather than a threaded parameter because
+/// `posixWriteFile` has a single call site but sits roughly ten signatures away
+/// from where flags are parsed. This file already configures
+/// `zstdCompressionLevel` and others the same way; following that is smaller
+/// than threading a Bool through the whole chain.
+var tarRestorePermissions: Bool = true
+
 func zstdCompressFrame(_ input: Data, level: Int32 = zstdCompressionLevel) -> Data? {
     let bound = ZSTD_compressBound(input.count)
     var out = Data(count: bound)
@@ -2154,8 +2181,30 @@ private func winClearReadOnly(_ dest: String) {
 /// 檔案時更完全不會被修正。
 private func posixWriteFile(dest: String, data: Data, mtime: UInt64, mode: UInt32,
                             restoreMtime: Bool) -> String? {
+    // Apply the umask when permissions are not being restored. Both the open()
+    // and the fchmod() below have to use the same value: open() alone would be
+    // undone by the fchmod, and fchmod alone would leave a window in which the
+    // file exists with the archive's mode -- briefly world-writable for an
+    // archive that contains such a member.
+    //
+    // umask(2) has no read-only form, so the value is read by setting it and
+    // setting it back. That is the standard idiom and not a race worth guarding
+    // here: extraction is the only thing running in this process.
+    //
+    // 不還原權限時套用 umask。下方的 open() 與 fchmod() 必須使用同一個值：只改 open()
+    // 會被 fchmod 蓋回去，而只改 fchmod 則會留下一段「檔案已存在且帶著封存中 mode」的
+    // 空窗——若封存內含全域可寫的成員，那一瞬間它就是全域可寫的。
+    //
+    // umask(2) 沒有唯讀形式，因此以「設定後再設回」讀取其值。那是標準慣用法，此處不值得
+    // 為它加防護：本行程中除了解壓沒有別的東西在跑。
+    let effectiveMode: UInt32 = {
+        guard !tarRestorePermissions else { return mode }
+        let current = umask(0)
+        umask(current)
+        return mode & ~UInt32(current)
+    }()
     clearNonRegular(dest)
-    var fd = dest.withCString { open($0, O_WRONLY | O_CREAT | O_TRUNC, mode_t(mode)) }
+    var fd = dest.withCString { open($0, O_WRONLY | O_CREAT | O_TRUNC, mode_t(effectiveMode)) }
     if fd < 0 && (errno == EACCES || errno == EPERM) {
         // The destination exists but its mode forbids writing. Write permission
         // on a file is not needed to replace it -- only on the directory -- so
@@ -2197,7 +2246,7 @@ private func posixWriteFile(dest: String, data: Data, mtime: UInt64, mode: UInt3
     }
     guard writeOK else { return "write failed for '\(dest)' / 寫入失敗 '\(dest)'" }
 
-    _ = fchmod(fd, mode_t(mode))
+    _ = fchmod(fd, mode_t(effectiveMode))
     if restoreMtime {
         var ts = [timespec(tv_sec: time_t(mtime), tv_nsec: 0),
                   timespec(tv_sec: time_t(mtime), tv_nsec: 0)]
@@ -3673,6 +3722,18 @@ private func printTarUsage() {
                         entries keep the current time (GNU tar semantics)
                         （僅 -x）不還原封存的 mtime，解出項目維持目前時間
                         （GNU tar 語意）
+      -p, --same-permissions
+                      : (-x only) restore the archive's permission bits exactly.
+                        This is the default here, unlike GNU tar, where it is
+                        the default only for root.
+                        （僅 -x）原樣還原封存中的權限位元。此處為預設值，與 GNU tar
+                        不同——在該處這只有 root 才是預設。
+      --no-same-permissions
+                      : (-x only) apply the process umask to extracted modes,
+                        which is GNU tar's default for a non-root user. Given
+                        with -p, -p wins, as in GNU tar.
+                        （僅 -x）對解出的 mode 套用行程 umask，那是 GNU tar 以非 root
+                        身分解壓時的預設。與 -p 同時給定時由 -p 勝出，與 GNU tar 相同。
       -h              : Show this help / 顯示說明
       --version       : Show build date version / 顯示建置日期版本
       -write_foundation / -write_ucrt :
@@ -4346,6 +4407,7 @@ struct SwiftTarMain {
             "-f", "-C", "-n", "-v", "-h", "--touch", "--keyfile", "--encrypt",
             "-stream-in", "-stream-out", "-O", "--to-stdout", "-i", "--ignore-zeros",
             "-o", "--no-same-owner", "--force",
+            "-p", "--same-permissions", "--no-same-permissions",
             "--strip-components", "--zstd-level",
             "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
             // codecs / 壓縮引擎
@@ -4729,6 +4791,26 @@ struct SwiftTarMain {
         // --touch: leave extracted entries at the current time (GNU tar
         // semantics). / --touch：解出項目維持目前時間（GNU tar 語意）。
         let restoreMtime = !args.contains("--touch")
+
+        // --no-same-permissions: apply the umask to extracted modes, which is
+        // GNU tar's default for a non-root user. `-p` / `--same-permissions`
+        // name the existing behaviour explicitly, so a caller can state what it
+        // wants instead of relying on which default this build happens to have.
+        //
+        // The default stays "restore", because that is what every extraction
+        // here has always done; flipping it would change working callers
+        // silently. `--no-same-permissions` losing to `-p` when both appear
+        // matches GNU tar, where the restoring form wins.
+        //
+        // --no-same-permissions：對解出的 mode 套用 umask，那是 GNU tar 以非 root
+        // 身分解壓時的預設。`-p`／`--same-permissions` 則明確指出既有行為，讓呼叫端得以
+        // 表明自己要什麼，而不必仰賴這個建置恰好採用哪個預設。
+        //
+        // 預設維持「還原」，因為此處每一次解壓一直都是這樣做的；翻轉它會無聲改變現有
+        // 呼叫端的行為。兩者同時出現時 `--no-same-permissions` 讓位給 `-p`，與 GNU tar
+        // 一致——還原的那一方勝出。
+        tarRestorePermissions = !args.contains("--no-same-permissions")
+            || args.contains("-p") || args.contains("--same-permissions")
 
         let hasStripComponents = args.contains("--strip-components")
             || args.contains(where: { $0.hasPrefix("--strip-components=") })

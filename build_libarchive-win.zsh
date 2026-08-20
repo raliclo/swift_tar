@@ -14,10 +14,36 @@ if [ ! -f zlib/build/Release/zs.lib ]; then
 fi
 
 build_dir="build/libarchive-win"
+
+# The compiler flag below is spelled -utf-8, not //utf-8.
+#
+# cl.exe accepts either prefix, but a doubled slash is a request to MSYS rather
+# than to the compiler: MSYS rewrites //x to /x only while it is doing argument
+# conversion. A shell started outside that path -- by PowerShell's Start-Process,
+# for one -- passes //utf-8 through verbatim, cl.exe does not recognise it, and
+# the sources are then read in the system ANSI code page. Any file holding a byte
+# that page cannot represent stops the build: on a CP950 machine
+# archive_read_support_format_rar5.c raised C4819, which becomes C2220 here
+# because libarchive builds with /WX.
+#
+# It needs a non-UTF-8 ACP *and* an actual recompile, so a cached archive.lib hid
+# it for as long as nothing invalidated the build tree.
+#
+# 下面那個編譯器旗標寫成 -utf-8，而非 //utf-8。
+#
+# cl.exe 兩種前綴都接受，但雙斜線是說給 MSYS 聽的、不是說給編譯器聽的：MSYS 只在進行
+# 引數轉換時才會把 //x 改寫成 /x。在該路徑之外啟動的 shell——例如由 PowerShell 的
+# Start-Process 啟動者——會原樣傳遞 //utf-8，cl.exe 不認得它，於是原始碼改以系統 ANSI
+# 字碼頁讀取。任何含有該字碼頁無法表示之位元組的檔案都會中止建置：在 CP950 的機器上，
+# archive_read_support_format_rar5.c 觸發 C4819，而此處 libarchive 以 /WX 建置，
+# 該警告即成為 C2220。
+#
+# 它同時需要非 UTF-8 的 ACP 與一次真正的重編，因此只要沒有東西讓建置樹失效，
+# 一份快取的 archive.lib 就會一直把它遮住。
 cmake -S libarchive -B "$build_dir" -G "Visual Studio 17 2022" -A x64 \
     -DBUILD_SHARED_LIBS=OFF \
     -DMSVC_USE_STATIC_CRT=OFF \
-    -DCMAKE_C_FLAGS=//utf-8 \
+    -DCMAKE_C_FLAGS=-utf-8 \
     -DZLIB_LIBRARY="$SCRIPT_DIR/zlib/build/Release/zs.lib" \
     -DZLIB_INCLUDE_DIR="$SCRIPT_DIR/zlib" \
     -DENABLE_ZLIB=ON \

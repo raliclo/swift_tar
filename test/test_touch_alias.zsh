@@ -19,7 +19,8 @@ set -uo pipefail
 # no longer reports an unknown option would pass an implementation that accepts
 # the flag and then ignores it, which is the way an alias most easily goes wrong.
 
-root=${0:A:h}
+script_dir=${0:A:h}
+root=${script_dir:h}
 cd "$root"
 
 tar=release/swift_tar
@@ -52,8 +53,16 @@ now_year=$(date +%Y)
 
 extract_year() {  # <旗標...> -> 解出檔案的 mtime 年份
   rm -rf "$work/out"; mkdir -p "$work/out"
-  ( cd "$work/out" && "$tar_abs" -x "$@" --zstd -f ../a.tzst ) >/dev/null 2>&1
-  stat -f '%Sm' -t '%Y' "$work/out/src/old.txt" 2>/dev/null
+  if ! ( cd "$work/out" && "$tar_abs" -x "$@" --zstd -f ../a.tzst ) >/dev/null 2>&1; then
+    print -- "EXTRACT_FAILED"
+    return
+  fi
+  local stamp
+  if stamp=$(stat -c '%y' "$work/out/src/old.txt" 2>/dev/null); then
+    print -- "${stamp%%-*}"
+  else
+    stat -f '%Sm' -t '%Y' "$work/out/src/old.txt" 2>/dev/null
+  fi
 }
 
 print -- "swift_tar -m／--touch 別名 / the -m alias (archived mtime 2020, now $now_year):"

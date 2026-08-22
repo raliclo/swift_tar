@@ -4423,13 +4423,13 @@ struct SwiftTarMain {
         ]
         // The LZFSE flag names are compiled in only when the engine is. Listing
         // them unconditionally put the literal "other3" into the --no-lzfse
-        // binary, which test_no_lzfse.zsh checks for with `strings`: the public
+        // binary, which test/test_no_lzfse.zsh checks for with `strings`: the public
         // build is meant to carry no trace of the private engine, and the option
         // table is a trace. Rejecting them there is also the right behaviour --
         // that build genuinely cannot do it, so accepting the flag and ignoring
         // it would be the silent-mismatch this whole check exists to stop.
         // LZFSE 的旗標名稱僅在該引擎被編入時才一併編入。先前無條件列出，會使字串
-        // 「other3」出現在 --no-lzfse 的執行檔中，而 test_no_lzfse.zsh 正是以 `strings`
+        // 「other3」出現在 --no-lzfse 的執行檔中，而 test/test_no_lzfse.zsh 正是以 `strings`
         // 檢查此事：公開版本不應留下私有引擎的任何痕跡，而選項表就是一種痕跡。在該版本
         // 拒絕這些旗標也是正確行為——它確實做不到，接受後忽略正是本檢查要杜絕的靜默不符。
         #if !EXCLUDE_LZFSE

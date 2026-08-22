@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# test_encrypt.zsh
+# test/test_encrypt.zsh
 # Verify swift_tar's encryption layer: ChaCha20-Poly1305 over 4 MiB chunks,
 # wrapped OUTSIDE the compression codec. Covers the RFC test vectors, keyfile
 # and passphrase key paths, layering with each codec, and — most importantly —
@@ -10,11 +10,12 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="${HERE:h}"
 UNAME_S="$(uname -s)"
 if [ -z "${ST:-}" ]; then
   case "$UNAME_S" in
-    MSYS*|MINGW*|CYGWIN*) ST="$HERE/release/swift_tar.exe" ;;
-    *) ST="$HERE/release/swift_tar" ;;
+    MSYS*|MINGW*|CYGWIN*) ST="$ROOT/release/swift_tar.exe" ;;
+    *) ST="$ROOT/release/swift_tar" ;;
   esac
 fi
 if [ -z "${SKIP_SLOW_XZ+x}" ]; then
@@ -94,7 +95,7 @@ BLOB_SRC=""
 # 未匹配的 glob 會原樣保留為字面值、由下方 `[ -f ]` 擋掉；但 zsh 預設的 NOMATCH
 # 會搶先報錯，導致 macOS/Linux 上根本走不到「語料不存在」的 fallback。本機看不出
 # 問題——scoop zsh 的 .zshenv 設了 `unsetopt nomatch`。
-for f in "$HERE"/verifications/rgb1/sample_consecutive/*.rgb1(N); do
+for f in "$ROOT"/verifications/rgb1/sample_consecutive/*.rgb1(N); do
   [ -f "$f" ] || continue
   tail -c +877 "$f" > "$SRC/blob.bin"
   BLOB_SRC="sampled video frame ${f##*/}"

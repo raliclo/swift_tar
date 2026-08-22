@@ -144,7 +144,7 @@ the same trade-off the codecs make.
 
 ## RGB1 container throughput by codec
 
-`../test_swift_tar_rgb1.zsh` archives an RGB1 container through every swift_tar
+`../test/test_swift_tar_rgb1.zsh` archives an RGB1 container through every swift_tar
 codec and reports archive size, compression ratio, create/extract time and MB/s,
 together with the run date and build version. With `--record` it also writes the
 table to the file for its platform:
@@ -164,8 +164,8 @@ about 0.44, and it was re-randomised each run so no two records were comparable.
 > unchanged. Record deliberately, on an idle machine.
 
 ```sh
-../test_swift_tar_rgb1.zsh              # verify only / 僅驗證
-../test_swift_tar_rgb1.zsh --record     # verify and update this platform's table
+../test/test_swift_tar_rgb1.zsh              # verify only / 僅驗證
+../test/test_swift_tar_rgb1.zsh --record     # verify and update this platform's table
 ```
 
 ## ZIP throughput and RSS on claw-code

@@ -1,13 +1,14 @@
 #!/usr/bin/env zsh
-# test_strip_components.zsh -- verify --strip-components extraction semantics.
-# test_strip_components.zsh -- 驗證 --strip-components 解出語意。
+# test/test_strip_components.zsh -- verify --strip-components extraction semantics.
+# test/test_strip_components.zsh -- 驗證 --strip-components 解出語意。
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="${HERE:h}"
 if [ -z "${ST:-}" ]; then
   case "$(uname -s)" in
-    MSYS*|MINGW*|CYGWIN*) ST="$HERE/release/swift_tar.exe" ;;
-    *) ST="$HERE/release/swift_tar" ;;
+    MSYS*|MINGW*|CYGWIN*) ST="$ROOT/release/swift_tar.exe" ;;
+    *) ST="$ROOT/release/swift_tar" ;;
   esac
 fi
 if [ ! -x "$ST" ]; then

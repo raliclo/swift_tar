@@ -16,12 +16,12 @@
 # gzip, zstd and the ZIP backend are statically linked from the zlib, zstd and
 # libarchive submodules. The other non-LZFSE codecs (bzip2/xz/lz4/lzip) still
 # shell out to CLI tools on PATH. The package carries version-win.txt staged as
-# version.txt plus the three dependency licenses, and no development files,
-# because nothing else is needed at run time.
+# version.txt plus swift_tar's own license and the three dependency licenses,
+# and no development files, because nothing else is needed at run time.
 # gzip、zstd 與 ZIP 後端皆自 zlib、zstd、libarchive submodule 靜態連結。其餘非
 # LZFSE 的壓縮引擎（bzip2/xz/lz4/lzip）仍呼叫 PATH 上的外部 CLI。套件內含以
-# version.txt 為名放入的 version-win.txt 與三份相依授權檔，不含開發用檔案，因為
-# 執行期不需要它們。
+# version.txt 為名放入的 version-win.txt、swift_tar 自身授權與三份相依授權檔，
+# 不含開發用檔案，因為執行期不需要它們。
 #
 # Zips with the Windows-bundled bsdtar rather than PowerShell's
 # Compress-Archive: the user-level scripting policy reserves PowerShell for UAC
@@ -52,6 +52,7 @@ die() { print -ru2 -- "package_win: $1"; exit 1 }
 
 [[ -f $exe ]]                 || die "not found: $exe (build it first, e.g. via compile_tar-win.bat)"
 [[ -f version-win.txt ]]      || die "version-win.txt not found (run zsh ./build_zlib-win.zsh)"
+[[ -f LICENSE ]]              || die "LICENSE not found"
 [[ -f zlib/LICENSE ]]         || die "zlib/LICENSE not found (initialize the zlib submodule)"
 [[ -f zstd/LICENSE ]]         || die "zstd/LICENSE not found (initialize the zstd submodule)"
 [[ -f libarchive/COPYING ]]   || die "libarchive/COPYING not found (initialize the libarchive submodule)"
@@ -79,6 +80,7 @@ cp $rt_bin/*.dll $stage_dir/
 # 以無後綴的名稱放入：在僅含 Windows 的套件內，後綴只是雜訊，且套件版面維持與文件
 # 所述一致。
 cp version-win.txt      $stage_dir/version.txt
+cp LICENSE              $stage_dir/swift_tar-LICENSE.txt
 cp zlib/LICENSE         $stage_dir/zlib-LICENSE.txt
 cp zstd/LICENSE         $stage_dir/zstd-LICENSE.txt
 cp libarchive/COPYING   $stage_dir/libarchive-COPYING.txt
@@ -103,4 +105,4 @@ out_abs=${out:A}
 
 rm -rf $stage_root
 dll_count=${#$(print -l $rt_bin/*.dll(N))}
-print -r -- "Packaged: $out (swift_tar.exe + $dll_count Swift runtime DLLs + dependency metadata/licenses)"
+print -r -- "Packaged: $out (swift_tar.exe + $dll_count Swift runtime DLLs + project/dependency metadata/licenses)"

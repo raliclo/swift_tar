@@ -25,7 +25,8 @@ set -uo pipefail
 # The fixture is 0666 rather than the more usual 0644: a umask of 022 has no
 # visible effect on 0644, so that test would pass whether the code worked or not.
 
-root=${0:A:h}
+script_dir=${0:A:h}
+root=${script_dir:h}
 cd "$root"
 
 tar=release/swift_tar

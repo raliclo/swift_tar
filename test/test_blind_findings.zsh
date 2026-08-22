@@ -4,9 +4,9 @@
 # test_blind_findings.zsh -- read_easy 盲測（2026-08-18，round 1-16）所發現
 # 缺陷的回歸測試。
 #
-#   ./test_blind_findings.zsh          # run against release/swift_tar[.exe]
-#   ST=/path/to/swift_tar ./test_blind_findings.zsh   # or a specific binary
-#   ./test_blind_findings.zsh --help
+#   ./test/test_blind_findings.zsh          # run against release/swift_tar[.exe]
+#   ST=/path/to/swift_tar ./test/test_blind_findings.zsh   # or a specific binary
+#   ./test/test_blind_findings.zsh --help
 #
 # Each case below reproduced a real defect before its fix. Two of them are the
 # reason this file uses `timeout` at all: a hang is the failure mode, and a test
@@ -23,10 +23,11 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
 fi
 
 HERE="${script_path:h}"
+ROOT="${HERE:h}"
 if [ -z "${ST:-}" ]; then
   case "$(uname -s)" in
-    MSYS*|MINGW*|CYGWIN*) ST="$HERE/release/swift_tar.exe" ;;
-    *) ST="$HERE/release/swift_tar" ;;
+    MSYS*|MINGW*|CYGWIN*) ST="$ROOT/release/swift_tar.exe" ;;
+    *) ST="$ROOT/release/swift_tar" ;;
   esac
 fi
 if [ ! -x "$ST" ]; then

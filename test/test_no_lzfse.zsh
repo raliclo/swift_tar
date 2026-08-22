@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# test_no_lzfse.zsh
+# test/test_no_lzfse.zsh
 # Verify the public/distributable build (compile_no_lzfse.zsh) ships NONE of the
 # private LZFSE engine: no bvx3/other3 in the binary, LZFSE codecs unavailable,
 # LZFSE archives undecodable — while standard codecs and plain tar still work.
@@ -10,7 +10,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-cd "$HERE"
+ROOT="${HERE:h}"
+cd "$ROOT"
 
 LOG="$HERE/test_no_lzfse.log"
 exec > >(tee "$LOG") 2>&1

@@ -12,10 +12,11 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="${HERE:h}"
 if [ -z "${ST:-}" ]; then
   case "$(uname -s)" in
-    MSYS*|MINGW*|CYGWIN*) ST="$HERE/release/swift_tar.exe" ;;
-    *) ST="$HERE/release/swift_tar" ;;
+    MSYS*|MINGW*|CYGWIN*) ST="$ROOT/release/swift_tar.exe" ;;
+    *) ST="$ROOT/release/swift_tar" ;;
   esac
 fi
 

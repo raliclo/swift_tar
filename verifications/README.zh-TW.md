@@ -129,7 +129,7 @@ peak RSS 51.48 MB；keyfile baseline 則為 6.13 MB。
 
 ## RGB1 容器各 codec 吞吐量
 
-`../test_swift_tar_rgb1.zsh` 將 RGB1 容器經由 swift_tar 各 codec 封存，回報封存
+`../test/test_swift_tar_rgb1.zsh` 將 RGB1 容器經由 swift_tar 各 codec 封存，回報封存
 大小、壓縮比、建立／解出耗時與 MB/s，並附上執行日期與建置版本。加上 `--record`
 才會將表格寫入該平台對應的檔案：
 [`-mac.txt`](rgb1_container_mbps_output-mac.txt) ·
@@ -146,8 +146,8 @@ codec 都會直接匹配——該表把 zstd 記為壓縮比 0.001，而真實�
 > 寫入紀錄。
 
 ```sh
-../test_swift_tar_rgb1.zsh              # 僅驗證 / verify only
-../test_swift_tar_rgb1.zsh --record     # 驗證並更新本平台的表格
+../test/test_swift_tar_rgb1.zsh              # 僅驗證 / verify only
+../test/test_swift_tar_rgb1.zsh --record     # 驗證並更新本平台的表格
 ```
 
 ## claw-code ZIP 吞吐量與 RSS

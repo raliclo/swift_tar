@@ -83,7 +83,7 @@ submodule.
 
 ```sh
 ./compile_no_lzfse.zsh         # → release/swift_tar (public, LZFSE-free)
-./test_no_lzfse.zsh            # verify the exclusion + standard codecs still work
+./test/test_no_lzfse.zsh            # verify the exclusion + standard codecs still work
 ```
 
 ### Windows
@@ -119,8 +119,8 @@ The remaining external codecs (bzip2, xz, lz4, lzip) require their corresponding
 Scoop CLI tools; `build_tool_install-win.zsh` installs the complete toolchain.
 
 The Windows ZIP contains the statically linked executable, Swift runtime DLLs,
-`version.txt` (staged from `version-win.txt`), `zlib-LICENSE.txt`, `zstd-LICENSE.txt`, and
-`libarchive-COPYING.txt`. It intentionally
+`version.txt` (staged from `version-win.txt`), `swift_tar-LICENSE.txt`,
+`zlib-LICENSE.txt`, `zstd-LICENSE.txt`, and `libarchive-COPYING.txt`. It intentionally
 excludes `zs.lib`, `zstd_static.lib`, headers, and the CMake build trees
 because they are development artifacts, not runtime dependencies.
 
@@ -283,7 +283,7 @@ non-zero exit status; it never returns partial plaintext as if it were valid.
 
 The primitives are implemented from the specifications and checked against
 their published test vectors (RFC 8439, RFC 4231, RFC 7914, FIPS 180-4).
-Run them with `--crypto-selftest`, or the full suite with `./test_encrypt.zsh`.
+Run them with `--crypto-selftest`, or the full suite with `./test/test_encrypt.zsh`.
 On Windows/MSYS, `verifications/encrypt_windows_correctness.zsh` reruns the
 self-test and a CLI smoke suite against `release/swift_tar.exe`; use
 `verifications/encrypt_mbps_win.zsh` for Windows MB/s throughput.
@@ -715,5 +715,11 @@ zstd/              submodule — pinned static zstd backend on Windows
 
 ## License
 
-See [lzfse2](./lzfse2) for the compression engine's license; libarchive and
-zlib retain their own licenses.
+swift_tar is licensed under the GNU General Public License v3.0
+(`GPL-3.0-only`).
+
+Copyright (C) 2026 Ralic Lo <raliclo@gmail.com>
+
+See [LICENSE](./LICENSE) for the project license statement. Bundled or linked
+components keep their own licenses: see [lzfse2](./lzfse2) for the compression
+engine's license; zlib, zstd, and libarchive retain their own licenses.

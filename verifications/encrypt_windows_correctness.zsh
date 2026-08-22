@@ -41,12 +41,12 @@ run_test() {
     mkdir -p "$tmp/src"
     printf 'alpha\n' > "$tmp/src/a.txt"
     printf 'bravo\n' > "$tmp/src/b.txt"
-    # Real image content when the sampled corpus is present; see test_encrypt.zsh for
+    # Real image content when the sampled corpus is present; see test/test_encrypt.zsh for
 # the same pattern and the reason a labelled random fallback stays. One 1080p
 # RGB1 payload is 6,220,800 B, which crosses the 4 MiB chunk boundary and leaves
 # a partial tail.
 # 取樣語料存在時使用真實影像內容；相同作法與保留「明確標示的隨機備援」之理由見
-# test_encrypt.zsh。一張 1080p 的 RGB1 payload 為 6,220,800 B，跨過 4 MiB 分塊邊界並
+# test/test_encrypt.zsh。一張 1080p 的 RGB1 payload 為 6,220,800 B，跨過 4 MiB 分塊邊界並
 # 留下不足一塊的尾段。
 _blob_src=""
 # (N) null-glob: without it zsh's default NOMATCH aborts before the labelled

@@ -2,26 +2,26 @@
 
 > **Fixed 2026-08-18 / 已修復.** Every defect the blind test turned up in the
 > program itself is now fixed, verified, and covered by
-> `test_blind_findings.zsh` (15 checks): the trailing-slash doubled separator and
+> `test/test_blind_findings.zsh` (15 checks): the trailing-slash doubled separator and
 > the `--delete` / `-u` breakage it caused, the `< /dev/null` encryption hang,
 > the ignored inline `--flag=value` spellings, `--zstd-level`'s odd exit 2, and
 > CRLF in the `-t` / `--identify` output on Windows. The suite fails 11 of its
 > checks against the previous binary and passes all 15 against this one.
 >
 > **Nothing is open, 2026-08-19.** Every defect recorded below is fixed and under
-> regression test — `test_blind_findings.zsh` is at 84 checks, all passing, and it
+> regression test — `test/test_blind_findings.zsh` is at 84 checks, all passing, and it
 > fails against every earlier binary. The one entry marked "recorded, not
 > actioned" is the case-collision *warning* option, which is a feature choice and
 > is written up with the reasoning rather than left as a task.
 >
 > **2026-08-18 已修復。** 盲測在程式本身找到的缺陷已全部修復、驗證，並由
-> `test_blind_findings.zsh`（15 項檢查）涵蓋：尾隨斜線造成的分隔符加倍及其引發的
+> `test/test_blind_findings.zsh`（15 項檢查）涵蓋：尾隨斜線造成的分隔符加倍及其引發的
 > `--delete`／`-u` 失效、`< /dev/null` 下的加密卡死、被忽略的內聯 `--flag=value`
 > 寫法、`--zstd-level` 特立獨行的 exit 2，以及 Windows 上 `-t`／`--identify` 輸出
 > 的 CRLF。該套件對舊 binary 有 11 項失敗，對新 binary 15 項全過。
 >
 > **2026-08-19：已無未處理項目。** 以下記錄的每一項缺陷皆已修復並納入回歸測試——
-> `test_blind_findings.zsh` 現有 84 項檢查、全數通過，且對先前每一版 binary 都會失敗。
+> `test/test_blind_findings.zsh` 現有 84 項檢查、全數通過，且對先前每一版 binary 都會失敗。
 > 唯一標為「記錄，未處理」的是大小寫碰撞的「警告」選項，那是功能取捨，已連同理由寫明，
 > 而非留作待辦。
 >
@@ -150,7 +150,7 @@ processes per file across 405 files and four `-n` arms. All checks PASS.
 One thing worth knowing before running it here: on Windows the script looks for
 `release/swift_tar`, not `release/swift_tar.exe`, and stops with
 `no swift_tar at … (set SWIFT_TAR=)`. It says exactly what to do, so this is a
-rough edge rather than a defect, but it differs from `test_blind_findings.zsh`,
+rough edge rather than a defect, but it differs from `test/test_blind_findings.zsh`,
 which picks the right name from `uname -s`.
 
 2026-08-19 狀態：**四個項目皆已修正。** 項目 1、2、3 於 `74dd2b4` 修正，仍保留於下
@@ -164,7 +164,7 @@ which picks the right name from `uname -s`.
 
 在此執行前值得先知道一件事：Windows 上該腳本找的是 `release/swift_tar` 而非
 `release/swift_tar.exe`，會以 `no swift_tar at …（set SWIFT_TAR=）` 停下。它明確說出
-該怎麼做，故屬粗糙處而非缺陷，但與依 `uname -s` 選對檔名的 `test_blind_findings.zsh`
+該怎麼做，故屬粗糙處而非缺陷，但與依 `uname -s` 選對檔名的 `test/test_blind_findings.zsh`
 不一致。
 
 ### 1. encrypt_windows_correctness.zsh reports success but exits 1 / 報成功卻回傳 1  ▸ ✅ 已修正 74dd2b4
@@ -210,7 +210,7 @@ NTFS 沒有 POSIX mode bits，MSYS 對所有一般檔案皆回報 644——這�
 （含它真正要保護的平行解壓順序案例）全部通過。該腳本對「不可寫目的地」已有前提不成立
 即跳過的機制，mode 檢查應比照處理，而非直接失敗。
 
-### 3. test_no_lzfse.zsh fails silently on Windows / 在 Windows 上無聲失敗  ▸ ✅ 已修正 74dd2b4
+### 3. test/test_no_lzfse.zsh fails silently on Windows / 在 Windows 上無聲失敗  ▸ ✅ 已修正 74dd2b4
 
 It calls `./compile_tar.zsh`, which is macOS-only (`/opt/homebrew`, `otool`), and
 both streams are discarded with `>/dev/null 2>&1`. The run prints
@@ -318,8 +318,8 @@ rather than below it is what let that last part happen.
 `exit(2)`。能一併處理的關鍵，在於把 `optValue` 宣告於 codec 區塊之上而非其下。
 
 Regression coverage for both spellings of `--keyfile` and `--zstd-level` is in
-`test_blind_findings.zsh`, which fails 11 checks against the previous binary.
-`--keyfile` 與 `--zstd-level` 兩種寫法的回歸測試位於 `test_blind_findings.zsh`，該
+`test/test_blind_findings.zsh`, which fails 11 checks against the previous binary.
+`--keyfile` 與 `--zstd-level` 兩種寫法的回歸測試位於 `test/test_blind_findings.zsh`，該
 套件對舊 binary 有 11 項失敗。
 
 ## Fallout from the .zsh rename / 改名後的連帶問題
@@ -374,9 +374,9 @@ swift_tar -c --zip64 -f o.zip -C w src
 # -> exit 1, no archive produced
 ```
 
-Two committed tests fail because of it: `test_blind_findings.zsh`
+Two committed tests fail because of it: `test/test_blind_findings.zsh`
 (`FAIL: --zip alone still works (want '0', got '1')`) and
-`test_swift_tar_rgb1.zsh`.
+`test/test_swift_tar_rgb1.zsh`.
 
 **Cause.** `ca4bf0d` added this to `libarchive_zip_bridge.c:200` to fix a real
 Windows defect — a Traditional Chinese filename failed the whole write with
@@ -426,7 +426,7 @@ branch, setting general purpose bit 11 from `nl_langinfo(CODESET)` instead.
 it activates a destructive `C`-locale conversion that turns every byte of
 `中文檔名.txt` into U+FFFD, so the option was previously failing to initialise
 rather than doing harm. Windows keeps the option, which is the mechanism that
-works there. `test_blind_findings.zsh` passes on Linux (85/0) and Windows (84/0);
+works there. `test/test_blind_findings.zsh` passes on Linux (85/0) and Windows (84/0);
 macOS was verified by the author of the fix.
 
 **由 `101584d` 修正，2026-08-19 複核。** 採用的並非上列前兩個方向：`hdrcharset`
@@ -790,12 +790,12 @@ been made.
 `\\?\`-prefixed absolute path for each, so no single call is bound by MAX_PATH,
 and the three extraction sites now throw instead of swallowing the result. After
 the fix all 97 target lengths extract, and the directory count matches GNU tar's.
-Covered by `test_blind_findings.zsh`, which sweeps ten lengths chosen from inside
+Covered by `test/test_blind_findings.zsh`, which sweeps ten lengths chosen from inside
 and outside the old failure bands.
 
 **修法。** `winMakeDirectories()` 逐一走訪各層，對每一層以 `\\?\` 前綴的絕對路徑呼叫
 `_wmkdir`，故沒有任何一次呼叫受 MAX_PATH 限制；三處解壓呼叫改為擲出錯誤而非吞掉結果。
-修正後 97 個目標長度全部可解出，目錄數與 GNU tar 一致。由 `test_blind_findings.zsh`
+修正後 97 個目標長度全部可解出，目錄數與 GNU tar 一致。由 `test/test_blind_findings.zsh`
 涵蓋，該測試自舊失敗帶的帶內與帶外各取共十個長度掃描。
 
 ### Round 22: two defects in the ZIP backend / ZIP 後端的兩個缺陷  ▸ ✅ 已修正 2026-08-18

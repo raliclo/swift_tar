@@ -139,7 +139,7 @@ image at all.
 
 **`tar` in the guest is swift_tar.** Any test that wants a *foreign* archive
 must not reach for `tar` by name there, or it will encrypt, extract or compare
-swift_tar's own output and call it third-party. `test_encrypt.zsh` picks its
+swift_tar's own output and call it third-party. `test/test_encrypt.zsh` picks its
 `.tgz` producer by self-description for exactly this reason: it skips anything
 reporting `swift_tar`, skips busybox because it cannot compress, and reports a
 clean SKIP if no compressing third-party tar exists rather than failing on a
@@ -153,7 +153,7 @@ precondition the platform was never meant to meet.
 
 **guest 內的 `tar` 是 swift_tar。** 任何需要「外來封存」的測試都不可在該處以名稱取用
 `tar`，否則會把 swift_tar 自己的輸出拿去加密、解出或比對，並稱之為第三方。
-`test_encrypt.zsh` 挑選 `.tgz` 產生器時以自我描述為準，正是為此：略過自報 `swift_tar`
+`test/test_encrypt.zsh` 挑選 `.tgz` 產生器時以自我描述為準，正是為此：略過自報 `swift_tar`
 者、略過不能壓縮的 busybox，若不存在可壓縮的第三方 tar 則乾淨跳過並回報，而不是在一個
 該平台本就不預期滿足的前提上失敗。
 
@@ -275,7 +275,7 @@ measurement leaves a record nobody chose to take.
 | How to use a feature | `README.md` + `README.zh-TW.md`, both, kept symmetric |
 | A defect, or an incompatibility with another tool | `todo/todo.md` — **not** the README |
 | A measurement | `verifications/*_output-<platform>.txt`, written only with `--record` |
-| A regression test for a fixed defect | `test_blind_findings.zsh` |
+| A regression test for a fixed defect | `test/test_blind_findings.zsh` |
 
 Defect narratives were moved out of the READMEs deliberately: a README that
 catalogues its own bugs teaches the reader to distrust the parts that are fine.

@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# test_swift_tar_rgb1.zsh
+# test/test_swift_tar_rgb1.zsh
 # Integration test: an RGB1 container packed by swift_tar must survive a full
 # archive round-trip through swift_tar's own tar / gzip / zip pipelines and come
 # back byte-for-byte, with --rgb1-info and --rgb1-raw still decoding correctly.
@@ -13,10 +13,11 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="${HERE:h}"
 if [ -z "${ST:-}" ]; then
   case "$(uname -s)" in
-    MSYS*|MINGW*|CYGWIN*) ST="$HERE/release/swift_tar.exe" ;;
-    *) ST="$HERE/release/swift_tar" ;;
+    MSYS*|MINGW*|CYGWIN*) ST="$ROOT/release/swift_tar.exe" ;;
+    *) ST="$ROOT/release/swift_tar" ;;
   esac
 fi
 SYS_TAR="$(command -v tar)"
@@ -161,8 +162,8 @@ ms()  { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f", (b-a)*1000}'; }
 # 依平台加後綴。共用單一檔案會造成陷阱：入版的表格錄自 Windows，而本腳本在 macOS
 # 上跑一次就會靜默地把它換成 macOS 的數字——只留下一個沒人解釋得清的 diff。現在每個
 # 平台各自擁有一個檔案，三者可同時入版。
-. "$HERE/platform.zsh"
-RESULTS="$HERE/verifications/rgb1_container_mbps_output-$(swift_tar_platform).txt"
+. "$ROOT/platform.zsh"
+RESULTS="$ROOT/verifications/rgb1_container_mbps_output-$(swift_tar_platform).txt"
 
 # Built in a temp file and moved into place only after the last codec passes,
 # rather than truncating the committed file up front and appending as we go.
@@ -322,7 +323,7 @@ check_reason "a directory as the pack payload says it is a directory" \
 # 不提供合成備援。來自錯誤語料的紀錄比沒有紀錄更糟，而該語料只差一道指令即可產生
 # （make_consecutive_corpus.zsh）。
 BIGSRC=""
-for d in "$HERE/verifications/rgb1/sample_consecutive" "$HERE/verifications/rgb1/sample"; do
+for d in "$ROOT/verifications/rgb1/sample_consecutive" "$ROOT/verifications/rgb1/sample"; do
   # (N) null-glob: neither sample dir is required to exist, and zsh's default
   # NOMATCH would abort here rather than fall through to the no-corpus path.
   # (N) null-glob：兩個 sample 目錄都非必要存在，而 zsh 預設的 NOMATCH 會在此
@@ -331,7 +332,7 @@ for d in "$HERE/verifications/rgb1/sample_consecutive" "$HERE/verifications/rgb1
     [ -f "$f" ] || continue
     BIGSRC="$TMP/bigsrc"; mkdir -p "$BIGSRC"
     cp "$f" "$BIGSRC/big.rgb1"
-    CORPUS_FRAME="${f#$HERE/}"
+    CORPUS_FRAME="${f#$ROOT/}"
     break 2
   done
 done

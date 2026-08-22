@@ -71,7 +71,7 @@ binary，完全**不含**私有 LZFSE 引擎——不編譯 `lzfse-cli.swift`，
 
 ```sh
 ./compile_no_lzfse.zsh         # → release/swift_tar（公開版、不含 LZFSE）
-./test_no_lzfse.zsh            # 驗證排除是否生效，且標準 codec 仍可用
+./test/test_no_lzfse.zsh            # 驗證排除是否生效，且標準 codec 仍可用
 ```
 
 ### Windows
@@ -105,7 +105,8 @@ release 驗證。
 
 Windows ZIP 包含靜態連結的執行檔、Swift runtime DLL、`version.txt`（由
 `version-win.txt` 放入）、
-`zlib-LICENSE.txt`、`zstd-LICENSE.txt` 與 `libarchive-COPYING.txt`。
+`swift_tar-LICENSE.txt`、`zlib-LICENSE.txt`、`zstd-LICENSE.txt` 與
+`libarchive-COPYING.txt`。
 `zs.lib`、`zstd_static.lib`、headers 與
 CMake build tree 屬於開發產物，並非 runtime dependency，因此不放入 release。
 
@@ -254,7 +255,7 @@ keyfile **沒有格式要求**：文字或二進位、任何長度皆可，位�
 
 密碼學原語依規範實作，並對照其公開測試向量驗證（RFC 8439、RFC 4231、
 RFC 7914、FIPS 180-4）。可用 `--crypto-selftest` 執行，完整測試套件則為
-`./test_encrypt.zsh`。Windows/MSYS 可用 `verifications/encrypt_windows_correctness.zsh`
+`./test/test_encrypt.zsh`。Windows/MSYS 可用 `verifications/encrypt_windows_correctness.zsh`
 針對 `release/swift_tar.exe` 重跑 self-test 與 CLI smoke suite；Windows MB/s
 吞吐量則使用 `verifications/encrypt_mbps_win.zsh`。
 
@@ -640,4 +641,10 @@ zstd/              子模組 —— Windows 固定版本的靜態 zstd backend
 
 ## 授權
 
-壓縮引擎授權見 [lzfse2](./lzfse2)；libarchive 與 zlib 保留各自授權。
+swift_tar 採用 GNU General Public License v3.0
+（`GPL-3.0-only`）授權。
+
+Copyright (C) 2026 Ralic Lo <raliclo@gmail.com>
+
+專案授權聲明見 [LICENSE](./LICENSE)。Bundled 或 linked components 保留各自授權：
+壓縮引擎授權見 [lzfse2](./lzfse2)；zlib、zstd 與 libarchive 保留各自授權。

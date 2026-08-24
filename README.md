@@ -651,6 +651,12 @@ which one you get is not a stable interface and may change between builds.
 | `0` | the requested operation completed |
 | non-zero | it did not; the reason goes to stderr |
 
+**A truncated archive is a failure, not an empty one.** An empty file is a legal
+empty archive and exits `0`, matching `bsdtar`. Anything else that cannot be read
+as an archive exits non-zero — including a `.tar.gz` cut inside its gzip header,
+which decodes to zero bytes and used to be indistinguishable from the empty case.
+So `-t` exiting `0` does mean the archive was readable.
+
 **A non-zero exit does not mean nothing was written.** Work is streamed, not
 staged, so whatever completed before the failure stays on disk:
 

@@ -295,6 +295,17 @@ catalogues its own bugs teaches the reader to distrust the parts that are fine.
 - **A test that cannot fail proves nothing.** Run the new test against the
   unfixed binary before believing it.
   **不會失敗的測試什麼也證明不了。** 相信一個新測試之前，先拿未修正的執行檔跑一次。
+- **A fallback inside a test can hide the case the test exists for.** A
+  self-reference case was written as `cmd1 || cmd2`. On Windows `cmd1` failed,
+  the fallback ran, and the case passed. On macOS `cmd1` *succeeded* — so the
+  fallback never ran, and what got measured was the broken path: the archive
+  collected itself. The case was green on one platform for two weeks precisely
+  because the fallback worked. If a case needs a fallback, assert which branch
+  ran.
+  **測試內部的備援，可能掩蓋該測試存在的目的。** 一個自我參照案例寫成
+  `cmd1 || cmd2`。Windows 上 `cmd1` 失敗、備援執行、案例通過；macOS 上 `cmd1`
+  **成功**，備援永不執行，量到的正是壞掉那條——封存把自己收了進去。該案例在其中一個
+  平台上綠了兩週，正是因為備援有效。若某案例確實需要備援，請斷言實際走的是哪一支。
 - **`.sh` → `.zsh` renames drop the exec bit.** Eleven committed scripts became
   non-executable that way; two test suites failed with 126 as a result.
   **`.sh` → `.zsh` 改名會掉執行位元。** 曾有十一支入版腳本因此無法執行。

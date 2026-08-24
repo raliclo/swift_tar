@@ -460,6 +460,67 @@ visible rather than looking like two unrelated investigations:
 The two that remain are below.
 仍存在的兩項如下。
 
+### macOS 2026-08-25: a truncated .tar.gz still read as an empty archive / 截斷的 .tar.gz 仍被讀成空封存  ▸ ✅ 已修正 2026-08-25
+
+The under-512 fix closed the raw-bytes half. A `.tar.gz` cut inside its gzip
+header never reaches the tar layer to be measured by it: it decodes to zero
+bytes, and zero bytes is what a legal empty archive also looks like.
+
+`gzipDecodeStream` ended with `return atBoundary`. That flag starts true and is
+only set false once output is produced, so a stream that yielded nothing kept
+its initial value and reported success. Measured on a 132-byte archive against
+`/usr/bin/tar`:
+
+| cut to | swift_tar (before) | bsdtar |
+|---|---|---|
+| 10, 20, 30 B | `0`, no output | `1` |
+| 50 B and up | `1` | `1` |
+
+The boundary was where the deflate data grew long enough for inflate itself to
+object. Fixed by tracking whether any input arrived and whether `Z_STREAM_END`
+was ever reached: an empty source stays a legal empty archive at exit 0, while a
+non-empty source that never reaches stream end is truncated. Pinned by six cases
+in `test/test_blind_findings.zsh`, including the two that must NOT be caught —
+an empty file, and an intact archive.
+
+<512 的修正處理了「純位元組」那一半。在 gzip 標頭內就被切斷的 `.tar.gz` 根本到不了
+tar 層：它解出零位元組，而零位元組正是合法空封存的樣子。`gzipDecodeStream` 結尾為
+`return atBoundary`，該旗標初值為 true 且僅在產出時翻轉，故毫無產出的串流保有初值並
+回報成功。修法為追蹤「是否有輸入抵達」與「是否曾抵達 `Z_STREAM_END`」；空來源仍是合法
+空封存並維持離開碼 0，非空來源若從未抵達串流結尾即為截斷。已以六個案例釘住，含兩個
+絕不能誤傷的形狀：空檔案與完好的封存。
+
+### macOS 2026-08-25: self-exclusion silently off when the -f path has a `..` through a missing directory / `-f` 路徑經過不存在的目錄時自我排除被靜默停用  ▸ ✅ 已修正 2026-08-25
+
+`fileIdentity` compares device+inode, which is the right question to ask — a
+name can reach the same file through a symlink or a different spelling. But it
+gave up when `lstat` failed, and `lstat` fails with ENOENT when an intermediate
+component does not exist: the kernel walks `a/../b` by entering `a`.
+
+So `-f ./out/../backup.tar` in a directory with no `out/` created the archive
+(the writer opens a normalised path), then failed to identify it, returned nil,
+and disabled self-exclusion entirely — the archive collected itself, silently.
+The open path was normalised and the identity path was not.
+
+Fixed by standardising the path before `lstat`, with the raw path as a fallback.
+Verified across all three spellings: `./out/../x.tar` with and without `out/`
+existing, and the plain path — all three now skip the archive.
+
+Found because `test_blind_findings.zsh` failed here but not on Windows. The test
+used `cmd1 || cmd2`; on macOS `cmd1` **succeeded** (exit 0) so the fallback never
+ran and the broken path was the one measured, while on Windows `cmd1` failed and
+the fallback made it pass. The fallback hid the thing the case existed to test.
+
+`fileIdentity` 比對 device+inode——這個提問方式是對的，因為同一個檔案可透過 symlink 或
+不同寫法被走到。但它在 `lstat` 失敗時放棄，而核心走訪 `a/../b` 時會實際進入 `a`，中間
+組件不存在即以 ENOENT 失敗。於是在沒有 `out/` 的目錄中寫 `-f ./out/../backup.tar`：
+封存被建立、身分辨識失敗、回傳 nil，自我排除整個停用，封存靜默地把自己收了進去。
+開檔路徑做了正規化，身分路徑沒有。修法為先正規化再 `lstat`，並以原始路徑為備援。
+
+此項之所以被發現，是因為該測試在 macOS 失敗而在 Windows 通過：測試使用
+`cmd1 || cmd2`，macOS 上 `cmd1` **成功**（離開碼 0），備援永不執行，量到的正是壞掉的
+那條；Windows 上 `cmd1` 失敗、落到備援因而通過。**備援掩蓋了該案例存在的目的。**
+
 ### macOS round 5: raw bytes under 512 still read as an empty archive / 小於 512 bytes 的隨機資料仍被讀成空封存  ▸ ✅ 已修正 2026-08-19
 
 The truncated-`.tar.gz` half of this is fixed. What remains is input that is not

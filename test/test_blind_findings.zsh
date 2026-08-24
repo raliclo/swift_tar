@@ -1317,6 +1317,48 @@ else
   echo "SKIP: raw typeflag '6' fixture (verifications/make_raw_tar.zsh missing)"
 fi
 
+
+# ---- a truncated .tar.gz is not an empty archive ----
+# The short-input guard above catches a source that ends mid-header, but a
+# .tar.gz cut inside its gzip header never reaches the tar layer at all: it
+# decodes to zero bytes, and zero bytes is what a legal empty archive also
+# looks like. gzipDecodeStream returned success for it, so `-t` printed nothing
+# and exited 0 where bsdtar exits 1. The boundary was where the deflate data
+# became long enough for inflate itself to object.
+# 上方的短輸入守門擋得住「在標頭中途結束」的來源，但在 gzip 標頭內就被切斷的 .tar.gz
+# 根本到不了 tar 層：它解出零位元組，而零位元組正是合法空封存的樣子。
+# gzipDecodeStream 為其回報成功，於是 `-t` 不印任何內容並以 0 結束，而 bsdtar 為 1。
+# 分界點落在 deflate 資料長到足以讓 inflate 自身提出異議之處。
+TG="$TMP/truncgz"
+mkdir -p "$TG/src"
+printf 'alpha\n' > "$TG/src/a.txt"
+"$ST" -c --gzip -f "$TG/full.tgz" -C "$TG" src >/dev/null 2>&1
+full=$(wc -c < "$TG/full.tgz" | tr -d ' ')
+
+# Every cut must be rejected. 10 bytes is the gzip header alone -- the case that
+# used to pass -- and the largest cut still has to lose the trailing CRC.
+# 每一種截斷都必須被拒絕。10 位元組僅為 gzip 標頭，正是先前會通過的案例；最大的截斷
+# 也仍須缺少結尾的 CRC。
+for cut in 10 20 30 50; do
+  [ "$cut" -lt "$full" ] || continue
+  head -c "$cut" "$TG/full.tgz" > "$TG/cut.tgz"
+  if "$ST" -t -f "$TG/cut.tgz" >/dev/null 2>&1; then
+    bad "a .tar.gz truncated to $cut bytes is rejected"
+  else
+    ok "a .tar.gz truncated to $cut bytes is rejected"
+  fi
+done
+
+# The two shapes that must NOT be caught by that: an empty file is a legal empty
+# archive, and an intact archive obviously still reads.
+# 該檢查絕不能誤傷的兩種形狀：空檔案是合法的空封存，而完好的封存當然仍須讀得出來。
+: > "$TG/empty"
+"$ST" -t -f "$TG/empty" >/dev/null 2>&1 \
+  && ok "an empty file is still a legal empty archive" \
+  || bad "an empty file is still a legal empty archive"
+eq "an intact .tar.gz still lists its members" "2" \
+   "$("$ST" -t -f "$TG/full.tgz" 2>/dev/null | wc -l | tr -d ' ')"
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

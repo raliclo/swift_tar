@@ -892,6 +892,27 @@ func gzipDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
     defer { inflateEnd(&strm) }
     var outBuf = [UInt8](repeating: 0, count: DECODE_CHUNK)
     var atBoundary = true
+    // atBoundary alone cannot tell "nothing to decode" from "the stream was cut
+    // before it produced anything". It starts true and only flips on output, so
+    // a .tar.gz truncated to its 10-byte header decoded to zero bytes, returned
+    // success, and the tar layer above saw a clean empty archive: `-t` printed
+    // nothing and exited 0 where bsdtar exits 1. Measured on a 132-byte archive:
+    // truncated to 10, 20 or 30 bytes it passed; from 50 bytes on there was
+    // enough deflate data for inflate itself to fail, and the two agreed again.
+    //
+    // An empty source is a legal empty archive and must stay exit 0; a non-empty
+    // source that never reaches Z_STREAM_END is truncated, whether or not it
+    // managed to emit bytes first.
+    // 單靠 atBoundary 無法分辨「沒有東西要解」與「串流在產出任何內容之前就被切斷」。
+    // 它初值為 true 且僅在產出時翻轉，故一個被截斷至 10 位元組標頭的 .tar.gz 會解出零
+    // 位元組並回報成功，上層 tar 因而看到一個乾淨的空封存：`-t` 不印任何內容並以 0
+    // 結束，而 bsdtar 為 1。以 132 位元組的封存實測：截斷至 10、20、30 位元組時皆通過；
+    // 自 50 位元組起 deflate 資料已足以讓 inflate 自身失敗，兩者遂又一致。
+    //
+    // 空來源是合法的空封存，必須維持離開碼 0；非空來源若從未抵達 Z_STREAM_END 即為
+    // 截斷，無論它先前是否已吐出位元組。
+    var sawInput = false
+    var sawStreamEnd = false
     let reader = ByteReader(input, prefix: prefix)
     // autoreleasepool: per-chunk reads and Data(bytes:count:) writes are
     // autoreleased; drain each iteration to keep decode RSS bounded.
@@ -905,6 +926,7 @@ func gzipDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
                 eof = true
                 return
             }
+            if !inBuf.isEmpty { sawInput = true }
             var consumed = 0
             let ok: Bool = inBuf.withUnsafeMutableBufferPointer { ib in
                 while consumed < ib.count {
@@ -925,6 +947,7 @@ func gzipDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
                     if rc == Z_STREAM_END {
                         inflateReset(&strm)
                         atBoundary = true
+                        sawStreamEnd = true
                     } else if rc == Z_OK || rc == Z_BUF_ERROR {
                         if rc == Z_BUF_ERROR && strm.avail_in == 0 && produced == 0 { break }
                     } else {
@@ -938,6 +961,7 @@ func gzipDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
         if failed { return false }
         if eof { break }
     }
+    if sawInput && !sawStreamEnd { return false }
     return atBoundary
 }
 
@@ -2581,12 +2605,30 @@ final class TarWriter {
     /// hardlink dedup rather than invented.
     /// 回答「這兩個名稱是不是同一個檔案」的鍵，沿用硬連結去重的作法而非另創一套。
     private static func fileIdentity(_ path: String) -> String? {
+        // Resolve the path lexically first. The kernel walks `a/../b` by
+        // entering `a`, so lstat fails with ENOENT when an intermediate
+        // component does not exist -- even though the file itself is right
+        // there. Writing `-f ./out/../backup.tar` in a directory with no `out/`
+        // did exactly that: the archive was created (the writer opens a
+        // normalised path), lstat on the literal string failed, the identity
+        // came back nil, and self-exclusion was disabled entirely, so the
+        // archive collected itself. The open path was normalised and the
+        // identity path was not.
+        //
+        // 先以字面方式解析路徑。核心走訪 `a/../b` 時會實際進入 `a`，故當中間組件不存在
+        // 時 lstat 會以 ENOENT 失敗——即使該檔案就在那裡。在沒有 `out/` 的目錄中寫
+        // `-f ./out/../backup.tar` 正是如此：封存被建立（寫入端開啟的是正規化後的
+        // 路徑）、對字面字串的 lstat 失敗、身分回傳 nil，自我排除遂被整個停用，封存
+        // 因而把自己收了進去。開檔路徑做了正規化，身分路徑沒有。
+        let resolved = (path as NSString).standardizingPath
 #if os(Windows)
-        guard let st = winStat(path) else { return nil }
+        guard let st = winStat(resolved) ?? winStat(path) else { return nil }
         return "\(st.volumeSerial)/\(st.fileIndex)"
 #else
         var st = stat()
-        guard lstat(path, &st) == 0 else { return nil }
+        if lstat(resolved, &st) != 0 {
+            guard lstat(path, &st) == 0 else { return nil }
+        }
         return "\(st.st_dev)/\(st.st_ino)"
 #endif
     }

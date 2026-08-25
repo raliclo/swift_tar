@@ -521,6 +521,41 @@ the fallback made it pass. The fallback hid the thing the case existed to test.
 `cmd1 || cmd2`，macOS 上 `cmd1` **成功**（離開碼 0），備援永不執行，量到的正是壞掉的
 那條；Windows 上 `cmd1` 失敗、落到備援因而通過。**備援掩蓋了該案例存在的目的。**
 
+### macOS 2026-08-25: 17 cases stopped running when the tests moved into `test/` / 測試移入 `test/` 後有 17 個案例停止執行  ▸ ✅ 已修正 2026-08-25
+
+`test/test_blind_findings.zsh` locates its raw-header fixture with
+`RAW="${0:A:h}/verifications/make_raw_tar.zsh"`. That was correct while the
+script sat in the repo root. Commit `f454ec9` moved the tests into `test/`, so
+`${0:A:h}` became `<root>/test` and the path resolved to
+`test/verifications/make_raw_tar.zsh`, which does not exist. The guard is
+`if [ -f "$RAW" ]`, so both dependent blocks printed `SKIP` and the suite still
+reported `FAIL: 0`.
+
+The suite went from 138 assertions to 121 without a single failure. The two
+blocks are path traversal (`..\..\x`, `C:\...\x`, `/tmp/x` in a member name)
+and the raw typeflag `6` FIFO fixture -- the cases that need headers no tar CLI
+will write, i.e. exactly the adversarial ones. Fixed with `${0:A:h:h}`; all 17
+pass, so nothing had regressed underneath. **The defect was the silence, not a
+wrong answer.**
+
+Audited the other seven test scripts for the same assumption: they use their
+script directory only for logs and temp dirs, or already take `:h` twice. This
+was the only one.
+
+`test/test_blind_findings.zsh` 以 `RAW="${0:A:h}/verifications/make_raw_tar.zsh"`
+定位 raw header 產生器。腳本還在 repo 根目錄時這是對的；`f454ec9` 把測試移入 `test/`
+之後，`${0:A:h}` 變成 `<root>/test`，該路徑解析為不存在的
+`test/verifications/make_raw_tar.zsh`。守門是 `if [ -f "$RAW" ]`，於是兩個相依區塊
+印出 `SKIP`，而整體仍回報 `FAIL: 0`。
+
+斷言數自 138 掉到 121，過程中沒有任何一項失敗。這兩個區塊是路徑穿越（成員名稱含
+`..\..\x`、`C:\...\x`、`/tmp/x`）與 raw typeflag `6` 的 FIFO fixture——正是那些
+需要「任何 tar CLI 都不會寫出的 header」的案例，也就是最具敵意的那一批。以
+`${0:A:h:h}` 修正後 17 項全數通過，底下並未退化。**缺陷在於沉默，而非答錯。**
+
+已核對其餘七支測試腳本是否有同樣假設：它們僅以自身目錄放 log 與暫存目錄，或已取兩次
+`:h`。只有這一支中招。
+
 ### macOS round 5: raw bytes under 512 still read as an empty archive / 小於 512 bytes 的隨機資料仍被讀成空封存  ▸ ✅ 已修正 2026-08-19
 
 The truncated-`.tar.gz` half of this is fixed. What remains is input that is not

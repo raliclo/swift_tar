@@ -708,7 +708,7 @@ fi
 #   /tmp/x     開頭的 "/" 雖被去除，結果仍解析到目的地之外
 # 封存不保證由本工具寫出，故讀取端必須假設名稱懷有敵意。沒有任何 tar CLI 會建立這類
 # 名稱，因此需要 raw header 產生器。
-RAW="${0:A:h}/verifications/make_raw_tar.zsh"
+RAW="${0:A:h:h}/verifications/make_raw_tar.zsh"
 if [ -f "$RAW" ]; then
   TRAV="$TMP/trav"
   mkdir -p "$TRAV"

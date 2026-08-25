@@ -306,6 +306,16 @@ catalogues its own bugs teaches the reader to distrust the parts that are fine.
   `cmd1 || cmd2`。Windows 上 `cmd1` 失敗、備援執行、案例通過；macOS 上 `cmd1`
   **成功**，備援永不執行，量到的正是壞掉那條——封存把自己收了進去。該案例在其中一個
   平台上綠了兩週，正是因為備援有效。若某案例確實需要備援，請斷言實際走的是哪一支。
+- **A `SKIP` never becomes a `FAIL`, so nothing reports it.** Moving the tests
+  into `test/` left one fixture path one directory too shallow; the guard was
+  `if [ -f "$fixture" ]`, so 17 assertions — the path-traversal and raw-typeflag
+  cases, the adversarial ones — stopped running while the suite still said
+  `FAIL: 0`. Read the skip lines, and compare the assertion count against the
+  last run.
+  **`SKIP` 永遠不會變成 `FAIL`，因此無人回報。** 測試移入 `test/` 時，某個 fixture
+  路徑少了一層；守門是 `if [ -f "$fixture" ]`，於是 17 項斷言——路徑穿越與 raw
+  typeflag，也就是最具敵意的那批——停止執行，而整體仍回報 `FAIL: 0`。請讀 skip 行，
+  並與上一次的斷言總數比對。
 - **`.sh` → `.zsh` renames drop the exec bit.** Eleven committed scripts became
   non-executable that way; two test suites failed with 126 as a result.
   **`.sh` → `.zsh` 改名會掉執行位元。** 曾有十一支入版腳本因此無法執行。

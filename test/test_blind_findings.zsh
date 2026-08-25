@@ -35,7 +35,42 @@ if [ ! -x "$ST" ]; then
   exit 1
 fi
 
-SYS_TAR="${SYS_TAR:-tar}"
+# 參考用的 tar 由實測選出，而不是假設 `tar` 這個名字就等於可用的實作。
+#
+# Buildroot guest 的 /usr/bin/tar 是包在 BusyBox 外面、只支援 `-f -`（串流）的前端，對
+# `-f <檔案>` 會直接拒絕，於是這支測試在該節點上以
+# `tar: this wrapper only supports -f - (stream)` 失敗——那讀起來像 swift_tar 產出的封存
+# 有問題，實際上是參考實作根本沒跑起來。探測方式是真的請它寫出一個封存，而不是看
+# uname：重點在於這個 tar 能不能寫檔，不在於底下是哪個核心。bsdtar（libarchive）在該
+# guest 上本來就有。
+#
+# The reference tar is chosen by measurement rather than by assuming the name
+# `tar` is a usable implementation.
+#
+# On the Buildroot guest /usr/bin/tar is a stream-only front end over BusyBox: it
+# takes `-f -` and refuses `-f <file>`, so this test failed there with
+# `tar: this wrapper only supports -f - (stream)` -- which reads as a problem
+# with the archive swift_tar produced, when the reference never ran at all. The
+# probe asks it to write a real archive rather than branching on uname: what
+# matters is whether this tar can write a file, not which kernel is underneath.
+# bsdtar (libarchive) is already present on that guest.
+if [ -z "${SYS_TAR:-}" ]; then
+  probe="$(mktemp -d)"
+  : > "$probe/f"
+  for candidate in tar bsdtar; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    if ( cd "$probe" && "$candidate" -cf probe.tar f ) >/dev/null 2>&1 && [ -s "$probe/probe.tar" ]; then
+      SYS_TAR="$candidate"
+      break
+    fi
+    rm -f "$probe/probe.tar"
+  done
+  rm -rf "$probe"
+fi
+if [ -z "${SYS_TAR:-}" ]; then
+  echo "error: no reference tar can write an archive (tried tar, bsdtar) / 找不到能寫出封存的參考 tar" >&2
+  exit 1
+fi
 TMP="$(mktemp -d)"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
@@ -44,6 +79,43 @@ pass=0
 fail=0
 ok()  { echo "PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "FAIL: $1"; fail=$((fail + 1)); }
+
+# 有時限地執行。此處的時限本身就是斷言——沒有它，一旦退化整個套件會直接卡死——因此它必須
+# 在每個節點上都成立，而不是只在裝了 coreutils 的節點上。
+#
+# Buildroot guest 沒有 `timeout`，連 BusyBox applet 都沒有，於是三項檢查以 rc=127
+# （command not found）失敗。那讀起來像 swift_tar 以錯誤的碼結束，實際上是這台機器少了
+# 一個工具。有 `timeout` 就用它，讓已經是綠燈的節點維持原本走過的路徑；沒有就用 zsh 的
+# 背景程序加看門狗。逾時的結束碼兩者不同（124 對 137），但這裡的斷言是「等於 1」，兩個
+# 值都不是 1，因此卡死一樣攔得下來。
+#
+# Bounded execution. The bound here is itself the assertion -- without it a
+# regression hangs the suite -- so it has to hold on every node, not only on
+# nodes that ship coreutils.
+#
+# The Buildroot guest has no `timeout`, not even as a BusyBox applet, so three
+# checks failed with rc=127 (command not found). That reads as swift_tar exiting
+# with the wrong code when it means this machine is missing a tool. Use
+# `timeout` where it exists, so nodes that are already green keep the path they
+# were proven on, and fall back to a zsh background process plus a watchdog. The
+# two report a timeout differently (124 vs 137), but the assertion here is
+# "equals 1" and neither value is 1, so a hang is still caught.
+bounded() { # <秒 / seconds> <指令 / command...>
+  local seconds="$1"; shift
+  local rc=0
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$seconds" "$@" || rc=$?
+    return $rc
+  fi
+  "$@" &
+  local pid=$!
+  ( sleep "$seconds"; kill -9 "$pid" 2>/dev/null ) &
+  local watcher=$!
+  wait "$pid" || rc=$?
+  kill "$watcher" 2>/dev/null || true
+  return $rc
+}
+
 eq() {
   local desc="$1" want="$2" got="$3"
   if [ "$want" = "$got" ]; then ok "$desc"; else bad "$desc (want '$want', got '$got')"; fi
@@ -114,12 +186,12 @@ eq "-u across spellings does not duplicate members" "$before" "$after"
 # 兩種形態都重要且曾有差異：管線擋得住，`< /dev/null` 擋不住，因為 Windows 的
 # _isatty() 對 NUL 字元裝置為真。timeout 本身就是斷言——沒有它，一旦退化整個
 # 測試套件會直接卡死。
-rc=0; timeout 20 "$ST" -c --encrypt -f "$TMP/np.enc" -C "$SRC" tree < /dev/null >/dev/null 2>&1 || rc=$?
+rc=0; bounded 20 "$ST" -c --encrypt -f "$TMP/np.enc" -C "$SRC" tree < /dev/null >/dev/null 2>&1 || rc=$?
 eq "--encrypt refuses stdin from /dev/null (no hang)" "1" "$rc"
 [ ! -e "$TMP/np.enc" ] && ok "--encrypt writes no archive when it refuses" \
   || bad "--encrypt writes no archive when it refuses"
 
-rc=0; printf '' | timeout 20 "$ST" -c --encrypt -f "$TMP/pp.enc" -C "$SRC" tree >/dev/null 2>&1 || rc=$?
+rc=0; printf '' | bounded 20 "$ST" -c --encrypt -f "$TMP/pp.enc" -C "$SRC" tree >/dev/null 2>&1 || rc=$?
 eq "--encrypt refuses stdin from a pipe (no hang)" "1" "$rc"
 
 # ---- round: inline --opt=value must be read, not ignored ----
@@ -129,11 +201,11 @@ eq "--encrypt refuses stdin from a pipe (no hang)" "1" "$rc"
 # 驗證層只比對 "=" 之前的名稱因而接受 `--flag=value`，故每個讀值端都必須認得它。
 # 當它們不認得時，--keyfile=PATH 會落到互動式提示並卡死，且毫無產出。
 head -c 64 /dev/urandom > "$TMP/k.bin"
-rc=0; timeout 20 "$ST" -c --encrypt --keyfile="$TMP/k.bin" -f "$TMP/inline.enc" -C "$SRC" tree >/dev/null 2>&1 || rc=$?
+rc=0; bounded 20 "$ST" -c --encrypt --keyfile="$TMP/k.bin" -f "$TMP/inline.enc" -C "$SRC" tree >/dev/null 2>&1 || rc=$?
 eq "--keyfile=PATH is honoured (no prompt, no hang)" "0" "$rc"
 
 mkdir -p "$TMP/out"
-if timeout 20 "$ST" -x --keyfile="$TMP/k.bin" -f "$TMP/inline.enc" -C "$TMP/out" >/dev/null 2>&1 \
+if bounded 20 "$ST" -x --keyfile="$TMP/k.bin" -f "$TMP/inline.enc" -C "$TMP/out" >/dev/null 2>&1 \
    && diff -r "$SRC/tree" "$TMP/out/tree" >/dev/null 2>&1; then
   ok "--keyfile=PATH round-trips"
 else
@@ -451,46 +523,74 @@ else
   bad "--zip64 produces an archive at all"
 fi
 
-# Read the flag straight out of the local file headers rather than trusting any
-# one reader: the point of the fix is what is IN the file.
-# 直接自 local file header 讀出該旗標，而非採信任何單一讀取器：本修正的重點在於
-# 檔案裡實際存了什麼。
-if command -v python3 >/dev/null 2>&1 && [ -f "$TMP/u.zip" ]; then
-  if python3 - "$TMP/u.zip" <<'PYEOF' >/dev/null 2>&1
-import sys, struct
-d = open(sys.argv[1], 'rb').read()
-want = 'src/中文檔名.txt'.encode('utf-8')
-off = 0
-while True:
-    i = d.find(b'PK\x03\x04', off)
-    if i < 0:
-        break
-    flag = struct.unpack_from('<H', d, i + 6)[0]
-    nlen = struct.unpack_from('<H', d, i + 26)[0]
-    name = d[i + 30:i + 30 + nlen]
-    if name == want:
-        sys.exit(0 if flag & 0x800 else 1)
-    off = i + 4
-sys.exit(2)   # the entry was not found under its UTF-8 name
-PYEOF
-  then
+# 直接自 ZIP 的位元組讀出 general purpose bit 11，且 local file header 與 central
+# directory 兩處都驗——後者才是讀取端實際查閱的那一份。
+#
+# 這裡原本是兩段 python3：一段做同樣的位元組解析，另一段拿 Python 的 zipfile 當「獨立讀
+# 取器」。兩段都移除了，而且不只是為了避開 python3。整個區塊原本被
+# `command -v python3` 包住，所以在沒有 python3 的節點上這兩項檢查是**靜默不執行**的
+# ——Buildroot guest 上從未跑過其中任何一項。現在它無條件執行。
+#
+# 「獨立讀取器」那一項沒有換成別的讀取器，而是換成多驗一個 header。實測：Info-ZIP
+# UnZip 6.00 會把這個名稱印成亂碼，無論 bit 11 是否正確，因此它無法充當判別式，拿它來
+# 驗只會產生與事實相反的失敗；bsdtar 讀得正確，但四個節點中只有兩個裝了它。既然本修正
+# 的重點本來就是「檔案裡實際存了什麼」，那就再讀一個 header，而不是再問一個讀不準的程式。
+#
+# 位移不是用 `grep -abo` 找的：BusyBox 的 grep 不支援 `-b`。改以 od 的十六進位傾印做字串
+# 比對，只需要 od 與 tr，四個節點都有。
+#
+# Read general purpose bit 11 straight out of the ZIP's bytes, and check it in
+# both the local file header and the central directory -- the latter being the
+# copy readers actually consult.
+#
+# This was two python3 blocks: one doing the same byte parsing, and one using
+# Python's zipfile as an "independent reader". Both are gone, and not only to
+# avoid python3. The whole section sat behind `command -v python3`, so on a node
+# without it these checks did not run *silently* -- neither of them had ever run
+# on the Buildroot guest. They now run unconditionally.
+#
+# The independent-reader check was not swapped for another reader but for a
+# second header. Measured: Info-ZIP UnZip 6.00 renders this name as mojibake
+# whether or not bit 11 is correct, so it cannot discriminate and would only
+# produce failures that contradict the file; bsdtar reads it correctly but is
+# installed on two of the four nodes. Since the point of the fix is what is IN
+# the file, read one more header rather than ask one more unreliable program.
+#
+# The offsets are not found with `grep -abo`: BusyBox grep has no `-b`. A hex
+# dump from od is string-searched instead, which needs only od and tr -- present
+# on all four nodes.
+if [ -f "$TMP/u.zip" ]; then
+  zip_hex=$(od -An -tx1 -v "$TMP/u.zip" | tr -d ' \n')
+  zip_needle=$(printf '%s' 'src/中文檔名.txt' | od -An -tx1 -v | tr -d ' \n')
+  sig_at()  { print -- "${zip_hex:$(( $1 * 2 )):8}" }
+  le16_at() { print -- $(( 16#${zip_hex:$(( $1 * 2 )):2} + 16#${zip_hex:$(( ($1 + 1) * 2 )):2} * 256 )) }
+
+  local_flag=""; central_flag=""
+  scan=$zip_hex; consumed=0
+  while [[ $scan == *$zip_needle* ]]; do
+    pre=${scan%%$zip_needle*}
+    off=$(( consumed + ${#pre} / 2 ))
+    # local file header: PK\x03\x04, name at +30, flag at +6
+    if (( off >= 30 )) && [ "$(sig_at $(( off - 30 )))" = "504b0304" ]; then
+      local_flag=$(le16_at $(( off - 24 )))
+    fi
+    # central directory header: PK\x01\x02, name at +46, flag at +8
+    if (( off >= 46 )) && [ "$(sig_at $(( off - 46 )))" = "504b0102" ]; then
+      central_flag=$(le16_at $(( off - 38 )))
+    fi
+    consumed=$(( off + ${#zip_needle} / 2 ))
+    scan=${zip_hex:$(( consumed * 2 ))}
+  done
+
+  if [ -n "$local_flag" ] && (( (local_flag & 0x800) != 0 )); then
     ok "ZIP sets general purpose bit 11 on a non-ASCII name"
   else
     bad "ZIP sets general purpose bit 11 on a non-ASCII name"
   fi
-
-  # A reader that honours bit 11 must agree with what we wrote. Python's zipfile
-  # is the discriminator: before the fix it returned a mojibake name here.
-  # 遵守 bit 11 的讀取器必須與我們寫出的一致。Python 的 zipfile 是判別式：修正前
-  # 它在此處回傳的是亂碼名稱。
-  if python3 -c "
-import sys, zipfile
-want = 'src/中文檔名.txt'
-sys.exit(0 if want in zipfile.ZipFile(sys.argv[1]).namelist() else 1)
-" "$TMP/u.zip" >/dev/null 2>&1; then
-    ok "an independent reader recovers the non-ASCII name from the ZIP"
+  if [ -n "$central_flag" ] && (( (central_flag & 0x800) != 0 )); then
+    ok "the ZIP central directory sets bit 11 on the same name"
   else
-    bad "an independent reader recovers the non-ASCII name from the ZIP"
+    bad "the ZIP central directory sets bit 11 on the same name"
   fi
 fi
 

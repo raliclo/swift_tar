@@ -261,8 +261,18 @@ gzip -t "$TMP/outside.back.tgz" 2>/dev/null \
 "$ST" -c --gzip --keyfile "$KEY" -f "$TMP/enc.tgz.enc" -C "$TMP" src
 "$ST" --decrypt-only --keyfile "$KEY" -f "$TMP/enc.tgz.enc" > "$TMP/d_only.out"
 "$ST" --cat         --keyfile "$KEY" -f "$TMP/enc.tgz.enc" > "$TMP/cat.out"
+# 用 $FOREIGN_TAR 而非裸的 `tar`：本區塊已在 FOREIGN_TAR 非空的分支內，而該變數是探測
+# 出來的——它排除了 swift_tar 自己，也排除了 busybox。在 Buildroot guest 上裸的 `tar`
+# 是只吃 `-f -` 的前端，於是這一項以「--decrypt-only/--cat do not differ as documented」
+# 失敗，指控的是 swift_tar，真正的原因卻是那個讀取器連檔案都打不開。
+# Use $FOREIGN_TAR rather than a bare `tar`: this block already sits where
+# FOREIGN_TAR is non-empty, and that variable was probed -- it excludes
+# swift_tar itself and excludes busybox. On the Buildroot guest a bare `tar` is
+# the stream-only front end, so this check failed as "--decrypt-only/--cat do
+# not differ as documented", accusing swift_tar when the reader could not open
+# the file at all.
 if [ "$(head -c 2 "$TMP/d_only.out" | od -An -tx1 | tr -d ' ')" = "1f8b" ] \
-   && tar -tf "$TMP/cat.out" >/dev/null 2>&1; then
+   && "$FOREIGN_TAR" -tf "$TMP/cat.out" >/dev/null 2>&1; then
   ok "--decrypt-only keeps compression while --cat undoes it"
 else
   bad "--decrypt-only/--cat do not differ as documented"
@@ -280,15 +290,35 @@ fi   # FOREIGN_TAR
 # ---------------------------------------------------------------------------
 must_fail "wrong keyfile is rejected" "$ST" -t --keyfile "$WRONG" -f "$TMP/plain.enc"
 
-corrupt() { # dest offset
+# 翻轉指定位移處的最低位，只用 dd／od／printf。
+#
+# 這裡原本是一段 python3 heredoc。它在 Buildroot／BusyBox 的 guest 上以
+# `corrupt:2: command not found: python3` 中止整支測試——而中止點在此之前的 20 幾項檢查
+# 都已通過，所以那一次執行的結束狀態說的是「加密測試失敗」，實際上是「這台機器沒有
+# python3」。為了翻轉一個 bit 而要求一整個直譯器，代價與所得完全不成比例。
+#
+# `conv=notrunc` 不可省：少了它，dd 會把檔案截斷到 seek 位置，於是後續的解密不是因為
+# 密文被竄改而失敗，而是因為檔案被砍短——那會讓這幾項檢查在錯誤的理由下通過。
+#
+# Flip the low bit at a given offset using only dd, od and printf.
+#
+# This was a python3 heredoc. On the Buildroot/BusyBox guest it aborted the
+# whole suite with `corrupt:2: command not found: python3` -- after some twenty
+# checks had already passed, so that run's exit status said "the encryption
+# tests failed" when it meant "this machine has no python3". Requiring an entire
+# interpreter to flip one bit is out of all proportion to the job.
+#
+# `conv=notrunc` is not optional: without it dd truncates the file at the seek
+# offset, so the decryption that follows would fail because the file got shorter
+# rather than because the ciphertext was tampered with -- passing these checks
+# for the wrong reason.
+corrupt() { # _ dest offset
   cp "$TMP/plain.enc" "$2"
-  python3 - "$2" "$3" <<'PY'
-import sys
-path, off = sys.argv[1], int(sys.argv[2])
-d = bytearray(open(path, 'rb').read())
-d[off] ^= 0x01
-open(path, 'wb').write(d)
-PY
+  local byte flipped
+  byte=$(dd if="$2" bs=1 skip="$3" count=1 2>/dev/null | od -An -tu1 | tr -d ' \n')
+  flipped=$(( byte ^ 0x01 ))
+  printf '%b' "\\x$(printf '%02x' "$flipped")" \
+    | dd of="$2" bs=1 seek="$3" count=1 conv=notrunc 2>/dev/null
 }
 corrupt _ "$TMP/t_cipher.enc" 60      # inside the first chunk's ciphertext
 must_fail "flipped ciphertext bit is rejected" "$ST" -t --keyfile "$KEY" -f "$TMP/t_cipher.enc"

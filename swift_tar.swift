@@ -67,25 +67,41 @@ import ucrt
 import WinSDK
 #endif
 
-#if os(Linux) && EXCLUDE_LZFSE
+#if !canImport(ObjectiveC) && EXCLUDE_LZFSE
 // autoreleasepool is an Objective-C runtime facility and exists only on
 // Darwin. The call sites below use it to bound peak memory while reading
-// chunks and building Data buffers; on Linux there is no autorelease pool to
-// drain, so this is a plain pass-through and the surrounding logic is
+// chunks and building Data buffers; where there is no autorelease pool to
+// drain, this is a plain pass-through and the surrounding logic is
 // unchanged. Inlined, so it costs nothing at runtime.
 // autoreleasepool 屬於 Objective-C runtime，僅存在於 Darwin。下方各呼叫點以它
-// 限制逐塊讀取與建立 Data 時的尖峰記憶體；Linux 沒有 autorelease pool 需要
-// 排空，因此此處為單純直通，不改變周圍邏輯。標記 inline 故無執行期成本。
+// 限制逐塊讀取與建立 Data 時的尖峰記憶體；在沒有 autorelease pool 可排空的平台上，
+// 此處為單純直通，不改變周圍邏輯。標記 inline 故無執行期成本。
 //
 // EXCLUDE_LZFSE is part of the condition because lzfse-cli.swift carries the
 // same shim under `#if !canImport(ObjectiveC)`, and that is compiled into this
-// module whenever the engine is included. Both conditions hold on Linux and
-// only on Linux, so a full-engine Linux build saw two declarations of one
-// function and failed; Windows never did, because this one is os(Linux)-only.
+// module whenever the engine is included. Excluding the engine is exactly when
+// that copy is absent, so the two never collide.
+//
+// The first condition was `os(Linux)`, which named one platform where the
+// second condition describes the actual requirement: every platform without the
+// Objective-C runtime. Windows is the other one, and the gap showed up the
+// first time anything asked for a Windows build with the engine excluded --
+// `cannot find 'autoreleasepool' in scope`, from test_no_lzfse building the
+// public half of its comparison. Until then no such build existed in this
+// repository: multissh made one, and supplied its own copy of this shim from
+// shared/SwiftTarWindowsShim.swift to do it, which is a second place to keep
+// the same eight lines correct.
+//
 // EXCLUDE_LZFSE 也是條件之一，因為 lzfse-cli.swift 以 `#if !canImport(ObjectiveC)`
-// 帶了同一份 shim，而含引擎時它會一併編入本 module。兩個條件僅在 Linux 同時成立，
-// 故含引擎的 Linux 建置會看到同一函式被宣告兩次而失敗；Windows 從未如此，因為
-// 這一份只在 os(Linux) 生效。
+// 帶了同一份 shim，而含引擎時它會一併編入本 module。排除引擎時該副本恰好不存在，
+// 因此兩者永遠不會相撞。
+//
+// 第一個條件原本是 `os(Linux)`——它指名了一個平台，而第二個條件描述的才是真正的需求：
+// 所有沒有 Objective-C runtime 的平台。Windows 是另一個，而這個缺口在第一次有人要求
+// 「Windows 且排除引擎」的建置時才浮現——`cannot find 'autoreleasepool' in scope`，
+// 來自 test_no_lzfse 建置其比較的公開版那一半。在那之前本 repository 裡不存在這種建置：
+// multissh 做了一個，並自 shared/SwiftTarWindowsShim.swift 提供它自己那份同樣的 shim，
+// 於是同樣的八行有了第二個必須維持正確的地方。
 @inline(__always)
 func autoreleasepool<Result>(invoking body: () throws -> Result) rethrows -> Result {
     try body()

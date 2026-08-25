@@ -19,7 +19,17 @@ exec > >(tee "$LOG") 2>&1
 TMP="$(mktemp -d "$HERE/.test_nolz.XXXXXX")"
 # Rebuild the full binary at the end so the working tree / install stays full.
 # 測試結束重建完整版，讓工作目錄／安裝維持完整版。
-cleanup() { rm -rf "$TMP"; ./compile_tar.zsh >/dev/null 2>&1 || true; }
+# 以該平台的完整版重建，讓工作目錄／安裝維持完整版。build_full 在下方依平台決定，但
+# trap 必須在建立 TMP 之後立刻設好，因此先宣告為空陣列：`set -u` 之下，若在分派之前就
+# 退出（例如缺 lzfse2），未宣告的陣列會讓 cleanup 自己出錯。
+# build_full is chosen per platform below, but the trap has to be armed as soon
+# as TMP exists, so declare it empty first: under `set -u` an exit before the
+# dispatch (a missing lzfse2, say) would otherwise make cleanup itself fail.
+build_full=()
+cleanup() {
+  rm -rf "$TMP"
+  (( ${#build_full} )) && "${build_full[@]}" >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
 
 # The OS build, not just the product version, identifies the environment:
@@ -33,27 +43,86 @@ pass=0; fail=0
 ok()  { echo "PASS: $1"; pass=$((pass+1)); }
 bad() { echo "FAIL: $1"; fail=$((fail+1)); }
 
-# This test needs two builds from source, and both build scripts are POSIX-only:
-# compile_tar.zsh targets macOS (/opt/homebrew, otool) and compile_no_lzfse.zsh
-# follows it. Windows builds through compile_tar-win.bat, which has no
-# --no-lzfse counterpart, so the comparison cannot be made here at all.
-# Say so and exit 0. Run unguarded on Windows this printed
-# "building full + public binaries..." and then died with no message whatsoever,
-# because both streams below are discarded and `set -e` then killed the script
-# at the `cp` of a binary that was never produced.
-# 本測試需要從原始碼建置兩份執行檔，而兩支建置腳本都僅適用 POSIX：compile_tar.zsh
-# 針對 macOS（/opt/homebrew、otool），compile_no_lzfse.zsh 亦然。Windows 走
-# compile_tar-win.bat，而它沒有 --no-lzfse 的對應版本，故此比較在此根本無法進行。
-# 明說並以 0 結束。未加守門時在 Windows 上執行會印出「building full + public
-# binaries...」後毫無訊息地死亡——因為下面兩行的輸出串流都被丟棄，接著 `set -e`
-# 在 cp 一個從未產生的執行檔時終止了腳本。
+# 本測試需要從原始碼建置兩份執行檔。曾經有一段守門在 Windows 上印出 SKIP 並以 0 結束，
+# 理由是「兩支建置腳本都僅適用 POSIX」。那個理由當時為真，但守門本身留下一個更糟的形狀：
+# 它只擋 Windows，於是 Linux 沒有守門也沒有可用的建置指令，測試會一路跑進 macOS 專用的
+# 腳本然後失敗。守門已由下方的依平台分派取代。
+#
+# 那段守門原本要解決的失敗仍值得記著：未加守門時在 Windows 上執行，會印出「building
+# full + public binaries...」後毫無訊息地死亡——因為兩道建置的輸出串流都被丟棄，接著
+# `set -e` 在 cp 一個從未產生的執行檔時終止了腳本。現在兩道建置各自有 `|| { echo
+# FATAL...; exit 1; }`，因此失敗會指名是哪一道。
+#
+# This test needs two builds from source. A guard used to print SKIP and exit 0
+# on Windows, on the grounds that both build scripts were POSIX-only. That was
+# true at the time, but the guard left a worse shape behind: it covered only
+# Windows, so Linux had neither a guard nor a usable build command and ran
+# straight into the macOS-only script. The guard is replaced by the per-platform
+# dispatch below.
+#
+# The failure that guard existed to prevent is still worth recording: run
+# unguarded on Windows it printed "building full + public binaries..." and then
+# died with no message whatsoever, because both build streams are discarded and
+# `set -e` killed the script at the `cp` of a binary that was never produced.
+# Each build now carries its own `|| { echo FATAL...; exit 1; }`, so a failure
+# names which one.
+#
+# 每個平台的「完整版」與「公開版」建置指令。
+#
+# 這裡原本寫死 compile_tar.zsh 與 compile_no_lzfse.zsh，而那兩支只適用 macOS
+# （/opt/homebrew、otool）。後果不只是「Windows 不能跑」：Windows 有守門會 SKIP 並回傳
+# 0，Linux 卻沒有，於是這支測試在 Linux 上真的去執行 compile_tar.zsh，然後以
+# `Missing /opt/homebrew/lib/liblz4.dylib` 失敗——它宣稱涵蓋 Linux，實際上從未涵蓋。
+#
+# Linux 這一側現在可行，是因為 compile_tar-linux.zsh 已能建出含 LZFSE 的完整版；在此之
+# 前它只能建排除版，本比較的「對照組」根本產不出來。公開版則以 EXCLUDE_LZFSE=1 取得，
+# 那正是該腳本既有的環境覆寫。
+#
+# The full and public build commands for each platform.
+#
+# This used to hardcode compile_tar.zsh and compile_no_lzfse.zsh, which target
+# macOS only (/opt/homebrew, otool). The consequence was not merely "Windows
+# cannot run this": Windows had a guard that skipped and returned 0 while Linux
+# had none, so on Linux the test really did run compile_tar.zsh and failed with
+# `Missing /opt/homebrew/lib/liblz4.dylib` -- claiming Linux coverage it never
+# had.
+#
+# The Linux side is possible now because compile_tar-linux.zsh can build WITH
+# the LZFSE engine; before that it could only build the excluded variant, so the
+# control half of this comparison could not be produced at all. The public half
+# uses EXCLUDE_LZFSE=1, that script's existing environment override.
+BIN=release/swift_tar
 case "$(uname -s)" in
+    Darwin)
+        build_full=(./compile_tar.zsh)
+        build_public=(./compile_no_lzfse.zsh)
+        ;;
+    Linux)
+        # 完整版需要私有的 lzfse2 已 checkout。缺了它，compile_tar-linux.zsh 會靜默地
+        # 改建排除版，於是「完整版含 bvx3」這個對照組會失敗，讀起來像產品缺陷。明說。
+        # The full build needs the private lzfse2 checked out. Without it,
+        # compile_tar-linux.zsh quietly builds the excluded variant instead, so
+        # the "full build contains bvx3" control fails and reads as a product
+        # defect. Say so instead.
+        if [ ! -f lzfse2/lzfse-cli.swift ]; then
+            echo "FATAL: lzfse2/lzfse-cli.swift missing; the full build has nothing to contrast against."
+            echo "       Fetch it with: git submodule update --init lzfse2"
+            echo "錯誤：缺少 lzfse2/lzfse-cli.swift，完整版無從作為對照。"
+            echo "       請執行：git submodule update --init lzfse2"
+            exit 1
+        fi
+        build_full=(./compile_tar-linux.zsh)
+        build_public=(env EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh)
+        ;;
     MINGW*|MSYS*|CYGWIN*)
-        echo "SKIP: needs compile_tar.zsh and compile_no_lzfse.zsh, both POSIX-only."
-        echo "      Windows builds via compile_tar-win.bat, which has no --no-lzfse variant."
-        echo "跳過：需要僅適用 POSIX 的 compile_tar.zsh 與 compile_no_lzfse.zsh；"
-        echo "      Windows 使用 compile_tar-win.bat，其無 --no-lzfse 對應版本。"
-        exit 0
+        BIN=release/swift_tar.exe
+        build_full=(zsh ./compile_tar-win.zsh)
+        build_public=(env EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh)
+        ;;
+    *)
+        echo "FATAL: no full/public build commands known for $(uname -s)"
+        echo "錯誤：$(uname -s) 上沒有已知的完整版／公開版建置指令"
+        exit 1
         ;;
 esac
 
@@ -62,10 +131,10 @@ echo "building full + public binaries..."
 # /dev/null alongside stdout, leaving `set -e` to end the run silently.
 # 保留 stderr：建置失敗原本會連同 stdout 一起進 /dev/null 而完全消失，
 # 只剩 `set -e` 無聲地結束整輪。
-./compile_tar.zsh      >/dev/null || { echo "FATAL: compile_tar.zsh failed"; exit 1; }
-cp release/swift_tar "$TMP/full"
-./compile_no_lzfse.zsh >/dev/null || { echo "FATAL: compile_no_lzfse.zsh failed"; exit 1; }
-cp release/swift_tar "$TMP/public"
+"${build_full[@]}"   >/dev/null || { echo "FATAL: ${build_full[*]} failed";   exit 1; }
+cp "$BIN" "$TMP/full"
+"${build_public[@]}" >/dev/null || { echo "FATAL: ${build_public[*]} failed"; exit 1; }
+cp "$BIN" "$TMP/public"
 FULL="$TMP/full"; PUB="$TMP/public"
 
 # 1) the private format name must be present in the full binary and ABSENT in

@@ -124,7 +124,39 @@ if ! (( $+commands[cl] )); then
 fi
 
 # ---- preconditions / 前置條件 ----
-[[ -f ../lzfse-cli.swift ]]                   || die "../lzfse-cli.swift not found / 找不到 ../lzfse-cli.swift"
+# LZFSE 引擎的來源，以及「不含它」這個選項。
+#
+# 路徑要找兩個地方。`../lzfse-cli.swift` 是 swift_tar 還住在 lzfse2 底下那個年代留下的
+# 寫法；如今 lzfse2 是 swift_tar 的 submodule，檔案在 lzfse2/lzfse-cli.swift，而 `../`
+# 指向 repo 之外——在目前的配置下它一定不存在，於是這支腳本在做任何事之前就 die。舊路徑
+# 保留為後備，因為那個舊配置在別處可能仍然成立。
+#
+# EXCLUDE_LZFSE=1 則完全不需要它：那是公開／可散布版，也是 test_no_lzfse 用來對照的另一
+# 半。此環境覆寫刻意與 compile_tar-linux.zsh 的同名覆寫同名同義，好讓該測試對兩個平台
+# 用同一種寫法提出同一個要求。
+#
+# Where the LZFSE engine comes from, and how to ask for a build without it.
+#
+# Two locations are tried. `../lzfse-cli.swift` dates from when swift_tar lived
+# inside lzfse2; today lzfse2 is swift_tar's own submodule and the file is at
+# lzfse2/lzfse-cli.swift, while `../` points outside the repository -- so under
+# the current layout it cannot exist and this script died before doing anything.
+# The old path stays as a fallback, since that older layout may still hold
+# elsewhere.
+#
+# EXCLUDE_LZFSE=1 needs neither: that is the public/distributable build, and the
+# other half of the contrast test_no_lzfse draws. The override deliberately
+# carries the same name and meaning as the one in compile_tar-linux.zsh, so that
+# test can ask both platforms for the same thing in the same words.
+LZFSE_CLI=""
+if [[ -n ${EXCLUDE_LZFSE:-} && ${EXCLUDE_LZFSE} != 0 ]]; then
+  note "EXCLUDE_LZFSE set; building without the LZFSE engine / 已設定，不含 LZFSE 引擎"
+else
+  for candidate in lzfse2/lzfse-cli.swift ../lzfse-cli.swift; do
+    [[ -f $candidate ]] && { LZFSE_CLI=$candidate; break }
+  done
+  [[ -n $LZFSE_CLI ]] || die "lzfse-cli.swift not found in lzfse2/ or ../ ; run: git submodule update --init lzfse2 / 在 lzfse2/ 與 ../ 均找不到 lzfse-cli.swift"
+fi
 [[ -f zlib/build/Release/zs.lib ]]            || die "zlib static library not found. Run: zsh ./build_zlib-win.zsh"
 [[ -f zstd/build/lib/Release/zstd_static.lib ]] || die "zstd static library not found. Run: zsh ./build_zstd-win.zsh"
 [[ -f version-win.txt ]]                      || die "version-win.txt not found. Run: zsh ./build_zlib-win.zsh"
@@ -158,13 +190,27 @@ tmp_version=$(mktemp -u)_version.swift
 cleanup() { rm -f "$tmp_cli" "$tmp_version" }
 trap cleanup EXIT
 
-zsh ./strip_runcli.zsh ../lzfse-cli.swift "$tmp_cli" || die "failed to strip runCLI() / 剝除 runCLI() 失敗"
+# 排除 LZFSE 時不剝除、也不納入 lzfse-cli.swift，改以 -DEXCLUDE_LZFSE 編譯——與
+# compile_tar-linux.zsh 的作法一致。zsh 中空陣列的 "${arr[@]}" 展開為零個字，因此同一行
+# swiftc 兩種情況都適用，不需要複製一份。
+# When LZFSE is excluded, lzfse-cli.swift is neither stripped nor compiled in and
+# -DEXCLUDE_LZFSE is passed instead, matching compile_tar-linux.zsh. In zsh
+# "${arr[@]}" on an empty array expands to zero words, so one swiftc line serves
+# both cases and no copy of it is needed.
+SWIFT_DEFINES=()
+CLI_SRC=()
+if [[ -n $LZFSE_CLI ]]; then
+  zsh ./strip_runcli.zsh "$LZFSE_CLI" "$tmp_cli" || die "failed to strip runCLI() / 剝除 runCLI() 失敗"
+  CLI_SRC=("$tmp_cli")
+else
+  SWIFT_DEFINES=(-DEXCLUDE_LZFSE)
+fi
 zsh ./generate_version.zsh "$tmp_version"           || die "build version generation failed"
 
 # ---- link / 連結 ----
 mkdir -p release
 build_exe="swift_tar-build-$$.exe"
-swiftc -O "$tmp_cli" "$tmp_version" swift_tar.swift rgb1.swift crypto.swift \
+swiftc -O "${SWIFT_DEFINES[@]}" "${CLI_SRC[@]}" "$tmp_version" swift_tar.swift rgb1.swift crypto.swift \
        build/libarchive_zip_bridge.obj \
        build/libarchive-win/libarchive/Release/archive.lib \
        -o "$build_exe" \

@@ -107,18 +107,31 @@ done
 # there are callers in exactly that position: multissh builds its own copy of
 # swift_tar with -DEXCLUDE_LZFSE on macOS, and had no way to ask for the same
 # thing here. On a full clone this script therefore built WITH the private
-# engine, and on WSL that failed outright -- the shim redeclares
-# `autoreleasepool(invoking:)`, which that Swift already provides on Linux. The
-# caller was left with a build it never asked for and could not turn off.
+# engine, and the caller was left with a build it never asked for and could not
+# turn off.
+#
+# That full-engine build also failed on WSL until 2026-08-25, and the reason
+# recorded here was wrong: it said Swift on Linux already provides
+# `autoreleasepool(invoking:)`. It does not -- were that so, the EXCLUDE_LZFSE
+# build would have collided too, and it always succeeded. Two shims were being
+# compiled into one module: swift_tar.swift's under `#if os(Linux)` and
+# lzfse-cli.swift's under `#if !canImport(ObjectiveC)`, overlapping on Linux
+# and nowhere else. swift_tar.swift's is now `#if os(Linux) && EXCLUDE_LZFSE`.
 #
 # 在環境中設定 EXCLUDE_LZFSE=1，即使 lzfse2 已 checkout 也強制排除，
 # 與 `./compile_tar.zsh --no-lzfse` 一致。
 #
 # 單靠偵測無法表達「我有這個引擎，但我不要它」，而確實有呼叫端正處於這個位置：
 # multissh 在 macOS 上是以 -DEXCLUDE_LZFSE 建置自己那份 swift_tar 的，卻無從在此提出
-# 相同要求。於是在完整 clone 上，本腳本會帶著私有引擎建置，而在 WSL 上那會直接失敗——
-# 該 shim 重複宣告了 `autoreleasepool(invoking:)`，而那個 Swift 在 Linux 上本就提供它。
-# 呼叫端因此得到一個它從未要求、也關不掉的建置。
+# 相同要求。於是在完整 clone 上，本腳本會帶著私有引擎建置，呼叫端因此得到一個它從未
+# 要求、也關不掉的建置。
+#
+# 含引擎的建置在 2026-08-25 之前於 WSL 上也會失敗，而此處原本記載的原因是錯的：它說
+# Linux 的 Swift 本就提供 `autoreleasepool(invoking:)`。並非如此——若真如此，
+# EXCLUDE_LZFSE 的建置也會一併衝突，而它一直都成功。真正的原因是同一個 module 編入了
+# 兩份 shim：swift_tar.swift 的 `#if os(Linux)` 與 lzfse-cli.swift 的
+# `#if !canImport(ObjectiveC)`，兩者僅在 Linux 重疊。swift_tar.swift 那份已改為
+# `#if os(Linux) && EXCLUDE_LZFSE`。
 SWIFT_DEFINES=(-DEXCLUDE_LZFSE)
 CLI_SRC=()
 TEMP_CLI=""

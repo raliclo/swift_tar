@@ -708,6 +708,13 @@ fi
 #   /tmp/x     開頭的 "/" 雖被去除，結果仍解析到目的地之外
 # 封存不保證由本工具寫出，故讀取端必須假設名稱懷有敵意。沒有任何 tar CLI 會建立這類
 # 名稱，因此需要 raw header 產生器。
+# The generator is tracked in the repo, so "missing" is never an environment
+# condition -- it means the path is wrong, which is exactly what fc60861 found.
+# Both guarded blocks therefore fail rather than skip. flow.md records the reason
+# as a rule: a SKIP never becomes a FAIL, so nobody reports it.
+# 產生器是 repo 追蹤的檔案，故「找不到」絕不是環境條件，而是路徑寫錯——fc60861 找到的
+# 正是這個。兩個受守門的區塊因此改為失敗而非跳過。flow.md 已將理由記為常規：SKIP 永遠
+# 不會變成 FAIL，因此無人回報。
 RAW="${0:A:h:h}/verifications/make_raw_tar.zsh"
 if [ -f "$RAW" ]; then
   TRAV="$TMP/trav"
@@ -816,7 +823,7 @@ if [ -f "$RAW" ]; then
     && ok "a legitimate symlink still extracts" \
     || bad "a legitimate symlink still extracts"
 else
-  echo "SKIP: path traversal (verifications/make_raw_tar.zsh missing)"
+  bad "path traversal (missing fixture generator $RAW)"
 fi
 
 # ---- a "./" member must not crash extraction ----
@@ -1314,7 +1321,7 @@ if [ -f "$RAW" ]; then
                                || bad "a raw typeflag '6' entry becomes a FIFO" ;;
   esac
 else
-  echo "SKIP: raw typeflag '6' fixture (verifications/make_raw_tar.zsh missing)"
+  bad "raw typeflag '6' fixture (missing fixture generator $RAW)"
 fi
 
 

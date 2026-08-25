@@ -67,7 +67,7 @@ import ucrt
 import WinSDK
 #endif
 
-#if os(Linux)
+#if os(Linux) && EXCLUDE_LZFSE
 // autoreleasepool is an Objective-C runtime facility and exists only on
 // Darwin. The call sites below use it to bound peak memory while reading
 // chunks and building Data buffers; on Linux there is no autorelease pool to
@@ -76,6 +76,16 @@ import WinSDK
 // autoreleasepool 屬於 Objective-C runtime，僅存在於 Darwin。下方各呼叫點以它
 // 限制逐塊讀取與建立 Data 時的尖峰記憶體；Linux 沒有 autorelease pool 需要
 // 排空，因此此處為單純直通，不改變周圍邏輯。標記 inline 故無執行期成本。
+//
+// EXCLUDE_LZFSE is part of the condition because lzfse-cli.swift carries the
+// same shim under `#if !canImport(ObjectiveC)`, and that is compiled into this
+// module whenever the engine is included. Both conditions hold on Linux and
+// only on Linux, so a full-engine Linux build saw two declarations of one
+// function and failed; Windows never did, because this one is os(Linux)-only.
+// EXCLUDE_LZFSE 也是條件之一，因為 lzfse-cli.swift 以 `#if !canImport(ObjectiveC)`
+// 帶了同一份 shim，而含引擎時它會一併編入本 module。兩個條件僅在 Linux 同時成立，
+// 故含引擎的 Linux 建置會看到同一函式被宣告兩次而失敗；Windows 從未如此，因為
+// 這一份只在 os(Linux) 生效。
 @inline(__always)
 func autoreleasepool<Result>(invoking body: () throws -> Result) rethrows -> Result {
     try body()

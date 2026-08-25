@@ -64,10 +64,26 @@ printf x > "$work/src/wide.txt";  chmod 0666 "$work/src/wide.txt"
 printf x > "$work/src/exec.sh";   chmod 0777 "$work/src/exec.sh"
 ( cd "$work" && "$tar_abs" -c --zstd -f a.tzst src ) 2>/dev/null
 
+# BSD stat spells the permission bits `-f '%Lp'`; GNU coreutils spells them
+# `-c '%a'` and reads `-f` as "show filesystem status" instead -- which succeeds,
+# so the BSD form on Linux printed `File: "..."` rather than failing. Every
+# comparison then mismatched against a correct build. Decided once here, not per
+# call, and by asking stat rather than by branching on `uname`: a GNU stat is
+# what matters, not a Linux kernel.
+# BSD 的 stat 以 `-f '%Lp'` 取權限位元；GNU coreutils 則是 `-c '%a'`，且會把 `-f`
+# 讀成「顯示檔案系統狀態」——那會成功，所以在 Linux 上 BSD 寫法印出的是 `File: "..."`
+# 而非報錯，於是每一項比對都在正確的建置上失敗。此處只判斷一次，且是問 stat 而不是
+# 看 `uname`：關鍵在於是不是 GNU stat，而不是核心是不是 Linux。
+if stat -c '%a' . >/dev/null 2>&1; then
+  mode_of() { stat -c '%a' "$1" 2>/dev/null }
+else
+  mode_of() { stat -f '%Lp' "$1" 2>/dev/null }
+fi
+
 extract_mode() {  # <旗標...> -> "wide exec"
   rm -rf "$work/out"; mkdir -p "$work/out"
   ( cd "$work/out" && "$tar_abs" -x "$@" --zstd -f ../a.tzst ) 2>/dev/null
-  print -- "$(stat -f '%Lp' "$work/out/src/wide.txt" 2>/dev/null) $(stat -f '%Lp' "$work/out/src/exec.sh" 2>/dev/null)"
+  print -- "$(mode_of "$work/out/src/wide.txt") $(mode_of "$work/out/src/exec.sh")"
 }
 
 print -- "swift_tar 解壓權限 / extract permissions (umask 022):"

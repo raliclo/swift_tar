@@ -51,18 +51,35 @@ touch -t 202001010000 "$work/src/old.txt"
 
 now_year=$(date +%Y)
 
+# mtime 由 zsh 內建的 zsh/stat 模組讀取，不呼叫外部 stat。原本這裡先試 GNU 的
+# `stat -c '%y'`，失敗再退回 BSD 的 `stat -f '%Sm'`——那涵蓋了 Linux 與 macOS，卻涵蓋不了
+# 「沒有 stat」這第三種情況：Buildroot／BusyBox 的 guest 的 applet 清單裡根本沒有 stat，
+# 於是兩個分支都靜默失敗，函式回傳空字串，而報告寫著 `expected 2020, got `，看起來像
+# swift_tar 沒有還原 mtime。zstat 內建於 zsh，且 `-F '%Y'` 直接給出年份，連兩種格式字串
+# 的差異都一併消失。
+#
+# The mtime comes from zsh's own zsh/stat module rather than an external stat.
+# This used to try GNU's `stat -c '%y'` and fall back to BSD's `stat -f '%Sm'`,
+# which covers Linux and macOS but not the third case: the Buildroot/BusyBox
+# guest has no stat in its applet list at all, so both branches failed silently,
+# the function returned an empty string, and the report read `expected 2020,
+# got ` -- which looks like swift_tar failing to restore the mtime. zstat is
+# built into zsh and `-F '%Y'` yields the year directly, so the two format
+# dialects stop mattering as well.
+zmodload zsh/stat
+
 extract_year() {  # <旗標...> -> 解出檔案的 mtime 年份
   rm -rf "$work/out"; mkdir -p "$work/out"
   if ! ( cd "$work/out" && "$tar_abs" -x "$@" --zstd -f ../a.tzst ) >/dev/null 2>&1; then
     print -- "EXTRACT_FAILED"
     return
   fi
-  local stamp
-  if stamp=$(stat -c '%y' "$work/out/src/old.txt" 2>/dev/null); then
-    print -- "${stamp%%-*}"
-  else
-    stat -f '%Sm' -t '%Y' "$work/out/src/old.txt" 2>/dev/null
-  fi
+  local -A entry
+  zstat -F '%Y' -H entry +mtime -- "$work/out/src/old.txt" 2>/dev/null || {
+    print -- "STAT_FAILED"
+    return
+  }
+  print -- "${entry[mtime]}"
 }
 
 print -- "swift_tar -m／--touch 別名 / the -m alias (archived mtime 2020, now $now_year):"

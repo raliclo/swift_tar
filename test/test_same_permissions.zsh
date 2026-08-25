@@ -64,26 +64,51 @@ printf x > "$work/src/wide.txt";  chmod 0666 "$work/src/wide.txt"
 printf x > "$work/src/exec.sh";   chmod 0777 "$work/src/exec.sh"
 ( cd "$work" && "$tar_abs" -c --zstd -f a.tzst src ) 2>/dev/null
 
-# BSD stat spells the permission bits `-f '%Lp'`; GNU coreutils spells them
-# `-c '%a'` and reads `-f` as "show filesystem status" instead -- which succeeds,
-# so the BSD form on Linux printed `File: "..."` rather than failing. Every
-# comparison then mismatched against a correct build. Decided once here, not per
-# call, and by asking stat rather than by branching on `uname`: a GNU stat is
-# what matters, not a Linux kernel.
-# BSD 的 stat 以 `-f '%Lp'` 取權限位元；GNU coreutils 則是 `-c '%a'`，且會把 `-f`
-# 讀成「顯示檔案系統狀態」——那會成功，所以在 Linux 上 BSD 寫法印出的是 `File: "..."`
-# 而非報錯，於是每一項比對都在正確的建置上失敗。此處只判斷一次，且是問 stat 而不是
-# 看 `uname`：關鍵在於是不是 GNU stat，而不是核心是不是 Linux。
-if stat -c '%a' . >/dev/null 2>&1; then
-  mode_of() { stat -c '%a' "$1" 2>/dev/null }
-else
-  mode_of() { stat -f '%Lp' "$1" 2>/dev/null }
-fi
+# 權限位元由 zsh 自己的 zsh/stat 模組讀取，不呼叫外部 stat。
+#
+# 外部 stat 在這三種環境各有一種壞法，而且壞得都很安靜：BSD（macOS）用
+# `stat -f '%Lp'`，GNU（WSL、多數 Linux）的 `-f` 卻是「顯示檔案系統狀態」——那會**成功**，
+# 因此在 Linux 上 BSD 寫法印出的是 `File: "..."` 而非報錯，於是每一項比對都在正確的建置
+# 上失敗；而 Buildroot／BusyBox 的 guest **根本沒有 stat 這個指令**，其 applet 清單裡沒
+# 有它。三者都被 `2>/dev/null` 吞掉，於是回報寫著 `expected 666 777, got  `——一個空字
+# 串，它看起來像 swift_tar 沒有還原權限。
+#
+# 這裡曾以「先探測 `stat -c '%a'` 再分支」來解決前兩種，那個作法對的地方在於它問的是
+# stat 本身而不是 `uname`——關鍵從來就不是核心是不是 Linux。zstat 把同一個道理推到底：
+# 它內建於 zsh，而四個節點都在跑 zsh，於是連「這台機器的 stat 是哪一種」都不必再問，第
+# 三種情況也一併消失。`-o` 會給出像 `0100646` 的八進位模式；此處只取末三位，也就是原本
+# `%Lp` 的意思。
+#
+# The permission bits come from zsh's own zsh/stat module rather than an
+# external stat.
+#
+# An external stat breaks in three different ways here, all of them quietly.
+# BSD (macOS) spells it `stat -f '%Lp'`; GNU (WSL and most Linux) reads `-f` as
+# "display filesystem status", which *succeeds* -- so on Linux the BSD form
+# printed `File: "..."` rather than failing, and every comparison then
+# mismatched against a correct build. The Buildroot/BusyBox guest *has no stat
+# at all*: it is not in the applet list. All three are swallowed by
+# `2>/dev/null`, so the report reads `expected 666 777, got  ` -- an empty
+# string that looks like swift_tar failing to restore permissions.
+#
+# This used to probe `stat -c '%a'` and branch, which was right to ask stat
+# itself rather than `uname`: a GNU stat is what matters, not a Linux kernel.
+# zstat carries that further -- it is built into zsh, which every node runs, so
+# there is no longer a question of which stat this machine ships, and the third
+# case disappears with it. `-o` yields an octal mode such as `0100646`; the last
+# three digits are what `%Lp` meant.
+zmodload zsh/stat
+
+file_mode() {  # <路徑> -> 三位八進位權限 / three octal permission digits
+  local -A entry
+  zstat -o -H entry -- "$1" 2>/dev/null || return 1
+  print -- "${entry[mode]: -3}"
+}
 
 extract_mode() {  # <旗標...> -> "wide exec"
   rm -rf "$work/out"; mkdir -p "$work/out"
   ( cd "$work/out" && "$tar_abs" -x "$@" --zstd -f ../a.tzst ) 2>/dev/null
-  print -- "$(mode_of "$work/out/src/wide.txt") $(mode_of "$work/out/src/exec.sh")"
+  print -- "$(file_mode "$work/out/src/wide.txt") $(file_mode "$work/out/src/exec.sh")"
 }
 
 print -- "swift_tar 解壓權限 / extract permissions (umask 022):"

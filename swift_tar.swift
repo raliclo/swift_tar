@@ -129,6 +129,7 @@ private func cSwiftTarZipRead(
     _ archivePath: UnsafePointer<CChar>,
     _ destinationDir: UnsafePointer<CChar>,
     _ extract: Int32,
+    _ toStdout: Int32,
     _ verbose: Int32,
     _ restoreMtime: Int32,
     _ errorBuffer: UnsafeMutablePointer<CChar>,
@@ -225,7 +226,7 @@ private func runZipCreate(archivePath: String, files: [String], changeDir: Strin
 }
 
 private func runZipRead(archivePath: String, extract: Bool, destDir: String,
-                        verbose: Bool, restoreMtime: Bool) throws {
+                        toStdout: Bool, verbose: Bool, restoreMtime: Bool) throws {
     // Create -C's target first. The tar extract path reaches its destination by
     // joining -C into each entry's path, so the directory-creation step makes
     // the whole chain on the way; the ZIP path hands -C to libarchive, which
@@ -239,7 +240,7 @@ private func runZipRead(archivePath: String, extract: Bool, destDir: String,
     // 目錄不存在便直接失敗。同一個旗標、同樣的指令形狀，結果卻相反——而 README 記載
     // 的是會自動建立的那一種，且未限定只適用 tar。在此建立目錄，是讓行為符合文件，
     // 而非把文件縮限成只描述其中一個後端。
-    if extract && !destDir.isEmpty && destDir != "." {
+    if extract && !toStdout && !destDir.isEmpty && destDir != "." {
 #if os(Windows)
         guard winMakeDirectories(destDir) else {
             throw TarError.io("cannot create directory '\(destDir)' / 無法建立目錄 '\(destDir)'")
@@ -252,7 +253,8 @@ private func runZipRead(archivePath: String, extract: Bool, destDir: String,
     var error = [CChar](repeating: 0, count: 4096)
     let status = archivePath.withCString { archive in
         destDir.withCString { directory in
-            cSwiftTarZipRead(archive, directory, extract ? 1 : 0, verbose ? 1 : 0,
+            cSwiftTarZipRead(archive, directory, extract ? 1 : 0, toStdout ? 1 : 0,
+                             verbose ? 1 : 0,
                              restoreMtime ? 1 : 0, &error, error.count)
         }
     }
@@ -3970,7 +3972,8 @@ func runTarProcess(_ exePath: String, _ args: [String], cwd: String? = nil) -> B
 /// 同 `runTarProcess`，但將子行程的 stdout 導向 `toFile`。用於檢查那些「重點就在
 /// stdout 輸出什麼」的旗標。
 func runTarProcessCapturingStdout(_ exePath: String, _ args: [String],
-                                  toFile: String, cwd: String? = nil) -> Bool {
+                                  toFile: String, cwd: String? = nil,
+                                  emptyStdin: Bool = false) -> Bool {
     FileManager.default.createFile(atPath: toFile, contents: nil)
     guard let out = FileHandle(forWritingAtPath: toFile) else { return false }
     defer { try? out.close() }
@@ -3983,8 +3986,16 @@ func runTarProcessCapturingStdout(_ exePath: String, _ args: [String],
     process.environment = env
     process.standardOutput = out
     process.standardError = FileHandle.nullDevice
+    var closedInput: Pipe?
+    if emptyStdin {
+        let input = Pipe()
+        try? input.fileHandleForWriting.close()
+        process.standardInput = input.fileHandleForReading
+        closedInput = input
+    }
     guard (try? process.run()) != nil else { return false }
     process.waitUntilExit()
+    _ = closedInput
     return process.terminationStatus == 0
 }
 
@@ -4277,6 +4288,39 @@ func runSelfTest(debug: Bool = false) {
             check("\(spelling) with -x: streams to stdout, writes nothing",
                   ok && left == 0 && body.contains(expected))
         }
+        // ZIP uses a separate libarchive backend, so tar's stdout test above
+        // cannot cover it. Assert both halves of -O's contract here: regular
+        // member bytes reach stdout and no archive entry reaches the filesystem.
+        // ZIP 走獨立的 libarchive 後端，故上方 tar 的 stdout 測試涵蓋不到它。在此同時
+        // 驗證 -O 的兩半契約：一般成員位元組抵達 stdout，且沒有封存項目落到檔案系統。
+        try? fm.removeItem(atPath: probeDir)
+        try? fm.createDirectory(atPath: probeDir, withIntermediateDirectories: true)
+        let zipCaptured = "\(soDir)/captured-zip.bin"
+        let zipDestination = "\(probeDir)/must-not-exist"
+        let zipStdoutOK = runTarProcessCapturingStdout(
+            selfExe, ["-O", "-x", "-f", zipA, "-C", zipDestination],
+            toFile: zipCaptured, cwd: probeDir)
+        let zipLeft = (try? fm.contentsOfDirectory(atPath: probeDir))?.count ?? -1
+        let zipBody = (try? String(contentsOfFile: zipCaptured, encoding: .utf8)) ?? ""
+        check("ZIP -O: streams members to stdout, writes nothing",
+              zipStdoutOK && zipLeft == 0 && zipBody.contains(expected)
+              && zipBody.contains("nested content line\n"))
+
+        // -stream-out changes the archive destination only for create. Commands
+        // whose output already is stdout, such as --cat, must still read -f.
+        // -stream-out 只有建立時才改變封存目的地。--cat 這類輸出本就走 stdout 的命令，
+        // 仍必須從 -f 讀取。
+        let catBaseline = "\(soDir)/cat-baseline.tar"
+        let catStreamOut = "\(soDir)/cat-stream-out.tar"
+        let catBaselineOK = runTarProcessCapturingStdout(
+            selfExe, ["--cat", "-f", soArchive], toFile: catBaseline, emptyStdin: true)
+        let catStreamOK = runTarProcessCapturingStdout(
+            selfExe, ["--cat", "-stream-out", "-f", soArchive],
+            toFile: catStreamOut, emptyStdin: true)
+        check("--cat -stream-out keeps -f as input",
+              catBaselineOK && catStreamOK
+              && fm.contents(atPath: catBaseline) == fm.contents(atPath: catStreamOut)
+              && ((try? fm.attributesOfItem(atPath: catStreamOut)[.size] as? Int) ?? 0) > 0)
         // An unknown option must stop the command rather than be skipped.
         // 未知選項必須中止指令，而非被略過。
         try? fm.removeItem(atPath: probeDir)
@@ -4781,7 +4825,7 @@ struct SwiftTarMain {
         // -so 指的是「輸出」去向，而輸出是什麼取決於操作：建立時輸出是封存，故
         // -so 等同 -f -；解出時輸出是成員內容，封存仍來自 -f。若兩種情況都把 -so
         // 當成 -f -，`-x -so -f a` 會去讀空的 stdin 而毫無輸出。
-        let archiveFromStream = wantStdin || (args.contains("-stream-out") && !args.contains("-x"))
+        let archiveFromStream = wantStdin || (args.contains("-stream-out") && doCreate)
         let archivePath = archiveFromStream ? "-" : (optValue("-f") ?? "-")
         let destDir = optValue("-C") ?? ""
 
@@ -4963,7 +5007,7 @@ struct SwiftTarMain {
                         throw TarError.io("--strip-components is not supported for ZIP extraction / ZIP 解出不支援 --strip-components")
                     }
                     try runZipRead(archivePath: archivePath, extract: doExtract,
-                                   destDir: destDir, verbose: verbose,
+                                   destDir: destDir, toStdout: toStdout, verbose: verbose,
                                    restoreMtime: restoreMtime)
                 } else {
                     try runRead(archivePath: archivePath, extract: doExtract,

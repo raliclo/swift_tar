@@ -82,11 +82,15 @@ gzip、zstd 與 ZIP 支援連結進 `swift_tar.exe`；執行時不需要 `zlib.d
 chunk 生一個 `zstd.exe`。
 
 ```bat
+build_tool_install-win.bat
 git submodule update --init
 zsh ./build_zlib-win.zsh
 zsh ./build_zstd-win.zsh
 compile_tar-win.bat
 ```
+
+在乾淨 Windows 上，`build_tool_install-win.bat` 會先透過 PowerShell 建立 Scoop 與
+zsh，再交給完整的 zsh 安裝器；已安裝 zsh 時重跑亦安全。
 
 `build_zlib-win.zsh` 與 `build_zstd-win.zsh` 是相依套件維護步驟：各自同步固定的
 gitlink、重建靜態庫（`zs.lib`／`zstd_static.lib`），並將精確的 tag、commit 與
@@ -101,7 +105,8 @@ release 驗證。
 最後建置的那個平台會覆寫掉另一個平台的 provenance。
 
 其餘外部 codec（bzip2、xz、lz4、lzip）仍需要對應的 Scoop CLI 工具；
-`build_tool_install-win.zsh` 可安裝完整工具鏈。
+`build_tool_install-win.bat` 會先完成 bootstrap，再交給
+`build_tool_install-win.zsh` 安裝完整工具鏈。
 
 Windows ZIP 包含靜態連結的執行檔、Swift runtime DLL、`version.txt`（由
 `version-win.txt` 放入）、

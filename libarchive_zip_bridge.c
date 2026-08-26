@@ -363,9 +363,31 @@ static int copy_archive_data(struct archive *reader, struct archive *disk,
     }
 }
 
+static int copy_archive_data_to_stdout(struct archive *reader,
+                                       char *error_buffer,
+                                       size_t error_capacity) {
+    char buffer[64 * 1024];
+    la_ssize_t count;
+
+    while ((count = archive_read_data(reader, buffer, sizeof(buffer))) > 0) {
+        if (fwrite(buffer, 1, (size_t)count, stdout) != (size_t)count) {
+            if (error_buffer != NULL && error_capacity > 0) {
+                snprintf(error_buffer, error_capacity, "write stdout: %s", strerror(errno));
+            }
+            return -1;
+        }
+    }
+    if (count < 0) {
+        set_archive_error(error_buffer, error_capacity, "archive_read_data", reader);
+        return -1;
+    }
+    return 0;
+}
+
 int swift_tar_zip_read(const char *archive_path,
                        const char *destination_dir,
                        int extract,
+                       int to_stdout,
                        int verbose,
                        int restore_mtime,
                        char *error_buffer,
@@ -424,7 +446,7 @@ int swift_tar_zip_read(const char *archive_path,
         goto cleanup;
     }
 
-    if (extract) {
+    if (extract && !to_stdout) {
         disk = archive_write_disk_new();
         if (disk == NULL) {
             set_error(error_buffer, error_capacity, "archive_write_disk_new failed");
@@ -452,9 +474,22 @@ int swift_tar_zip_read(const char *archive_path,
             goto cleanup;
         }
         path = archive_entry_pathname(entry);
-        if (!extract || verbose) printf("%s%s\n", extract ? "x " : "", path != NULL ? path : "");
+        if (!extract) {
+            printf("%s\n", path != NULL ? path : "");
+        } else if (verbose) {
+            FILE *listing = to_stdout ? stderr : stdout;
+            fprintf(listing, "x %s\n", path != NULL ? path : "");
+        }
 
-        if (extract) {
+        if (extract && to_stdout) {
+            if (archive_entry_filetype(entry) == AE_IFREG) {
+                if (copy_archive_data_to_stdout(reader, error_buffer, error_capacity) != 0) {
+                    goto cleanup;
+                }
+            } else {
+                archive_read_data_skip(reader);
+            }
+        } else if (extract) {
             status = archive_write_header(disk, entry);
             if (status < ARCHIVE_OK) {
                 set_archive_error(error_buffer, error_capacity, "archive_write_header", disk);
@@ -471,6 +506,12 @@ int swift_tar_zip_read(const char *archive_path,
         } else {
             archive_read_data_skip(reader);
         }
+    }
+    if (to_stdout && fflush(stdout) != 0) {
+        if (error_buffer != NULL && error_capacity > 0) {
+            snprintf(error_buffer, error_capacity, "flush stdout: %s", strerror(errno));
+        }
+        goto cleanup;
     }
     result = 0;
 

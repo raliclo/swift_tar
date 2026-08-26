@@ -94,11 +94,16 @@ libraries, then links gzip, zstd, and ZIP support directly into `swift_tar.exe`;
 external `gzip.exe`, or per-chunk `zstd.exe` is required at runtime.
 
 ```bat
+build_tool_install-win.bat
 git submodule update --init
 zsh ./build_zlib-win.zsh
 zsh ./build_zstd-win.zsh
 compile_tar-win.bat
 ```
+
+On a clean Windows machine, `build_tool_install-win.bat` bootstraps Scoop and
+zsh from PowerShell before handing off to the full zsh installer. It is safe to
+run again when zsh is already installed.
 
 `build_zlib-win.zsh` and `build_zstd-win.zsh` are dependency-maintenance steps:
 each syncs its pinned gitlink, rebuilds the static library (`zs.lib` /
@@ -116,7 +121,8 @@ against. A single shared file meant whichever platform built last overwrote the
 other's provenance.
 
 The remaining external codecs (bzip2, xz, lz4, lzip) require their corresponding
-Scoop CLI tools; `build_tool_install-win.zsh` installs the complete toolchain.
+Scoop CLI tools; `build_tool_install-win.bat` bootstraps and installs the complete
+toolchain, then hands off to `build_tool_install-win.zsh`.
 
 The Windows ZIP contains the statically linked executable, Swift runtime DLLs,
 `version.txt` (staged from `version-win.txt`), `swift_tar-LICENSE.txt`,

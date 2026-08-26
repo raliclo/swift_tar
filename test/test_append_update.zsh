@@ -4,9 +4,12 @@
 # removal — a feature BSD tar lacks) against the platform's standard tar. Every
 # archive is validated by extracting it and diffing the tree against a
 # reference, so container equivalence is checked by content, not byte layout.
+# What that diff cannot see is asserted separately: section 4 checks that an
+# appended symlink survives as a symlink, because diff -r follows links.
 # 驗證 swift_tar 的 -r（追加）、-u（更新）與 --delete（就地移除項目——BSD tar
 # 沒有的功能），並與系統 tar 對比。每個封存都以解出後的檔案樹與參考樹做 diff
-# 比對，因此比的是內容等價，而非位元組佈局。
+# 比對，因此比的是內容等價，而非位元組佈局。該 diff 看不到的部分另行斷言：第 4 節
+# 檢查追加的 symlink 是否仍以 symlink 形式存活，因為 diff -r 會跟隨連結。
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -45,7 +48,17 @@ echo "[Info] swift_tar: $ST"
 pass=0; fail=0
 ok()   { echo "PASS: $1"; pass=$((pass+1)); }
 bad()  { echo "FAIL: $1"; fail=$((fail+1)); }
-same_tree() { # desc dirA dirB  → PASS iff identical trees / 兩棵樹相同才 PASS
+# desc dirA dirB → PASS iff the two trees carry the same names and the same file
+# contents. This is not tree identity, and the earlier wording ("PASS iff
+# identical trees") claimed more than the check delivers: diff -r compares
+# content and follows symlinks, so mode, mtime, symlink target and hardlink
+# sharing are all invisible to it. A symlink swapped for a regular file of the
+# same content compares equal here. Section 4 asserts that case separately.
+# desc dirA dirB → 兩棵樹的名稱與檔案內容相同才 PASS。這不是「樹完全相同」，而原本的
+# 措辭（「兩棵樹相同才 PASS」）宣稱得比這道檢查實際做到的更多：diff -r 只比內容且會
+# 跟隨 symlink，因此 mode、mtime、symlink 指向與 hardlink 共用關係它全部看不到。把
+# symlink 換成同內容的一般檔案，在此仍會判定相同。第 4 節即為此另行斷言。
+same_tree() {
   if diff -r "$2" "$3" >/dev/null 2>&1; then ok "$1"; else bad "$1 (trees differ)"; fi
 }
 
@@ -132,6 +145,42 @@ if "$SYS_TAR" --delete -f "$TMP/ref_del.tar" b.txt >/dev/null 2>&1; then
             "$TMP/x_sw_del" "$TMP/x_ref_del"
 else
   ok "DELETE: system tar ($SYS_TAR) has no --delete — swift_tar-only capability"
+fi
+
+# ---------------------------------------------------------------------------
+# 4) SYMLINK preservation through -r. Nothing above can see this: same_tree()
+#    is the only tree check in this file and diff -r follows symlinks, so an
+#    appended symlink that came back as a regular file would pass every
+#    assertion here. Ask directly instead — is it still a link, and does it
+#    still point where it did.
+#    4）symlink 經 -r 後的保存性。上方沒有任何檢查看得到這件事：本檔唯一的樹比對是
+#    same_tree()，而 diff -r 會跟隨 symlink，因此追加後變成一般檔案的 symlink 會通過
+#    上面每一項斷言。所以直接問：它還是不是連結，指向有沒有變。
+# ---------------------------------------------------------------------------
+LNK="$TMP/lnk"; mkdir -p "$LNK"
+printf 'echo\n' > "$LNK/target.txt"
+# ln -s can succeed while producing a copy rather than a link (MSYS without
+# winsymlinks), so the -L test decides whether this case is meaningful here.
+# ln -s 可能「成功」卻產生副本而非連結（MSYS 未設 winsymlinks），故以 -L 判定本案例
+# 在此環境是否有意義。
+if ln -s target.txt "$LNK/link.txt" 2>/dev/null && [ -L "$LNK/link.txt" ]; then
+  "$ST" -c -f "$TMP/sw_lnk.tar" -C "$LNK" target.txt
+  "$ST" -r -f "$TMP/sw_lnk.tar" -C "$LNK" link.txt
+  mkdir -p "$TMP/x_sw_lnk"
+  "$ST" -x -f "$TMP/sw_lnk.tar" -C "$TMP/x_sw_lnk"
+  # An `if` is required, not `[ -L … ] && …`: under `set -e` the && form exits
+  # the whole script when the test is false — precisely the failure case.
+  # 此處必須用 `if`，不能寫成 `[ -L … ] && …`：在 `set -e` 下，該寫法於測試為假時會
+  # 讓整個腳本退出——而那正是要偵測的失敗情況。
+  got_target=""
+  if [ -L "$TMP/x_sw_lnk/link.txt" ]; then
+    got_target="$(readlink "$TMP/x_sw_lnk/link.txt")"
+  fi
+  [ "$got_target" = "target.txt" ] \
+    && ok "APPEND -r: an appended symlink stays a symlink, target intact" \
+    || bad "APPEND -r: symlink preservation (link=[$got_target], expected [target.txt])"
+else
+  echo "SKIP: symlink preservation — cannot create symlinks here / 略過：此環境無法建立 symlink"
 fi
 
 # ---------------------------------------------------------------------------

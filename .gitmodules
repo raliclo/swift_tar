@@ -10,15 +10,6 @@
 [submodule "zstd"]
 	path = zstd
 	url = https://github.com/facebook/zstd
-	# build_zstd-win.zsh generates CMake/MSVC output under zstd/build/, which
-	# upstream's .gitignore does not cover, so every Windows build leaves the
-	# submodule reporting untracked content. The output cannot simply be deleted:
-	# compile_tar-win.bat links zstd/build/lib/Release/zstd_static.lib from it.
-	# build_zstd-win.zsh 會在 zstd/build/ 產生 CMake/MSVC 輸出，而上游的
-	# .gitignore 未涵蓋這些路徑，因此每次 Windows 建置後該 submodule 都會回報
-	# 未追蹤內容。這些產物不能直接刪除：compile_tar-win.bat 需連結其中的
-	# zstd/build/lib/Release/zstd_static.lib。
-	ignore = untracked
 [submodule "lz4"]
 	path = lz4
 	url = https://github.com/lz4/lz4

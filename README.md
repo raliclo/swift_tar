@@ -109,6 +109,8 @@ run again when zsh is already installed.
 each syncs its pinned gitlink, rebuilds the static library (`zs.lib` /
 `zstd_static.lib`), and writes the exact tag/commit/linkage to
 `version-win.txt`.
+The zstd CMake binary tree lives under `build/zstd-win`, outside the submodule,
+so generated files cannot be hidden by a broad submodule ignore rule.
 Run them after cloning or changing either submodule. Normal
 `compile_tar-win.bat` rebuilds the incremental libarchive backend and reuses the
 existing zlib/zstd libraries. Build-version generation preserves the `zlib_*`, `zstd_*`, and `libarchive_*`

@@ -158,7 +158,7 @@ else
   [[ -n $LZFSE_CLI ]] || die "lzfse-cli.swift not found in lzfse2/ or ../ ; run: git submodule update --init lzfse2 / 在 lzfse2/ 與 ../ 均找不到 lzfse-cli.swift"
 fi
 [[ -f zlib/build/Release/zs.lib ]]            || die "zlib static library not found. Run: zsh ./build_zlib-win.zsh"
-[[ -f zstd/build/lib/Release/zstd_static.lib ]] || die "zstd static library not found. Run: zsh ./build_zstd-win.zsh"
+[[ -f build/zstd-win/lib/Release/zstd_static.lib ]] || die "zstd static library not found. Run: zsh ./build_zstd-win.zsh"
 [[ -f version-win.txt ]]                      || die "version-win.txt not found. Run: zsh ./build_zlib-win.zsh"
 
 # ---- libarchive backend / libarchive 後端 ----
@@ -216,7 +216,7 @@ swiftc -O "${SWIFT_DEFINES[@]}" "${CLI_SRC[@]}" "$tmp_version" swift_tar.swift r
        -o "$build_exe" \
        -I cmodules/zlib -Xcc -Izlib -Xcc -Izlib/build \
        -Lzlib/build/Release -lzs \
-       -Lzstd/build/lib/Release -lzstd_static \
+       -Lbuild/zstd-win/lib/Release -lzstd_static \
     || die "compile failed / 編譯失敗"
 
 # ---- install, with retry / 安裝，含重試 ----

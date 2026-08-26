@@ -1,14 +1,22 @@
 #!/usr/bin/env zsh
-# Build the bundled static libarchive ZIP backend for macOS.
-# 建置 macOS 使用的內附靜態 libarchive ZIP 後端。
+# Build the bundled static libarchive ZIP backend for macOS or Linux.
+# 建置 macOS 或 Linux 使用的內附靜態 libarchive ZIP 後端。
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"
+. ./platform.zsh
 
 git submodule update --init libarchive
 
-build_dir="build/libarchive-macos"
+case "$(swift_tar_platform)" in
+    mac)   build_dir="build/libarchive-macos"; version_file="version-mac.txt" ;;
+    linux) build_dir="build/libarchive-linux"; version_file="version-linux.txt" ;;
+    *)
+        echo "[FAIL] unsupported platform / 不支援的平台：$(swift_tar_platform)" >&2
+        exit 1
+        ;;
+esac
 cmake -S libarchive -B "$build_dir" \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=OFF \
@@ -32,16 +40,12 @@ fi
 clang -O2 -Ilibarchive/libarchive -c libarchive_zip_bridge.c \
     -o build/libarchive_zip_bridge.o
 
-# Record the pinned gitlink, mirroring build_libarchive-win.zsh. Until this was
-# added, version-mac.txt carried no libarchive provenance at all and the shared
-# version.txt made a macOS build look as if it had linked the library the
-# Windows build linked.
-# 記錄所固定的 gitlink，與 build_libarchive-win.zsh 相同。在此之前 version-mac.txt
-# 完全沒有 libarchive 的來源資訊，而共用的 version.txt 會讓 macOS 建置看起來像是
-# 連結了 Windows 建置所連結的那份函式庫。
+# Record the pinned gitlink in this platform's provenance file, mirroring
+# build_libarchive-win.zsh without letting a Linux build overwrite macOS data.
+# 將固定的 gitlink 記錄於本平台的來源資訊檔，與 build_libarchive-win.zsh 相同，
+# 且不讓 Linux 建置覆寫 macOS 資料。
 libarchive_version=$(git -C libarchive describe --tags --always)
 libarchive_commit=$(git -C libarchive rev-parse HEAD)
-version_file="version-mac.txt"
 tmp_version="$version_file.tmp"
 {
     grep -vE '^libarchive_(version|commit|linkage)=' "$version_file" 2>/dev/null || true

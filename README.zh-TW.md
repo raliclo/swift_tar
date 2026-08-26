@@ -94,7 +94,9 @@ zsh，再交給完整的 zsh 安裝器；已安裝 zsh 時重跑亦安全。
 
 `build_zlib-win.zsh` 與 `build_zstd-win.zsh` 是相依套件維護步驟：各自同步固定的
 gitlink、重建靜態庫（`zs.lib`／`zstd_static.lib`），並將精確的 tag、commit 與
-連結方式寫入 `version-win.txt`。首次 clone 或變更任一 submodule 後才需執行；平常的
+連結方式寫入 `version-win.txt`。zstd 的 CMake binary tree 位於 submodule 外的
+`build/zstd-win`，因此產生檔不會再被廣泛的 submodule ignore 規則隱藏。
+首次 clone 或變更任一 submodule 後才需執行；平常的
 `compile_tar-win.bat` 會增量重建 libarchive 後端並重用既有 zlib/zstd 靜態庫。
 建置版本產生流程會在 `version-win.txt` 保留 `zlib_*`、`zstd_*` 與 `libarchive_*`
 provenance 欄位，封裝步驟也會將該檔案以 `version.txt` 之名放入 Windows ZIP，供

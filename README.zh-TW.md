@@ -538,9 +538,14 @@ swift_tar -c -f first.tar -f second.tar ...      # 寫出 first.tar；second.tar
 `--decrypt-only`，方向卻相反——那兩者是讀取 `-f` 並寫至 stdout，而 `--rgb1-pack`
 是**寫入** `-f`。
 
-`--version` 回報編譯 binary 時擷取的本機日期時間，例如
+`--version` 回報**來源資訊**（provenance）最後一次改變時的本機日期時間，例如
 `swift_tar 20260712-143015`。相同值會以 `swift_tar_version` 儲存在封裝的
-`version.txt` 中。
+`version-<平台>.txt` 中，與該版本戳所描述的函式庫版本及連結方式並列。
+
+**它不是編譯時間，也無法辨識執行檔。** 只要記錄下來的函式庫與連結方式沒變，改過原始碼再
+建置也不會更動這個戳記，因此由不同原始碼建出的兩個執行檔可能回報同一個版本。不在 git
+checkout 內時——QEMU guest 是刻意不含 `.git` 佈建的——沒有可比對的對象，每次建置都會產生
+新的戳記。若需確認手上是哪一個執行檔，請取它的 `sha256`。
 
 ## 可重現的輸出
 

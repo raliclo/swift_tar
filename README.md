@@ -601,9 +601,18 @@ This catches people out on `--rgb1-pack`, which sits next to `--encrypt-only`
 and `--decrypt-only` in the table above but points the other way: those two read
 `-f` and write to stdout, whereas `--rgb1-pack` *writes* `-f`.
 
-`--version` reports the local date and time captured when the binary was
-compiled, for example `swift_tar 20260712-143015`. The same value is stored as
-`swift_tar_version` in the packaged `version.txt`.
+`--version` reports the local date and time at which the build **provenance**
+last changed, for example `swift_tar 20260712-143015`. The same value is stored
+as `swift_tar_version` in the packaged `version-<platform>.txt`, alongside the
+library versions and linkage that the stamp describes.
+
+**It is not a compile time, and it does not identify a binary.** Rebuilding
+after a source change leaves the stamp alone as long as the recorded libraries
+and linkage are unchanged, so two binaries built from different source can
+report the same version. Outside a git checkout — the QEMU guest is provisioned
+without `.git` on purpose — there is nothing to compare against and a fresh
+stamp is minted on every build. If you need to know which binary you have, take
+its `sha256`.
 
 ## Reproducible output
 

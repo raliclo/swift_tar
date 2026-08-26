@@ -1330,6 +1330,55 @@ Windows 分支是以原始 ustar fixture 涵蓋（`make_raw_tar.zsh` 新增 `fif
 靠 `mkfifo`——否則唯一無法建立管線的平台，就會是唯一其分支從未被任何測試執行到的平台，
 而那正是 round 49 缺陷得以出貨的方式。
 
+## `release_matrix.csv` is cited as the answer but does not exist / 被指為答案的 `release_matrix.csv` 並不存在  ▸ 🔴 未決 / open
+
+`d868dc3` deliberately changed what `swift_tar_version` means: no longer when a
+binary was compiled, but when its recorded provenance last changed. The tradeoff
+is sound and the reason is documented -- the old behaviour rewrote
+`version-<plat>.txt` on every build, and `helper/build_swift_tar.zsh` refuses to
+build while that file is dirty, so a test run (tests build) blocked the next
+build four times in one day.
+
+The rationale closes by saying identity was never a timestamp's job:
+"release_matrix.csv records each shipped binary's sha256, and that is the
+answer." No file by that name exists -- not in this repo, not in the parent
+`lzfse2` tree, and not in any commit reachable from `--all`. The only two
+occurrences of the string are the comment lines that cite it.
+
+So the property that was given up has a documented replacement, and the
+replacement is not there. Either it lives somewhere unshared (the Windows tree?)
+and needs committing, or it needs writing, or the comment should stop pointing at
+it.
+
+Observed here, not reported by a test: `swift_tar.swift` changed in `ce48061` and
+`1444fcd`; a rebuild on 2026-08-26 produced a binary reporting
+`20260816-014809`, ten days older than the source it was built from. That is the
+intended behaviour -- noting it as the concrete demonstration, not as a
+complaint.
+
+Both READMEs said `--version` "reports the local date and time captured when the
+binary was compiled", which stopped being true at `d868dc3`. Corrected in the
+same change as this entry.
+
+`d868dc3` 刻意改變了 `swift_tar_version` 的語意：不再是「執行檔何時編譯」，而是「其記錄的
+來源資訊何時改變」。這個取捨成立，理由也寫得清楚——舊行為每建置一次就改寫
+`version-<平台>.txt`，而 `helper/build_swift_tar.zsh` 在該檔有未提交變更時會拒絕建置，
+於是跑一次測試（測試會建置）就擋掉下一次建置，一天之內發生四次。
+
+該段理由最後說，辨識執行檔本來就不是時間戳的工作：「release_matrix.csv 記的是各執行檔的
+sha256，那才是答案。」但沒有這個檔案——本 repo 沒有，父層 `lzfse2` 樹沒有，`--all`
+可達的任何 commit 也沒有。這個字串在整棵樹上只出現兩次，都在引用它的註解裡。
+
+換言之，被讓出的性質有一個明載的替代品，而該替代品不存在。它要嘛在某處未共享（Windows
+端？）而需要入版，要嘛需要被寫出來，要嘛該註解不應再指向它。
+
+此項於此處觀察到，非測試回報：`swift_tar.swift` 在 `ce48061` 與 `1444fcd` 中改動過，而
+2026-08-26 重新建置得到的執行檔回報 `20260816-014809`，比它的來源早了十天。**這正是預期
+行為**——記下來是作為具體示範，不是抱怨。
+
+兩份 README 原本寫著 `--version`「回報編譯 binary 時擷取的本機日期時間」，該敘述自
+`d868dc3` 起不再為真，已於同一次變更中更正。
+
 ## The ZIP backend stores its own output file / ZIP 後端會把自己的輸出檔收進封存  ▸ 🔴 未決 / open
 
 Found while verifying the trailing-slash fix, not reported by any test agent.

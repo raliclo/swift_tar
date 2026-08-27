@@ -836,6 +836,14 @@ var zstdCompressionLevel: Int32 {
 // nonisolated(unsafe) would switch the check off; a Mutex makes the guarantee real.
 // The cost is one uncontended lock per access, and these are read a few times per
 // stream, never in a hot loop. The computed property keeps every call site unchanged.
+// -h/--dereference：與 tarRestorePermissions 同樣的持有方式與理由。
+// -h/--dereference: held the same way and for the same reason as tarRestorePermissions.
+let tarDereferenceBox = Mutex<Bool>(false)
+var tarDereference: Bool {
+    get { tarDereferenceBox.withLock { $0 } }
+    set { tarDereferenceBox.withLock { $0 = newValue } }
+}
+
 let tarRestorePermissionsBox = Mutex<Bool>(true)
 var tarRestorePermissions: Bool {
     get { tarRestorePermissionsBox.withLock { $0 } }
@@ -2540,11 +2548,24 @@ final class TarWriter {
     /// nil，因為那走不進去。
     private let archiveIdentity: String?
 
+    /// -h/--dereference：以 stat 取代 lstat，使符號連結被當成它指向的目標。連結本身
+    /// 因而不會進入封存，其目標的內容則會。
+    /// -h/--dereference: stat instead of lstat, so a symlink is treated as its target.
+    /// The link itself does not enter the archive; the target's contents do.
+    private let dereference: Bool
+    /// 跟隨連結時走訪過的目錄身分（dev/ino）。連結指回祖先目錄會形成迴圈，而 lstat
+    /// 模式下不可能發生——連結不會被走進去。此集合使迴圈成為「跳過並回報」而非無限展開。
+    /// Directory identities already walked while following links. A link pointing back at
+    /// an ancestor is a cycle, which cannot arise under lstat because links are never
+    /// entered. This makes a cycle a reported skip rather than unbounded expansion.
+    private var walkedDirs = Set<String>()
+
     init(sink: ParallelChunkSink, verbose: Bool, updateBaseline: [String: UInt64]? = nil,
-         archivePath: String? = nil) {
+         archivePath: String? = nil, dereference: Bool = false) {
         self.sink = sink
         self.verbose = verbose
         self.updateBaseline = updateBaseline
+        self.dereference = dereference
         self.archiveIdentity = archivePath.flatMap { TarWriter.fileIdentity($0) }
     }
 
@@ -2842,9 +2863,45 @@ final class TarWriter {
         if rem != 0 { try sink.write(Data(count: TAR_BLOCK - rem)) }
 #else
         var st = stat()
-        guard lstat(path, &st) == 0 else {
+        // 跟隨模式用 stat：它解析最後一層，故 S_IFLNK 不會出現，下方的 switch 自然把
+        // 連結當成它的目標處理——不需要為此新增任何分支。
+        // stat in follow mode resolves the final component, so S_IFLNK never appears and
+        // the switch below treats a link as its target without a new branch.
+        let statRC = dereference ? stat(path, &st) : lstat(path, &st)
+        guard statRC == 0 else {
+            // 跟隨模式下，斷掉的連結會使 stat 失敗，而 lstat 模式能好好地存下它。
+            // 回報並略過，不讓整次建立因一個斷鏈而中止。
+            // In follow mode a broken link makes stat fail where lstat would have stored it
+            // happily. Report and skip rather than abandoning the whole create.
+            if dereference, lstat(path, &st) == 0 {
+                eprint("swift_tar: skipping '\(name)': --dereference cannot follow it / 略過 '\(name)'：--dereference 無法跟隨")
+                return
+            }
             throw TarError.io("cannot stat '\(path)' / 無法讀取 '\(path)' 的檔案資訊")
         }
+        // 迴圈偵測只在跟隨模式需要，且只對目錄——檔案再怎麼重複收錄都會終止。
+        // Cycle detection is needed only in follow mode and only for directories.
+        // 迴圈是「連結指回*當前路徑上的祖先*」，不是「這個目錄先前出現過」。第一版用了
+        // 後者，於是 `swift_tar -c --dereference src real` 會把 real 跳掉——因為 src/link
+        // 已經走過同一個 dev/ino——即使 real 是使用者明確指定的操作元。合法的重複收錄
+        // 與迴圈的差別，只在於那個目錄是否還在目前的遞迴堆疊上。
+        // A cycle is a link back to an ancestor *on the current path*, not a directory seen
+        // before. The first version used the latter and dropped an explicitly named operand
+        // because a link had already reached the same dev/ino. What separates legitimate
+        // duplication from a cycle is whether the directory is still on the recursion stack.
+        var pushedDirID: String? = nil
+        if dereference, (st.st_mode & S_IFMT) == S_IFDIR {
+            let id = "\(st.st_dev)/\(st.st_ino)"
+            if walkedDirs.contains(id) {
+                eprint("swift_tar: skipping '\(name)': --dereference would loop here / 略過 '\(name)'：--dereference 於此形成迴圈")
+                return
+            }
+            walkedDirs.insert(id)
+            pushedDirID = id
+        }
+        // 離開此目錄時退出堆疊，包含因擲出而離開的路徑。
+        // Pop on the way out, including the path that leaves by throwing.
+        defer { if let id = pushedDirID { walkedDirs.remove(id) } }
         if let ai = archiveIdentity, ai == "\(st.st_dev)/\(st.st_ino)" {
             eprint("swift_tar: skipping '\(name)': it is the archive being written / 略過 '\(name)'：它就是正在寫出的封存")
             return
@@ -3985,7 +4042,10 @@ private func printTarUsage() {
                         with -p, -p wins, as in GNU tar.
                         （僅 -x）對解出的 mode 套用行程 umask，那是 GNU tar 以非 root
                         身分解壓時的預設。與 -p 同時給定時由 -p 勝出，與 GNU tar 相同。
-      -h              : Show this help / 顯示說明
+      --help          : Show this help / 顯示說明
+      -h, --dereference : Follow symlinks when creating; store what they point to
+                          rather than the links / 建立時跟隨符號連結，存入其指向的
+                          內容而非連結本身
       --version       : Show build date version / 顯示建置日期版本
       -write_foundation / -write_ucrt :
                         (Windows -x only) extraction write backend: Foundation
@@ -4661,7 +4721,7 @@ struct SwiftTarMain {
             }
             return out
         }()
-        if args.contains("-h") || args.count < 2 {
+        if args.contains("--help") || args.count < 2 {
             printTarUsage()
             exit(args.count < 2 ? 1 : 0)
         }
@@ -4701,6 +4761,7 @@ struct SwiftTarMain {
             "-stream-in", "-stream-out", "-O", "--to-stdout", "-i", "--ignore-zeros",
             "-o", "--no-same-owner", "--force",
             "-p", "--same-permissions", "--no-same-permissions",
+            "--dereference", "--help",
             "--strip-components", "--zstd-level",
             "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
             // codecs / 壓縮引擎
@@ -5110,6 +5171,13 @@ struct SwiftTarMain {
         tarRestorePermissions = !args.contains("--no-same-permissions")
             || args.contains("-p") || args.contains("--same-permissions")
 
+        // -h 與 --dereference 為同義，比照 GNU tar 與 bsdtar。此前 -h 是「顯示說明」，
+        // 說明已改由 --help 提供——那也是 GNU 的寫法，而 bsdtar 根本沒有 -h 表示說明。
+        // -h and --dereference are synonyms, as in GNU tar and bsdtar. -h previously meant
+        // "show help"; help is now --help, which is GNU's spelling, and bsdtar never spelled
+        // help as -h at all.
+        tarDereference = args.contains("-h") || args.contains("--dereference")
+
         let hasStripComponents = args.contains("--strip-components")
             || args.contains(where: { $0.hasPrefix("--strip-components=") })
         let stripComponents: Int = {
@@ -5276,7 +5344,8 @@ struct SwiftTarMain {
 
         let sink = ParallelChunkSink(codec: codec, output: sinkOutput, inflight: inflight)
         let writer = TarWriter(sink: sink, verbose: verbose,
-                               archivePath: archiveAbsolute)
+                               archivePath: archiveAbsolute,
+                               dereference: tarDereference)
         for f in files {
             try writer.add(path: f)
         }

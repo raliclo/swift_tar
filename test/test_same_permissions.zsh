@@ -133,6 +133,33 @@ check "666 777" "$(extract_mode -p --no-same-permissions)" \
   "順序相反時 -p 仍勝出 / -p still wins in the other order"
 
 print -- ""
+# -p 不得順帶開啟跟隨連結。兩者的解析原本相鄰，而 tarRestorePermissions 的續行
+# `|| args.contains("-p") ...` 曾被一次插入切斷、接到 tarDereference 上：-p 於是既失去
+# 還原權限的效果，又讓建立端開始跟隨 symlink。兩種錯誤都能編譯、都以 0 結束。
+# -p must not also turn on link following. The two are parsed next to each other, and the
+# continuation line of tarRestorePermissions was once severed by an insertion and attached
+# to tarDereference instead: -p lost its own effect and silently gained another. Both
+# compile and both exit zero.
+deref_probe=$(mktemp -d)
+mkdir -p "$deref_probe/t"
+print -- x > "$deref_probe/target.txt"
+ln -s ../target.txt "$deref_probe/t/link.txt"
+if [[ -L "$deref_probe/t/link.txt" ]]; then
+  # 解出後看磁碟，而非解析列表輸出：swift_tar 的 `-t -v` 只列名稱，不印 ls 風格的
+  # 權限欄，所以「數開頭是 l 的行」會永遠得到 0——那會讓這個檢查在任何情況下都通過。
+  # Look at what lands on disk rather than parsing a listing: swift_tar's `-t -v` prints
+  # names only, so counting lines that start with l would always yield 0 and the check
+  # would pass no matter what.
+  ( cd "$deref_probe" && "$tar_abs" -c -p -f probe.tar t ) 2>/dev/null
+  mkdir -p "$deref_probe/out"
+  ( cd "$deref_probe/out" && "$tar_abs" -x -f ../probe.tar ) 2>/dev/null
+  links=$( find "$deref_probe/out" -type l | wc -l | tr -d ' ' )
+  check "1" "$links" "-p 不順帶跟隨連結 / -p does not also follow links"
+else
+  print -- "  skip 本環境無法建立真符號連結 / no real symlink here"
+fi
+rm -rf "$deref_probe"
+
 if (( failures == 0 )); then
   print -- "通過 / PASS: extract permissions"
 else

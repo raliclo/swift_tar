@@ -147,7 +147,7 @@ FULL="$TMP/full"; PUB="$TMP/public"
                                                 || bad "public build still contains other3"
 
 # 2) public help must not advertise any LZFSE codec / 公開版 help 不得列出 LZFSE codec
-if "$PUB" -h | grep -qiE 'lzfse|bvx3|other3'; then bad "public help leaks LZFSE/bvx3/other3"
+if "$PUB" --help | grep -qiE 'lzfse|bvx3|other3'; then bad "public help leaks LZFSE/bvx3/other3"
 else ok "public help lists no LZFSE codec"; fi
 
 # A compressible payload large enough to force a real bvx3 block (small inputs

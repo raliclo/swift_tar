@@ -2982,16 +2982,48 @@ final class TarReader {
     /// 另一個參照拒絕它時，「與 bsdtar 一致」並不構成辯護。
     ///
     /// 僅檢查目的地之下的各層：`-C` 本身可能是使用者自行選擇、經由 symlink 抵達的路徑。
-    private static func passesThroughSymlink(dest: String, below root: String) -> Bool {
+    /// `cleared` remembers the directories already shown not to be symlinks, so
+    /// each one is asked about once per extraction rather than once per member
+    /// beneath it. Without it this walk is O(members x depth) lstat calls, and
+    /// on a 41,576-member archive that cost dominated extraction: decode went
+    /// from 3.07 s to 12.34 s, a 4x regression traced to this function by
+    /// bisect. A 5,402-member archive lost 50% -- the price scales with member
+    /// count, which is what identified it.
+    ///
+    /// The entry is safe to keep because the threat is a symlink planted by an
+    /// earlier entry *of this same archive*, and only this extraction can plant
+    /// one. `forgetVerifiedDirectory` is therefore called wherever a symlink is
+    /// created, which is the single way a cached path can stop being what it
+    /// was. A symlink planted by a *different* process mid-extraction was never
+    /// covered: the original form re-checked before each member but still left
+    /// a window between its check and the open, so this changes how wide that
+    /// window is, not whether it exists.
+    ///
+    /// `cleared` 記住已確認不是 symlink 的目錄，使每個目錄在一次解壓中只被詢問一次，
+    /// 而不是其下每個成員各問一次。少了它，這個走訪是 O(成員數 x 深度) 次 lstat；在
+    /// 41,576 個成員的封存上，該成本主導了整個解壓：decode 由 3.07 秒變成 12.34 秒，
+    /// 經 bisect 定位到本函式。5,402 個成員的封存慢 50%——代價與成員數成正比，而那
+    /// 正是它被辨識出來的線索。
+    ///
+    /// 快取之所以安全，是因為威脅是「同一封存中較早的項目」所植入的 symlink，而只有
+    /// 本次解壓能植入。故凡建立 symlink 之處皆呼叫 forgetVerifiedDirectory——那是快取
+    /// 中的路徑唯一可能不再是原本那個東西的途徑。至於「解壓進行中由*其他行程*植入」，
+    /// 原本就未被涵蓋：舊寫法雖在每個成員前重新檢查，檢查與開檔之間仍留有空隙。本次
+    /// 改動改變的是該空隙的寬度，而非它是否存在。
+    private static func passesThroughSymlink(dest: String, below root: String,
+                                             cleared: inout Set<String>) -> Bool {
         let fm = FileManager.default
         let rootPrefix = root.isEmpty ? "" : (root.hasSuffix("/") ? root : root + "/")
         var walked = rootPrefix
         let tail = rootPrefix.isEmpty ? dest : String(dest.dropFirst(rootPrefix.count))
         for comp in tail.split(separator: "/").dropLast() {
             walked += (walked.isEmpty || walked.hasSuffix("/")) ? String(comp) : "/" + String(comp)
-            if let attrs = try? fm.attributesOfItem(atPath: walked),
-               attrs[.type] as? FileAttributeType == .typeSymbolicLink {
-                return true
+            if !cleared.contains(walked) {
+                if let attrs = try? fm.attributesOfItem(atPath: walked),
+                   attrs[.type] as? FileAttributeType == .typeSymbolicLink {
+                    return true
+                }
+                cleared.insert(walked)
             }
             walked += "/"
         }
@@ -3145,6 +3177,9 @@ final class TarReader {
         // 內容並以 0 結束，於是一個無法辨識的檔案被當成合法的空封存。分界點精確落在
         // 512，因為那正是第一次 readExactly 得以因「內容」而非因「長度」失敗之處。
         // bsdtar 對其下的每一種大小都以「Unrecognized archive format」拒絕。
+        // Directories this extraction has already shown not to be symlinks.
+        // 本次解壓已確認不是 symlink 的目錄。
+        var clearedDirs = Set<String>()
         while true {
             guard let block = readExactly(TAR_BLOCK) else {
                 // Ran out mid-block. Zero bytes left means the source ended on a
@@ -3285,7 +3320,8 @@ final class TarReader {
             // attack this stops.
             // 拒絕穿過「同一封存中較早項目所植入的 symlink」寫入。該兩項目攻擊的說明見
             // passesThroughSymlink。
-            if TarReader.passesThroughSymlink(dest: dest, below: options.destDir) {
+            if TarReader.passesThroughSymlink(dest: dest, below: options.destDir,
+                                              cleared: &clearedDirs) {
                 eprint("swift_tar: skipping '\(rel)': path passes through a symlink / 略過 '\(rel)'：路徑穿過 symlink")
                 if !isDir { try skipData(size) }
                 continue
@@ -3364,6 +3400,18 @@ final class TarReader {
                 if symlink(linkname, dest) != 0 {
                     throw TarError.io("symlink failed for '\(dest)' / 建立符號連結失敗")
                 }
+                // dest is now a symlink, so drop whatever the cache concluded
+                // about it. No test can currently make this line matter:
+                // replacing an existing directory with a symlink fails earlier,
+                // in symlink() itself, and the run stops. That is not a designed
+                // guarantee though -- it is a side effect of removeItem not
+                // clearing the directory -- so the line stays rather than
+                // resting the cache's safety on an accident.
+                // dest 現已是 symlink，故丟棄快取對它的結論。目前沒有測試能讓這一行
+                // 產生作用：以 symlink 取代既有目錄會更早在 symlink() 本身失敗而中止。
+                // 但那並非設計上的保證——它是 removeItem 未能清空該目錄的副作用——因此
+                // 保留此行，不讓快取的安全性建立在一個意外之上。
+                clearedDirs.remove(dest)
                 // A symlink's own mtime was left at "now". Every other entry
                 // type here restores it -- the FIFO case below, the regular
                 // file's futimens, the directory pass -- so a link was the one

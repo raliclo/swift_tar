@@ -871,6 +871,40 @@ if [ -f "$RAW" ]; then
     bad "traversal blocked: write through a planted symlink"
   fi
 
+  # Three entries, not two. The two-entry form above plants the symlink first,
+  # so the guard meets a path that has never been anything else. This one makes
+  # the directory real, writes into it, and only then replaces it with the
+  # symlink -- which is the order that defeats any check remembering what a path
+  # was. swift_tar caches cleared directories to keep the walk from costing one
+  # lstat per member per level, so this is the case that decides whether the
+  # cache is invalidated when a symlink lands on a path already cleared.
+  # Without that invalidation the guard passes the two-entry test and lets this
+  # one through.
+  # 三個項目，而非兩個。上方的兩項目形式先植入 symlink，故守門面對的路徑從未是別的
+  # 東西。此處先讓該目錄真實存在、寫入其中，之後才以 symlink 取代它——而那正是能擊敗
+  # 「記住路徑曾是什麼」的順序。swift_tar 會快取已驗證的目錄，以免走訪的代價變成每個
+  # 成員每一層一次 lstat，因此本案例決定的是：當 symlink 落在一個已被清空驗證的路徑
+  # 上時，快取是否失效。少了那次失效，守門會通過上方的兩項目測試，卻放行本案例。
+  zsh "$RAW" "$TMP/portal3.tar" \
+      file 'portal/decoy.txt' 'DECOY' \
+      link portal '../../..' \
+      file 'portal/pwned3.txt' 'PWNED3' >/dev/null 2>&1
+  rm -rf "$TRAV/q"; mkdir -p "$TRAV/q/a/b"
+  rm -f "$TRAV/q/pwned3.txt" "$TRAV/pwned3.txt" "$TMP/pwned3.txt"
+  # `|| true` because this form makes swift_tar exit 1: symlink() refuses to
+  # replace the directory entry 1 created, and the run stops there. The
+  # assertion is about what reached the filesystem, not the exit code, and
+  # without this the whole suite would end here under set -e.
+  # 加 `|| true`，因為此形式會讓 swift_tar 以 1 結束：symlink() 拒絕取代第 1 個項目
+  # 建出的目錄，執行就此停止。本斷言看的是「什麼落到了檔案系統」而非離開碼，且少了
+  # 它，整個套件會在 set -e 之下就此結束。
+  ( cd "$TRAV/q/a/b" && "$ST" -x -f "$TMP/portal3.tar" ) >/dev/null 2>&1 || true
+  if [ ! -e "$TRAV/q/pwned3.txt" ] && [ ! -e "$TRAV/pwned3.txt" ] && [ ! -e "$TMP/pwned3.txt" ]; then
+    ok "traversal blocked: a symlink replacing a directory written earlier in the same archive"
+  else
+    bad "traversal blocked: a symlink replacing a directory written earlier in the same archive"
+  fi
+
   # A hardlink aimed outside is refused safely, but used to be refused in total
   # silence: no stdout, no stderr, exit 0, entry gone. The same tool already
   # warned when a hardlink target was merely missing, so the security-relevant

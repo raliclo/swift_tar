@@ -128,3 +128,13 @@ Use the Edit/Write tools for files and zsh for scripts. A Python string replacem
 targets an invisible literal that must match exactly; a mismatch is either an assertion
 or a silent no-op. On 2026-08-28 a line inserted that way re-attached the continuation of
 one expression to a different variable, and it compiled, type-checked and exited zero.
+
+## 測試中的表格資料用 csv2 / Use csv2 for tabular data in tests
+
+測試若要產出或讀取表格（結果矩陣、逐案例的量測、對照表），存成 `.csv2`（兩列標頭：
+英文一列、繁體中文一列）並以 `csv2` 讀寫，不要自行切逗號。全域 CLAUDE.md 的理由在此
+同樣成立，而測試更容易踩到：一個把欄位切錯的斷言會**通過**，因為它比對的是錯位之後的
+值。`csv2 -get r:c` 取單格，`csv2 -r` 逐筆讀，`csv2 -md` 出表格給文件用。
+
+If a test produces or reads a table, store it as `.csv2` and go through `csv2`. An
+assertion that split the fields wrongly passes, because it compares the shifted value.

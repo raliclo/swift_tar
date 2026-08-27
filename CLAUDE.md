@@ -75,3 +75,40 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+## 不得抑制編譯器診斷 / Never suppress a compiler diagnostic
+
+**警告與錯誤要用「修好成因」解決，不是用標註讓它閉嘴。**
+
+禁止用來讓診斷消失的手段，包括但不限於：
+
+```swift
+nonisolated(unsafe) var x = 0        // 不要：把並行檢查關掉
+@unchecked Sendable                  // 不要
+// swiftlint:disable / swift-format-ignore
+```
+
+```sh
+2>/dev/null            # 不要用來藏建置訊息
+-w  -Wno-...           # 不要
+|| true                # 不要用來蓋掉非零退出（測試中刻意容忍者除外，且須註明理由）
+```
+
+**理由是這棵樹已經付出過的代價。** 被藏起來的診斷不會消失，它只是改在執行期出現，而
+且那時已經沒有指向成因的線索。2026-08-28 的 `aea0427` 是同一類：一個正確的安全修正
+帶進 O(成員數 × 深度) 的 lstat，沒有任何警告會提到它，於是它一路活到量測輪次才以
+「解壓慢 302%」的形式現身，花了一次 9 小時 46 分的輪次加一次 98 筆 commit 的 bisect
+才定位。編譯器願意講的話，要讓它講完。
+
+**正確做法**：改結構讓診斷自然消失。全域可變狀態就把它變成不可變、或收進傳遞下去的
+值；並行捕獲就讓被捕獲的東西真的是 Sendable。若判斷某個診斷確實不適用，那是**與使用者
+討論後的決定**，不是自行標註掉。
+
+**Warnings and errors are resolved by fixing the cause, never by annotating them
+into silence.** A suppressed diagnostic does not go away; it moves to run time,
+where the thread back to its cause is gone. `aea0427` was the same shape: a
+correct security fix carrying an O(members x depth) cost that no warning
+mentioned, so it survived until a measurement round showed up as a 302% decode
+regression and took a 9h46m round plus a 98-commit bisect to locate. Change the
+structure so the diagnostic stops applying; deciding a diagnostic does not apply
+is a conversation with the user, not a unilateral annotation.

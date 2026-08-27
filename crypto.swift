@@ -25,6 +25,7 @@
 //  不含依金鑰而異的分支或查表，但不防禦可觀察本機記憶體的攻擊者。
 // =====================================================================
 
+import Synchronization
 import Foundation
 
 // ---------------------------------------------------------------------
@@ -421,10 +422,20 @@ enum Scrypt {
 /// 取自系統 CSPRNG 的密碼學安全亂數。
 func cryptoRandomBytes(_ count: Int) -> [UInt8] {
     var out = [UInt8](repeating: 0, count: count)
-    for i in 0..<count { out[i] = UInt8.random(in: 0...255, using: &systemRandom) }
+    // 取鎖一次涵蓋整個迴圈，而非每個位元組一次：無競爭的加解鎖雖便宜，乘上 count 次
+    // 就不是了，且中途換手也沒有任何好處。
+    // One acquisition for the whole loop rather than one per byte: an uncontended lock
+    // is cheap but not when multiplied by count, and handing it over mid-loop buys
+    // nothing.
+    systemRandomBox.withLock { rng in
+        for i in 0..<count { out[i] = UInt8.random(in: 0...255, using: &rng) }
+    }
     return out
 }
-private var systemRandom = SystemRandomNumberGenerator()
+// 以 Mutex 持有：亂數產生器是全域可變狀態，而 nonce 產生可能來自多個執行緒。
+// Held in a Mutex: the generator is global mutable state and nonces may be drawn
+// from more than one thread.
+private let systemRandomBox = Mutex(SystemRandomNumberGenerator())
 
 // ---------------------------------------------------------------------
 // MARK: - Encrypted container / 加密容器
@@ -684,7 +695,10 @@ enum TarCrypto {
 
         /// Run work for a slot already reserved by `reserveSlot()`.
         /// 對已由 `reserveSlot()` 保留額度的 chunk 執行工作。
-        func submitWork(index: Int, _ work: @escaping () -> Data?) {
+        // work 由本函式交給背景佇列執行，故它跨執行緒是既有事實，而非新增的要求。
+// work is handed to a background queue by this function, so crossing threads was
+// already true of it rather than a new requirement.
+        func submitWork(index: Int, _ work: @escaping @Sendable () -> Data?) {
             group.enter()
             queue.async { [self] in
                 autoreleasepool {

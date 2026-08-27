@@ -84,7 +84,7 @@ zsh ./generate_version.zsh "$TEMP_VERSION"
 # Build into the release/ folder / 建置輸出至 release/ 資料夾
 mkdir -p release
 zsh ./build_libarchive.zsh
-swiftc -O $SWIFT_DEFINES $CLI_SRC "$TEMP_VERSION" swift_tar.swift rgb1.swift crypto.swift \
+swiftc -O -swift-version 6 $SWIFT_DEFINES $CLI_SRC "$TEMP_VERSION" swift_tar.swift rgb1.swift crypto.swift \
     build/libarchive_zip_bridge.o build/libarchive-macos/libarchive/libarchive.a \
     -o release/swift_tar -lz -lbz2 -L"$BREW_LIB" -llz4 -llzma -lzstd
 

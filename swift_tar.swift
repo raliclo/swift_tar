@@ -45,7 +45,18 @@
 //     真實 ZIP/ZIP64 容器在 macOS 與 Windows 上皆透過內附 libarchive 後端建立與讀取。
 // =====================================================================
 
+import Synchronization
 import Foundation
+
+/// Decode a NUL-terminated C buffer. `String(cString:)` is deprecated because it
+/// reads past the array when there is no terminator; taking the prefix first
+/// makes the bound explicit.
+/// 解碼以 NUL 結尾的 C 緩衝區。`String(cString:)` 已棄用，因為缺少結尾符時它會讀過
+/// 陣列尾端；先取前綴使邊界顯式。
+func cMessage(_ buffer: [CChar]) -> String {
+    String(decoding: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) },
+           as: UTF8.self)
+}
 import zlib
 #if os(Windows)
 // CRT-level file I/O for the -write_ucrt extraction backend (one open per
@@ -221,7 +232,7 @@ private func runZipCreate(archivePath: String, files: [String], changeDir: Strin
         }
     }
     guard status == 0 else {
-        throw TarError.io(String(cString: error))
+        throw TarError.io(cMessage(error))
     }
 }
 
@@ -259,7 +270,7 @@ private func runZipRead(archivePath: String, extract: Bool, destDir: String,
         }
     }
     guard status == 0 else {
-        throw TarError.io(String(cString: error))
+        throw TarError.io(cMessage(error))
     }
 }
 
@@ -774,7 +785,21 @@ func lzipCompressStream(_ input: Data, level: Int32 = 6) -> Data? {
 /// `--zstd-level 3`。上限取自 `ZSTD_maxCLevel()`（libzstd 1.5.x 為 22）而非寫死的
 /// 常數，以隨連結的函式庫變動。注意 zstd CLI 未加 `--ultra` 時會靜默降到 19；
 /// C API 無此限制，故此處的 `--zstd-level 22` 確實是 22。
-var zstdCompressionLevel: Int32 = 9
+// 儲存於 Mutex 而非全域可變狀態：這些值在引數解析期間寫入一次，其後由工作執行緒
+// 讀取。Swift 6 的嚴格並行檢查看不出這個時序，而以 nonisolated(unsafe) 告訴它
+// 「別管」等於把檢查關掉。改用 Mutex 讓保證成為真的，代價是每次存取一次無競爭的
+// 加解鎖——這些值每串流僅讀取數次，不在任何熱迴圈上。外層維持同名的計算屬性，
+// 因此既有的呼叫點一處都不必改。
+// Held in a Mutex rather than as global mutable state: written once while parsing
+// arguments, read afterwards by worker threads. Telling Swift 6 to ignore that with
+// nonisolated(unsafe) would switch the check off; a Mutex makes the guarantee real.
+// The cost is one uncontended lock per access, and these are read a few times per
+// stream, never in a hot loop. The computed property keeps every call site unchanged.
+let zstdCompressionLevelBox = Mutex<Int32>(9)
+var zstdCompressionLevel: Int32 {
+    get { zstdCompressionLevelBox.withLock { $0 } }
+    set { zstdCompressionLevelBox.withLock { $0 = newValue } }
+}
 
 /// 解出檔案時是否原樣還原封存中的權限位元。
 ///
@@ -801,7 +826,21 @@ var zstdCompressionLevel: Int32 = 9
 /// from where flags are parsed. This file already configures
 /// `zstdCompressionLevel` and others the same way; following that is smaller
 /// than threading a Bool through the whole chain.
-var tarRestorePermissions: Bool = true
+// 儲存於 Mutex 而非全域可變狀態：這些值在引數解析期間寫入一次，其後由工作執行緒
+// 讀取。Swift 6 的嚴格並行檢查看不出這個時序，而以 nonisolated(unsafe) 告訴它
+// 「別管」等於把檢查關掉。改用 Mutex 讓保證成為真的，代價是每次存取一次無競爭的
+// 加解鎖——這些值每串流僅讀取數次，不在任何熱迴圈上。外層維持同名的計算屬性，
+// 因此既有的呼叫點一處都不必改。
+// Held in a Mutex rather than as global mutable state: written once while parsing
+// arguments, read afterwards by worker threads. Telling Swift 6 to ignore that with
+// nonisolated(unsafe) would switch the check off; a Mutex makes the guarantee real.
+// The cost is one uncontended lock per access, and these are read a few times per
+// stream, never in a hot loop. The computed property keeps every call site unchanged.
+let tarRestorePermissionsBox = Mutex<Bool>(true)
+var tarRestorePermissions: Bool {
+    get { tarRestorePermissionsBox.withLock { $0 } }
+    set { tarRestorePermissionsBox.withLock { $0 = newValue } }
+}
 
 func zstdCompressFrame(_ input: Data, level: Int32 = zstdCompressionLevel) -> Data? {
     let bound = ZSTD_compressBound(input.count)
@@ -1369,12 +1408,35 @@ func rpmUnwrapStream(input: FileHandle, prefix: Data, output: FileHandle) -> Boo
 /// would touch far more code than this single hand-off.
 /// 讀取端取得加密封存金鑰的方式。於解析命令列後、開啟封存前設定一次；filter 鏈
 /// 在讀取端深處解析，若要逐層傳遞金鑰，改動範圍遠大於此單一交接點。
-var tarDecryptionSecretProvider: (() throws -> TarCrypto.KeySecret)? = nil
+// 同上以 Mutex 持有。閉包型別加上 @Sendable：它由引數解析建立、由工作執行緒呼叫，
+// 故「可跨執行緒呼叫」本來就是它必須滿足的條件，此處只是把它寫進型別裡。
+// Held in a Mutex as above. The closure type gains @Sendable because it is built
+// while parsing arguments and called from worker threads, so being callable across
+// threads was always a requirement; this states it in the type.
+let tarDecryptionSecretProviderBox = Mutex<(@Sendable () throws -> TarCrypto.KeySecret)?>(nil)
+var tarDecryptionSecretProvider: (@Sendable () throws -> TarCrypto.KeySecret)? {
+    get { tarDecryptionSecretProviderBox.withLock { $0 } }
+    set { tarDecryptionSecretProviderBox.withLock { $0 = newValue } }
+}
 
 /// Set when `--encrypt` (or `--keyfile` with `-c`) is given; nil means the
 /// archive is written in the clear. / 指定 `--encrypt`（或 `-c` 搭配 `--keyfile`）
 /// 時設定；nil 表示封存不加密。
-var tarEncryptionSecret: TarCrypto.KeySecret? = nil
+// 儲存於 Mutex 而非全域可變狀態：這些值在引數解析期間寫入一次，其後由工作執行緒
+// 讀取。Swift 6 的嚴格並行檢查看不出這個時序，而以 nonisolated(unsafe) 告訴它
+// 「別管」等於把檢查關掉。改用 Mutex 讓保證成為真的，代價是每次存取一次無競爭的
+// 加解鎖——這些值每串流僅讀取數次，不在任何熱迴圈上。外層維持同名的計算屬性，
+// 因此既有的呼叫點一處都不必改。
+// Held in a Mutex rather than as global mutable state: written once while parsing
+// arguments, read afterwards by worker threads. Telling Swift 6 to ignore that with
+// nonisolated(unsafe) would switch the check off; a Mutex makes the guarantee real.
+// The cost is one uncontended lock per access, and these are read a few times per
+// stream, never in a hot loop. The computed property keeps every call site unchanged.
+let tarEncryptionSecretBox = Mutex<TarCrypto.KeySecret?>(nil)
+var tarEncryptionSecret: TarCrypto.KeySecret? {
+    get { tarEncryptionSecretBox.withLock { $0 } }
+    set { tarEncryptionSecretBox.withLock { $0 = newValue } }
+}
 
 enum ReadFilter {
 #if EXCLUDE_LZFSE
@@ -1468,7 +1530,13 @@ func resolveFilterChain(input: FileHandle, prefix: Data, filePath: String?,
     // Resolve the key before going async: prompting for a passphrase from the
     // decode thread would interleave with the reader's own output.
     // 在轉入背景執行緒前先取得金鑰：於解碼執行緒提示輸入密語會與讀取端輸出交錯。
-    var encryptionSecret: TarCrypto.KeySecret? = nil
+    // `let`，不是 `var`：它其後會被背景執行緒上的閉包捕獲，而捕獲一個可變變數意味著
+    // 「該值可能在別處改變」——此處並不會。以確定性初始化在每個分支各賦值一次，即可讓
+    // 型別本身說出這件事，無需標註。
+    // `let`, not `var`: it is captured by a closure running on a background thread, and
+    // capturing a mutable variable says the value might change elsewhere, which it does
+    // not. Definite initialisation assigns it once per branch, so the type states that.
+    let encryptionSecret: TarCrypto.KeySecret?
     if case .encrypted = filter {
         guard let provider = tarDecryptionSecretProvider else {
             result.fail("archive is encrypted — supply --keyfile <path>, or run on a terminal to be prompted"
@@ -1479,6 +1547,8 @@ func resolveFilterChain(input: FileHandle, prefix: Data, filePath: String?,
             result.fail(error.localizedDescription)
             return FilteredStream(handle: input, prefix: head, names: names + [filter.name])
         }
+    } else {
+        encryptionSecret = nil
     }
 
     let pipe = Pipe()
@@ -1582,19 +1652,35 @@ final class ParallelChunkSink {
     private let output: FileHandle
     private let chunkSize: Int
     private let sem: DispatchSemaphore
-    private let lock = NSLock()
     private let queue = DispatchQueue(label: "swifttar.parallel", qos: .userInitiated,
                                       attributes: .concurrent)
     private let group = DispatchGroup()
     private var buffer = Data()
     private var readIndex = 0
 
-    private final class State: @unchecked Sendable {
+    // State 由 class + NSLock + @unchecked Sendable 改為 struct + Mutex。前者要讀者
+    // 自行相信「每一處存取都取了那把鎖」，而 @unchecked 正是把那份相信寫進型別；Mutex
+    // 使「不取鎖就拿不到值」成為型別本身的規則。
+    // State moves from class + NSLock + @unchecked Sendable to struct + Mutex. The former
+    // asked the reader to believe every access took that lock, and @unchecked wrote that
+    // belief into the type; Mutex makes "no lock, no value" the rule.
+    // buffer 與 readIndex 留在外面不加鎖：只有生產端執行緒觸碰它們，而下方的閉包改為
+    // 只捕獲所需成員而非 self，故無需整個類別 Sendable。
+    // buffer and readIndex stay unlocked: only the producer touches them, and the closure
+    // below captures the members it uses rather than self, so the class need not be Sendable.
+    private struct State {
         var results: [Int: Data] = [:]
         var writeIndex = 0
         var failure: String? = nil
     }
-    private let state = State()
+    // Mutex 是 ~Copyable，無法被複製進閉包的捕獲清單，故以一個 Sendable 的 box
+    // class 持有它——class 參考可複製，而其唯一儲存屬性 Mutex 本身即為 Sendable，
+    // 因此該 box 的 Sendable 是編譯器驗證的結果，不是宣稱。
+    // Mutex is ~Copyable and cannot be copied into a capture list, so a Sendable box
+    // class holds it: a class reference copies, and its one stored property is itself
+    // Sendable, so the box's conformance is checked rather than asserted.
+    private final class Shared: Sendable { let m = Mutex(State()) }
+    private let shared = Shared()
 
     init(codec: TarCodec, output: FileHandle, inflight: Int,
          chunkSize: Int = TAR_CHUNK_SIZE) {
@@ -1630,7 +1716,7 @@ final class ParallelChunkSink {
                 dispatch(chunk)
             }
         }
-        if let f = state.failure { throw TarError.io(f) }
+        if let f = shared.m.withLock({ $0.failure }) { throw TarError.io(f) }
     }
 
     private func dispatch(_ chunk: Data) {
@@ -1639,25 +1725,32 @@ final class ParallelChunkSink {
         readIndex += 1
         let codec = self.codec
         group.enter()
-        queue.async { [self] in
+        // 捕獲所需成員而非 [self]：每一項都是 Sendable，故此閉包不要求整個類別 Sendable。
+        // Capture the members used rather than [self]: each is Sendable, so the closure
+        // does not require the whole class to be.
+        let shared = self.shared
+        let output = self.output
+        let sem = self.sem
+        let group = self.group
+        queue.async {
             // autoreleasepool: GCD worker threads drain pools lazily; compressed
             // chunk buffers otherwise linger past their ordered write.
             // autoreleasepool：GCD worker 執行緒的 pool 排空時機不定；壓縮後的
             // chunk 緩衝區會在按序寫出後仍滯留。
             autoreleasepool {
                 let body = codec.compressChunk(chunk)
-                lock.lock()
-                if let body = body {
-                    state.results[idx] = body
-                    while let r = state.results.removeValue(forKey: state.writeIndex) {
-                        do { try output.write(contentsOf: r) }
-                        catch { state.failure = state.failure ?? "\(error)" }
-                        state.writeIndex += 1
+                shared.m.withLock { st in
+                    if let body = body {
+                        st.results[idx] = body
+                        while let r = st.results.removeValue(forKey: st.writeIndex) {
+                            do { try output.write(contentsOf: r) }
+                            catch { st.failure = st.failure ?? "\(error)" }
+                            st.writeIndex += 1
+                        }
+                    } else {
+                        st.failure = st.failure ?? "chunk compression failed"
                     }
-                } else {
-                    state.failure = state.failure ?? "chunk compression failed"
                 }
-                lock.unlock()
             }
             sem.signal()
             group.leave()
@@ -1674,7 +1767,7 @@ final class ParallelChunkSink {
             dispatch(chunk)
         }
         group.wait()
-        if let f = state.failure { throw TarError.io(f) }
+        if let f = shared.m.withLock({ $0.failure }) { throw TarError.io(f) }
         if codec.isLZFSEFamily {
             try output.write(contentsOf: Data([0x62, 0x76, 0x78, 0x24]))  // 'bvx$'
         }
@@ -2333,13 +2426,24 @@ final class FileWriterPool {
     private let backend: WriteBackend
     private let restoreMtime: Bool
     private let sem: DispatchSemaphore
-    private let lock = NSLock()
     private let queue = DispatchQueue(label: "swifttar.extract", qos: .userInitiated,
                                       attributes: .concurrent)
     private let group = DispatchGroup()
 
-    private final class State: @unchecked Sendable { var failure: String? = nil }
-    private let state = State()
+    // State 由 class + NSLock + @unchecked Sendable 改為 struct + Mutex。前者要讀者
+    // 自行相信「每一處存取都取了那把鎖」，而 @unchecked 正是把那份相信寫進型別；Mutex
+    // 使「不取鎖就拿不到值」成為型別本身的規則。
+    // State moves from class + NSLock + @unchecked Sendable to struct + Mutex. The former
+    // asked the reader to believe every access took that lock, and @unchecked wrote that
+    // belief into the type; Mutex makes "no lock, no value" the rule.
+    // Mutex 是 ~Copyable，無法被複製進閉包的捕獲清單，故以一個 Sendable 的 box
+    // class 持有它——class 參考可複製，而其唯一儲存屬性 Mutex 本身即為 Sendable，
+    // 因此該 box 的 Sendable 是編譯器驗證的結果，不是宣稱。
+    // Mutex is ~Copyable and cannot be copied into a capture list, so a Sendable box
+    // class holds it: a class reference copies, and its one stored property is itself
+    // Sendable, so the box's conformance is checked rather than asserted.
+    private final class Shared: Sendable { let m = Mutex<String?>(nil) }
+    private let shared = Shared()
 
     init(backend: WriteBackend, inflight: Int, restoreMtime: Bool = true) {
         self.backend = backend
@@ -2347,10 +2451,7 @@ final class FileWriterPool {
         self.sem = DispatchSemaphore(value: max(2, inflight))
     }
 
-    var failure: String? {
-        lock.lock(); defer { lock.unlock() }
-        return state.failure
-    }
+    var failure: String? { shared.m.withLock { $0 } }
 
     /// `mode` is ignored on Windows, which has no POSIX permission bits.
     /// `mode` 在 Windows 上被忽略：該平台沒有 POSIX 權限位元。
@@ -2361,7 +2462,13 @@ final class FileWriterPool {
 #if os(Windows)
         let backend = self.backend
 #endif
-        queue.async { [self] in
+        // 捕獲所需成員而非 [self]，理由同 ParallelChunkSink。
+        // Capture the members used rather than [self], as in ParallelChunkSink.
+        let shared = self.shared
+        let sem = self.sem
+        let group = self.group
+        let backend = self.backend
+        queue.async {
 #if os(Windows)
             let err = winWriteFile(dest: dest, data: data, mtime: mtime, backend: backend,
                                    restoreMtime: restoreMtime)
@@ -2370,9 +2477,7 @@ final class FileWriterPool {
                                      restoreMtime: restoreMtime)
 #endif
             if let err = err {
-                lock.lock()
-                state.failure = state.failure ?? err
-                lock.unlock()
+                shared.m.withLock { $0 = $0 ?? err }
             }
             sem.signal()
             group.leave()

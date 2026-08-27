@@ -112,3 +112,19 @@ mentioned, so it survived until a measurement round showed up as a 302% decode
 regression and took a 9h46m round plus a 98-commit bisect to locate. Change the
 structure so the diagnostic stops applying; deciding a diagnostic does not apply
 is a conversation with the user, not a unilateral annotation.
+
+## 不要用 Python 做編輯或腳本 / Do not use Python for edits or scripting
+
+**改檔案用 Edit／Write 工具；要腳本就用 zsh。** 不要以 `python3 - <<'PY'` 這類 heredoc
+代替編輯器。
+
+以 Python 做字串替換時，被替換的目標是一段**看不見的**字面值——它必須與檔案逐字相符，
+而任何不符只會得到 `AssertionError` 或更糟的「靜默不替換」。2026-08-28 的
+`-h/--dereference` 就是這樣壞掉的：新的一行被插進一個跨行運算式的中間，於是
+`|| args.contains("-p")` 這個續行接到了另一個變數上。**它能編譯、能通過型別檢查、以 0
+結束**，而 `-p` 同時失去自己的效果並取得一個無關的效果。Edit 工具會呈現前後文。
+
+Use the Edit/Write tools for files and zsh for scripts. A Python string replacement
+targets an invisible literal that must match exactly; a mismatch is either an assertion
+or a silent no-op. On 2026-08-28 a line inserted that way re-attached the continuation of
+one expression to a different variable, and it compiled, type-checked and exited zero.

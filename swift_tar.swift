@@ -3364,6 +3364,34 @@ final class TarReader {
                 if symlink(linkname, dest) != 0 {
                     throw TarError.io("symlink failed for '\(dest)' / 建立符號連結失敗")
                 }
+                // A symlink's own mtime was left at "now". Every other entry
+                // type here restores it -- the FIFO case below, the regular
+                // file's futimens, the directory pass -- so a link was the one
+                // thing an extraction could not reproduce. bsdtar restores it,
+                // which is what makes the difference visible: extracting the
+                // same archive with both tools gave trees that differed only in
+                // link mtimes, and lz4bench's manifest comparison read that as
+                // the two codecs disagreeing.
+                //
+                // utimensat with AT_SYMLINK_NOFOLLOW, not FileManager's
+                // setAttributes: the latter follows the link and would stamp
+                // the TARGET, silently corrupting a file the archive never
+                // asked to modify.
+                //
+                // 符號連結自身的 mtime 原本停在「現在」。此處其他每一種項目都會還原它
+                // ——下方的 FIFO 分支、一般檔的 futimens、目錄的收尾——唯獨連結是解壓
+                // 重現不出來的那一個。bsdtar 會還原，這正是差異得以顯現的原因：以兩種
+                // 工具解開同一個封存，得到的樹只在連結的 mtime 上不同，而 lz4bench 的
+                // manifest 比對把它讀成「兩個 codec 結果不一致」。
+                //
+                // 使用 utimensat 加 AT_SYMLINK_NOFOLLOW，而非 FileManager 的
+                // setAttributes：後者會跟隨連結，改到*目標檔*的 mtime，無聲地動了封存
+                // 從未要求修改的檔案。
+                if options.restoreMtime {
+                    var ts = [timespec(tv_sec: time_t(mtime), tv_nsec: 0),
+                              timespec(tv_sec: time_t(mtime), tv_nsec: 0)]
+                    _ = utimensat(AT_FDCWD, dest, &ts, AT_SYMLINK_NOFOLLOW)
+                }
 #endif
             case UInt8(ascii: "6"):
 #if os(Windows)

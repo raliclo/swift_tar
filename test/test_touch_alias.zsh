@@ -47,6 +47,32 @@ print -- x > "$work/src/old.txt"
 # An mtime old enough that it cannot collide with "now": if the two could match,
 # the test could not tell restoring from not restoring.
 touch -t 202001010000 "$work/src/old.txt"
+
+# 一個指向同目錄檔案的符號連結，帶著同樣久遠的 mtime。連結自身的 mtime 曾是解壓唯一
+# 重現不出來的東西：一般檔走 futimens、目錄有收尾、FIFO 有自己的分支，唯獨連結建完就
+# 結束，於是停在「現在」。這在兩次解壓相隔數分鐘時才顯形——lz4bench 的 manifest 比對
+# 因此把兩個 codec 讀成不一致，而它們其實一模一樣。
+# A symlink carrying the same old mtime. Its own mtime was the one thing an
+# extraction could not reproduce: regular files go through futimens, directories
+# get a final pass, FIFOs have their own branch, but a link was created and left
+# at "now". It only shows when two extractions are minutes apart, which is how
+# lz4bench's manifest comparison came to read two identical codecs as disagreeing.
+ln -s old.txt "$work/src/link.txt" 2>/dev/null
+touch -h -t 202001010000 "$work/src/link.txt" 2>/dev/null
+# MSYS 未設 winsymlinks 時 `ln -s` 會成功卻產生副本；BusyBox 的 touch 也可能沒有 -h。
+# 兩者都讓這組案例失去意義而非失敗，故以實測決定是否執行。
+# ln -s can succeed while producing a copy on MSYS, and BusyBox touch may lack
+# -h. Either makes these cases meaningless rather than failing, so they are
+# gated on what actually happened.
+link_ok=0
+if [[ -L "$work/src/link.txt" ]]; then
+  zmodload zsh/stat 2>/dev/null
+  local -A probe
+  if zstat -L -F '%Y' -H probe +mtime -- "$work/src/link.txt" 2>/dev/null; then
+    [[ ${probe[mtime]} == 2020 ]] && link_ok=1
+  fi
+fi
+
 ( cd "$work" && "$tar_abs" -c --zstd -f a.tzst src ) 2>/dev/null
 
 now_year=$(date +%Y)
@@ -92,6 +118,34 @@ check "$now_year" "$(extract_year -m)" \
   "-m 與 --touch 行為相同 / -m behaves as --touch"
 check "$now_year" "$(extract_year -m --touch)" \
   "兩者並用不衝突 / the two together do not conflict"
+
+# 連結自身的 mtime。zstat 必須加 -L，否則它讀的是目標檔——而目標檔的 mtime 一直都是
+# 對的，所以少了 -L 這組案例在修好之前就會通過，什麼也證明不了。
+# The link's own mtime. zstat needs -L or it reads the target, whose mtime was
+# always correct -- without it these cases would have passed before the fix and
+# proved nothing.
+extract_link_year() {
+  rm -rf "$work/out"; mkdir -p "$work/out"
+  if ! ( cd "$work/out" && "$tar_abs" -x "$@" --zstd -f ../a.tzst ) >/dev/null 2>&1; then
+    print -- "EXTRACT_FAILED"
+    return
+  fi
+  local -A entry
+  zstat -L -F '%Y' -H entry +mtime -- "$work/out/src/link.txt" 2>/dev/null || {
+    print -- "STAT_FAILED"
+    return
+  }
+  print -- "${entry[mtime]}"
+}
+
+if (( link_ok )); then
+  check "2020" "$(extract_link_year)" \
+    "符號連結自身的 mtime 也還原 / a symlink's own mtime is restored too"
+  check "$now_year" "$(extract_link_year --touch)" \
+    "--touch 對連結同樣不還原 / --touch does not restore it either"
+else
+  print -- "  skip 本環境無法建立帶 mtime 的真符號連結 / no real symlink with a settable mtime here"
+fi
 
 # 未知選項的檢查本身必須仍然有效：這個別名擴大的是清單，不是把檢查關掉。
 # The unknown-option check must still work: this alias widens the list, it does

@@ -663,16 +663,32 @@ enum TarCrypto {
     /// Same skeleton as ParallelChunkSink.
     /// 加密與解密共用的保序併發管線：以 semaphore 限制在途 chunk 數，結果以索引
     /// 為鍵並按序排出。骨架與 ParallelChunkSink 相同。
-    private final class OrderedPipeline: @unchecked Sendable {
+    /// `Sendable` is checked here, not asserted. Every stored property is itself
+    /// `Sendable` -- the ordered-write state now lives in a `Mutex` rather than in
+    /// bare `var`s beside an `NSLock`. The previous `@unchecked Sendable` asked the
+    /// reader to believe the lock was taken on every path; nothing would have
+    /// reported it if one path had not.
+    /// 此處的 `Sendable` 是編譯器驗證的，不是宣稱：每個儲存屬性本身皆為 `Sendable`
+    /// ——按序寫出的狀態改由 `Mutex` 持有，而非置於 `NSLock` 旁的裸 `var`。先前的
+    /// `@unchecked Sendable` 要讀者自行相信每一條路徑都取了那把鎖；若有一條沒取，
+    /// 不會有任何東西回報。
+    private final class OrderedPipeline: Sendable {
         private let sem: DispatchSemaphore
-        private let lock = NSLock()
         private let queue = DispatchQueue(label: "swifttar.crypto", qos: .userInitiated,
                                           attributes: .concurrent)
         private let group = DispatchGroup()
         private let output: FileHandle
-        private var results: [Int: Data] = [:]
-        private var writeIndex = 0
-        private var failure: String? = nil
+        private struct State {
+            var results: [Int: Data] = [:]
+            var writeIndex = 0
+            var failure: String? = nil
+        }
+        // Mutex 是 ~Copyable，無法進入閉包的捕獲清單，故以一個 Sendable 的 box class
+        // 持有它——class 參考可複製，而其唯一儲存屬性即為 Sendable。
+        // Mutex is ~Copyable and cannot enter a capture list, so a Sendable box class
+        // holds it: a class reference copies and its one stored property is Sendable.
+        private final class Shared: Sendable { let m = Mutex(State()) }
+        private let shared = Shared()
 
         init(output: FileHandle, inflight: Int) {
             self.output = output
@@ -686,9 +702,7 @@ enum TarCrypto {
         /// 寫出的結果不會累積超過 `inflight`。
         func reserveSlot() -> Bool {
             sem.wait()
-            lock.lock()
-            let accepted = failure == nil
-            lock.unlock()
+            let accepted = shared.m.withLock { $0.failure == nil }
             if !accepted { sem.signal() }
             return accepted
         }
@@ -700,36 +714,44 @@ enum TarCrypto {
 // already true of it rather than a new requirement.
         func submitWork(index: Int, _ work: @escaping @Sendable () -> Data?) {
             group.enter()
-            queue.async { [self] in
+            // 捕獲所需成員而非 [self]：每一項皆為 Sendable，故此閉包不要求整個類別
+            // Sendable，也就不必為此把任何欄位搬進鎖裡。
+            // Capture the members used rather than [self]: each is Sendable, so the
+            // closure does not require the whole class to be.
+            let shared = self.shared
+            let output = self.output
+            let sem = self.sem
+            let group = self.group
+            queue.async {
                 autoreleasepool {
                     let produced = work()
                     var slotsToRelease = 0
-                    lock.lock()
-                    if failure != nil {
-                        slotsToRelease = 1
-                    } else if let produced {
-                        results[index] = produced
-                        // Drain only the contiguous run, so a failed chunk stops
-                        // output instead of letting later chunks past it.
-                        // 只排出連續段，讓失敗的 chunk 阻斷輸出，後續 chunk 不會越過。
-                        while let r = results.removeValue(forKey: writeIndex) {
-                            do {
-                                try output.write(contentsOf: r)
-                                slotsToRelease += 1
-                            } catch {
-                                failure = "\(error)"
-                                slotsToRelease += 1 + results.count
-                                results.removeAll(keepingCapacity: false)
-                                break
+                    shared.m.withLock { st in
+                        if st.failure != nil {
+                            slotsToRelease = 1
+                        } else if let produced {
+                            st.results[index] = produced
+                            // Drain only the contiguous run, so a failed chunk stops
+                            // output instead of letting later chunks past it.
+                            // 只排出連續段，讓失敗的 chunk 阻斷輸出，後續 chunk 不會越過。
+                            while let r = st.results.removeValue(forKey: st.writeIndex) {
+                                do {
+                                    try output.write(contentsOf: r)
+                                    slotsToRelease += 1
+                                } catch {
+                                    st.failure = "\(error)"
+                                    slotsToRelease += 1 + st.results.count
+                                    st.results.removeAll(keepingCapacity: false)
+                                    break
+                                }
+                                st.writeIndex += 1
                             }
-                            writeIndex += 1
+                        } else {
+                            st.failure = "chunk \(index) failed"
+                            slotsToRelease = 1 + st.results.count
+                            st.results.removeAll(keepingCapacity: false)
                         }
-                    } else {
-                        failure = "chunk \(index) failed"
-                        slotsToRelease = 1 + results.count
-                        results.removeAll(keepingCapacity: false)
                     }
-                    lock.unlock()
                     for _ in 0..<slotsToRelease { sem.signal() }
                 }
                 group.leave()
@@ -740,8 +762,7 @@ enum TarCrypto {
         /// 等待所有 worker；若有失敗則回傳第一個。
         func finish() -> String? {
             group.wait()
-            lock.lock(); defer { lock.unlock() }
-            return failure
+            return shared.m.withLock { $0.failure }
         }
     }
 

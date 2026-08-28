@@ -585,7 +585,8 @@ would not predict.
 | `--encrypt` | (`-c` only) Encrypt with ChaCha20-Poly1305; prompts for a passphrase |
 | `--keyfile <path>` | Use the file's bytes as key material instead of a passphrase (create and read; required when stdin is not a terminal). **On create it turns encryption on by itself** — `-c --keyfile k.bin -f out.enc src/` encrypts; you do not also need `--encrypt`. |
 | `--force`   | (`-x` only) Allow a member to overwrite one written earlier in the *same* extraction; without it that case is refused |
-| `-h`        | Help |
+| `-h`, `--dereference` | (`-c`, `-r`, `-u`) Follow symlinks: store what each one points to rather than the link itself. A broken link is reported and skipped, because the `stat` this uses fails where the default `lstat` would have stored the link happily. A link back to a directory already on the current path is a cycle; it is reported and skipped rather than expanded. Two links reaching the same directory by different routes are **not** a cycle and are both archived. |
+| `--help`    | Help. **`-h` used to mean this.** It now means `--dereference`, matching GNU tar and bsdtar; help is `--help`, which is GNU's spelling and what bsdtar has always used. |
 | `--version` | Show the fixed build-date version (`yyyyMMdd-HHmmss`) |
 | `--crypto-selftest` | Run the crypto unit tests (published vectors, header parsing, chunk framing), then exit |
 
@@ -593,6 +594,47 @@ would not predict.
 accepted and writes a plain uncompressed tar, the level discarded. Check with
 `--identify`: an archive built by `-c --zstd-level 9 -f out.tar dir` reports
 `tar`, not `zstd → tar`. See [Exit status](#exit-status) for what the codes mean.
+
+### `-h` changed meaning
+
+`-h` used to print this help. It now means `--dereference`, as it does in GNU tar
+and bsdtar; help moved to `--help`.
+
+The change is deliberate but it is worth stating plainly, because both spellings
+exit zero. A caller that ran `swift_tar -c -h -f out.tar src/` expecting the help
+text now gets an archive with every symlink resolved to its target — larger, and
+holding the contents rather than the links. Nothing fails; the archive is simply
+not the one that was intended.
+
+`swift_tar -h` on its own still fails loudly, since `-h` alone names no operation.
+
+### What `--dereference` archives
+
+Without it, a symlink is stored as a link: zero bytes plus its target string.
+With it, the link is resolved and what it points to is stored instead.
+
+```
+src/link -> ../real          # real/ holds inside.txt
+
+-c -f a.tar src              # default
+  drwxr-xr-x  src/
+  lrwxr-xr-x  src/link -> ../real
+
+-c -h -f b.tar src           # dereference
+  drwxr-xr-x  src/
+  drwxr-xr-x  src/link/
+  -rw-r--r--  src/link/inside.txt
+```
+
+Two consequences on extraction, neither of which needs a flag:
+
+- The archive contains **no symlink entries at all**, so extracting it produces
+  plain files and directories.
+- The guard that refuses to write through a symlink planted by an earlier entry
+  never comes into play, because there is no such entry to plant.
+
+The cost is duplication: several links pointing at one directory each store its
+contents again, and a link out of the tree pulls that content into the archive.
 
 ### Which way `-f` points
 

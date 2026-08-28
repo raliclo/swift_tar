@@ -522,7 +522,8 @@ swift_tar -c -f first.tar -f second.tar ...      # 寫出 first.tar；second.tar
 | `--encrypt` | （僅 `-c`）以 ChaCha20-Poly1305 加密，並提示輸入密語 |
 | `--keyfile <path>` | 以檔案位元組作為金鑰材料取代密語（建立與讀取皆適用；stdin 非終端機時為必要）。**建立時它本身即會開啟加密**——`-c --keyfile k.bin -f out.enc src/` 就會加密，不需要另外再加 `--encrypt`。 |
 | `--force`   | （僅 `-x`）允許某成員覆蓋**同一次**解出中較早寫出的檔案；未加時該情形會被拒絕 |
-| `-h`        | 顯示說明 |
+| `-h`、`--dereference` | （`-c`、`-r`、`-u`）跟隨符號連結：存入它所指向的內容，而非連結本身。斷掉的連結會被回報並略過——此處改用的 `stat` 對它會失敗，而預設的 `lstat` 能好好把該連結存下來。連結指回「當前路徑上已走過的目錄」是迴圈，會被回報並略過而非展開；兩個經由不同路徑抵達同一目錄的連結**不是**迴圈，兩者都會被收錄。 |
+| `--help`    | 顯示說明。**此前 `-h` 是這個意思。** 現在 `-h` 等同 `--dereference`，與 GNU tar 及 bsdtar 一致；說明改由 `--help` 提供，那是 GNU 的寫法，也是 bsdtar 一向的用法。 |
 | `--version` | 顯示固定的建置日期版本（`yyyyMMdd-HHmmss`） |
 | `--crypto-selftest` | 執行密碼學單元測試（公開向量、標頭解析、分塊切分）後結束 |
 
@@ -530,6 +531,45 @@ swift_tar -c -f first.tar -f second.tar ...      # 寫出 first.tar；second.tar
 未壓縮的純 tar，等級被丟棄。可用 `--identify` 檢查：以
 `-c --zstd-level 9 -f out.tar dir` 產生的封存會回報 `tar`，而非 `zstd → tar`。
 各離開碼的意義見[離開碼](#離開碼)一節。
+
+### `-h` 的語意已改變
+
+`-h` 此前是「印出說明」。現在它等同 `--dereference`，與 GNU tar 及 bsdtar 一致；說明
+改由 `--help` 提供。
+
+這是刻意的變更，但值得明白寫出來，因為**兩種行為都以 0 結束**。原本執行
+`swift_tar -c -h -f out.tar src/` 期待看到說明的呼叫端，現在會得到一個把每個符號連結
+都解析成目標的封存——體積更大，內容而非連結。沒有任何東西失敗，只是那個封存不是它要的
+那一個。
+
+單獨執行 `swift_tar -h` 仍會明確失敗，因為 `-h` 本身並未指名任何操作。
+
+### `--dereference` 會收錄什麼
+
+不加時，符號連結被存成連結：零位元組加上它的目標字串。加上之後，連結被解析，存入的是
+它所指向的內容。
+
+```
+src/link -> ../real          # real/ 裡有 inside.txt
+
+-c -f a.tar src              # 預設
+  drwxr-xr-x  src/
+  lrwxr-xr-x  src/link -> ../real
+
+-c -h -f b.tar src           # 跟隨
+  drwxr-xr-x  src/
+  drwxr-xr-x  src/link/
+  -rw-r--r--  src/link/inside.txt
+```
+
+解壓端因而有兩個後果，且**都不需要任何旗標**：
+
+- 該封存**完全不含 symlink 項目**，故解出的是純檔案與目錄。
+- 「拒絕穿過封存中較早項目所植入的 symlink 寫入」那道守門永遠不會派上用場，因為根本
+  沒有可植入的項目。
+
+代價是重複：多個指向同一目錄的連結會各自再存一份其內容，而指向樹外的連結會把該內容
+拉進封存。
 
 ### `-f` 指向哪一邊
 

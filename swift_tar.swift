@@ -1502,13 +1502,29 @@ func sniffFilter(_ head: [UInt8]) -> ReadFilter? {
 
 /// Thread-safe accumulated result of all decoder layers.
 /// 各層解碼執行緒的共同結果（thread-safe）。
-final class ChainResult: @unchecked Sendable {
-    private let lock = NSLock()
-    private var _ok = true
-    private var _message: String? = nil
-    var ok: Bool { lock.lock(); defer { lock.unlock() }; return _ok }
-    var message: String? { lock.lock(); defer { lock.unlock() }; return _message }
-    func fail(_ msg: String) { lock.lock(); _ok = false; _message = _message ?? msg; lock.unlock() }
+/// `Sendable` here is checked rather than asserted: the only stored property is a
+/// `Mutex`, which is itself `Sendable`, so the compiler establishes the conformance.
+/// The previous form was `@unchecked Sendable` over `NSLock` plus two bare `var`s,
+/// which asked the reader to believe that every path took the lock -- and nothing
+/// would have reported it if one had not.
+/// 此處的 `Sendable` 是編譯器驗證的，不是宣稱：唯一的儲存屬性是 `Mutex`，而它本身
+/// 即為 `Sendable`，故該符合由編譯器確立。先前的寫法是 `@unchecked Sendable` 加
+/// `NSLock` 與兩個裸 `var`，要讀者自行相信每一條路徑都取了那把鎖——而若有一條沒取，
+/// 不會有任何東西回報。
+final class ChainResult: Sendable {
+    private struct State {
+        var ok = true
+        var message: String? = nil
+    }
+    private let state = Mutex(State())
+    var ok: Bool { state.withLock { $0.ok } }
+    var message: String? { state.withLock { $0.message } }
+    func fail(_ msg: String) {
+        state.withLock { st in
+            st.ok = false
+            st.message = st.message ?? msg
+        }
+    }
 }
 
 struct FilteredStream {

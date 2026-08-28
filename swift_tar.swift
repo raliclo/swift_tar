@@ -838,6 +838,16 @@ var zstdCompressionLevel: Int32 {
 // stream, never in a hot loop. The computed property keeps every call site unchanged.
 // -h/--dereference：與 tarRestorePermissions 同樣的持有方式與理由。
 // -h/--dereference: held the same way and for the same reason as tarRestorePermissions.
+// --exclude：可重複給定，故持有的是清單而非旗標。與其他設定同樣置於 Mutex 中，理由
+// 相同：於引數解析期間寫入一次，其後由工作執行緒讀取。
+// --exclude is repeatable, so this holds a list rather than a flag. In a Mutex for the
+// same reason as the rest: written once while parsing, read afterwards.
+let tarExcludePatternsBox = Mutex<[String]>([])
+var tarExcludePatterns: [String] {
+    get { tarExcludePatternsBox.withLock { $0 } }
+    set { tarExcludePatternsBox.withLock { $0 = newValue } }
+}
+
 let tarDereferenceBox = Mutex<Bool>(false)
 var tarDereference: Bool {
     get { tarDereferenceBox.withLock { $0 } }
@@ -2803,8 +2813,56 @@ final class TarWriter {
 #endif
     }
 
+    /// Does `name` match any `--exclude` pattern?
+    ///
+    /// Matched with `fnmatch` and no flags, so `*` crosses `/` — that is bsdtar's
+    /// behaviour, verified rather than assumed: `--exclude 'src/*.log'` there also
+    /// drops `src/sub/deep.log`. A pattern holding no `/` is additionally tried
+    /// against every path component, which is why bare `sub` and bare `deep.log`
+    /// both work in bsdtar.
+    ///
+    /// `name` 是否命中任一 `--exclude` 樣式？
+    ///
+    /// 以 `fnmatch` 不帶旗標比對，故 `*` 會跨越 `/`——那是 bsdtar 的行為，且經實測
+    /// 而非臆測：該處的 `--exclude 'src/*.log'` 同樣會丟掉 `src/sub/deep.log`。不含
+    /// `/` 的樣式另外會逐一比對每個路徑元件，這正是 bsdtar 中單獨的 `sub` 與單獨的
+    /// `deep.log` 都能生效的原因。
+    private func isExcluded(_ name: String) -> Bool {
+        let patterns = tarExcludePatterns
+        guard !patterns.isEmpty else { return false }
+        for p in patterns {
+            if p.withCString({ pat in name.withCString { fnmatch(pat, $0, 0) == 0 } }) {
+                return true
+            }
+            guard !p.contains("/") else { continue }
+            for comp in name.split(separator: "/") {
+                if p.withCString({ pat in String(comp).withCString { fnmatch(pat, $0, 0) == 0 } }) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     func add(path: String) throws {
         let name = TarWriter.archiveName(path)
+        // Checked before stat, so an excluded entry costs nothing and an excluded
+        // directory is never descended into -- which is what makes `--exclude` able
+        // to step around an unreadable subtree rather than merely omit its listing.
+        // 於 stat 之前檢查，故被排除的項目不付出任何代價，被排除的目錄也不會被走進去
+        // ——那正是 `--exclude` 得以繞開讀不到的子樹、而非僅僅略去其列表的原因。
+        if isExcluded(name) {
+            if verbose { eprint("skipping \(name) / 略過 \(name)") }
+            return
+        }
+        // bsdtar 的目錄成員名帶結尾斜線，故 `--exclude 'src/sub/*'` 的 `*` 會匹配到空
+        // 字串而命中 `src/sub/` 本身，整棵子樹連目錄一併消失。此處在確知是目錄之後補上
+        // 該形式的比對——實測 bsdtar 確實如此，六種樣式中只有這一種會顯露差異。
+        // bsdtar names directory members with a trailing slash, so `--exclude 'src/sub/*'`
+        // has its `*` match the empty string and drops `src/sub/` itself along with the
+        // subtree. This adds that spelling once the entry is known to be a directory --
+        // measured against bsdtar, where it is the one shape of six that reveals the gap.
+        let excludedAsDirectory = { [self] in isExcluded(name + "/") }
 #if os(Windows)
         guard let st = winStat(path) else {
             throw TarError.io("cannot stat '\(path)' / 無法讀取 '\(path)' 的檔案資訊")
@@ -2831,6 +2889,10 @@ final class TarWriter {
             return
         }
         if st.isDir {
+            if excludedAsDirectory() {
+                if verbose { eprint("skipping \(name)/ / 略過 \(name)/") }
+                return
+            }
             if verbose { eprint("a \(name)/") }
             try writeEntryHeader(name: name + "/", mode: mode, uid: uid, gid: gid,
                                  size: 0, mtime: mtime, typeflag: UInt8(ascii: "5"), linkname: "")
@@ -2940,6 +3002,10 @@ final class TarWriter {
 
         switch st.st_mode & S_IFMT {
         case S_IFDIR:
+            if excludedAsDirectory() {
+                if verbose { eprint("skipping \(name)/ / 略過 \(name)/") }
+                return
+            }
             if verbose { eprint("a \(name)/") }
             try writeEntryHeader(name: name + "/", mode: mode, uid: uid, gid: gid,
                                  size: 0, mtime: mtime, typeflag: UInt8(ascii: "5"), linkname: "")
@@ -4777,8 +4843,8 @@ struct SwiftTarMain {
             "-stream-in", "-stream-out", "-O", "--to-stdout", "-i", "--ignore-zeros",
             "-o", "--no-same-owner", "--force",
             "-p", "--same-permissions", "--no-same-permissions",
-            "--dereference", "--help",
-            "--strip-components", "--zstd-level",
+            "--dereference", "--help", "--exclude",
+            "--strip-components", "--zstd-level", "--exclude",
             "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
             // codecs / 壓縮引擎
             "--gzip", "-z", "--bzip2", "-j", "--xz", "-J", "--lzip", "--zstd",
@@ -4823,7 +4889,7 @@ struct SwiftTarMain {
         // `--lat -33.8688` 會回報「unknown option -33.8688」。正值掩蓋了這個缺口——
         // 25.033 並不以減號開頭——故它只在南半球緯度、西經等負值欄位上現形。
         let valueOptions: Set<String> = [
-            "-f", "-C", "-n", "--keyfile", "--strip-components", "--zstd-level",
+            "-f", "-C", "-n", "--keyfile", "--strip-components", "--zstd-level", "--exclude",
             "--width", "--height", "--lat", "--lng", "--height-m",
             "--title", "--country", "--creator-email", "--right",
             "--created-ms", "--tz-offset-min",
@@ -4859,7 +4925,7 @@ struct SwiftTarMain {
                 let name = a.hasPrefix("--") ? String(a.prefix(while: { $0 != "=" })) : a
                 guard knownOptions.contains(name) || lzfseOptions.contains(name) else {
                     eprint("swift_tar: unknown option \(a) / 無法辨識的選項 \(a)")
-                    eprint("  run swift_tar -h for the full list / 執行 swift_tar -h 可列出完整選項")
+                    eprint("  run swift_tar --help for the full list / 執行 swift_tar --help 可列出完整選項")
                     exit(1)
                 }
                 continue
@@ -5193,6 +5259,24 @@ struct SwiftTarMain {
         // "show help"; help is now --help, which is GNU's spelling, and bsdtar never spelled
         // help as -h at all.
         tarDereference = args.contains("-h") || args.contains("--dereference")
+
+        // --exclude <pattern>，可重複。GNU tar 另有 --exclude=PATTERN 的等號寫法，
+        // 兩者皆接受；bsdtar 只有分開的形式。
+        // --exclude <pattern>, repeatable. GNU tar also spells it --exclude=PATTERN and
+        // both are accepted here; bsdtar has only the separated form.
+        var excludes: [String] = []
+        var ai = 0
+        while ai < args.count {
+            let a = args[ai]
+            if a == "--exclude", ai + 1 < args.count {
+                excludes.append(args[ai + 1]); ai += 2; continue
+            }
+            if a.hasPrefix("--exclude=") {
+                excludes.append(String(a.dropFirst("--exclude=".count))); ai += 1; continue
+            }
+            ai += 1
+        }
+        tarExcludePatterns = excludes
 
         let hasStripComponents = args.contains("--strip-components")
             || args.contains(where: { $0.hasPrefix("--strip-components=") })

@@ -533,6 +533,27 @@ swift_tar -c -f first.tar -f second.tar ...      # 寫出 first.tar；second.tar
 `-c --zstd-level 9 -f out.tar dir` 產生的封存會回報 `tar`，而非 `zstd → tar`。
 各離開碼的意義見[離開碼](#離開碼)一節。
 
+### 兩種 tar 分歧之處，`--exclude` 跟隨 bsdtar
+
+bsdtar 3.5.3 與 GNU tar 1.35 的 `--exclude` 實作並不相同，把命令列從一邊搬到另一邊之前
+值得先知道。以 `src/` 內含 `keep.txt`、`skip.log`、`sub/deep.log` 為例：
+
+| 樣式 | bsdtar | GNU tar | swift_tar |
+| --- | --- | --- | --- |
+| `sub`、`*.log`、`deep.log`、`*` | 一致 | 一致 | 相同 |
+| `src/sub/*` | 連 `src/sub` 一併排除 | 保留 `src/sub` | **同 bsdtar** |
+| `src/*` | 連 `src` 一併排除，封存為空 | 保留 `src` | **同 bsdtar** |
+
+bsdtar 的目錄成員名帶結尾斜線，故以 `/*` 結尾的樣式，其 `*` 會匹配到空字串而連目錄本身
+一併帶走；GNU 只比對目錄內的東西。
+
+swift_tar 跟隨 bsdtar，因為本工具在其他各處的對照對象一向是它。`test/test_exclude.zsh`
+把**兩半都當成斷言**——swift_tar 必須與 bsdtar 相同，*且* 必須與 GNU 不同——因此日後任
+何一邊的行為改變都會被回報，而不是被默默吸收。
+
+若要以兩種 tar 都一致的方式排除一個目錄，就別加結尾的 `/*`：`--exclude sub` 或
+`--exclude src/sub`。
+
 ### `-h` 的語意已改變
 
 `-h` 此前是「印出說明」。現在它等同 `--dereference`，與 GNU tar 及 bsdtar 一致；說明

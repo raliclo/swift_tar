@@ -596,6 +596,30 @@ accepted and writes a plain uncompressed tar, the level discarded. Check with
 `--identify`: an archive built by `-c --zstd-level 9 -f out.tar dir` reports
 `tar`, not `zstd → tar`. See [Exit status](#exit-status) for what the codes mean.
 
+### `--exclude` follows bsdtar where the two tars disagree
+
+bsdtar 3.5.3 and GNU tar 1.35 do not implement `--exclude` the same way, which is worth
+knowing before porting a command line between them. Given `src/` holding `keep.txt`,
+`skip.log` and `sub/deep.log`:
+
+| pattern | bsdtar | GNU tar | swift_tar |
+| --- | --- | --- | --- |
+| `sub`, `*.log`, `deep.log`, `*` | agree | agree | same |
+| `src/sub/*` | drops `src/sub` too | keeps `src/sub` | **as bsdtar** |
+| `src/*` | drops `src` too, archive is empty | keeps `src` | **as bsdtar** |
+
+bsdtar names directory members with a trailing slash, so a pattern ending in `/*` has its
+`*` match the empty string and takes the directory along with its contents. GNU matches
+only what is inside.
+
+swift_tar follows bsdtar because bsdtar is what this tool is checked against everywhere
+else. `test/test_exclude.zsh` asserts both halves — that swift_tar matches bsdtar *and*
+that it still differs from GNU — so a later change on either side is reported rather than
+absorbed.
+
+To exclude a directory in a way both tars agree on, name it without a trailing `/*`:
+`--exclude sub` or `--exclude src/sub`.
+
 ### `-h` changed meaning
 
 `-h` used to print this help. It now means `--dereference`, as it does in GNU tar

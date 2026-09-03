@@ -126,9 +126,37 @@ static int add_path(struct archive *writer,
         if (verbose) fprintf(stderr, "a %s\n", archive_entry_pathname(entry));
 
         status = archive_write_header(writer, entry);
-        if (status < ARCHIVE_OK) {
+        if (status == ARCHIVE_FATAL) {
             set_archive_error(error_buffer, error_capacity, "archive_write_header", writer);
             goto cleanup;
+        }
+        if (status == ARCHIVE_FAILED) {
+            /* This entry cannot be written; the archive is still usable. libarchive
+             * defines ARCHIVE_FAILED on write_header to mean exactly that, and it is
+             * what "Can't add archive to itself" comes back as when -f names a file
+             * inside the tree being walked. Testing `status < ARCHIVE_OK` treated it
+             * as fatal, so the walk stopped at the archive file and every member
+             * after it was missing from a file that had still been created. bsdtar,
+             * on this same libarchive, skips the entry and carries on -- so did the
+             * tar path here, which excludes the archive by file identity in Swift.
+             * 此項寫不進去，但封存仍然可用。libarchive 對 write_header 的
+             * ARCHIVE_FAILED 定義正是如此，而 `-f` 指向被走訪目錄內的檔案時，
+             * "Can't add archive to itself" 回傳的就是它。原本以 `status <
+             * ARCHIVE_OK` 判斷會當成致命錯誤，於是走訪停在封存檔本身，其後的成員
+             * 全部缺席，而檔案仍被建立出來。同一套 libarchive 上的 bsdtar 是略過
+             * 該項並繼續；此處的 tar 路徑亦然，它在 Swift 端以檔案身分排除封存。 */
+            fprintf(stderr, "swift_tar: %s: %s\n",
+                    archive_entry_pathname(entry), archive_error_string(writer));
+            archive_entry_free(entry);
+            entry = NULL;
+            continue;
+        }
+        if (status < ARCHIVE_OK) {
+            /* ARCHIVE_WARN: the header was written, so keep going and copy the data,
+             * but do not let the reason go unsaid.
+             * ARCHIVE_WARN：標頭已寫入，故繼續複製資料，但不讓原因無聲消失。 */
+            fprintf(stderr, "swift_tar: %s: %s\n",
+                    archive_entry_pathname(entry), archive_error_string(writer));
         }
         if (copy_file_to_archive(writer, entry, error_buffer, error_capacity) != 0) {
             goto cleanup;

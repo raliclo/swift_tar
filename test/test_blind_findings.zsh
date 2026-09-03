@@ -1427,6 +1427,64 @@ printf 'alpha\n' > "$TMP/selfsrc/a.txt"
 eq "an unrelated tar inside the tree is still archived" \
    "1" "$("$ST" -t -f "$TMP/outside.tar" 2>/dev/null | grep -c 'unrelated.tar')"
 
+# ---- the ZIP backend: skip the archive, do not abandon the walk ----
+# The ZIP path does not compare identity in Swift -- libarchive walks the tree
+# itself and detects the case, returning ARCHIVE_FAILED from archive_write_header
+# with "Can't add archive to itself". The bridge used to test `status <
+# ARCHIVE_OK`, which lumped that in with ARCHIVE_FATAL: the walk stopped at the
+# archive file, and every member not yet visited was missing from a file that had
+# still been created.
+#
+# The fixture needs a *subdirectory*, and that is not decoration. A flat tree
+# does not reproduce the loss: libarchive emits the current level in readdir
+# order, the archive is the newest file there, and on APFS it came out last in
+# every trial -- so nothing followed it and every member survived even unfixed.
+# Descent is different: `sub/` and its contents are always emitted after the
+# top-level entries, so they always follow the archive. Measured against the
+# unfixed binary, three trials out of three: flat tree kept all eight members,
+# `sub/` tree kept only `./`. Exit status and the stderr line are the assertions
+# that discriminate in either shape; the member checks are the guarantee, and
+# they only bite in this one.
+#
+# ZIP 路徑不在 Swift 端比對身分——走訪由 libarchive 自行進行，它自己偵測得到這個情況，
+# 並自 archive_write_header 回傳 ARCHIVE_FAILED 與 "Can't add archive to itself"。
+# bridge 原本以 `status < ARCHIVE_OK` 判斷，把它與 ARCHIVE_FATAL 混為一談：走訪停在
+# 封存檔，尚未走到的成員全部缺席，而檔案仍被建立出來。
+#
+# 這個 fixture 需要一層**子目錄**，而那不是裝飾。扁平的樹重現不出損失：libarchive 以
+# readdir 順序輸出當層項目，封存檔是該層最新的檔案，在 APFS 上每次實測都排在最後——
+# 其後沒有東西，故即使未修正也不會少任何成員。下降則不同：`sub/` 及其內容一律在頂層
+# 項目**之後**輸出，因此必定排在封存檔之後。對未修正的執行檔實測三次三中：扁平樹八個
+# 成員全在，`sub/` 樹只剩 `./`。離開碼與 stderr 那一行在兩種形狀下都有鑑別力；成員檢查
+# 是要釘住的保證，而它只在這一種形狀下咬得住。
+ZSELF="$TMP/zipself"
+mkdir -p "$ZSELF/sub"
+printf 'alpha\n' > "$ZSELF/a.txt"
+printf 'zeta\n'  > "$ZSELF/sub/z.txt"
+# `set -e` is on, and the whole point of this case is that the unfixed build
+# exits 1 here -- so capture the status instead of letting it abort the suite.
+# 本檔開了 `set -e`，而這個案例的重點正是未修正的版本會在此以 1 結束，故必須把狀態接住，
+# 不能讓它中止整個套件。
+zself_rc=0
+( cd "$ZSELF" && "$ST" -c --zip -f m.zip . >/dev/null 2>"$TMP/zipself.err" ) || zself_rc=$?
+eq "--zip self-reference: creating the archive still succeeds" "0" "$zself_rc"
+eq "--zip: the archive is not stored inside itself" \
+   "" "$("$ST" -t -f "$ZSELF/m.zip" 2>/dev/null | grep 'm.zip')"
+eq "--zip: a top-level member survives" \
+   "1" "$("$ST" -t -f "$ZSELF/m.zip" 2>/dev/null | grep -c 'a.txt')"
+eq "--zip: a member below the archive in walk order survives" \
+   "1" "$("$ST" -t -f "$ZSELF/m.zip" 2>/dev/null | grep -c 'sub/z.txt')"
+# Skipping silently would be the other half of the defect: say why, on stderr.
+# 無聲略過會是這個缺陷的另一半：要在 stderr 說出原因。
+eq "--zip: the skipped entry is reported on stderr" \
+   "1" "$(grep -c 'Can.t add archive to itself' "$TMP/zipself.err")"
+# And the archive must actually be readable afterwards, not merely listable.
+# 且封存事後必須真的解得開，而不只是列得出來。
+mkdir -p "$TMP/zipself_x"
+( cd "$TMP/zipself_x" && "$ST" -x -f "$ZSELF/m.zip" >/dev/null 2>&1 )
+eq "--zip: the resulting archive extracts both members" \
+   "2" "$(find "$TMP/zipself_x" -type f | grep -c -e 'a\.txt' -e 'z\.txt')"
+
 # ---- a typeflag '6' entry from a raw fixture ----
 # This runs on every platform, including Windows, which is the point: the
 # platform that cannot create a FIFO is the one whose branch would otherwise

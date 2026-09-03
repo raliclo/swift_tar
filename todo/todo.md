@@ -1379,7 +1379,61 @@ sha256，那才是答案。」但沒有這個檔案——本 repo 沒有，父�
 兩份 README 原本寫著 `--version`「回報編譯 binary 時擷取的本機日期時間」，該敘述自
 `d868dc3` 起不再為真，已於同一次變更中更正。
 
-## The ZIP backend stores its own output file / ZIP 後端會把自己的輸出檔收進封存  ▸ 🔴 未決 / open
+## The ZIP backend stores its own output file / ZIP 後端會把自己的輸出檔收進封存  ▸ 🔴 未決，且已換了形狀 / open, and it changed shape
+
+**Update 2026-09-04 — no longer stored; now the whole archive is abandoned.**
+Re-measured on macOS at `a18e92e`. libarchive detects the case itself and
+`archive_write_header` returns `ARCHIVE_FAILED` with "Can't add archive to
+itself". `libarchive_zip_bridge.c:129` tests `if (status < ARCHIVE_OK) goto
+cleanup`, which treats that as fatal — so the walk stops at the archive file and
+everything after it in walk order is silently absent from a file that was still
+created.
+
+```
+swift_tar -c --zip -f o.zip .    # rc=1, o.zip is 158 bytes
+swift_tar -t -f o.zip            # ./            <- src/ and src/a.txt are gone
+bsdtar   -c -f o.zip --format zip .   # rc=0, warns, members: ./ ./src/ ./src/a.txt
+swift_tar -c -f o.tar .               # rc=0, members: ./ src/ src/a.txt   (tar path is correct)
+```
+
+Same libarchive, opposite outcome: bsdtar treats `ARCHIVE_FAILED` on
+`write_header` as "skip this entry, the archive is still usable" — which is what
+libarchive documents it to mean — and carries on. The bridge conflates it with
+`ARCHIVE_FATAL`.
+
+Exit 1 means this is not silent, so it is not the old defect's shape. But the
+loss is real and order-dependent: only members the walk reaches *before* the
+archive file survive. `swift_tar -c --zip -f out.zip .` from inside the tree is
+the ordinary invocation, and it now yields a truncated archive rather than a
+self-including one.
+
+Fix is in the bridge, not in Swift: separate `ARCHIVE_FAILED`/`ARCHIVE_WARN`
+from `ARCHIVE_FATAL` at both `archive_write_header` sites, skip the entry, and
+keep the warning visible. The identity comparison the original entry called for
+is no longer needed — libarchive already does it.
+
+**2026-09-04 更新 —— 不再收進封存，改為整個封存被放棄。** 於 `a18e92e` 在 macOS 重測。
+libarchive 自己偵測得到這個情況，`archive_write_header` 回傳 `ARCHIVE_FAILED` 並附
+"Can't add archive to itself"。`libarchive_zip_bridge.c:129` 的判斷是
+`if (status < ARCHIVE_OK) goto cleanup`，把它當成致命錯誤，於是走訪停在該封存檔，
+排在其後的成員全部不在一個「仍然被建立出來」的檔案裡。
+
+同一套 libarchive、相反的結果：bsdtar 把 `write_header` 的 `ARCHIVE_FAILED` 解讀為
+「略過這一項，封存仍然可用」——那正是 libarchive 文件所定義的語意——並繼續走完。bridge
+把它與 `ARCHIVE_FATAL` 混為一談。
+
+離開碼為 1，故此事並不沉默，形狀已與舊缺陷不同。但損失是真的，且與走訪順序相關：只有
+在封存檔**之前**被走到的成員會留下。而在目錄內執行 `swift_tar -c --zip -f out.zip .`
+正是最平常的用法，現在得到的是一個被截斷的封存，而非一個含有自身的封存。
+
+修法在 bridge，不在 Swift：於兩處 `archive_write_header` 將
+`ARCHIVE_FAILED`／`ARCHIVE_WARN` 與 `ARCHIVE_FATAL` 分開，略過該項並保留警告可見。
+原條目所要求的身分比對已不需要——libarchive 本身已經做了。
+
+---
+
+以下為原始記錄（2026-08-18），其描述的行為已不復存在：
+Original record (2026-08-18); the behaviour it describes no longer occurs:
 
 Found while verifying the trailing-slash fix, not reported by any test agent.
 `-c --zip -f out.zip .` from inside the directory being archived lists

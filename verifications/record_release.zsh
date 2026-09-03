@@ -85,8 +85,27 @@ STAMP=$(sed -n 's/^swift_tar_version=//p' "$VERSION_FILE" 2>/dev/null | sed -n '
 [[ -n $STAMP ]] || STAMP="(none)"
 
 # 工作區是否乾淨很重要：由有未提交變更的樹建出的執行檔，那個 commit 並不能識別它。
+#
+# 兩點限制要說明白，否則這兩欄會被讀成它們答不了的問題：
+#
+# 其一，`worktree` 記的是**記錄當下**的狀態，不是建置當下的。兩者只有在「建完立刻記錄」
+# 時才是同一件事——這也是預期用法。若在建置與記錄之間改了任何檔案（哪怕改的是本檔），
+# 這一欄就會是 dirty，而它描述的其實是記錄那一刻。
+#
+# 其二，`git_commit` 會被 rebase 改掉，sha256 不會。2026-09-04 就發生了：第一列記下
+# `f39e78d`，數分鐘後一次 `pull --rebase` 把同一份內容改寫為 `ef97509`，那一欄於是指向
+# 一個任何人都取不到的 commit。**一張以 sha256 記錄身分的表，它的 commit 欄指向不存在的
+# commit**——這正是本表要解決的問題換了個形狀。故此欄是脈絡，不是身分；身分永遠是 sha256。
+# 若在 rebase 之後才發現某列已失效，修那一格（`csv2 -update r:5 <新hash>`），不要改 sha256。
+#
 # Whether the worktree was clean matters: a binary built from a dirty tree is not
-# identified by that commit.
+# identified by that commit. Two limits, stated so these columns are not read as
+# answering questions they cannot. First, `worktree` describes the tree at *record*
+# time, not at build time; the two coincide only when you record straight after
+# building, which is the intended use. Second, `git_commit` is rewritten by a rebase
+# and the sha256 is not -- which happened on 2026-09-04, minutes after the first row
+# was written. The commit column is context; identity is always the sha256. Fix a
+# stale cell with `csv2 -update r:5 <new-hash>`; never touch the sha256.
 COMMIT=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || print -r -- "(not-a-checkout)")
 if git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1; then
   if [[ -n $(git -C "$ROOT" status --porcelain --untracked-files=no) ]]; then

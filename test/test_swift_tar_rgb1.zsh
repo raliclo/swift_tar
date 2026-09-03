@@ -89,9 +89,41 @@ verify_extract() { # label dir
   local label="$1" dir="$2" f="$2/img.rgb1"
   if [ ! -f "$f" ]; then bad "$label: extracted img.rgb1 missing"; return; fi
   if ! cmp -s "$SRC/img.rgb1" "$f"; then bad "$label: extracted .rgb1 differs byte-wise"; return; fi
-  if ! diff -q "$REF_INFO" <("$ST" --rgb1-info -f "$f") >/dev/null; then
+  # 兩處比對走暫存檔，而不是 process substitution。
+  #
+  # `<(...)` 需要 /dev/fd，而 Buildroot guest 上那個目錄根本不存在：`diff` 以
+  # `can't stat '/dev/fd/11'` 失敗、回傳非零，於是這兩行把「比對沒能執行」報成
+  # 「內容不同」——六個案例全部指控 swift_tar，而同一次執行裡逐位元組的 `cmp` 是通過的。
+  #
+  # 該 guest 有 /proc，所以 `ln -s /proc/self/fd /dev/fd` 能救；但那個連結不會存活過重開
+  # 機，2026-08-26 補過一次，之後重啟就又消失了。與其要求每個節點都具備某個設施，不如
+  # 讓測試不需要它——這與此處改用 zsh/stat 取代外部 stat 是同一個判斷。
+  #
+  # Both comparisons go through temp files rather than process substitution.
+  #
+  # `<(...)` needs /dev/fd, and that directory simply does not exist on the
+  # Buildroot guest: `diff` fails with `can't stat '/dev/fd/11'` and returns
+  # non-zero, so these two lines reported "the comparison could not run" as
+  # "the contents differ" -- six cases all accusing swift_tar while the
+  # byte-for-byte `cmp` in the same run passed.
+  #
+  # That guest has /proc, so `ln -s /proc/self/fd /dev/fd` fixes it; but the
+  # symlink does not survive a reboot. It was created on 2026-08-26 and was gone
+  # after the next restart. Rather than require a facility of every node, let the
+  # test not need one -- the same judgement as replacing the external stat with
+  # zsh/stat here.
+  # 暫存檔放在測試自己的 TMP，不放進解壓目錄：本檔目前沒有整樹比對，但把產物寫進「正在
+  # 被驗證的目錄」是一種只要日後有人加上一次目錄比對就會爆的安排。
+  # The scratch files live in the test's own TMP rather than the extraction
+  # directory: nothing here compares whole trees today, but writing artefacts
+  # into the directory under verification is the kind of arrangement that breaks
+  # the first time someone adds such a comparison.
+  local got_info="$TMP/.info.got" got_raw="$TMP/.raw.got"
+  "$ST" --rgb1-info -f "$f" > "$got_info" 2>/dev/null
+  if ! diff -q "$REF_INFO" "$got_info" >/dev/null; then
     bad "$label: --rgb1-info on extracted .rgb1 differs"; return; fi
-  if ! cmp -s "$RAW" <("$ST" --rgb1-raw -f "$f"); then
+  "$ST" --rgb1-raw -f "$f" > "$got_raw" 2>/dev/null
+  if ! cmp -s "$RAW" "$got_raw"; then
     bad "$label: --rgb1-raw payload differs"; return; fi
   ok "$label: .rgb1 survived round-trip (bytes + info + payload)"
 }

@@ -173,6 +173,22 @@ at CPU-side work in the extract path rather than at I/O.
 Naming that work would need profiling, which has not been done. Recorded as a
 bounded open question, not a conclusion.
 
+**Narrowed, not closed (2026-09-04).** `verifications/zstd_decode_gap.zsh` was
+written to split "why is native slower" into facets that can be measured one at
+a time, and it has eliminated three candidates: the E-cluster, the `-n` setting,
+and parallelism. What remains is one unproven lead — `user` time is comparable
+while `sys` is not, and page faults differ by a factor of about 64 (128,042
+against 1,990), which points at `FileWriterPool`'s `smallFileMax` rather than at
+the codec.
+
+Two cautions, both earned. First, that script measures **native versus external
+zstd**, which is a different comparison from **swift_tar versus bsdtar** above;
+a page-fault count from one does not explain the other, and the two must not be
+merged into a single story. Second, the conclusion in this area has already been
+overturned twice, each time because a mechanism was named before the numbers
+supported it. So: three candidates excluded, one candidate remaining, mechanism
+not yet measured. Still an open question.
+
 An earlier note in `build_multissh_in_linux_vm.zsh` recorded
 `swift_tar -x 89 s vs bsdtar -xzf 52 s` and concluded swift_tar was slower. That
 observation was right and the reasoning attached to it was right — but it
@@ -206,6 +222,16 @@ files, not decoding — where no choice of tar helps.
 的比值比 macOS 寫入磁碟更差——這指向解壓路徑的 CPU 側工作，而非 I/O。
 
 要指出那是什麼工作需要 profiling，尚未進行。此處記為一個範圍明確的未決問題，而非結論。
+
+**已縮小範圍，但尚未結案（2026-09-04）。** `verifications/zstd_decode_gap.zsh` 的用途，
+是把「native 為何較慢」拆成可逐項量測的面向，目前已排除三個候選：E-cluster、`-n` 設定、
+平行度。剩下的是一條未經證實的線索——`user` 時間相近而 `sys` 不同，page fault 相差約 64
+倍（128,042 對 1,990），指向 `FileWriterPool` 的 `smallFileMax`，而非編碼器本身。
+
+兩點提醒，都是付過代價的。其一，該腳本量的是 **native 與 external zstd** 的對比，與上方
+**swift_tar 與 bsdtar** 的對比是兩件事；其中一邊的 page fault 數字並不能解釋另一邊，兩者
+不可併成同一個故事。其二，這一段的結論已經被推翻過兩次，每次都是在數字尚不足時就先指名
+了機制。故此處的狀態是：排除三項、剩一個候選、機制尚未量出。仍為未決問題。
 
 `build_multissh_in_linux_vm.zsh` 先前記錄的 `swift_tar -x 89 秒 vs bsdtar -xzf 52 秒`
 觀察無誤、推理亦無誤，但它只涵蓋解壓，卻被推廣為「swift_tar 在 VM 裡較慢」，而上方的

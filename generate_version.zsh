@@ -38,7 +38,9 @@ current_rest=$(grep -v '^swift_tar_version=' "$version_file" 2>/dev/null || true
 #
 # 這確實改變了 swift_tar_version 的語意：它不再是「這個執行檔何時被編譯」，而是「這份來源
 # 資訊何時改變」。那才是這個檔案其餘每一行在講的事，而「執行檔是不是我以為的那一個」本來
-# 就不該靠時間戳回答——release_matrix.csv 記的是各執行檔的 sha256，那才是答案。
+# 就不該靠時間戳回答——verifications/release_matrix.csv2 記的是各執行檔的 sha256，那才是
+# 答案；以 verifications/record_release.zsh --record 追加。該檔案在本註解寫成時尚不存在，
+# 於是「被讓出的性質有一個明載的替代品，而替代品不在」持續了十天；2026-09-04 補上。
 #
 # 不是 git checkout 時（例如刻意不含 .git 的 QEMU guest），`git show` 會失敗，於是行為與
 # 原本完全相同：照常蓋上新的時間戳。
@@ -57,8 +59,11 @@ current_rest=$(grep -v '^swift_tar_version=' "$version_file" 2>/dev/null || true
 # This does change what swift_tar_version means: no longer "when this binary was
 # compiled" but "when this provenance last changed", which is what every other
 # line in the file is about. Whether a binary is the one you think it is was
-# never a question a timestamp could answer -- release_matrix.csv records each
-# shipped binary's sha256, and that is the answer.
+# never a question a timestamp could answer -- verifications/release_matrix.csv2
+# records each built binary's sha256, and that is the answer; append to it with
+# verifications/record_release.zsh --record. That file did not exist when this
+# comment was written, so for ten days the property given up here had a documented
+# replacement that was not there. Supplied 2026-09-04.
 #
 # Outside a git checkout -- the QEMU guest is provisioned without .git on
 # purpose -- `git show` fails and the behaviour is exactly as before: stamp anew.

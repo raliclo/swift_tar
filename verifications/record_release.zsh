@@ -52,12 +52,23 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# 預設找建置產物；Windows 上帶 .exe。不猜，看哪一個真的存在。
-# Default to the build output; .exe on Windows. Do not guess -- see which one exists.
+# 依 $PLAT 決定要哪一個產物，不是「哪個先找到算哪個」。原本的順序在兩者皆存在時會挑錯：
+# 這台 Windows 機器以 WSL 建 Linux 版，兩邊的產物都落在同一個 release/（WSL 共用
+# /mnt/c），於是 2026-09-04 在 Windows 上挑到了 release/swift_tar——那是 Linux ELF，
+# 而該列會以 platform=win 記下它的 sha256。誤標身分正是這張表要防的事，所以本平台的產物
+# 不在時直接報錯，不退而求其次：退回另一個檔只會把錯誤寫得更像真的。
+# Choose by $PLAT rather than first-one-found. The old order picks the wrong file whenever
+# both exist: this Windows box builds the Linux binary under WSL and both land in the same
+# release/ (WSL shares /mnt/c), so on 2026-09-04 it picked release/swift_tar -- a Linux ELF
+# whose sha256 would have been recorded as platform=win. Misattributed identity is the exact
+# thing this table exists to prevent, so a missing binary for this platform is an error
+# rather than a fallback: falling back to the other file only makes the wrong row look real.
 if [[ -z $BINARY ]]; then
-  for candidate in "$ROOT/release/swift_tar" "$ROOT/release/swift_tar.exe"; do
-    [[ -f $candidate ]] && { BINARY=$candidate; break }
-  done
+  case $PLAT in
+    win) want="$ROOT/release/swift_tar.exe" ;;
+    *)   want="$ROOT/release/swift_tar" ;;
+  esac
+  [[ -f $want ]] && BINARY=$want
 fi
 [[ -n $BINARY && -f $BINARY ]] || {
   print -r -- "no binary found; build first, or pass --binary PATH" >&2
@@ -78,7 +89,21 @@ else
   exit 1
 fi
 
-BYTES=$(zstat +size "$BINARY" 2>/dev/null || stat -f %z "$BINARY")
+# `zstat` 需要顯式 zmodload：它是否已定義取決於 module_path，macOS 上會自動載入，而
+# Windows 的 zsh port 不會——於是 2026-09-04 在 Windows 上掉到 BSD 的 `stat -f %z`，
+# 而 GNU／MSYS 的 stat 把 `-f` 讀成「顯示檔案系統資訊」，回報
+# `cannot read file system information for '%z'`，整支腳本停在這裡。三段備援依序涵蓋
+# zsh 模組、GNU 與 BSD，與本檔挑 sha256 工具時「以跑得動挑選」的作法一致。
+# `zstat` needs an explicit zmodload: whether it is defined depends on module_path. macOS
+# autoloads it and the Windows zsh port does not, so on 2026-09-04 this fell through to BSD
+# `stat -f %z`, and GNU/MSYS stat reads `-f` as "show filesystem status" -- it answered
+# `cannot read file system information for '%z'` and the script stopped here. The three-way
+# fallback covers the zsh module, GNU and BSD, the same "pick what runs" rule this file
+# already applies to the sha256 tool.
+zmodload zsh/stat 2>/dev/null
+BYTES=$(zstat +size "$BINARY" 2>/dev/null \
+        || stat -c %s "$BINARY" 2>/dev/null \
+        || stat -f %z "$BINARY")
 
 VERSION_FILE="$ROOT/version-$PLAT.txt"
 STAMP=$(sed -n 's/^swift_tar_version=//p' "$VERSION_FILE" 2>/dev/null | sed -n '1p')

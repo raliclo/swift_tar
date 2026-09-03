@@ -1,0 +1,3 @@
+platform,swift_tar_version,sha256,bytes,git_commit,worktree,recorded_utc
+平台,版本戳,sha256,位元組,git commit,工作區,記錄時間UTC
+mac,20260816-014809,48672b2ebbfc97611b93d87b9f912f3936316d7e8674ee1a813814f0adf7f4b1,1329112,f39e78d,clean,2026-09-03T22:44:58Z

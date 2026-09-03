@@ -2493,11 +2493,21 @@ final class FileWriterPool {
         sem.wait()                            // backpressure / 反壓
         group.enter()
         let restoreMtime = self.restoreMtime
-#if os(Windows)
-        let backend = self.backend
-#endif
         // 捕獲所需成員而非 [self]，理由同 ParallelChunkSink。
         // Capture the members used rather than [self], as in ParallelChunkSink.
+        //
+        // `backend` 只宣告一次。此處原本在上方多了一個 `#if os(Windows)` 的
+        // `let backend = self.backend`，而下方那一行是無條件的——兩者在 Windows 上
+        // 同時成立，於是只有 Windows 會以 `invalid redeclaration of 'backend'` 失敗，
+        // 而 POSIX 三個節點完全正常。這類「只在一個平台成立」的重複，最容易在別處
+        // 綠燈時活下來。
+        //
+        // `backend` is declared once. There used to be a `#if os(Windows)`
+        // `let backend = self.backend` above this, with the unconditional one
+        // below still in place -- both hold on Windows, so only Windows failed,
+        // with `invalid redeclaration of 'backend'`, while the three POSIX nodes
+        // built fine. A duplicate that is live on exactly one platform is the
+        // kind that survives while everything else is green.
         let shared = self.shared
         let sem = self.sem
         let group = self.group
@@ -2831,18 +2841,120 @@ final class TarWriter {
         let patterns = tarExcludePatterns
         guard !patterns.isEmpty else { return false }
         for p in patterns {
-            if p.withCString({ pat in name.withCString { fnmatch(pat, $0, 0) == 0 } }) {
-                return true
-            }
+            if globNoFlags(p, name) { return true }
             guard !p.contains("/") else { continue }
             for comp in name.split(separator: "/") {
-                if p.withCString({ pat in String(comp).withCString { fnmatch(pat, $0, 0) == 0 } }) {
-                    return true
-                }
+                if globNoFlags(p, String(comp)) { return true }
             }
         }
         return false
     }
+
+    /// 以 fnmatch(3)、不帶旗標的語意比對一個樣式。
+    ///
+    /// POSIX 上直接用 fnmatch，因為那正是 `--exclude` 的行為所對齊的東西，而該行為
+    /// 已在 macOS、WSL 與 Buildroot guest 上驗證過——沒有理由在那裡改用自己的實作。
+    ///
+    /// Windows 沒有 fnmatch。少了這條分支，整個檔案在 Windows 上根本編不過
+    /// （`cannot find 'fnmatch' in scope`），於是 `--exclude` 一落地就讓該平台無法建置，
+    /// 而其他三個節點全綠。此處的替代只實作 flags=0 的語意：`*` 與 `?` 都會跨越 `/`、
+    /// `[...]` 支援 `!`／`^` 反向與範圍、反斜線跳脫下一個字元。回溯式比對，沒有遞迴，
+    /// 因此病態樣式不會炸掉堆疊。
+    ///
+    /// 正確性由 test/test_exclude.zsh 釘住——那支測試本來就是以 bsdtar 為準逐一實測
+    /// 對齊的，所以「Windows 與其他平台行為分歧」會被它抓到，而不是靠這段註解保證。
+    ///
+    /// Match one pattern with fnmatch(3) semantics and no flags.
+    ///
+    /// POSIX uses fnmatch itself, because that is what `--exclude`'s behaviour was
+    /// aligned to and that behaviour is already verified on macOS, WSL and the
+    /// Buildroot guest -- there is no reason to substitute an own implementation
+    /// there.
+    ///
+    /// Windows has no fnmatch. Without this branch the file does not compile
+    /// there at all (`cannot find 'fnmatch' in scope`), so `--exclude` made that
+    /// platform unbuildable the moment it landed while the other three stayed
+    /// green. The replacement implements flags=0 semantics only: `*` and `?` both
+    /// cross `/`, `[...]` supports `!`/`^` negation and ranges, and a backslash
+    /// escapes the next character. It backtracks rather than recurses, so a
+    /// pathological pattern cannot blow the stack.
+    ///
+    /// Correctness is pinned by test/test_exclude.zsh, which was itself aligned
+    /// to bsdtar by measurement -- so a divergence between Windows and the rest
+    /// is caught there rather than promised here.
+    private func globNoFlags(_ pattern: String, _ name: String) -> Bool {
+#if os(Windows)
+        let p = Array(pattern), s = Array(name)
+        var pi = 0, si = 0, starP = -1, starS = 0
+        while si < s.count {
+            var advanced = false
+            if pi < p.count {
+                switch p[pi] {
+                case "\\" where pi + 1 < p.count:
+                    if p[pi + 1] == s[si] { pi += 2; si += 1; advanced = true }
+                case "?":
+                    pi += 1; si += 1; advanced = true
+                case "*":
+                    starP = pi; starS = si; pi += 1; advanced = true
+                case "[":
+                    if let end = Self.classEnd(p, pi) {
+                        if Self.classMatches(p, pi, end, s[si]) {
+                            pi = end + 1; si += 1; advanced = true
+                        }
+                    } else if p[pi] == s[si] {
+                        // 未終結的 `[` 視為字面字元，與 fnmatch 相同。
+                        // An unterminated `[` is a literal, as in fnmatch.
+                        pi += 1; si += 1; advanced = true
+                    }
+                default:
+                    if p[pi] == s[si] { pi += 1; si += 1; advanced = true }
+                }
+            }
+            if advanced { continue }
+            guard starP >= 0 else { return false }
+            starS += 1
+            si = starS
+            pi = starP + 1
+        }
+        while pi < p.count, p[pi] == "*" { pi += 1 }
+        return pi == p.count
+#else
+        return pattern.withCString { pat in
+            name.withCString { fnmatch(pat, $0, 0) == 0 }
+        }
+#endif
+    }
+
+#if os(Windows)
+    /// `[` 所開啟的字元類在何處結束；未終結時回傳 nil。
+    /// Where the class opened by `[` ends; nil when it is unterminated.
+    private static func classEnd(_ p: [Character], _ start: Int) -> Int? {
+        var i = start + 1
+        if i < p.count, p[i] == "!" || p[i] == "^" { i += 1 }
+        // 緊接在開頭的 `]` 是成員而非結尾。 / A `]` right at the start is a member.
+        if i < p.count, p[i] == "]" { i += 1 }
+        while i < p.count, p[i] != "]" { i += 1 }
+        return i < p.count ? i : nil
+    }
+
+    private static func classMatches(_ p: [Character], _ start: Int, _ end: Int,
+                                     _ c: Character) -> Bool {
+        var i = start + 1
+        var negate = false
+        if i < end, p[i] == "!" || p[i] == "^" { negate = true; i += 1 }
+        var hit = false
+        while i < end {
+            if i + 2 < end, p[i + 1] == "-" {
+                if p[i] <= c, c <= p[i + 2] { hit = true }
+                i += 3
+            } else {
+                if p[i] == c { hit = true }
+                i += 1
+            }
+        }
+        return negate ? !hit : hit
+    }
+#endif
 
     func add(path: String) throws {
         let name = TarWriter.archiveName(path)

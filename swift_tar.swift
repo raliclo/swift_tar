@@ -3601,7 +3601,41 @@ final class TarReader {
                 continue
             }
 
-            let parent = (dest as NSString).deletingLastPathComponent
+            // 父目錄以字串切分求得，不走 NSString 的路徑 API。
+            //
+            // `(dest as NSString).deletingLastPathComponent` 在 Linux 的
+            // swift-corelibs-foundation 上，對**相對**路徑會以 SIGILL 崩潰，堆疊停在
+            // `String._startOfLastPathComponent`。而 dest 恰好在未給 `-C` 時就是相對
+            // 路徑——上方那一行是 `options.destDir.isEmpty ? rel : ...`，且 tar 的目錄
+            // 成員帶尾斜線，於是 `t/` 這種值會直接讓行程死掉。
+            //
+            // 症狀因此是：先 cd 進目的地再 `swift_tar -x -f a.tar` 整個崩潰，而
+            // `swift_tar -x -f a.tar -C dir` 完全正常。macOS 走 Apple 的 Foundation，
+            // 不受影響，所以這件事在 macOS 上一次也測不出來。multiscp 一律傳 `-C`，
+            // 這是整個網格都沒有察覺它的原因。
+            //
+            // The parent comes from a string split rather than NSString's path API.
+            //
+            // `(dest as NSString).deletingLastPathComponent` crashes with SIGILL on
+            // Linux's swift-corelibs-foundation for a *relative* path, with the
+            // stack ending in `String._startOfLastPathComponent`. And dest is
+            // exactly that when no `-C` is given -- the line above reads
+            // `options.destDir.isEmpty ? rel : ...`, and tar stores directory
+            // members with a trailing slash, so a value like `t/` killed the
+            // process outright.
+            //
+            // The symptom is therefore that `cd dest && swift_tar -x -f a.tar`
+            // crashes while `swift_tar -x -f a.tar -C dest` is fine. macOS uses
+            // Apple's Foundation and never sees it, so this could not be caught
+            // there. multiscp always passes `-C`, which is why the whole mesh
+            // stayed unaware of it.
+            let parent: String = {
+                var trimmed = dest
+                while trimmed.count > 1, trimmed.hasSuffix("/") { trimmed.removeLast() }
+                guard let slash = trimmed.lastIndex(of: "/") else { return "" }
+                if slash == trimmed.startIndex { return "/" }
+                return String(trimmed[trimmed.startIndex..<slash])
+            }()
             if !parent.isEmpty {
                 // Skip just this member when its parent cannot be made a
                 // directory, rather than aborting: the rest of the archive is

@@ -1936,6 +1936,49 @@ private func winCreateSymlink(dest: String, target: String) {
     }
 }
 
+/// 設定「符號連結自身」的 mtime，而不是它所指向的目標。
+///
+/// `FILE_FLAG_OPEN_REPARSE_POINT` 是這裡的全部重點：少了它，`CreateFileW` 會跟隨連結，
+/// `SetFileTime` 便會蓋掉*目標檔*的時間——一個封存從未要求修改的檔案。這與 POSIX 端使用
+/// `utimensat(AT_SYMLINK_NOFOLLOW)` 而非 `FileManager.setAttributes` 是同一個理由，也是
+/// 同一種無聲的破壞方式。`FILE_FLAG_BACKUP_SEMANTICS` 則是開啟「目錄形態的 reparse
+/// point」所必需。
+///
+/// 失敗時靜默略過，政策同 winCreateSymlink：連結本身已經建立，時間戳不正確不值得中止
+/// 整次解壓。
+///
+/// Set the mtime of the symlink itself rather than of what it points at.
+///
+/// `FILE_FLAG_OPEN_REPARSE_POINT` is the whole point here: without it
+/// `CreateFileW` follows the link and `SetFileTime` stamps the TARGET -- a file
+/// the archive never asked to modify. Same reason, and the same silent
+/// corruption, as the POSIX side using `utimensat(AT_SYMLINK_NOFOLLOW)` rather
+/// than `FileManager.setAttributes`. `FILE_FLAG_BACKUP_SEMANTICS` is required to
+/// open a directory-shaped reparse point.
+///
+/// Failure is skipped silently, the same policy as winCreateSymlink: the link
+/// itself exists, and a wrong timestamp does not justify ending the extraction.
+private func winSetLinkMtime(_ path: String, _ mtime: UInt64) {
+    // FILETIME 以 100ns 為單位、自 1601-01-01 起算；與 Unix epoch 相差 11644473600 秒。
+    // FILETIME counts 100ns ticks from 1601-01-01; the Unix epoch is
+    // 11644473600 seconds later.
+    let ticks = (mtime &+ 11_644_473_600) &* 10_000_000
+    var ft = FILETIME(dwLowDateTime: DWORD(truncatingIfNeeded: ticks),
+                      dwHighDateTime: DWORD(truncatingIfNeeded: ticks >> 32))
+    let handle = path.withCString(encodedAs: UTF16.self) { wide in
+        CreateFileW(wide,
+                    DWORD(FILE_WRITE_ATTRIBUTES),
+                    DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE),
+                    nil,
+                    DWORD(OPEN_EXISTING),
+                    DWORD(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS),
+                    nil)
+    }
+    guard handle != INVALID_HANDLE_VALUE else { return }
+    defer { CloseHandle(handle) }
+    _ = SetFileTime(handle, nil, nil, &ft)
+}
+
 /// Best-effort hardlink creation via `fsutil hardlink create` (no admin
 /// required, verified); warns and skips on failure, same policy as
 /// winCreateSymlink. Not FileManager.linkItem: verified to silently create a
@@ -3790,17 +3833,44 @@ final class TarReader {
                 if symlink(linkname, dest) != 0 {
                     throw TarError.io("symlink failed for '\(dest)' / 建立符號連結失敗")
                 }
+#endif
                 // dest is now a symlink, so drop whatever the cache concluded
-                // about it. No test can currently make this line matter:
-                // replacing an existing directory with a symlink fails earlier,
-                // in symlink() itself, and the run stops. That is not a designed
-                // guarantee though -- it is a side effect of removeItem not
-                // clearing the directory -- so the line stays rather than
-                // resting the cache's safety on an accident.
-                // dest 現已是 symlink，故丟棄快取對它的結論。目前沒有測試能讓這一行
-                // 產生作用：以 symlink 取代既有目錄會更早在 symlink() 本身失敗而中止。
-                // 但那並非設計上的保證——它是 removeItem 未能清空該目錄的副作用——因此
-                // 保留此行，不讓快取的安全性建立在一個意外之上。
+                // about it. This is bookkeeping about swift_tar's own data
+                // structure and has nothing to do with the platform, but it
+                // used to sit inside the POSIX branch.
+                //
+                // The comment here used to say no test could make this line
+                // matter, because replacing an existing directory with a
+                // symlink fails earlier in symlink() itself and the run stops --
+                // adding "that is a side effect, not a designed guarantee, so
+                // the line stays rather than resting the cache's safety on an
+                // accident." That reasoning was right and the placement made it
+                // moot: on Windows there is no symlink() to refuse, and
+                // FileManager.createSymbolicLink replaces the directory
+                // happily. The accident the comment declined to rely on is a
+                // POSIX accident, and Windows never had it.
+                //
+                // Measured 2026-09-04: with this line unreachable there,
+                // test_blind_findings' "a symlink replacing a directory written
+                // earlier in the same archive" failed on Windows alone -- every
+                // other traversal guard passed. A stale cache entry said the
+                // path was a cleared directory, so the member after the link
+                // was written through it.
+                //
+                // dest 現已是 symlink，故丟棄快取對它的結論。這是關於 swift_tar 自身
+                // 資料結構的簿記，與平台無關，但它原本被放在 POSIX 分支裡面。
+                //
+                // 此處的註解原本寫著「沒有測試能讓這一行產生作用」，理由是以 symlink
+                // 取代既有目錄會更早在 symlink() 本身失敗而中止，並補充「那並非設計上的
+                // 保證而是副作用，因此保留此行，不讓快取的安全性建立在一個意外之上」。
+                // 那個推理是對的，而它的擺放位置讓它落空了：Windows 上沒有 symlink()
+                // 可以拒絕，FileManager.createSymbolicLink 會直接取代該目錄。那個註解
+                // 不願依賴的「意外」是 POSIX 的意外，Windows 從來就沒有。
+                //
+                // 2026-09-04 實測：這一行在該處無法執行時，test_blind_findings 的
+                // 「同一封存中稍早寫入的目錄被符號連結取代」單獨在 Windows 上失敗，而
+                // 其餘每一項 traversal 守門都通過。過期的快取項目宣稱該路徑是已清空的
+                // 目錄，於是連結之後的那個成員就穿過它寫了出去。
                 clearedDirs.remove(dest)
                 // A symlink's own mtime was left at "now". Every other entry
                 // type here restores it -- the FIFO case below, the regular
@@ -3825,12 +3895,27 @@ final class TarReader {
                 // 使用 utimensat 加 AT_SYMLINK_NOFOLLOW，而非 FileManager 的
                 // setAttributes：後者會跟隨連結，改到*目標檔*的 mtime，無聲地動了封存
                 // 從未要求修改的檔案。
+                //
+                // Windows 端的等價作法是以 FILE_FLAG_OPEN_REPARSE_POINT 開啟該連結本身
+                // 再 SetFileTime。原本這整段（連同上面的快取失效）都在 POSIX 分支內，
+                // 因此 Windows 的連結 mtime 停在「現在」——test_touch_alias 在該處以
+                // 「expected 2020, got 2026」失敗，而其他三個節點通過。
+                //
+                // The Windows equivalent opens the link itself with
+                // FILE_FLAG_OPEN_REPARSE_POINT and calls SetFileTime. This whole
+                // block, like the cache invalidation above it, used to live
+                // inside the POSIX branch, so a link's mtime stayed at "now" on
+                // Windows -- test_touch_alias failed there with "expected 2020,
+                // got 2026" while the other three nodes passed.
                 if options.restoreMtime {
+#if os(Windows)
+                    winSetLinkMtime(dest, mtime)
+#else
                     var ts = [timespec(tv_sec: time_t(mtime), tv_nsec: 0),
                               timespec(tv_sec: time_t(mtime), tv_nsec: 0)]
                     _ = utimensat(AT_FDCWD, dest, &ts, AT_SYMLINK_NOFOLLOW)
-                }
 #endif
+                }
             case UInt8(ascii: "6"):
 #if os(Windows)
                 // Windows has no FIFOs at all, so this is reported and skipped

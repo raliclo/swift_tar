@@ -13,9 +13,12 @@
 > 142 on Linux, all passing, and it fails against every earlier binary. The two
 > entries that carried 🔴 are both closed by this date's work: `release_matrix.csv2`
 > exists (`ef97509`) and holds four rows, and the ZIP backend no longer stores its
-> own output (`f0ef58e`). The one entry marked "recorded, not actioned" is the
-> case-collision *warning* option, which is a feature choice written up with its
-> reasoning rather than left as a task.
+> own output (`f0ef58e`). No entry is left marked "recorded, not actioned": the
+> case-collision *warning* option was the last one, and it was actioned on
+> 2026-08-19 — extraction now **refuses** the colliding member, with `--force` to
+> override, which went further than the warning the note had proposed. This
+> sentence claimed the opposite for sixteen days while the resolution sat in the
+> same section.
 >
 > This banner said "Nothing is open, 2026-08-19" while two 🔴 entries sat below it,
 > one written on 2026-08-26, and it counted 84 checks when the suite had passed
@@ -36,8 +39,10 @@
 > **2026-09-04：已無未處理項目。** 以下記錄的每一項缺陷皆已修復並納入回歸測試——
 > `test/test_blind_findings.zsh` 在 Windows 上有 137 項檢查、Linux 上 142 項，全數通過，
 > 且對先前每一版 binary 都會失敗。原本標著 🔴 的兩項於本日一併結案：`release_matrix.csv2`
-> 已存在（`ef97509`）並有四列，ZIP 後端也不再把自己的輸出收進封存（`f0ef58e`）。唯一標為
-> 「記錄，未處理」的是大小寫碰撞的「警告」選項，那是功能取捨，已連同理由寫明，而非待辦。
+> 已存在（`ef97509`）並有四列，ZIP 後端也不再把自己的輸出收進封存（`f0ef58e`）。
+> 已無任何條目仍標著「記錄，未處理」：大小寫碰撞的「警告」選項是最後一項，且已於
+> 2026-08-19 處理——解出端現在對碰撞成員採**拒絕**，並以 `--force` 允許，比該註記原本
+> 提議的「警告」更進一步。此句與事實相反地存在了十六天，而其解決方案就寫在同一節內。
 >
 > 本橫幅曾寫著「2026-08-19：已無未處理項目」，而其下就掛著兩個 🔴 條目，其中一個寫於
 > 08-26；它也還在報 84 項檢查，當時套件早已跑到 130 項。**過期的橫幅比過期的條目代價更大**，
@@ -46,11 +51,16 @@
 > 不會過期。特意錨定在 `^## `：不錨定的話連這幾句話本身都會被撈進去，而一個會回報六筆假
 > 命中的建議，沒有人會執行第二次。
 >
-> **The `read_easy` blind test is 17 rounds into a planned 100 and continues.**
+> **The `read_easy` blind test is past round 49 of a planned 100 and continues.**
 > Rounds that found something are recorded below with the measurement; rounds
-> that found nothing are not, because a clean round adds no fact to check.
-> **`read_easy` 盲測已進行 17 回合（計畫 100），仍在繼續。** 有發現的回合連同實測記
-> 於下方；沒有發現的回合不記錄，因為乾淨的回合並未新增任何可供查核的事實。
+> that found nothing are not, because a clean round adds no fact to check — which
+> is also why the count cannot be read off the entries. The highest round *named*
+> below is 49, so that is a floor, not a total. This line said "17 rounds" until
+> 2026-09-04, by which point entries for rounds 33, 42 and 49 sat beneath it.
+> **`read_easy` 盲測已過第 49 回合（計畫 100），仍在繼續。** 有發現的回合連同實測記
+> 於下方；沒有發現的回合不記錄，因為乾淨的回合並未新增任何可供查核的事實——也正因如此，
+> 回合數無法由下方條目推得：下方**具名**的最大回合為 49，那是下限而非總數。本行在
+> 2026-09-04 之前一直寫著「17 回合」，而其下早已列有第 33、42、49 回合的條目。
 
 Tracked issues that are known, reproduced, and deliberately not fixed yet.
 `verifications/bsdtar_compat.zsh:385` already points here for its XFAIL, so this

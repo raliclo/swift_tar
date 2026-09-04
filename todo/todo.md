@@ -8,11 +8,24 @@
 > CRLF in the `-t` / `--identify` output on Windows. The suite fails 11 of its
 > checks against the previous binary and passes all 15 against this one.
 >
-> **Nothing is open, 2026-08-19.** Every defect recorded below is fixed and under
-> regression test — `test/test_blind_findings.zsh` is at 84 checks, all passing, and it
-> fails against every earlier binary. The one entry marked "recorded, not
-> actioned" is the case-collision *warning* option, which is a feature choice and
-> is written up with the reasoning rather than left as a task.
+> **Nothing is open, 2026-09-04.** Every defect recorded below is fixed and under
+> regression test — `test/test_blind_findings.zsh` is at 137 checks on Windows and
+> 142 on Linux, all passing, and it fails against every earlier binary. The two
+> entries that carried 🔴 are both closed by this date's work: `release_matrix.csv2`
+> exists (`ef97509`) and holds four rows, and the ZIP backend no longer stores its
+> own output (`f0ef58e`). The one entry marked "recorded, not actioned" is the
+> case-collision *warning* option, which is a feature choice written up with its
+> reasoning rather than left as a task.
+>
+> This banner said "Nothing is open, 2026-08-19" while two 🔴 entries sat below it,
+> one written on 2026-08-26, and it counted 84 checks when the suite had passed
+> 130. **A stale banner costs more than a stale entry**, because it is what stops
+> anyone reading further: whoever trusts it never reaches the entries that would
+> have corrected it. Update it whenever something opens or closes, and run
+> `grep -n '^## .*🔴' todo/todo.md` rather than trusting this paragraph — that
+> listing cannot go stale. Anchored at `^## ` on purpose: an unanchored grep also
+> matches these very sentences, and advice that returns six false hits is advice
+> nobody runs twice.
 >
 > **2026-08-18 已修復。** 盲測在程式本身找到的缺陷已全部修復、驗證，並由
 > `test/test_blind_findings.zsh`（15 項檢查）涵蓋：尾隨斜線造成的分隔符加倍及其引發的
@@ -20,10 +33,18 @@
 > 寫法、`--zstd-level` 特立獨行的 exit 2，以及 Windows 上 `-t`／`--identify` 輸出
 > 的 CRLF。該套件對舊 binary 有 11 項失敗，對新 binary 15 項全過。
 >
-> **2026-08-19：已無未處理項目。** 以下記錄的每一項缺陷皆已修復並納入回歸測試——
-> `test/test_blind_findings.zsh` 現有 84 項檢查、全數通過，且對先前每一版 binary 都會失敗。
-> 唯一標為「記錄，未處理」的是大小寫碰撞的「警告」選項，那是功能取捨，已連同理由寫明，
-> 而非留作待辦。
+> **2026-09-04：已無未處理項目。** 以下記錄的每一項缺陷皆已修復並納入回歸測試——
+> `test/test_blind_findings.zsh` 在 Windows 上有 137 項檢查、Linux 上 142 項，全數通過，
+> 且對先前每一版 binary 都會失敗。原本標著 🔴 的兩項於本日一併結案：`release_matrix.csv2`
+> 已存在（`ef97509`）並有四列，ZIP 後端也不再把自己的輸出收進封存（`f0ef58e`）。唯一標為
+> 「記錄，未處理」的是大小寫碰撞的「警告」選項，那是功能取捨，已連同理由寫明，而非待辦。
+>
+> 本橫幅曾寫著「2026-08-19：已無未處理項目」，而其下就掛著兩個 🔴 條目，其中一個寫於
+> 08-26；它也還在報 84 項檢查，當時套件早已跑到 130 項。**過期的橫幅比過期的條目代價更大**，
+> 因為它正是讓人停止往下讀的那一段：相信它的人永遠不會讀到能糾正它的條目。開啟或關閉任何
+> 一項時就要一併更新，並以 `grep -n '^## .*🔴' todo/todo.md` 為準而非相信本段——那份清單
+> 不會過期。特意錨定在 `^## `：不錨定的話連這幾句話本身都會被撈進去，而一個會回報六筆假
+> 命中的建議，沒有人會執行第二次。
 >
 > **The `read_easy` blind test is 17 rounds into a planned 100 and continues.**
 > Rounds that found something are recorded below with the measurement; rounds
@@ -1330,7 +1351,43 @@ Windows 分支是以原始 ustar fixture 涵蓋（`make_raw_tar.zsh` 新增 `fif
 靠 `mkfifo`——否則唯一無法建立管線的平台，就會是唯一其分支從未被任何測試執行到的平台，
 而那正是 round 49 缺陷得以出貨的方式。
 
-## `release_matrix.csv` is cited as the answer but does not exist / 被指為答案的 `release_matrix.csv` 並不存在  ▸ 🔴 未決 / open
+## `release_matrix.csv` is cited as the answer but does not exist / 被指為答案的 `release_matrix.csv` 並不存在  ▸ ✅ 已結案 2026-09-04 / closed
+
+> **Closed 2026-09-04.** `verifications/release_matrix.csv2` and
+> `record_release.zsh` were added (`ef97509`), and the table now holds four rows:
+> two mac and two win. The property `d868dc3` gave up has its replacement.
+>
+> Two things had to be fixed before the win rows could be written, and the second
+> would have produced a false row rather than an error (`33753a5`). `zstat` needs
+> an explicit `zmodload zsh/stat` — macOS autoloads it, the Windows zsh port does
+> not — so it fell through to BSD `stat -f %z`, which GNU/MSYS stat rejects. And
+> the binary was chosen first-one-found, `release/swift_tar` before
+> `release/swift_tar.exe`; both exist on the Windows box because WSL builds the
+> Linux ELF into the same directory, so it selected the ELF and would have
+> recorded its sha256 as `platform=win`.
+>
+> The `git_commit` column then went stale twice more, exactly as this file's own
+> note predicted: both win rows named commits a rebase had rewritten before they
+> were pushed. Corrected in `f0ef58e`, with the mapping established by patch-id
+> rather than by memory. `record_release.zsh --verify` (`0a8c006`) now fails when
+> any cell names an unreachable commit, which is what stops this recurring —
+> writing the limitation in a comment did not, three times.
+>
+> **2026-09-04 結案。** 已新增 `verifications/release_matrix.csv2` 與
+> `record_release.zsh`（`ef97509`），表中現有四列：mac 兩列、win 兩列。`d868dc3` 讓出的
+> 性質，其替代品已到位。
+>
+> 補上 win 兩列之前先修了兩個缺陷，其中第二個會產出一列假資料而非報錯（`33753a5`）：
+> `zstat` 需要顯式 `zmodload zsh/stat`（macOS 會自動載入，Windows 的 zsh port 不會），
+> 於是掉到 BSD 的 `stat -f %z`，而 GNU／MSYS 的 stat 不吃這個寫法；以及執行檔以「先找到
+> 算哪個」挑選，順序把 `release/swift_tar` 排在 `.exe` 之前，而 Windows 這台兩個都有
+> ——WSL 建的 Linux ELF 落在同一個目錄——因此挑中 ELF，會把它的 sha256 記成
+> `platform=win`。
+>
+> 其後 `git_commit` 欄又失效了兩次，正如本檔自己的註記所預言：兩列 win 記下的 commit 都
+> 在推送前被 rebase 改寫過。已於 `f0ef58e` 更正，對應關係以 patch-id 確立而非憑記憶。
+> `record_release.zsh --verify`（`0a8c006`）現在會在任一格指向取不到的 commit 時失敗
+> ——真正擋住重演的是它，而不是註解：註解已經寫過，同一件事仍發生了三次。
 
 `d868dc3` deliberately changed what `swift_tar_version` means: no longer when a
 binary was compiled, but when its recorded provenance last changed. The tradeoff
@@ -1379,7 +1436,45 @@ sha256，那才是答案。」但沒有這個檔案——本 repo 沒有，父�
 兩份 README 原本寫著 `--version`「回報編譯 binary 時擷取的本機日期時間」，該敘述自
 `d868dc3` 起不再為真，已於同一次變更中更正。
 
-## The ZIP backend stores its own output file / ZIP 後端會把自己的輸出檔收進封存  ▸ 🔴 未決，且已換了形狀 / open, and it changed shape
+## The ZIP backend stores its own output file / ZIP 後端會把自己的輸出檔收進封存  ▸ ✅ 已結案 2026-09-04 / closed
+
+> **Closed 2026-09-04 (`f0ef58e`), after the fix for macOS turned out not to
+> apply on Windows.** `a1b2f76` handled `ARCHIVE_FAILED` from
+> `archive_write_header`, which is how libarchive reports "Can't add archive to
+> itself". That report never arrives on Windows: measured at `a18e92e`,
+> `-c --zip -f m.zip .` from inside the tree returned 0, wrote nothing to stderr,
+> and listed `./m.zip` among the members. One shared source file, and macOS
+> skipped-and-warned while Windows stored the archive inside itself in silence.
+>
+> The check no longer depends on libarchive noticing. `add_path` compares each
+> entry against the archive being written **by identity, on every platform**:
+> `st_dev`/`st_ino` on POSIX, `dwVolumeSerialNumber` with
+> `nFileIndexHigh`/`Low` on Windows — the two pairs the tar path already uses in
+> Swift. Running it everywhere rather than only where it was missing keeps one
+> behaviour to reason about, and stops the platform that had no check becoming
+> the platform whose check nothing exercises.
+>
+> Identity and not paths, verified rather than asserted: `-f m.zip` and
+> `-f /abs/path/m2.zip` are both refused from inside the tree, which a string
+> comparison against the operand would not have caught. Windows
+> `test_blind_findings` went 135/2 → 137/0; Linux stayed 142/0, so intercepting
+> before libarchive's own report changes nothing there.
+>
+> **2026-09-04 結案（`f0ef58e`）——而起因是「macOS 上的修正在 Windows 並不成立」。**
+> `a1b2f76` 處理的是 `archive_write_header` 回傳的 `ARCHIVE_FAILED`，那是 libarchive
+> 回報 "Can't add archive to itself" 的方式。但該回報在 Windows 上從不出現：於 `a18e92e`
+> 實測，在樹內執行 `-c --zip -f m.zip .` 回傳 0、stderr 全空，而 `./m.zip` 就在成員清單
+> 裡。同一份原始檔，macOS 是「跳過並警告」，Windows 是無聲收錄。
+>
+> 現在這個檢查不再指望 libarchive 察覺。`add_path` **在所有平台**都以**檔案身分**比對每個
+> 成員與正在寫出的封存：POSIX 用 `st_dev`／`st_ino`，Windows 用 `dwVolumeSerialNumber`
+> 加 `nFileIndexHigh`／`Low`——即 Swift 端 tar 路徑已在使用的那兩組值。在所有平台都執行
+> 而非只補在缺的那一邊，好處是只需推理一種行為，也避免「原本沒有檢查的平台」變成「檢查
+> 無人驗證的平台」。
+>
+> 比的是身分而非路徑，這一點是驗過的：`-f m.zip` 與 `-f /絕對路徑/m2.zip` 兩種寫法都會被
+> 拒絕，而純比對運算元字串的作法接不住後者。Windows 的 `test_blind_findings` 由 135/2 變成
+> 137/0；Linux 維持 142/0，可見在 libarchive 自己回報之前先攔下來，對該平台毫無影響。
 
 **Update 2026-09-04 — no longer stored; now the whole archive is abandoned.**
 Re-measured on macOS at `a18e92e`. libarchive detects the case itself and

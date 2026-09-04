@@ -40,8 +40,40 @@ purpose is to be ignorant of the answer.
 |---|---|---|---|
 | macOS | `./build.zsh` | `verifications/tar_interop_matrix.zsh` | bsdtar (`/usr/bin/tar`), GNU tar (`gtar`, from `brew install gnu-tar`) |
 | Windows / MSYS | `./build.zsh` | same | bsdtar (`C:\Windows\System32\tar.exe`), GNU tar (MSYS `tar`) |
-| WSL | via multissh | same | GNU tar; bsdtar only if installed |
+| WSL | via multissh | same | GNU tar 1.35; **no bsdtar installed** |
 | Linux VM on macOS | `~/projWin/VM-test/run.sh` | **not a matrix platform — see below** | — |
+
+**The WSL cell is still empty, and `MATRIX_RC=0` from there does not fill it.**
+Attempted 2026-09-04 from macOS. Everything the run needs is present on that
+node — `swift_tar/release/swift_tar` built the same day, the matrix script,
+GNU tar 1.35, Swift 6.3.3 — and the script exited **0**. It also wrote **zero
+bytes**. The exit status was not evidence of anything.
+
+The cause is the transport, not the matrix: over macOS→WSL `multissh`, a remote
+command's writes to stdout start failing with `Input/output error (os error 5)`
+after the first one or two. It is not the filesystem and not that tree —
+`cat /etc/hostname` fails the same way. `multiscp` fails to fetch the output
+file for the same reason, naming its own server-side binary in the error. So
+the matrix ran with its stdout broken and reported success, because nothing it
+does checks that its own output landed.
+
+Record the WSL cell only from a run whose **output** came back, not from an exit
+status. Until the transport is fixed, run it on the Windows box that reaches WSL
+locally rather than driving it over that link.
+
+**WSL 那一格仍是空的，而該處回報的 `MATRIX_RC=0` 填不上它。** 2026-09-04 自 macOS
+嘗試。該節點所需之物一應俱全——當日建好的 `swift_tar/release/swift_tar`、矩陣腳本、
+GNU tar 1.35、Swift 6.3.3——腳本也確實以 **0** 結束，同時寫出 **零位元組**。那個離開碼
+不構成任何證據。
+
+成因在傳輸層而非矩陣：經 macOS→WSL 的 `multissh`，遠端指令寫入 stdout 在第一、兩次之後
+即開始以 `Input/output error (os error 5)` 失敗。既不是檔案系統也不限於那棵樹——
+`cat /etc/hostname` 同樣失敗；`multiscp` 取回輸出檔亦因同一原因失敗，錯誤訊息指名的是它
+自己在伺服端的執行檔。於是矩陣是在 stdout 已壞掉的情況下跑完並回報成功，因為它沒有任何
+一處檢查自己的輸出是否真的落地。
+
+WSL 那一格只能以「**輸出真的回來了**」的執行來記錄，不能以離開碼記錄。在傳輸層修好之前，
+請在本機就搆得到 WSL 的那台 Windows 上跑，而不要從這條連線驅動它。
 
 **The Linux VM is deliberately not an interop reference platform.** Its
 buildroot config leaves `BR2_PACKAGE_TAR` unset on purpose, so `tar` there is

@@ -43,37 +43,93 @@ purpose is to be ignorant of the answer.
 | WSL | via multissh | same | GNU tar 1.35; **no bsdtar installed** |
 | Linux VM on macOS | `~/projWin/VM-test/run.sh` | **not a matrix platform — see below** | — |
 
-**The WSL cell is still empty, and `MATRIX_RC=0` from there does not fill it.**
-Attempted 2026-09-04 from macOS. Everything the run needs is present on that
-node — `swift_tar/release/swift_tar` built the same day, the matrix script,
-GNU tar 1.35, Swift 6.3.3 — and the script exited **0**. It also wrote **zero
-bytes**. The exit status was not evidence of anything.
+**The WSL cell is filled, from macOS, 2026-09-05: PASS 6 / FAIL 0 / SKIP 0.**
+The run wrote 1036 bytes and 25 lines on the far side; the file was fetched with
+`multiscp` and its sha256 compared, matching end to end
+(`f25015e41be3afe6d43ff75284dec0cafcb43ae03918876cbab4c17dd66bc467`). That is
+the standard this section asked for — output that came back, not an exit status.
 
-The cause is the transport, not the matrix: over macOS→WSL `multissh`, a remote
-command's writes to stdout start failing with `Input/output error (os error 5)`
-after the first one or two. It is not the filesystem and not that tree —
-`cat /etc/hostname` fails the same way. `multiscp` fails to fetch the output
-file for the same reason, naming its own server-side binary in the error. So
-the matrix ran with its stdout broken and reported success, because nothing it
-does checks that its own output landed.
+**The earlier diagnosis on this page was wrong, and the way it was wrong is
+worth keeping.** It read: "the cause is the transport, not the matrix … it is
+not the filesystem and not that tree — `cat /etc/hostname` fails the same way."
+`cat /etc/hostname` failing is evidence **for** the filesystem, not against it.
+A broken transport does not hand you a connection and a shell and then fail to
+read a file; it fails at connect. Getting that far and then meeting
+`Input/output error (os error 5)` on a read says the far side's filesystem is
+wedged, and `/etc` sits on the same one.
 
-Record the WSL cell only from a run whose **output** came back, not from an exit
-status. Until the transport is fixed, run it on the Windows box that reaches WSL
-locally rather than driving it over that link.
+That is exactly what had happened. WSL's filesystem was returning
+`Input/output error` that day on `.git/HEAD`, on `compile.zsh`, and on
+`/usr/bin/df` — a distribution's own binary. `wsl --shutdown` and a restart
+cleared every one of them. The link was never the problem, and there was nothing
+to fix in the transport before running the matrix.
 
-**WSL 那一格仍是空的，而該處回報的 `MATRIX_RC=0` 填不上它。** 2026-09-04 自 macOS
-嘗試。該節點所需之物一應俱全——當日建好的 `swift_tar/release/swift_tar`、矩陣腳本、
-GNU tar 1.35、Swift 6.3.3——腳本也確實以 **0** 結束，同時寫出 **零位元組**。那個離開碼
-不構成任何證據。
+Re-measured 2026-09-05 over the same macOS→WSL `multissh` before running the
+matrix: `cat /etc/hostname` eight times, all rc=0; 10000 lines of stdout, all
+10000 received; 1 MiB of base64, 1416501 bytes intact; twelve commands in one
+connection, the twelfth still answering. The edge matrix records Mac→WSL and
+WSL→Mac passing on both IPv4 and IPv6.
 
-成因在傳輸層而非矩陣：經 macOS→WSL 的 `multissh`，遠端指令寫入 stdout 在第一、兩次之後
-即開始以 `Input/output error (os error 5)` 失敗。既不是檔案系統也不限於那棵樹——
-`cat /etc/hostname` 同樣失敗；`multiscp` 取回輸出檔亦因同一原因失敗，錯誤訊息指名的是它
-自己在伺服端的執行檔。於是矩陣是在 stdout 已壞掉的情況下跑完並回報成功，因為它沒有任何
-一處檢查自己的輸出是否真的落地。
+**Driving it from the Windows box is not required.** macOS reaches WSL directly;
+that suggestion answered a reachability problem that did not exist.
 
-WSL 那一格只能以「**輸出真的回來了**」的執行來記錄，不能以離開碼記錄。在傳輸層修好之前，
-請在本機就搆得到 WSL 的那台 Windows 上跑，而不要從這條連線驅動它。
+### How to record this cell / 如何記錄這一格
+
+Never take a cell from an exit status. Have the far side write its output to a
+file, report the size and digest **there**, fetch the file, and compare the
+digest **here**:
+
+```zsh
+C=~/.multissh/harvest/wsl.conf          # 16889 is WSL; 16888 on the same address is Windows
+./release/multissh -F "$C" wslnode '
+  cd ~/proj/multissh/swift_tar || exit 9
+  zsh verifications/tar_interop_matrix.zsh > /tmp/wsl-matrix.txt 2>&1
+  echo "MATRIX_RC=$?"
+  echo "BYTES=$(wc -c < /tmp/wsl-matrix.txt)"
+  echo "SHA=$(sha256sum /tmp/wsl-matrix.txt | cut -d" " -f1)"'
+./release/multiscp -F "$C" wslnode:/tmp/wsl-matrix.txt ./wsl-matrix.txt
+shasum -a 256 ./wsl-matrix.txt          # must equal the SHA printed above
+```
+
+`BYTES` is the check the earlier attempt lacked: a run that exits 0 having
+written zero bytes has to be treated as a failure, because zero bytes and
+"passed quietly" are the same picture. If output really is failing, this reports
+it as a wedged far side rather than as a passing matrix.
+
+Confirm which daemon answered before trusting a result. Mirrored networking puts
+WSL and Windows on one address, separated only by port, so reachability alone
+proves nothing — `uname -s` must say `Linux`.
+
+**WSL 那一格已填上，2026-09-05 自 macOS 執行：PASS 6 / FAIL 0 / SKIP 0。** 該次在遠端
+寫出 1036 位元組、25 行，再以 `multiscp` 取回並比對 sha256，兩端完全相同
+（`f25015e41be3afe6d43ff75284dec0cafcb43ae03918876cbab4c17dd66bc467`）。這正是本節原先
+要求的標準——以「輸出真的回來了」記錄，而非以離開碼。
+
+**本頁先前的診斷是錯的，而它錯的方式值得留下來。** 原文寫著「成因在傳輸層而非矩陣……
+既不是檔案系統也不限於那棵樹—— `cat /etc/hostname` 同樣失敗」。`cat /etc/hostname` 失敗
+是**支持**檔案系統這個解釋的證據，不是排除它的證據。傳輸層若壞了，不會先給你一條連線與一個
+shell、然後才讀不到檔案；它會在連線階段就失敗。走到那一步之後才遇到讀取的
+`Input/output error (os error 5)`，說的是對端的檔案系統卡住了，而 `/etc` 就在同一個上面。
+
+而實際情形正是如此。當天 WSL 的檔案系統對 `.git/HEAD`、`compile.zsh`，以及 `/usr/bin/df`
+——發行版自己的執行檔——都回 `Input/output error`。`wsl --shutdown` 後重啟，每一項都消失。
+那條連線從頭到尾都不是問題，跑矩陣之前也沒有什麼傳輸層需要先修。
+
+2026-09-05 在跑矩陣之前，以同一條 macOS→WSL `multissh` 重新量測：`cat /etc/hostname`
+連續八次全部 rc=0；10000 行 stdout 收到 10000 行；1 MiB base64 收到 1416501 位元組完整；
+單次連線內連跑十二條指令，第十二條照樣有輸出。邊矩陣亦記錄 Mac→WSL 與 WSL→Mac 在
+IPv4 與 IPv6 皆通過。
+
+**不需要改到那台 Windows 上驅動。** macOS 直接搆得到 WSL；那個建議解的是一個並不存在的
+可達性問題。
+
+記錄方式見上方程式碼區塊：**絕不以離開碼記錄一格**。讓對端把輸出寫進檔案、在**那一端**
+回報大小與摘要，取回檔案後在**這一端**比對摘要。`BYTES` 正是先前那次缺少的檢查——以 0
+結束卻寫出零位元組的執行必須當成失敗，因為「零位元組」與「安靜地通過」在畫面上是同一
+幅景象。輸出若真的壞了，這個做法會把它報成「對端卡住」，而不是報成一次通過的矩陣。
+
+信任結果之前先確認回應的是哪一個 daemon。鏡像網路讓 WSL 與 Windows 共用同一位址、僅以
+埠區分，因此「連得上」什麼都不證明——`uname -s` 必須回 `Linux`。
 
 **The Linux VM is deliberately not an interop reference platform.** Its
 buildroot config leaves `BR2_PACKAGE_TAR` unset on purpose, so `tar` there is

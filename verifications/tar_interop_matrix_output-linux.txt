@@ -1,8 +1,8 @@
-[Info] date: 2026-08-18 23:45:25 CST
+[Info] date: 2026-09-05 05:25:18 CST
 [Info] platform: linux
 [Info] host: Linux 6.18.33.2-microsoft-standard-WSL2 x86_64
-[Info] swift_tar: swift_tar 20260818-234319
-[Info] corpus digest: f5875925149b74ff8340dae22aaa902e3da462f8b545180ae0d3ae24a8b29c4d
+[Info] swift_tar: swift_tar 20260819-211139
+[Info] corpus digest: 9258b5a30822bde11c4c5d0157077fe22e8717d8975e5aef9f9f87b8155bcd1f
 
 == reference tar implementations found / 現場找到的參照實作 ==
   gnutar  /usr/bin/tar

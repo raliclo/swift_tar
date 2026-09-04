@@ -173,21 +173,48 @@ at CPU-side work in the extract path rather than at I/O.
 Naming that work would need profiling, which has not been done. Recorded as a
 bounded open question, not a conclusion.
 
-**Narrowed, not closed (2026-09-04).** `verifications/zstd_decode_gap.zsh` was
-written to split "why is native slower" into facets that can be measured one at
-a time, and it has eliminated three candidates: the E-cluster, the `-n` setting,
-and parallelism. What remains is one unproven lead — `user` time is comparable
-while `sys` is not, and page faults differ by a factor of about 64 (128,042
-against 1,990), which points at `FileWriterPool`'s `smallFileMax` rather than at
-the codec.
+**Four candidates excluded, none remaining (2026-09-04).**
+`verifications/zstd_decode_gap.zsh` split "why is native slower" into facets that
+can be measured one at a time and eliminated three: the E-cluster, the `-n`
+setting, and parallelism. That left one lead — `user` time comparable while `sys`
+was not, with page faults differing by about 64× (128,042 against 1,990) —
+pointing at per-file buffering in `FileWriterPool`. **That lead is now excluded
+too**, by `verifications/page_fault_attribution.zsh`.
 
-Two cautions, both earned. First, that script measures **native versus external
-zstd**, which is a different comparison from **swift_tar versus bsdtar** above;
-a page-fault count from one does not explain the other, and the two must not be
-merged into a single story. Second, the conclusion in this area has already been
-overturned twice, each time because a mechanism was named before the numbers
-supported it. So: three candidates excluded, one candidate remaining, mechanism
-not yet measured. Still an open question.
+The design is worth stating, because it needed no rebuild: `swift_tar.swift:4019`
+*is* the switch. A member of at most `smallFileMax` (4 MiB) is buffered whole into
+a `Data()`; anything larger skips that path entirely. Sizing the members across
+4 MiB therefore turns the path on and off in one binary. Five corpora, seven
+interleaved reps, minima taken, on a RAM disk, inter-rep variance under 1%:
+
+| corpus | members | path | faults | per MiB | per 4 KiB page |
+|---|---|---|---|---|---|
+| C | 96 × 1 MiB | buffered | 8,144 | 84 | 0.33 |
+| A | 32 × 3 MiB | buffered | 26,424 | 275 | 1.08 |
+| D | 24 × 4 MiB | buffered | 26,206 | 272 | 1.07 |
+| E | 24 × 5 MiB | inline | 28,086 | 234 | 0.91 |
+| B | 16 × 6 MiB | inline | 20,482 | 213 | 0.83 |
+
+D against E decides it: same member count, adjacent sizes, the branch flips, and
+faults per page move smoothly from 1.07 to 0.91 — no discontinuity at the
+boundary. C is the stronger refutation: it leans on the buffered path hardest, 96
+members all taking it, and has the *fewest* faults. Were buffering the cause, C
+would be the worst case rather than the best.
+
+Faults per page varying continuously with allocation size, and not jumping when
+the branch changes, is the shape of the allocator — macOS `malloc` mmaps and
+munmaps large allocations, and the next one pays zero-fill page by page on first
+touch. The inline path allocates per chunk, so it pays the same cost.
+
+**Bounds, which must travel with this result.** It measures swift_tar extracting
+synthetic, incompressible corpora. It is *not* a measurement of the 64× native
+versus external gap itself; it answers only "is per-file buffering the source of
+the faults", and the answer is no.
+
+So this section is back to zero candidates. The next step is deliberately **not**
+a fifth mechanism — three have been named and overturned already. It is a
+per-symbol profile (`sample`, or Instruments' Allocations) that lets the data
+name the allocation site.
 
 An earlier note in `build_multissh_in_linux_vm.zsh` recorded
 `swift_tar -x 89 s vs bsdtar -xzf 52 s` and concluded swift_tar was slower. That
@@ -223,15 +250,39 @@ files, not decoding — where no choice of tar helps.
 
 要指出那是什麼工作需要 profiling，尚未進行。此處記為一個範圍明確的未決問題，而非結論。
 
-**已縮小範圍，但尚未結案（2026-09-04）。** `verifications/zstd_decode_gap.zsh` 的用途，
-是把「native 為何較慢」拆成可逐項量測的面向，目前已排除三個候選：E-cluster、`-n` 設定、
-平行度。剩下的是一條未經證實的線索——`user` 時間相近而 `sys` 不同，page fault 相差約 64
-倍（128,042 對 1,990），指向 `FileWriterPool` 的 `smallFileMax`，而非編碼器本身。
+**四個候選皆已排除，一個不剩（2026-09-04）。** `verifications/zstd_decode_gap.zsh` 把
+「native 為何較慢」拆成可逐項量測的面向，排除了三個：E-cluster、`-n` 設定、平行度。剩下
+一條線索——`user` 時間相近而 `sys` 不同，page fault 相差約 64 倍（128,042 對 1,990）
+——指向 `FileWriterPool` 的逐檔緩衝。**該線索現已同樣被排除**，證據為
+`verifications/page_fault_attribution.zsh`。
 
-兩點提醒，都是付過代價的。其一，該腳本量的是 **native 與 external zstd** 的對比，與上方
-**swift_tar 與 bsdtar** 的對比是兩件事；其中一邊的 page fault 數字並不能解釋另一邊，兩者
-不可併成同一個故事。其二，這一段的結論已經被推翻過兩次，每次都是在數字尚不足時就先指名
-了機制。故此處的狀態是：排除三項、剩一個候選、機制尚未量出。仍為未決問題。
+其設計值得記下，因為它不需要重建：`swift_tar.swift:4019` **本身就是那個開關**。成員
+大小不超過 `smallFileMax`（4 MiB）者整份緩衝進 `Data()`，更大者完全跳過該路徑。因此只要
+讓成員大小跨過 4 MiB，就能在同一個執行檔上把這條路徑開開關關。五個語料、七輪交錯、取
+最小值、於 RAM disk 上進行，輪間變異低於 1%：
+
+| 語料 | 成員 | 路徑 | page fault | 每 MiB | 每 4 KiB 分頁 |
+|---|---|---|---|---|---|
+| C | 96 × 1 MiB | 緩衝 | 8,144 | 84 | 0.33 |
+| A | 32 × 3 MiB | 緩衝 | 26,424 | 275 | 1.08 |
+| D | 24 × 4 MiB | 緩衝 | 26,206 | 272 | 1.07 |
+| E | 24 × 5 MiB | inline | 28,086 | 234 | 0.91 |
+| B | 16 × 6 MiB | inline | 20,482 | 213 | 0.83 |
+
+決定性的是 D 與 E：成員數相同、大小相鄰、分支翻面，而每頁 fault 由 1.07 平順走到 0.91
+——分界處沒有不連續。C 是更強的反證：它把緩衝路徑用得最重（96 個成員全部走它），fault
+卻**最少**。若緩衝是成因，C 應是最壞的情況，而非最好的。
+
+每頁 fault 隨單次配置的大小連續變化、且跨越分支時不跳動，這個形狀指向配置器——macOS 的
+`malloc` 對大配置採 mmap／munmap，下一次配置在首次觸碰時逐頁 zero-fill。inline 路徑同樣
+逐塊配置，因此付同樣的代價。
+
+**界限必須與這個結果一起被引用。** 它量的是 swift_tar 在合成、不可壓縮語料上的解壓，
+**不是** native 對 external 那個 64 倍差距本身；它只回答「逐檔緩衝是不是 fault 的來源」，
+答案是否。
+
+所以本節回到零個候選。下一步刻意**不是**提出第五個機制——已經有三個被提出並推翻。下一步
+是逐符號 profile（`sample`，或 Instruments 的 Allocations），讓資料自己指出配置點。
 
 `build_multissh_in_linux_vm.zsh` 先前記錄的 `swift_tar -x 89 秒 vs bsdtar -xzf 52 秒`
 觀察無誤、推理亦無誤，但它只涵蓋解壓，卻被推廣為「swift_tar 在 VM 裡較慢」，而上方的

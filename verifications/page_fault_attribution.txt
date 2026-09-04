@@ -1,0 +1,43 @@
+==============================================================
+ page fault 歸因：FileWriterPool 的逐檔緩衝 / attributing page faults
+==============================================================
+  執行檔 / binary : /Users/raliclo/proj/lzfse2/swift_tar/release/swift_tar
+  sha256          : 36d310d53f15d638f14a26787432a588c9cd31d0234e2c18a51478fbad13f787
+  重複次數 / reps : 7   （取最小值 / minimum taken）
+  smallFileMax    : 4 MiB   （swift_tar.swift:2501）
+
+  RAM disk        : /dev/disk17 → /Volumes/faultprobe  (1536 MiB)
+
+--- 建立語料與封存 / building corpora and archives ---
+  A   32 檔 × 3 MiB =  96 MiB   走緩衝 buffered     封存 97 MiB
+  B   16 檔 × 6 MiB =  96 MiB   不走緩衝 inline     封存 97 MiB
+  C   96 檔 × 1 MiB =  96 MiB   走緩衝 buffered     封存 97 MiB
+  D   24 檔 × 4 MiB =  96 MiB   走緩衝 buffered     封存 97 MiB
+  E   24 檔 × 5 MiB = 120 MiB   不走緩衝 inline     封存 121 MiB
+
+--- 交錯量測 / interleaved, 7 輪 ---
+    每一輪都跑過 A B C，不是跑完一組再跑另一組。
+  rep 1:  A=26559  B=20486  C=8411  D=26212  E=28097
+  rep 2:  A=26425  B=20482  C=8145  D=26207  E=28086
+  rep 3:  A=26426  B=20483  C=8144  D=26207  E=28098
+  rep 4:  A=26424  B=20482  C=8145  D=26208  E=28096
+  rep 5:  A=26426  B=20482  C=8144  D=26207  E=28097
+  rep 6:  A=26425  B=20482  C=8221  D=26206  E=28098
+  rep 7:  A=26426  B=20483  C=8145  D=26207  E=28098
+
+--- 最小值 / minima ---
+  語料  路徑       成員數    page reclaims 每 MiB        real      user      sys
+  A   緩衝       32     26424        275          0.06      0.01      0.06
+  B   inline   16     20482        213          0.08      0.01      0.07
+  C   緩衝       96     8144         84           0.05      0.01      0.05
+  D   緩衝       24     26206        272          0.07      0.01      0.07
+  E   inline   24     28086        234          0.10      0.02      0.08
+
+--- 判讀 / reading it ---
+  A vs C（位元組數與路徑相同，成員數 32 → 96）: 26424 → 8144
+  A vs B（位元組數相同，緩衝 → inline）        : 26424 → 20482
+
+  若逐檔緩衝是成因：B 應遠低於 A，且 C 應高於 A。
+  若 B 與 A 相當：該候選被排除，回到零個候選。
+  If buffering is the cause, B falls far below A and C rises above it.
+  If B matches A, the candidate is excluded.

@@ -30,22 +30,31 @@ scripts.
 ROUNDS=1 ./encrypt_mbps_win.zsh ../../claw-code
 ```
 
-The 2026-08-06 Windows run used `release/swift_tar.exe` version
-`20260805-193735` on MSYS_NT-10.0-26200 with `claw-code` at 1.40 GB logical
-input. It passed `--crypto-selftest` (**44 PASS / 0 FAIL**) and the throughput
-script's correctness checks (**6 PASS / 0 FAIL**). Full tree `diff -r` is
-available with `VERIFY_TREE=1`, but is disabled by default because it dominates
-Windows wall time.
+The current Windows run is dated 2026-08-18 and used `release/swift_tar.exe`
+version `20260818-074043` on MINGW64_NT-10.0-26200 with `claw-code` at 1.40 GB
+logical input. It passed `--crypto-selftest` (**44 PASS / 0 FAIL**) and the
+throughput script's correctness checks. Full tree `diff -r` is available with
+`VERIFY_TREE=1`, but is disabled by default because it dominates Windows wall
+time — note that `rounds` is **1** here, not a median of 3 as on macOS.
+
+Every figure below is section A and B of
+[`encrypt_mbps_win_output.txt`](encrypt_mbps_win_output.txt). Do not edit this
+table by hand; diff it against that file after each run.
 
 | Codec | create | create + encrypt | extract | extract + decrypt |
 | --- | ---: | ---: | ---: | ---: |
-| plain tar | 178 MB/s | 147 MB/s | 99 MB/s | 81 MB/s |
-| gzip | 166 MB/s | 146 MB/s | 94 MB/s | 94 MB/s |
-| zstd | 198 MB/s | 181 MB/s | 106 MB/s | 97 MB/s |
+| plain tar | 457 MB/s | 249 MB/s | 75 MB/s | 61 MB/s |
+| gzip | 217 MB/s | 184 MB/s | 64 MB/s | 50 MB/s |
+| zstd | 235 MB/s | 213 MB/s | 71 MB/s | 56 MB/s |
 
-`--encrypt-only` ran at **253 MB/s** and `--decrypt-only` at **269 MB/s**. The
+`--encrypt-only` ran at **263 MB/s** and `--decrypt-only` at **289 MB/s**. The
 decrypted output was verified byte-identical to the original archive; wrong-key
 and tampered-ciphertext inputs were rejected.
+
+This block previously described the 2026-08-06 run at build `20260805-193735`
+and carried its numbers (plain tar `178 / 147 / 99 / 81`, zstd `198 / 181 / 106
+/ 97`), two builds and twelve days behind the output file it links to. Create
+throughput in particular was understated by more than 2x.
 
 ### Windows correctness smoke test
 
@@ -89,15 +98,28 @@ by the configured in-flight count rather than the 1.4 GB stream size.
 
 ### Results summary (Apple M4, claw-code 1.40 GB, medians of 3)
 
+Every figure below is section A and B of
+[`encrypt_mbps_rss_output.txt`](encrypt_mbps_rss_output.txt) — dated
+2026-08-15, build `20260814-201122`. Do not edit this table by hand; diff it
+against that file after each run.
+
 | Codec | create | create + encrypt | extract | extract + decrypt |
 | --- | ---: | ---: | ---: | ---: |
-| plain tar | 550 MB/s | 299 MB/s | 570 MB/s | 426 MB/s |
-| gzip | 322 MB/s | 277 MB/s | 474 MB/s | 411 MB/s |
-| zstd | 1542 MB/s | 1231 MB/s | 396 MB/s | 460 MB/s |
+| plain tar | 1389 MB/s | 602 MB/s | 1199 MB/s | 476 MB/s |
+| gzip | 315 MB/s | 277 MB/s | 668 MB/s | 518 MB/s |
+| zstd | 531 MB/s | 468 MB/s | 830 MB/s | 647 MB/s |
 
-`--encrypt-only` runs at **542 MB/s** with 228 MB peak RSS and `--decrypt-only`
-runs at **392 MB/s** with 190 MB peak RSS. The decrypted output is verified
+`--encrypt-only` runs at **659 MB/s** with 181 MB peak RSS and `--decrypt-only`
+runs at **647 MB/s** with 109 MB peak RSS. The decrypted output is verified
 byte-identical to the original.
+
+The zstd row previously read `1542 / 1231 / 396 / 460`, which reversed the
+result: it made zstd the fastest creator and the slowest extractor, where the
+committed measurement has it the other way round. The whole table had been
+copied out of a run that predates the one linked above and was never refreshed
+against it. Note also that the zstd rows here were measured before
+`--zstd-level 9` was pinned in `1cac313` (2026-08-16), so re-running
+`encrypt_mbps_rss.zsh` today will not reproduce them.
 
 Size overhead is **48 bytes of header plus 21 bytes per 4 MiB chunk** — 7125
 bytes on a 1.4 GB archive (0.0005%).
@@ -113,19 +135,30 @@ chunk index — so the layer uses the same ordered concurrent pipeline and the
 same `-n` budget as the codecs. **The container format did not change**, so
 archives written before and after this change are mutually readable.
 
+Section B2 of [`encrypt_mbps_rss_output.txt`](encrypt_mbps_rss_output.txt), same
+run as the tables above. Do not edit by hand.
+
 | `-n` | encrypt | RSS | decrypt | RSS |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 132 MB/s | 28 MB | 133 MB/s | 28 MB |
-| 2 | 262 MB/s | 45 MB | 260 MB/s | 41 MB |
-| 4 | 479 MB/s | 79 MB | 479 MB/s | 58 MB |
-| 8 | 662 MB/s | 147 MB | 656 MB/s | 92 MB |
-| 16 | **763 MB/s** | 206 MB | **742 MB/s** | 135 MB |
-| 20 (default) | 754 MB/s | 232 MB | 738 MB/s | 152 MB |
+| 1 | 133 MB/s | 28 MB | 134 MB/s | 28 MB |
+| 2 | 259 MB/s | 45 MB | 258 MB/s | 41 MB |
+| 4 | 477 MB/s | 79 MB | 476 MB/s | 58 MB |
+| 8 | 659 MB/s | 147 MB | 665 MB/s | 97 MB |
+| 16 | 763 MB/s | 207 MB | 767 MB/s | 135 MB |
+| 20 (default) | **767 MB/s** | 228 MB | **771 MB/s** | 152 MB |
 
 Throughput scales cleanly to about `-n 16` on this 10-core machine — a **5.8×**
 speed-up over `-n 1` — and the default (`2 × cores` = 20) sits at the plateau,
 so it needs no tuning. RSS grows linearly with in-flight chunks (~4 MiB each),
 the same trade-off the codecs make.
+
+Two figures in this section deserve a note. The `--encrypt-only` rate quoted
+above (**659 MB/s**) is section B's, and it coincides exactly with the `-n 8`
+row here rather than with the default `-n 20` row — the two sections are not
+measured at the same in-flight count, so quoting one as "the" encrypt rate is
+what made the earlier text self-contradictory. And this table itself was
+previously copied from a run other than the linked output file: it gave the
+`-n 20` decrypt rate as 738 MB/s where the committed file records 771.
 
 > **Methodology**: the sweep interleaves settings — every round runs the whole
 > sweep and the best time per setting is reported. Running all rounds of one

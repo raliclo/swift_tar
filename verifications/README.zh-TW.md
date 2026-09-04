@@ -28,20 +28,28 @@ MB/s；peak working set 仍由既有 Windows RSS 腳本負責。
 ROUNDS=1 ./encrypt_mbps_win.zsh ../../claw-code
 ```
 
-2026-08-06 的 Windows 執行使用 MSYS_NT-10.0-26200 上的
-`release/swift_tar.exe` 版本 `20260805-193735`，語料為 logical input 1.40 GB
+目前的 Windows 執行日期為 2026-08-18，使用 MINGW64_NT-10.0-26200 上的
+`release/swift_tar.exe` 版本 `20260818-074043`，語料為 logical input 1.40 GB
 的 `claw-code`。結果為 `--crypto-selftest` **44 PASS / 0 FAIL**，throughput
-腳本的正確性檢查 **6 PASS / 0 FAIL**。完整 tree `diff -r` 可用
-`VERIFY_TREE=1` 開啟，但預設關閉，因為它會主導 Windows wall time。
+腳本的正確性檢查亦全數通過。完整 tree `diff -r` 可用 `VERIFY_TREE=1` 開啟，
+但預設關閉，因為它會主導 Windows wall time——另注意此處 `rounds` 為 **1**，
+不像 macOS 是 3 次中位數。
+
+下表每一格皆取自 [`encrypt_mbps_win_output.txt`](encrypt_mbps_win_output.txt)
+的 A、B 兩節。**請勿手動編輯**；每次執行後以該檔比對。
 
 | Codec | 建立 | 建立 + 加密 | 解出 | 解出 + 解密 |
 | --- | ---: | ---: | ---: | ---: |
-| 純 tar | 178 MB/s | 147 MB/s | 99 MB/s | 81 MB/s |
-| gzip | 166 MB/s | 146 MB/s | 94 MB/s | 94 MB/s |
-| zstd | 198 MB/s | 181 MB/s | 106 MB/s | 97 MB/s |
+| 純 tar | 457 MB/s | 249 MB/s | 75 MB/s | 61 MB/s |
+| gzip | 217 MB/s | 184 MB/s | 64 MB/s | 50 MB/s |
+| zstd | 235 MB/s | 213 MB/s | 71 MB/s | 56 MB/s |
 
-`--encrypt-only` 為 **253 MB/s**，`--decrypt-only` 為 **269 MB/s**。解密輸出
+`--encrypt-only` 為 **263 MB/s**，`--decrypt-only` 為 **289 MB/s**。解密輸出
 已驗證與原封存位元組一致；錯誤金鑰與竄改密文皆被拒絕。
+
+本段先前描述的是 2026-08-06、build `20260805-193735` 的執行，並帶著該次的數字
+（純 tar `178 / 147 / 99 / 81`、zstd `198 / 181 / 106 / 97`），比它所連結的輸出檔
+落後兩個 build、十二天。其中建立吞吐量被低估超過兩倍。
 
 ### Windows 正確性 smoke test
 
@@ -81,14 +89,23 @@ peak RSS 達 **1454 MB**，未加密的建立僅 20 MB。下方 TGZ 調查中的
 
 ### 結果摘要（Apple M4、claw-code 1.40 GB、3 次中位數）
 
+下表每一格皆取自 [`encrypt_mbps_rss_output.txt`](encrypt_mbps_rss_output.txt)
+的 A、B 兩節——日期 2026-08-15、build `20260814-201122`。**請勿手動編輯**；
+每次執行後以該檔比對。
+
 | Codec | 建立 | 建立 + 加密 | 解出 | 解出 + 解密 |
 | --- | ---: | ---: | ---: | ---: |
-| 純 tar | 550 MB/s | 299 MB/s | 570 MB/s | 426 MB/s |
-| gzip | 322 MB/s | 277 MB/s | 474 MB/s | 411 MB/s |
-| zstd | 1542 MB/s | 1231 MB/s | 396 MB/s | 460 MB/s |
+| 純 tar | 1389 MB/s | 602 MB/s | 1199 MB/s | 476 MB/s |
+| gzip | 315 MB/s | 277 MB/s | 668 MB/s | 518 MB/s |
+| zstd | 531 MB/s | 468 MB/s | 830 MB/s | 647 MB/s |
 
-`--encrypt-only` 為 **542 MB/s**、peak RSS 228 MB；`--decrypt-only` 為
-**392 MB/s**、peak RSS 190 MB。解密輸出已驗證與原檔位元組一致。
+`--encrypt-only` 為 **659 MB/s**、peak RSS 181 MB；`--decrypt-only` 為
+**647 MB/s**、peak RSS 109 MB。解密輸出已驗證與原檔位元組一致。
+
+zstd 那列先前寫的是 `1542 / 1231 / 396 / 460`，那把結果**反轉**了：它使 zstd 成為
+最快的建立者與最慢的解出者，而入版量測正好相反。整張表抄自一次早於上方所連結輸出檔
+的執行，之後從未對齊。另注意此處的 zstd 各列量於 `--zstd-level 9` 被 `1cac313`
+（2026-08-16）釘住**之前**，故今日重跑 `encrypt_mbps_rss.zsh` 不會重現這些數字。
 
 大小開銷為 **48 bytes 標頭加上每 4 MiB chunk 21 bytes**——1.4 GB 封存為 7125
 bytes（0.0005%）。
@@ -102,18 +119,27 @@ peak RSS 51.48 MB；keyfile baseline 則為 6.13 MB。
 與 codec 相同的保序併發管線與同一組 `-n` 預算。**容器格式並未改變**，此變更
 前後寫出的封存可互相讀取。
 
+下表取自 [`encrypt_mbps_rss_output.txt`](encrypt_mbps_rss_output.txt) 的 B2 節，
+與上方各表同一次執行。**請勿手動編輯。**
+
 | `-n` | 加密 | RSS | 解密 | RSS |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 132 MB/s | 28 MB | 133 MB/s | 28 MB |
-| 2 | 262 MB/s | 45 MB | 260 MB/s | 41 MB |
-| 4 | 479 MB/s | 79 MB | 479 MB/s | 58 MB |
-| 8 | 662 MB/s | 147 MB | 656 MB/s | 92 MB |
-| 16 | **763 MB/s** | 206 MB | **742 MB/s** | 135 MB |
-| 20（預設） | 754 MB/s | 232 MB | 738 MB/s | 152 MB |
+| 1 | 133 MB/s | 28 MB | 134 MB/s | 28 MB |
+| 2 | 259 MB/s | 45 MB | 258 MB/s | 41 MB |
+| 4 | 477 MB/s | 79 MB | 476 MB/s | 58 MB |
+| 8 | 659 MB/s | 147 MB | 665 MB/s | 97 MB |
+| 16 | 763 MB/s | 207 MB | 767 MB/s | 135 MB |
+| 20（預設） | **767 MB/s** | 228 MB | **771 MB/s** | 152 MB |
 
 在這台 10 核機器上，吞吐量可順利擴展至約 `-n 16`——相較 `-n 1` 為 **5.8 倍**
 ——而預設值（`2 × 核心數` = 20）正位於平原區，無需另行調整。RSS 隨在途 chunk
 數（每個約 4 MiB）線性成長，與 codec 的取捨相同。
+
+本節有兩個數字需要說明。上文引用的 `--encrypt-only` 速率（**659 MB/s**）取自 B 節，
+它恰好等於此處 `-n 8` 那列而非預設的 `-n 20` 那列——兩節並非在相同在途數量下量測，
+把其中之一稱為「該」加密速率，正是先前文字自相矛盾的原因。此外本表先前也抄自
+所連結輸出檔以外的另一次執行：它把 `-n 20` 的解密速率寫成 738 MB/s，而入版檔案
+記錄的是 771。
 
 > **方法論**：此 sweep 採交錯執行——每一輪跑完整個 sweep，並回報各設定的最佳
 > 時間。若把某個 `-n` 的所有輪次跑完才換下一個，CPU 會單調升溫；本腳本早期版本

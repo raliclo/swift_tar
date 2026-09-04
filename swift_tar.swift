@@ -4152,10 +4152,50 @@ final class TarReader {
         }
 
         // Directory mtimes last, deepest first / 目錄 mtime 最後套用、先深後淺
+        //
+        // Windows 用 `winSetLinkMtime`，不用 `FileManager.setAttributes`：在 Windows 上
+        // 後者對**目錄**沒有效果，而且不回報任何錯誤。`try?` 吞掉的不是拋出的例外——它根本
+        // 沒有拋，只是沒有做到。因此順序、drain、先深後淺全都正確，而目錄仍然帶著解壓當下
+        // 的時間，看起來就像「tar 不保留目錄 mtime」這個設計決定。
+        //
+        // 實測（2026-09-04，macOS → Windows → macOS 往返，四種 codec 各一次）：來源目錄
+        // 設為 2001-02-03，其下檔案設為 2010-11-12。檔案的時間戳逐秒保住，三層目錄全部變成
+        // 解壓當下的時間；同一份封存在 macOS 本機解壓則目錄與檔案都正確。**兩端都沒有任何
+        // 錯誤輸出，退出碼皆為 0。**
+        //
+        // 需要的 handle 開法此檔已經有了：`winSetLinkMtime` 為了 symlink 而使用
+        // `FILE_FLAG_BACKUP_SEMANTICS`，而那個旗標正是「開啟目錄以設定其屬性」所必需的
+        // 同一個。`FILE_FLAG_OPEN_REPARSE_POINT` 對一般目錄無害——沒有 reparse point 可
+        // 跟隨時，它就只是開啟該目錄本身。
+        //
+        // On Windows use `winSetLinkMtime` rather than `FileManager.setAttributes`:
+        // there, the latter has no effect on *directories* and reports no error.
+        // The `try?` is not swallowing a thrown exception -- nothing is thrown; the
+        // call simply does not do it. So the ordering, the drain and the
+        // deepest-first sort are all correct and the directories still carry
+        // extraction time, which reads like a deliberate decision not to restore
+        // directory mtimes at all.
+        //
+        // Measured 2026-09-04 over a macOS -> Windows -> macOS round trip, once per
+        // codec: source directories stamped 2001-02-03 with a file beneath them
+        // stamped 2010-11-12. The file's timestamp survived to the second; all
+        // three directory levels came back as extraction time. The same archive
+        // extracted locally on macOS restored both. Neither side printed anything
+        // and both exited zero.
+        //
+        // The handle this needs already exists in this file: `winSetLinkMtime`
+        // opens with `FILE_FLAG_BACKUP_SEMANTICS` for symlinks, and that is the
+        // same flag required to open a directory in order to set its attributes.
+        // `FILE_FLAG_OPEN_REPARSE_POINT` is harmless on a plain directory -- with
+        // no reparse point to follow, it opens the directory itself.
         if options.restoreMtime {
             for (path, mtime) in dirTimes.sorted(by: { $0.path.count > $1.path.count }) {
+#if os(Windows)
+                winSetLinkMtime(path, mtime)
+#else
                 try? fm.setAttributes([.modificationDate:
                     Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: path)
+#endif
             }
         }
     }

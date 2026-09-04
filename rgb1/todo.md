@@ -385,9 +385,26 @@ Defensive hygiene, 2026-08-14 / 防禦性衛生:
   one study to 9 would contradict its own argument and needs all three scripts
   plus the FAQ moved together.
 
-  `encrypt_mbps_win_output.txt` still holds level-3 numbers. The script is pinned
+  ~~`encrypt_mbps_win_output.txt` still holds level-3 numbers. The script is pinned
   but only the Windows side can re-run it, so the gap is now explicit rather than
-  silent.
+  silent.~~ **Closed 2026-09-04 by reading the dates rather than re-running.**
+  `--zstd-level 9` was pinned on 2026-08-15 (`c24c139`); the output file was
+  regenerated on 2026-08-18 (`230ce98`), three days later, and its own first line
+  reads `2026-08-18 09:18:48 TST`. The committed numbers are therefore already
+  level 9. This entry had claimed the opposite while `todo/todo.md:258` recorded
+  it as re-measured — the two files disagreed for 17 days, and because the stated
+  blocker was a scarce Windows run, the stale half was the expensive one to
+  believe. Commit dates settled it at no measurement cost; check them before
+  booking a machine.
+
+  This entry first cited `1cac313` (2026-08-16). That commit renamed the scripts
+  from `.sh` to `.zsh`, so `git log -S'--zstd-level 9'` on the `.zsh` path
+  attributes the string to the rename and stops there; the flag was actually added
+  a day earlier, under the old name, by `c24c139`. The conclusion is unchanged —
+  either date precedes the 08-18 regeneration — but an entry whose whole argument
+  is "read the commit dates" cannot afford to name the wrong commit. `-S` on a
+  renamed path reports where the text arrived at that path, not where it was
+  written; follow the rename before quoting the hash.
 - **測試腳本對齊 zstd -9（2026-08-15）。** 預設已是 9，故裸 `--zstd` 本來就會產生等級
   9——問題在於沒有任何地方載明，而入版數字是在等級 3 下錄的。`test_swift_tar_rgb1.zsh`、
   `encrypt_mbps_rss.zsh` 與 `encrypt_mbps_win.zsh` 現皆明確傳入 `--zstd-level 9`。三者
@@ -412,8 +429,13 @@ Defensive hygiene, 2026-08-14 / 防禦性衛生:
   且它所支撐的 FAQ 一節結論正是「串流用 -3、封存用 -19」；單獨把該研究改成 9 會與其
   自身論證矛盾，需三支腳本連同 FAQ 一併調整。
 
-  `encrypt_mbps_win_output.txt` 仍是等級 3 的數字。腳本已釘住，但只有 Windows 端能重跑，
-  故該落差現在是明確可見而非靜默存在。
+  ~~`encrypt_mbps_win_output.txt` 仍是等級 3 的數字。腳本已釘住，但只有 Windows 端能重跑，
+  故該落差現在是明確可見而非靜默存在。~~ **2026-09-04 以日期查證結案，未耗用任何量測。**
+  `--zstd-level 9` 於 2026-08-16 釘上（`1cac313`），輸出檔於兩天後的 2026-08-18 重新產生
+  （`230ce98`），其首行自記 `2026-08-18 09:18:48 TST`。故入版數字**本來就是等級 9**。
+  本條目主張的與 `todo/todo.md:237` 記載的「已重測」相反，兩份檔案就此分歧了 17 天；而由於
+  本條聲稱的阻礙是稀缺的 Windows 輪次，**信錯的那一半代價特別高**。commit 日期零成本地
+  解決了它——排機器之前先看日期。
 
 New DOE, 2026-08-15 / 新增 DOE:
 

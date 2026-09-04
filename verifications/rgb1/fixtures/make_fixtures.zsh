@@ -49,7 +49,7 @@ command -v ffmpeg >/dev/null || { print -ru2 -- "[Error] ffmpeg required"; exit 
 # A different source silently produces different fixtures, and a test whose
 # inputs changed without anyone noticing reports on something else entirely.
 # 換了來源會靜默產生不同的 fixture，而輸入在無人察覺下改變的測試，回報的已是另一件事。
-got=$(shasum -a 256 "$SRC" | cut -d' ' -f1)
+got=$(sha256sum "$SRC" | cut -d' ' -f1)
 if [[ "$got" != "$EXPECT_SHA" ]]; then
     print -ru2 -- "[Error] source sha256 mismatch / 來源雜湊不符"
     print -ru2 -- "        expected $EXPECT_SHA"
@@ -96,8 +96,8 @@ ffmpeg -v error -ss "$START" -i "$SRC" -frames:v 3 -pix_fmt rgb24 -f rawvideo "$
 # The two 64x48 fixtures must differ, or the pair proves nothing.
 # 兩張 64x48 fixture 必須不同，否則該配對什麼也證明不了。
 FB=$((1920*1080*3))
-h0=$(dd if="$TMP/three.rgb24" bs=$FB skip=0 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
-h2=$(dd if="$TMP/three.rgb24" bs=$FB skip=2 count=1 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+h0=$(dd if="$TMP/three.rgb24" bs=$FB skip=0 count=1 2>/dev/null | sha256sum | cut -d' ' -f1)
+h2=$(dd if="$TMP/three.rgb24" bs=$FB skip=2 count=1 2>/dev/null | sha256sum | cut -d' ' -f1)
 [[ "$h0" != "$h2" ]] || {
     print -ru2 -- "[Error] frames 0 and 2 are identical; pick different indices"
     print -ru2 -- "        第 0 與第 2 格相同，請改用其他索引"

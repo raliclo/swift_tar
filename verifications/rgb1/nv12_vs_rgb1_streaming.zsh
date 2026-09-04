@@ -249,7 +249,15 @@ printf "  %-8s %12s bytes  %5.2f B/px  %s\n" "rgb24" "$RGB_RAW" \
 printf "  %-8s %12s bytes  %5.2f B/px  %s\n" "rgba"  "$RGBA_BYTES" 4.0 "what P6 hands to Metal"
 echo
 
-now() { perl -MTime::HiRes=time -e 'printf "%.6f", time'; }
+# 高解析度時間取自 zsh 自己的 `zsh/datetime`，不呼叫 perl。**本專案不使用 Perl**。
+# 與 test/test_swift_tar_rgb1.zsh 的同一行一併改；Buildroot guest 沒有 perl，那裡這一行
+# 本來就會失敗。
+# High-resolution time comes from zsh's own `zsh/datetime` rather than perl.
+# **This project does not use Perl.** Changed alongside the identical line in
+# test/test_swift_tar_rgb1.zsh; the Buildroot guest has no perl, so this could
+# never have worked there.
+zmodload zsh/datetime
+now() { printf '%.6f' $EPOCHREALTIME; }
 elapsed() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.3f", b-a}'; }
 
 # ---------------------------------------------------------------------

@@ -139,9 +139,9 @@ ln "$SRC/hard1.txt" "$SRC/hard2.txt" 2>/dev/null || true
 tree_sum() { ( cd "$1" && find . | LC_ALL=C sort | while read -r p; do
         if [[ -L "$p" ]]; then print -r -- "$p L $(readlink "$p")"
         elif [[ -d "$p" ]]; then print -r -- "$p D"
-        else print -r -- "$p F $(shasum -a 256 "$p" | cut -d' ' -f1)"
+        else print -r -- "$p F $(sha256sum "$p" | cut -d' ' -f1)"
         fi
-    done | shasum -a 256 | cut -d' ' -f1 ) }
+    done | sha256sum | cut -d' ' -f1 ) }
 WANT=$(tree_sum "$SRC")
 
 emit "[Info] date: $(date '+%Y-%m-%d %H:%M:%S %Z')"

@@ -177,7 +177,18 @@ verify_extract "reverse interop (swift_tar extracts system tar)" "$TMP/x_rev"
 #    回報各 swift_tar codec 的封存大小、壓縮比與建立／解出耗時。每個 codec 仍驗證
 #    完整性。耗時為 3 次平均、僅供參考（單機、熱快取），非正式基準。
 # ---------------------------------------------------------------------------
-now() { perl -MTime::HiRes=time -e 'printf "%.6f", time'; }
+# 高解析度時間取自 zsh 自己的 `zsh/datetime`，不呼叫 perl。**本專案不使用 Perl**，而
+# 這一行原本是整棵樹裡少數幾個直接呼叫它的地方之一。這與先前以 `zmodload zsh/stat` 取代
+# 外部 `stat` 是同一類修法：需要的東西 shell 本來就有，外部工具只帶來一個相依與一組
+# 平台差異。Buildroot guest 沒有 perl，所以那裡這一行本來就會失敗。
+# High-resolution time comes from zsh's own `zsh/datetime` rather than perl.
+# **This project does not use Perl**, and this line was one of the few places in
+# the tree that called it directly. Same shape as replacing the external `stat`
+# with `zmodload zsh/stat`: the shell already has what is needed, and the
+# external tool only adds a dependency and a set of platform differences. The
+# Buildroot guest has no perl, so this line could never have worked there.
+zmodload zsh/datetime
+now() { printf '%.6f' $EPOCHREALTIME; }
 ms()  { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.1f", (b-a)*1000}'; }
 
 # The codec table is also written to verifications/ as a committed .txt, the

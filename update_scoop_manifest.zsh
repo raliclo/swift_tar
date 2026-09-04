@@ -57,12 +57,17 @@ die() { print -ru2 -- "update_scoop_manifest: $1"; exit 1 }
 # 「<digest>  <path>」——二進位模式下更是「<digest> *<path>」——因而必須剝除尾段欄位，
 # 徒增一處可能出錯之處而毫無好處。實測：傳路徑的寫法回傳 "657f... *z.zip"，被下方的
 # 摘要格式守門擋下，manifest 正確地未被更動。
+# 後備由 `shasum` 換成 `openssl`：**本專案不使用 Perl**，而 `shasum` 是一支 Perl 腳本。
+# 留著它當後備，等於在「sha256sum 剛好不在」的機器上安靜地把 Perl 拉進來。
+# The fallback is `openssl` rather than `shasum`: **this project does not use
+# Perl**, and `shasum` is a Perl script. Keeping it quietly pulls Perl in on any
+# machine where sha256sum happens to be missing.
 if (( $+commands[sha256sum] )); then
   new_hash=$(sha256sum < "$zip")
-elif (( $+commands[shasum] )); then
-  new_hash=$(shasum -a 256 < "$zip")
+elif (( $+commands[openssl] )); then
+  new_hash=$(openssl dgst -sha256 < "$zip" | awk '{print $NF}')
 else
-  die "no sha256sum or shasum on PATH"
+  die "no sha256sum or openssl on PATH"
 fi
 new_hash=${${new_hash%% *}:l}
 [[ $new_hash == [0-9a-f](#c64) ]] || die "unexpected hash: $new_hash"

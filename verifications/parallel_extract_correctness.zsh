@@ -124,12 +124,15 @@ fi
 # 以指令陣列保存，而非包成每檔呼叫的函式：fingerprint() 會一次傳入整份檔案清單。
 # 兩種工具的輸出格式皆為「<64 hex>  <path>」。
 typeset -ga hasher
+# 後備由 `shasum` 換成 `openssl`：**本專案不使用 Perl**，而 `shasum` 是一支 Perl 腳本。
+# The fallback is `openssl` rather than `shasum`: **this project does not use
+# Perl**, and `shasum` is a Perl script.
 if (( $+commands[sha256sum] )); then
   hasher=( sha256sum )
-elif (( $+commands[shasum] )); then
-  hasher=( shasum -a 256 )
+elif (( $+commands[openssl] )); then
+  hasher=( openssl dgst -sha256 -r )
 else
-  print -ru2 -- "no shasum or sha256sum"; exit 1
+  print -ru2 -- "no sha256sum or openssl"; exit 1
 fi
 # Mode and inode come from zsh's own stat module, not the `stat` command.
 # The Linux guest has NO `stat` at all (this busybox is built without the
@@ -301,8 +304,15 @@ check "mtime preserved through the pool" $([[ $mt == $want ]] && print 1 || prin
 say ""
 say "## 5. large file (inline path) alongside 400 pooled small files"
 say ""
-h1=$(shasum -a 256 $src/big.bin | cut -d' ' -f1)
-h2=$(shasum -a 256 $out/big.bin | cut -d' ' -f1)
+# 用本檔上方偵測出來的 $hasher，不要直接寫死 `shasum`。這兩行原本繞過那個陣列——而該
+# 陣列存在的理由正是「Linux guest 上沒有 shasum」，所以繞過它等於讓這個檢查在那台機器上
+# 失效；同時 `shasum` 是 Perl 腳本，而**本專案不使用 Perl**。
+# Use the $hasher detected above rather than hardcoding `shasum`. These two lines
+# bypassed that array -- which exists precisely because the Linux guest has no
+# shasum, so bypassing it disabled this check there; and `shasum` is a Perl
+# script, which **this project does not use**.
+h1=$($hasher $src/big.bin | cut -d' ' -f1)
+h2=$($hasher $out/big.bin | cut -d' ' -f1)
 check "6 MiB file is byte-identical" $([[ $h1 == $h2 ]] && print 1 || print 0)
 nsmall=$(ls $out/sub/s*.dat 2>/dev/null | wc -l | tr -d ' ')
 check "all 400 small files present" $([[ $nsmall == 400 ]] && print 1 || print 0) "found $nsmall"

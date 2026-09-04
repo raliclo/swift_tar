@@ -161,13 +161,28 @@ fi
 # sha256 的工具依平台而異。以「跑得動」挑選，不以名稱挑選——本樹已因後者踩過坑。
 # The sha256 tool differs by platform. Pick the one that runs, not the one with the
 # expected name; this tree has been bitten by choosing on the name.
+# `shasum` 已移除，不是降到後備順位：**本專案不使用 Perl**，而 `shasum` 是一支 Perl
+# 腳本（本機 shebang 為 `#!/opt/homebrew/opt/perl/bin/perl`）。留著它當後備，等於在
+# 「sha256sum 剛好不在」的機器上安靜地把 Perl 拉進來。
+#
+# 這不會少掉任何覆蓋範圍：`sha256sum` 在四個節點上都存在（Mac、Windows、WSL、Linux VM
+# 各查過），而 `shasum` 在 Buildroot guest 上根本沒有。
+#
+# `shasum` is removed rather than demoted: **this project does not use Perl**, and
+# `shasum` is a Perl script (its shebang here is
+# `#!/opt/homebrew/opt/perl/bin/perl`). Keeping it as a fallback quietly pulls
+# Perl in on any machine where sha256sum happens to be missing.
+#
+# Nothing is lost by dropping it: `sha256sum` is present on all four nodes
+# (checked on the Mac, Windows, WSL and the Linux VM), and `shasum` does not
+# exist on the Buildroot guest at all.
 SHA=""
-if print -n "" | shasum -a 256 >/dev/null 2>&1; then
-  SHA=$(shasum -a 256 "$BINARY" | cut -d' ' -f1)
-elif print -n "" | sha256sum >/dev/null 2>&1; then
+if print -n "" | sha256sum >/dev/null 2>&1; then
   SHA=$(sha256sum "$BINARY" | cut -d' ' -f1)
+elif print -n "" | openssl dgst -sha256 >/dev/null 2>&1; then
+  SHA=$(openssl dgst -sha256 "$BINARY" | awk '{print $NF}')
 else
-  print -r -- "no working sha256 tool (tried shasum -a 256, sha256sum)" >&2
+  print -r -- "no working sha256 tool (tried sha256sum, openssl dgst -sha256)" >&2
   exit 1
 fi
 

@@ -12,12 +12,112 @@
 #ifdef _WIN32
 #include <direct.h>
 #include <io.h>
+#include <windows.h>
 #define swift_tar_chdir _chdir
 #define swift_tar_getcwd _getcwd
 #else
+#include <sys/stat.h>
 #include <unistd.h>
 #define swift_tar_chdir chdir
 #define swift_tar_getcwd getcwd
+#endif
+
+/* Identify a file by identity rather than by its path, so the walk can recognise
+ * the archive it is writing however that file is spelled.
+ *
+ * libarchive detects this case itself on macOS and Linux and returns
+ * ARCHIVE_FAILED from archive_write_header with "Can't add archive to itself",
+ * which the loop below handles. On Windows it never reports it: measured at
+ * a18e92e, `-c --zip -f m.zip .` from inside the tree returned 0 with empty
+ * stderr and `./m.zip` among the members. So the check cannot be left to
+ * libarchive, and this runs on every platform -- one behaviour to reason about,
+ * and the platform that had no check is not the platform whose check is
+ * untested.
+ *
+ * Path strings are not enough: `./m.zip` and an absolute spelling of the same
+ * file must both be recognised, which is why the tar path in Swift compares
+ * st_dev/st_ino and volumeSerial/fileIndex. The same two pairs are used here.
+ *
+ * 以檔案身分而非路徑字串辨識檔案，使走訪無論該檔如何拼寫，都認得出「正在寫出的封存」。
+ *
+ * macOS 與 Linux 上 libarchive 會自行偵測，archive_write_header 回傳
+ * ARCHIVE_FAILED 並附上 "Can't add archive to itself"，由下方迴圈處理。Windows 上
+ * 它從不回報：於 a18e92e 實測，在樹內執行 `-c --zip -f m.zip .` 回傳 0、stderr 全空，
+ * 而 `./m.zip` 就在成員清單裡。故此檢查不能交給 libarchive，且在所有平台都執行——
+ * 只需推理一種行為，而原本沒有檢查的平台，不會變成「檢查未受測」的那個平台。
+ *
+ * 路徑字串不夠：`./m.zip` 與同一檔案的絕對路徑寫法都必須被認出，這正是 Swift 端的 tar
+ * 路徑比對 st_dev／st_ino 與 volumeSerial／fileIndex 的原因。此處採用同樣的兩組值。 */
+#ifdef _WIN32
+typedef struct { DWORD volume; DWORD index_high; DWORD index_low; int valid; } file_id;
+
+static file_id file_identity(const char *path) {
+    file_id id;
+    HANDLE handle;
+    BY_HANDLE_FILE_INFORMATION info;
+    wchar_t *wide;
+    int wide_len;
+
+    id.volume = 0; id.index_high = 0; id.index_low = 0; id.valid = 0;
+    if (path == NULL) return id;
+
+    /* 名稱以 UTF-8 傳遞（見下方 hdrcharset 的說明），故用 CP_UTF8 而非 ANSI 代碼頁；
+     * 用 CreateFileA 會讓非 ASCII 檔名比對不到自己。
+     * Names travel as UTF-8 (see the hdrcharset note below), so convert with CP_UTF8 and
+     * not the ANSI codepage: CreateFileA would fail to match a non-ASCII name against
+     * itself. */
+    wide_len = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
+    if (wide_len <= 0) return id;
+    wide = (wchar_t *)malloc((size_t)wide_len * sizeof(wchar_t));
+    if (wide == NULL) return id;
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, wide_len) <= 0) {
+        free(wide);
+        return id;
+    }
+
+    /* 存取權限 0 只查詢不讀取，且三個 SHARE 旗標齊備——這個檔案此刻正被 writer 開著寫入，
+     * 少了任何一個都會拿不到 handle，而那會讓檢查靜默失效。
+     * Access 0 queries without reading, and all three share flags are needed: this file is
+     * open for writing right now, and without them the handle would fail and the check
+     * would silently do nothing. */
+    handle = CreateFileW(wide, 0,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    free(wide);
+    if (handle == INVALID_HANDLE_VALUE) return id;
+    if (GetFileInformationByHandle(handle, &info)) {
+        id.volume = info.dwVolumeSerialNumber;
+        id.index_high = info.nFileIndexHigh;
+        id.index_low = info.nFileIndexLow;
+        id.valid = 1;
+    }
+    CloseHandle(handle);
+    return id;
+}
+
+static int same_file(file_id a, file_id b) {
+    return a.valid && b.valid && a.volume == b.volume
+        && a.index_high == b.index_high && a.index_low == b.index_low;
+}
+#else
+typedef struct { dev_t device; ino_t inode; int valid; } file_id;
+
+static file_id file_identity(const char *path) {
+    file_id id;
+    struct stat st;
+
+    id.device = 0; id.inode = 0; id.valid = 0;
+    if (path != NULL && stat(path, &st) == 0) {
+        id.device = st.st_dev;
+        id.inode = st.st_ino;
+        id.valid = 1;
+    }
+    return id;
+}
+
+static int same_file(file_id a, file_id b) {
+    return a.valid && b.valid && a.device == b.device && a.inode == b.inode;
+}
 #endif
 
 static void set_error(char *buffer, size_t capacity, const char *message) {
@@ -82,6 +182,7 @@ static int copy_file_to_archive(struct archive *writer,
 
 static int add_path(struct archive *writer,
                     const char *path,
+                    file_id archive_id,
                     int verbose,
                     char *error_buffer,
                     size_t error_capacity) {
@@ -120,6 +221,25 @@ static int add_path(struct archive *writer,
         if (status < ARCHIVE_OK) {
             set_archive_error(error_buffer, error_capacity, "archive_read_next_header", disk);
             goto cleanup;
+        }
+
+        /* 在 descend 與 write_header 之前先問身分：封存本身是一般檔案，不會被 descend，
+         * 而在寫入之前攔下它，才能讓每個平台走同一條路徑，不必依賴 libarchive 是否回報。
+         * 訊息沿用 libarchive 的原文，好讓兩個平台的 stderr 一致——測試斷言的正是這句話。
+         * Ask about identity before descend and before write_header: the archive itself is a
+         * regular file and is never descended into, and stopping it before the write is what
+         * lets every platform take one path rather than depending on whether libarchive
+         * reports it. The wording is libarchive's own, so stderr reads the same on both
+         * platforms -- which is what the test asserts. */
+        if (archive_id.valid) {
+            file_id entry_id = file_identity(archive_entry_sourcepath(entry));
+            if (same_file(entry_id, archive_id)) {
+                fprintf(stderr, "swift_tar: %s: Can't add archive to itself\n",
+                        archive_entry_pathname(entry));
+                archive_entry_free(entry);
+                entry = NULL;
+                continue;
+            }
         }
 
         if (archive_read_disk_can_descend(disk)) archive_read_disk_descend(disk);
@@ -238,6 +358,7 @@ int swift_tar_zip_create(const char *archive_path,
     adopt_environment_charset();
     struct archive *writer = NULL;
     char *original_dir = NULL;
+    file_id archive_id = {0};
     int result = -1;
     int status;
     size_t index;
@@ -333,6 +454,19 @@ int swift_tar_zip_create(const char *archive_path,
         goto cleanup;
     }
 
+    /* 身分要在 chdir 之前取得：`archive_path` 是相對於呼叫端的工作目錄，而下面馬上就會
+     * 切換到 change_dir。切換之後再解析同一個字串，會指向另一個檔案或根本不存在，而那會
+     * 讓檢查靜默失效——正是這類「看起來有防守其實沒有」的形狀。
+     * 寫到 stdout（`-f -`）時沒有輸出檔可比，identity 保持無效，檢查自然不生效。
+     * Take the identity before the chdir: `archive_path` is relative to the caller's working
+     * directory and the next block moves out of it. Resolving the same string afterwards
+     * would name a different file or none at all, and the check would silently do nothing --
+     * exactly the looks-guarded-but-is-not shape. Writing to stdout (`-f -`) has no output
+     * file to compare against, so the identity stays invalid and the check does not fire. */
+    if (archive_path != NULL && strcmp(archive_path, "-") != 0) {
+        archive_id = file_identity(archive_path);
+    }
+
     if (change_dir != NULL && change_dir[0] != '\0') {
         original_dir = swift_tar_getcwd(NULL, 0);
         if (original_dir == NULL || swift_tar_chdir(change_dir) != 0) {
@@ -345,7 +479,7 @@ int swift_tar_zip_create(const char *archive_path,
     }
 
     for (index = 0; index < path_count; ++index) {
-        if (add_path(writer, paths[index], verbose, error_buffer, error_capacity) != 0) {
+        if (add_path(writer, paths[index], archive_id, verbose, error_buffer, error_capacity) != 0) {
             goto cleanup;
         }
     }

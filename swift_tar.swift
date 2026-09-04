@@ -4568,7 +4568,16 @@ func runTarProcess(_ exePath: String, _ args: [String], cwd: String? = nil) -> B
 func runTarProcessCapturingStdout(_ exePath: String, _ args: [String],
                                   toFile: String, cwd: String? = nil,
                                   emptyStdin: Bool = false) -> Bool {
-    FileManager.default.createFile(atPath: toFile, contents: nil)
+    // The result is used, not discarded. Linux says so and macOS does not: Darwin's
+    // Foundation marks createFile @discardableResult, swift-corelibs-foundation does
+    // not, so this line warned only on Linux. Using the value is both what silences
+    // it honestly and the better code -- the failure is now named here rather than
+    // surfacing one line later as a nil FileHandle.
+    // 回傳值有被使用，不是丟棄。這一點只有 Linux 說得出來：Darwin 的 Foundation 對
+    // createFile 標了 @discardableResult，swift-corelibs-foundation 沒有，故此行僅在
+    // Linux 產生警告。把回傳值用掉既是誠實地消掉它，也是比較好的程式碼——失敗在此處
+    // 就被指名，而不是延到下一行變成一個 nil 的 FileHandle。
+    guard FileManager.default.createFile(atPath: toFile, contents: nil) else { return false }
     guard let out = FileHandle(forWritingAtPath: toFile) else { return false }
     defer { try? out.close() }
     let process = Process()

@@ -1184,7 +1184,17 @@ func cryptoSelfTest() -> Bool {
         let encURL = tmp.appendingPathComponent("enc.bin")
         let outURL = tmp.appendingPathComponent("out.bin")
         try? payload.write(to: plainURL)
-        FileManager.default.createFile(atPath: encURL.path, contents: nil)
+        // Report through the same channel the rest of this case uses, rather than
+        // discarding the result. Only Linux warns about the discard (corelibs-
+        // foundation does not mark createFile @discardableResult, Darwin does), but
+        // a self-test that cannot create its own scratch file should say so here
+        // instead of failing one line later inside the do block.
+        // 以本案例其餘部分同一個管道回報，而非丟棄回傳值。只有 Linux 會對丟棄提出警告
+        // （corelibs-foundation 未對 createFile 標 @discardableResult，Darwin 有），但一個
+        // 連自己的暫存檔都建不出來的自我測試，應該在此處說出來，而不是延到 do 區塊裡失敗。
+        guard FileManager.default.createFile(atPath: encURL.path, contents: nil) else {
+            check(name, "cannot create \(encURL.lastPathComponent)", "match"); return
+        }
         let secret = sealWith ?? .passphrase("correct horse battery staple")
         do {
             let inH = try FileHandle(forReadingFrom: plainURL)
@@ -1194,7 +1204,9 @@ func cryptoSelfTest() -> Bool {
             if let mutate {
                 var d = try Data(contentsOf: encURL); mutate(&d); try d.write(to: encURL)
             }
-            FileManager.default.createFile(atPath: outURL.path, contents: nil)
+            guard FileManager.default.createFile(atPath: outURL.path, contents: nil) else {
+                check(name, "cannot create \(outURL.lastPathComponent)", "match"); return
+            }
             let encH = try FileHandle(forReadingFrom: encURL)
             let dstH = try FileHandle(forWritingTo: outURL)
             try TarCrypto.decryptStream(input: encH, prefix: Data(), output: dstH,
@@ -1256,7 +1268,9 @@ func cryptoSelfTest() -> Bool {
         var mismatches: [String] = []
         for enc in settings {
             let encURL = tmp.appendingPathComponent("e_par_\(enc).bin")
-            FileManager.default.createFile(atPath: encURL.path, contents: nil)
+            guard FileManager.default.createFile(atPath: encURL.path, contents: nil) else {
+                mismatches.append("encrypt -n \(enc): cannot create \(encURL.lastPathComponent)"); continue
+            }
             do {
                 let inH = try FileHandle(forReadingFrom: plainURL)
                 let encH = try FileHandle(forWritingTo: encURL)
@@ -1269,7 +1283,9 @@ func cryptoSelfTest() -> Bool {
             // 每種加密設定都必須能被每種解密設定讀取
             for dec in settings {
                 let outURL = tmp.appendingPathComponent("o_par_\(enc)_\(dec).bin")
-                FileManager.default.createFile(atPath: outURL.path, contents: nil)
+                guard FileManager.default.createFile(atPath: outURL.path, contents: nil) else {
+                    mismatches.append("enc \(enc) → dec \(dec): cannot create \(outURL.lastPathComponent)"); continue
+                }
                 do {
                     let rH = try FileHandle(forReadingFrom: encURL)
                     let oH = try FileHandle(forWritingTo: outURL)

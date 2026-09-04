@@ -190,8 +190,34 @@ MODMAP
 # "error while loading shared libraries"。
 SWIFT_RUNTIME_DIR="$SWIFT_PREFIX/lib/swift/linux"
 
+# -swift-version 6, matching compile_tar.zsh and compile_tar-win.zsh. Linux was the
+# last platform without it, and the reason it waited is worth keeping: the flag was
+# not held back because nobody had tried it, but because trying it produced errors
+# that only Linux shows. glibc's `stdin`/`stderr` are mutable globals; Darwin's and
+# ucrt's are not, so macOS and Windows compiled clean while Linux reported eight --
+# four in crypto.swift (fixed in 8c552cf by taking the descriptor number rather than
+# the FILE*) and four in the private engine (fixed in lzfse2 665c56a by using that
+# file's own eprint()). Same source, three answers, and the difference is in libc.
+#
+# Both were fixed by removing the reference, never by annotating the diagnostic away.
+#
+# Measured in the QEMU aarch64 guest with this script before the flag was committed
+# here, all four combinations:
+#   EXCLUDE_LZFSE=1 x Swift 5   rc=0      EXCLUDE_LZFSE=1 x Swift 6   rc=0
+#   full engine     x Swift 5   rc=0      full engine     x Swift 6   rc=0
+# Swift 6 mode adds no warning the Swift 5 build did not already produce.
+#
+# -swift-version 6，與 compile_tar.zsh、compile_tar-win.zsh 一致。Linux 是最後一個補上
+# 的平台，而它之所以等到現在值得記下來：旗標不是因為沒人試過而被擱置，而是試了會出現
+# 只有 Linux 才看得到的錯誤。glibc 的 `stdin`／`stderr` 是可變全域，Darwin 與 ucrt 的
+# 不是，所以 macOS 與 Windows 編得乾淨，Linux 卻報八個——crypto.swift 四個（8c552cf 改
+# 為取描述子編號而非 FILE*）、私有引擎四個（lzfse2 665c56a 改用該檔既有的 eprint()）。
+# 同一份原始碼、三種結果，差別在 libc。兩處都是以「拿掉那個引用」修好，不是用標註壓下。
+#
+# 旗標提交至此之前，已在 QEMU aarch64 guest 內以本腳本實測四種組合，全部 rc=0；
+# Swift 6 模式未新增任何 Swift 5 建置沒有的警告。
 log_msg "Build swift_tar / 建置 swift_tar"
-"$SWIFTC" -O "${SWIFT_DEFINES[@]}" \
+"$SWIFTC" -O -swift-version 6 "${SWIFT_DEFINES[@]}" \
     "$TEMP_VERSION" "${CLI_SRC[@]}" swift_tar.swift rgb1.swift crypto.swift \
     build/libarchive_zip_bridge.o \
     -Xcc -fmodule-map-file="$ZLIB_MODULEMAP" \

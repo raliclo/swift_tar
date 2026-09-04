@@ -1,18 +1,48 @@
+# 每個 submodule 都記下它追蹤哪一個分支。
+#
+# 少了 `branch =`，一份 checkout 唯一能說出「這個 pin 屬於哪條線」的方式，就是去猜；
+# 而預設的 `origin/HEAD` 經常不是那條線。zlib 與 zstd 就是這樣被誤讀過一次：兩者的
+# pin 分別**正是** `origin/master` 與 `origin/release` 的 tip，卻因為各自的
+# `origin/HEAD` 指向 `develop`／`dev`，在「落後幾個 commit」的量測裡顯示為落後 85 與
+# 382。數字沒有錯，它量的是另一條分支——而依那個數字去「更新」，會把一個穩定版本的
+# pin 換成開發線的 tip。
+#
+# 這一行不會阻止 detach：`git submodule update` 仍會依 gitlink 切出 detached HEAD。
+# 它的作用是讓 `git submodule update --remote` 有正確的目標，並讓讀的人不必猜。
+#
+# Record which branch each submodule tracks. Without `branch =`, the only way a
+# checkout can say which line a pin belongs to is to guess, and the default
+# `origin/HEAD` is often not that line -- zlib and zstd were misread exactly that
+# way: each pin *is* the tip of `origin/master` and `origin/release`, yet with
+# `origin/HEAD` pointing at `develop`/`dev` they measured as 85 and 382 commits
+# behind. The numbers were right about a different branch, and updating on them
+# would have swapped a stable pin for a development tip.
+#
+# This does not prevent detaching: `git submodule update` still checks out the
+# gitlink as a detached HEAD. It gives `--remote` the right target and saves a
+# reader from guessing.
+
 [submodule "lzfse2"]
 	path = lzfse2
 	url = git@github.com:raliclo/lzfse2.git
+	branch = main
 [submodule "libarchive"]
 	path = libarchive
 	url = https://github.com/libarchive/libarchive.git
+	branch = master
 [submodule "zlib"]
 	path = zlib
 	url = https://github.com/madler/zlib.git
+	branch = master
 [submodule "zstd"]
 	path = zstd
 	url = https://github.com/facebook/zstd
+	branch = release
 [submodule "lz4"]
 	path = lz4
 	url = https://github.com/lz4/lz4
+	branch = dev
 [submodule "xz"]
 	path = xz
 	url = https://github.com/tukaani-project/xz
+	branch = master

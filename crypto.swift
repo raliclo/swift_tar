@@ -899,7 +899,19 @@ enum KeyInput {
         let isTerminal = stdinHandle != INVALID_HANDLE_VALUE
             && GetConsoleMode(stdinHandle, &consoleMode)
 #else
-        let isTerminal = isatty(fileno(stdin)) == 1
+        // STDIN_FILENO，不是 fileno(stdin)：這裡要的一直只是描述子編號，從未拿那個
+        // FILE* 做過 I/O。glibc 的 `stdin` 是全域可變指標，Swift 6 語言模式因而報
+        // `reference to var 'stdin' is not concurrency-safe`——Linux 上四處皆然，而
+        // Windows 沒有這個問題，因為 ucrt 的 stdin 走 __acrt_iob_func 而非全域變數。
+        // 改用常數之後診斷不再適用，而不是被標註壓下去：程式不再依賴共享可變狀態。
+        // STDIN_FILENO rather than fileno(stdin): only the descriptor number was ever
+        // wanted here, and the FILE* is never used for I/O. glibc's `stdin` is a mutable
+        // global, so Swift 6 language mode reports `reference to var 'stdin' is not
+        // concurrency-safe` at all four sites on Linux; Windows never did, because ucrt
+        // reaches stdin through __acrt_iob_func instead of a global. With the constant the
+        // diagnostic stops applying rather than being annotated away -- the code no longer
+        // depends on shared mutable state.
+        let isTerminal = isatty(STDIN_FILENO) == 1
 #endif
         guard isTerminal else {
             throw TarCryptoError.io(
@@ -943,7 +955,7 @@ enum KeyInput {
         return line
 #else
         var term = termios(), saved = termios()
-        guard tcgetattr(fileno(stdin), &term) == 0 else {
+        guard tcgetattr(STDIN_FILENO, &term) == 0 else {
             throw TarCryptoError.io("cannot read terminal settings / 無法讀取終端機設定")
         }
         saved = term
@@ -960,8 +972,8 @@ enum KeyInput {
         // 直接採用平台自身的 typedef 在兩邊皆正確，並同時處理 ECHO 巨集
         // 被匯入 Swift 後型別亦不同的問題。
         term.c_lflag &= ~tcflag_t(ECHO)
-        _ = tcsetattr(fileno(stdin), TCSAFLUSH, &term)
-        defer { _ = tcsetattr(fileno(stdin), TCSAFLUSH, &saved) }
+        _ = tcsetattr(STDIN_FILENO, TCSAFLUSH, &term)
+        defer { _ = tcsetattr(STDIN_FILENO, TCSAFLUSH, &saved) }
         guard let line = readLine(strippingNewline: true) else {
             throw TarCryptoError.io("no passphrase supplied / 未輸入密語")
         }

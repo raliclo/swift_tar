@@ -273,6 +273,33 @@ machine can close this — re-run the script there and commit the result.
 於是 `encrypt_mbps_win.sh:231` 要求等級 9，而緊鄰的入版表格回報的是等級 3 的結果，
 且檔內未載明何者。此項只有 Windows 機器能結——在該機重跑腳本並提交結果即可。
 
+**Confirmed closed 2026-09-04, from dates rather than a re-run.** The two
+paragraphs above describe the state *before* the re-measurement the heading
+records, and read as an open task because they were never revised — the same
+shape as this file's stale banner. The evidence: `--zstd-level 9` was pinned on
+2026-08-15 (`c24c139`), the output file was regenerated on 2026-08-18
+(`230ce98`), and its first line reads `2026-08-18 09:18:48 TST`. Regenerated
+after the pin, so the committed numbers are level 9. `rgb1/todo.md` asserted the
+opposite until the same date and has been corrected there too.
+
+This note first cited `1cac313` (2026-08-16), the `.sh`→`.zsh` rename — which is
+also why the text above still says `encrypt_mbps_win.sh`. `git log -S` on the
+`.zsh` path stops at the rename rather than following it, so the flag looks a day
+younger than it is. Either date precedes the regeneration and the conclusion is
+unchanged, but a note whose argument is "read the dates" has to name the right
+commit.
+
+**2026-09-04 以日期確認結案，未重跑。** 上方兩段描述的是標題所載重測**之前**的狀態，
+因未隨之修訂而讀來仍像待辦——與本檔過期橫幅同一形狀。證據：`--zstd-level 9` 於
+2026-08-15 釘上（`c24c139`），輸出檔於 2026-08-18 重新產生（`230ce98`），其首行為
+`2026-08-18 09:18:48 TST`。產生於釘住之後，故入版數字為等級 9。`rgb1/todo.md` 在同一日
+之前主張相反，已一併更正。
+
+本註記原先引用 `1cac313`（2026-08-16），那是 `.sh`→`.zsh` 的更名——也正是上文仍寫
+`encrypt_mbps_win.sh` 的原因。`git log -S` 在更名後的路徑上會停在更名那一筆而不追溯，
+於是該旗標看起來比實際晚了一天。兩個日期都早於重測，結論不變，但一則以「讀日期」為論據
+的註記，必須指對 commit。
+
 ### Not applicable on Windows, failing cleanly / 本平台不適用，且失敗訊息清楚
 
 - `verifications/rgb1/mixed_size_delta.zsh` — needs `swift_tar_DOE` built first.
@@ -1227,7 +1254,9 @@ Measured 2026-08-19 with a three-member archive built on WSL's ext4:
 | bsdtar 3.8.4 | 1 of 3 | `FILE.TXT` — the last entry's case | the last entry's |
 
 **All three exit 0 with no message**, so two members' data is discarded silently
-by every one of them. **Recorded, not actioned**, and the reasoning matters
+by every one of them. **Recorded, not actioned** *(as written 2026-08-18; actioned
+the next day — see "Actioned 2026-08-19" further down this section)*, and the
+reasoning matters
 because it is the opposite of round 42's:
 
 **三者皆以 0 結束且無任何訊息**，故兩個成員的資料在每一個工具中都被無聲丟棄。
@@ -1246,10 +1275,16 @@ because it is the opposite of round 42's:
 
 What swift_tar *could* add is a warning — it knows the names it has written this
 run, so a case-insensitive collision is detectable. That would turn silent data
-loss into visible data loss, which is worth something. It is not done here
+loss into visible data loss, which is worth something. ~~It is not done here
 because it is a new feature with a per-entry memory cost, not the repair of a
-defect, and nobody has asked for it. Noted so the option is on record rather
-than rediscovered.
+defect, and nobody has asked for it.~~ **Superseded the same day — see
+"Actioned 2026-08-19" immediately below, which went further and refuses rather
+than warns.** The "not done" reasoning is struck rather than removed because the
+next paragraph is a reversal of it, and a reversal is only legible next to what
+it reversed.
+
+~~此處未做~~ **當日即被下方「Actioned 2026-08-19」取代，且比警告更進一步：改為拒絕而非
+警告。** 保留刪除線是因為下一段正是對它的翻轉，而翻轉唯有與被翻轉者並陳才讀得懂。
 
 **Actioned 2026-08-19, going further than the note above proposed.** Extraction
 now **refuses** the second member rather than warning, and `--force` allows it.
@@ -1304,9 +1339,15 @@ extracting a regular member onto an existing FIFO hung forever, and a read-only
 destination aborted the whole extract. Both were about writing *over* something,
 not about creating pipes, and both are closed.
 
-Awaiting a decision on whether to create FIFOs on POSIX (Windows would keep
+~~Awaiting a decision on whether to create FIFOs on POSIX (Windows would keep
 skipping). Not implemented unprompted: it adds a member type the tool has never
-written, which is a feature, not a fix.
+written, which is a feature, not a fix.~~ **Superseded — the decision was made
+and implemented the same day; see "Implemented 2026-08-19" below.** Kept struck
+through rather than deleted because it records why the work waited for a
+decision instead of being done unprompted.
+
+~~等待決定是否在 POSIX 上建立 FIFO。~~ **已被下方「Implemented 2026-08-19」取代**——
+保留刪除線而非刪去，是因為它記錄了「為何當時等待決定而非逕行實作」。
 
 跳過不支援項目型別的 `default:` 分支未區分平台，因此 `typeflag='6'` 在 Linux 與
 macOS 上同樣被跳過——而該處 `mkfifo` 不需任何權限，GNU tar 會確實建出管線。裝置節點

@@ -208,9 +208,28 @@ fi
 zsh ./generate_version.zsh "$tmp_version"           || die "build version generation failed"
 
 # ---- link / 連結 ----
+# -swift-version 6：compile_tar.zsh 自 2026-08-29 起就有，這裡與 compile_tar-linux.zsh
+# 都沒有，於是兩個平台仍以 Swift 5 模式編譯，而 Swift 6 的嚴格並行檢查從未看過
+# `os(Windows)` 的分支——那是三個平台中未檢查面最大的一塊。
+#
+# 加上之前先確認這個旗標在本工具鏈上真的有作用，而不是拿「零診斷」當結論：同一支 swiftc
+# 對一段含全域可變狀態的三行探針，不帶旗標時零診斷，帶了就報
+# `main actor-isolated var 'counter' can not be mutated from a nonisolated context`。
+# 確認之後再建，Windows 端 0 errors——那是程式碼的結果，不是旗標沒生效。
+#
+# -swift-version 6: compile_tar.zsh has carried this since 2026-08-29 while this script and
+# compile_tar-linux.zsh did not, so those two platforms still built in Swift 5 mode and Swift
+# 6's strict concurrency checking had never seen the `os(Windows)` branches -- the largest
+# unchecked surface of the three.
+#
+# Before adding it, the flag was confirmed to do something here rather than treating "no
+# diagnostics" as the finding: the same swiftc accepts a three-line global-mutable-state probe
+# without it and rejects it with `main actor-isolated var 'counter' can not be mutated from a
+# nonisolated context`. Only then was the build run; Windows reports 0 errors, and that is the
+# code's result, not the flag failing to apply.
 mkdir -p release
 build_exe="swift_tar-build-$$.exe"
-swiftc -O "${SWIFT_DEFINES[@]}" "${CLI_SRC[@]}" "$tmp_version" swift_tar.swift rgb1.swift crypto.swift \
+swiftc -O -swift-version 6 "${SWIFT_DEFINES[@]}" "${CLI_SRC[@]}" "$tmp_version" swift_tar.swift rgb1.swift crypto.swift \
        build/libarchive_zip_bridge.obj \
        build/libarchive-win/libarchive/Release/archive.lib \
        -o "$build_exe" \

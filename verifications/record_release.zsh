@@ -28,6 +28,12 @@
 #   verifications/record_release.zsh              # 印出將寫入的一列，不寫檔
 #   verifications/record_release.zsh --record     # 追加到 release_matrix.csv2
 #   verifications/record_release.zsh --binary PATH [--record]
+#   verifications/record_release.zsh --verify     # 檢查各列的 git_commit 是否仍取得到
+#
+# --verify 在有任何一格失效時以非 0 結束，適合放進 CI 或提交前的檢查。它不修改任何檔案，
+# 也不自動修——哪個新 hash 對應哪一列，只有建出該執行檔的機器知道。
+# --verify exits non-zero if any commit cell has become unreachable. It changes nothing and
+# repairs nothing: only the machine that built a binary knows which hash replaced its own.
 #
 # 不加 --record 就不動已入版的檔案，與本目錄其他腳本一致。
 # Without --record it touches no committed file, as the other scripts here do.
@@ -43,14 +49,64 @@ PLAT=$(swift_tar_platform)
 
 BINARY=""
 RECORD=0
+VERIFY=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --record) RECORD=1; shift ;;
+    --verify) VERIFY=1; shift ;;
     --binary) BINARY="${2:?--binary needs a path}"; shift 2 ;;
     -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
     *) print -r -- "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+
+# --verify：檢查每一列的 git_commit 在這個 clone 裡是否還取得到。
+#
+# 本檔下方已經寫明「git_commit 會被 rebase 改掉」，那段話是 2026-09-04 第一列壞掉之後補的。
+# **幾小時後同一件事又發生在 win 兩列上**（`27dc8c9` 與 `06b7dfd`，兩者在此 repo 中皆無此
+# 物件），因為記錄發生在 push 之前，而那些本地 commit 在 push 前被改寫了。
+#
+# 也就是說：把限制寫進註解，擋不住它再發生一次。**要擋就得有人去比對**，而沒有人會為了
+# 一個「已知的限制」定期手動比對四列 hash。這個模式讓那件事變成一道指令。
+#
+# 它不自動修。哪一個新 hash 對應哪一列，只有建出該執行檔的那台機器知道；由此處猜測填入，
+# 等於用一個看起來對的值蓋掉一個看得出錯的值。
+#
+# The note below about rebase rewriting git_commit was added after the first row broke on
+# 2026-09-04. Hours later the same thing happened to both win rows, because recording happens
+# before pushing and those local commits were rewritten first. A limitation written in a
+# comment does not stop it recurring; something has to compare. This mode is that comparison.
+# It deliberately does not repair: only the machine that produced a binary knows which new
+# hash replaces its old one, and guessing here would overwrite a visibly wrong value with a
+# plausible one.
+if [[ $VERIFY -eq 1 ]]; then
+  [[ -f $MATRIX ]] || { print -r -- "no matrix at $MATRIX" >&2; exit 1 }
+  n=$(csv2 -r -i "$MATRIX" | wc -l | tr -d ' ')
+  (( n > 0 )) || { print -r -- "matrix has no rows / 表中沒有任何一列" >&2; exit 1 }
+  bad=0
+  for r in {1..$n}; do
+    plat=$(csv2 -get $r:1 -i "$MATRIX")
+    commit=$(csv2 -get $r:5 -i "$MATRIX")
+    sha=$(csv2 -get $r:3 -i "$MATRIX")
+    if git -C "$ROOT" merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then
+      print -r -- "  ✓ 第 $r 列 ($plat) $commit  在 HEAD 的歷史中 / reachable"
+    elif git -C "$ROOT" cat-file -e "$commit" 2>/dev/null; then
+      print -r -- "  ~ 第 $r 列 ($plat) $commit  存在但不在 HEAD 歷史中 / exists, not in HEAD's history"
+      bad=1
+    else
+      print -r -- "  ✗ 第 $r 列 ($plat) $commit  此 clone 中不存在 / no such object here"
+      print -r -- "      sha256 仍然有效，身分未失 / the sha256 still identifies it: ${sha:0:16}…"
+      bad=1
+    fi
+  done
+  if (( bad )); then
+    print -r -- ""
+    print -r -- "git_commit 是脈絡，不是身分——失效的格子不影響 sha256。"
+    print -r -- "修法：由建出該執行檔的機器提供新 hash，csv2 -update r:5 <新hash>。不要猜。"
+    print -r -- "The commit column is context, not identity. Repair from the machine that built it."
+  fi
+  exit $bad
+fi
 
 # 依 $PLAT 決定要哪一個產物，不是「哪個先找到算哪個」。原本的順序在兩者皆存在時會挑錯：
 # 這台 Windows 機器以 WSL 建 Linux 版，兩邊的產物都落在同一個 release/（WSL 共用

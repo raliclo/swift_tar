@@ -1,7 +1,7 @@
 #!/bin/zsh
 # =====================================================================
-# faults_by_path.zsh -- 把 page fault 歸因到 FileWriterPool 的逐檔緩衝，或排除它。
-# faults_by_path.zsh -- attribute the page faults to FileWriterPool's per-file
+# page_fault_attribution.zsh -- 把 page fault 歸因到 FileWriterPool 的逐檔緩衝，或排除它。
+# page_fault_attribution.zsh -- attribute the page faults to FileWriterPool's per-file
 #                       buffering, or rule it out.
 #
 # R50-Mac 待辦第 2 項：native 解壓比 external 慢，三個競爭假設已排除（E-Cluster 參與度、
@@ -17,14 +17,22 @@
 # 而 inline 串流。於是只要讓檔案大小跨過那條線，就能在同一個執行檔上開關這條程式碼路徑，
 # 不必改 smallFileMax 重建。
 #
-# 三個語料，**總位元組數相同**，只有成員大小與數量不同：
+# 五個語料。前三個總位元組數相同，只有成員大小與數量不同；後兩個是緊貼分界的一對：
 #
-#   A   32 × 3 MiB = 96 MiB   ≤4 MiB → 走緩衝   count 32
-#   B   16 × 6 MiB = 96 MiB   >4 MiB → 不走緩衝 count 16
-#   C   96 × 1 MiB = 96 MiB   ≤4 MiB → 走緩衝   count 96
+#   A   32 × 3 MiB =  96 MiB   ≤4 MiB → 走緩衝
+#   B   16 × 6 MiB =  96 MiB   >4 MiB → 不走緩衝
+#   C   96 × 1 MiB =  96 MiB   ≤4 MiB → 走緩衝
+#   D   24 × 4 MiB =  96 MiB   ≤4 MiB → 走緩衝     ← 分界上
+#   E   24 × 5 MiB = 120 MiB   >4 MiB → 不走緩衝   ← 分界外一格
 #
-#   A vs C：位元組數相同、路徑相同、成員數 3 倍 → 隔離「數量」的效應
-#   A vs B：位元組數相同、路徑不同           → 隔離「緩衝路徑本身」的效應
+#   A vs C：位元組數相同、路徑相同、成員數 3 倍 → 隔離「數量」
+#   A vs B：位元組數相同、路徑不同             → 但大小與數量同時變了，分不乾淨
+#   D vs E：**成員數相同、大小相鄰、只有分支翻面** → 這一對才是決定性的
+#
+# 起初只有 A/B/C。它們之間大小與數量同時變動，因此無法斷定是哪一個在起作用——D/E 是為了
+# 補上這個缺口才加的，而結論正是由它們給出的。
+# A/B/C alone vary size and count together and cannot separate the two; D/E were added to
+# close that gap and are what settles it.
 #
 # **可證偽**：若逐檔緩衝是成因，B 的 fault 應遠低於 A 與 C，且 C 應高於 A。若 B 與 A
 # 相當，這個候選就該被排除，而我們回到零個候選——那也是有價值的結果，本輪的結論已經被
@@ -77,7 +85,7 @@
 # ---------------------------------------------------------------------
 #
 # 用法 / Usage:
-#   faults_by_path.zsh [--reps N] [--keep]
+#   page_fault_attribution.zsh [--reps N] [--keep]
 # =====================================================================
 set -uo pipefail
 
@@ -87,7 +95,7 @@ while (( $# )); do
     case "$1" in
         --reps) shift; REPS="${1:?--reps needs a number}" ;;
         --keep) KEEP=1 ;;
-        -h|--help) sed -n '2,45p' "${0:A}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,81p' "${0:A}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) print -ru2 -- "unknown option: $1"; exit 2 ;;
     esac
     shift

@@ -88,6 +88,32 @@ if [[ $VERIFY -eq 1 ]]; then
     plat=$(csv2 -get $r:1 -i "$MATRIX")
     commit=$(csv2 -get $r:5 -i "$MATRIX")
     sha=$(csv2 -get $r:3 -i "$MATRIX")
+    # 只有「長得像 commit」的值才要求可達。`(not-a-checkout)` 之類帶括號的明確標記是誠實的
+    # 值——guest 內建置時那裡沒有 .git，身分本來就由 sha256 承擔——把它報成失敗，等於讓這道
+    # 檢查對一個正確的做法亮紅燈。一個會對正確做法報警的檢查，很快就會被當成雜訊而略過，
+    # 那時它對真正的失效也一起失效了。
+    # Only values that claim to be commits are required to resolve. A parenthesised marker
+    # such as `(not-a-checkout)` is an honest value — a guest build has no .git and identity
+    # rests on the sha256 — and flagging it would make this check cry wolf. A check that
+    # warns about correct practice gets ignored, and then it no longer catches the real thing.
+    #
+    # `(#c7,40)` needs EXTENDED_GLOB, and it must not be combined with `##`. Written as
+    # `[0-9a-f]##(#c7,40)` without the option set, the whole thing is matched literally, so
+    # **every** value looks like a non-commit and the check skips every row while exiting 0.
+    # Measured: `ef97509`, `9f47258638bf` and `(not-a-checkout)` all took the skip branch;
+    # with `setopt extended_glob` and the count alone, the first two are commits and the
+    # third is not. A guard written to stop this check crying wolf had turned it into a
+    # check that cannot fail, which is worse -- crying wolf is at least visible.
+    # `(#c7,40)` 需要 EXTENDED_GLOB，且不可與 `##` 併用。未設定該選項時，
+    # `[0-9a-f]##(#c7,40)` 整串會被當成字面比對，於是**每一個**值都像非 commit——檢查跳過
+    # 每一列並以 0 結束。實測：`ef97509`、`9f47258638bf` 與 `(not-a-checkout)` 全部走了略過
+    # 分支；改為 `setopt extended_glob` 並只用計數之後，前兩者是 commit、第三者不是。
+    # 一道為了避免誤報而寫的守門，變成了一道不可能失敗的檢查，那比誤報更糟——誤報至少看得見。
+    setopt local_options extended_glob
+    if [[ $commit != [0-9a-f](#c7,40) ]]; then
+      print -r -- "  – 第 $r 列 ($plat) $commit  非 commit 的明確標記，不適用 / explicit non-commit marker"
+      continue
+    fi
     if git -C "$ROOT" merge-base --is-ancestor "$commit" HEAD 2>/dev/null; then
       print -r -- "  ✓ 第 $r 列 ($plat) $commit  在 HEAD 的歷史中 / reachable"
     elif git -C "$ROOT" cat-file -e "$commit" 2>/dev/null; then

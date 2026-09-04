@@ -52,8 +52,19 @@ trap 'rm -rf "$work"' EXIT
 
 # 分類每個候選者：能寫出封存、支援 --exclude，且由 --version 判定家族。
 # Classify each candidate: can write an archive, supports --exclude, family from --version.
+# Windows 上的 bsdtar 沒有一個叫得出來的名字。系統自帶的是 C:\Windows\System32\tar.exe，
+# 而 Git Bash 的 PATH 上 `tar` 會先解析到 scoop／MSYS 的 GNU tar，`bsdtar` 則根本不是一個
+# 指令。於是這支測試在 Windows 上一直是 bsdtar=none：分歧那兩個樣式被跳過，而檔頭宣告
+# 「swift_tar 跟隨 bsdtar」的那個選擇，在唯一同時擁有 bsdtar 與 swift_tar 的平台上從未被
+# 驗證過。加入絕對路徑而非再加一個名字——問題正是它沒有名字。
+# On Windows bsdtar has no name to look up. The system one is C:\Windows\System32\tar.exe,
+# while `tar` on Git Bash's PATH resolves to scoop/MSYS GNU tar first and `bsdtar` is not a
+# command at all. So this file ran with bsdtar=none there: the divergent shapes were skipped,
+# and the choice the header states -- that swift_tar follows bsdtar -- went unverified on the
+# one platform that has both bsdtar and swift_tar. An absolute path rather than another name,
+# because having no name is the problem.
 BSD=""; GNU=""
-for cand in tar bsdtar gtar gnutar; do
+for cand in tar bsdtar gtar gnutar /c/Windows/System32/tar.exe; do
   command -v $cand >/dev/null 2>&1 || continue
   rm -rf "$work/probe" "$work/p.tar"; mkdir -p "$work/probe/d"; print -- x > "$work/probe/d/f"
   ( cd "$work/probe" && $cand cf ../p.tar --exclude 'nothing' d ) >/dev/null 2>&1 || continue
@@ -74,13 +85,20 @@ if [[ -z $BSD && -z $GNU ]]; then
 fi
 
 failures=0
+# printf 而非 print：`print` 會解釋逸出序列，於是樣式 `\*.log` 的標籤印成 `*.log`，與清單裡
+# 真正的 `*.log` 那一項完全同名。兩個不同的檢查頂著同一個標籤，失敗時無從分辨是哪一個——
+# 而逸出樣式正是最需要看清楚的那一類。%s 的引數不受格式字串影響，反斜線原樣通過。
+# printf, not print: `print` interprets escape sequences, so the pattern `\*.log` printed its
+# label as `*.log` -- identical to the genuine `*.log` entry in the same list. Two different
+# checks under one label leave a failure unattributable, and escaped patterns are exactly the
+# ones that need to be legible. A %s argument is untouched by the format string.
 check() {
   if [[ $1 == $2 ]]; then
-    print -- "  ok   $3"
+    printf '  ok   %s\n' "$3"
   else
-    print -- "  FAIL $3"
-    print -- "       期望 / expected : $1"
-    print -- "       實際 / got      : $2"
+    printf '  FAIL %s\n' "$3"
+    printf '       期望 / expected : %s\n' "$1"
+    printf '       實際 / got      : %s\n' "$2"
     (( failures += 1 ))
   fi
 }
@@ -89,6 +107,17 @@ mkdir -p "$work/src/sub"
 print -- a > "$work/src/keep.txt"
 print -- b > "$work/src/skip.log"
 print -- c > "$work/src/sub/deep.log"
+# 這三個是為了字元類、範圍與逸出而加的：單靠上面三個檔，`[a-z].log`、`[!…]` 與 `\*` 都
+# 會因為「沒有東西可命中」而在任何實作上都得到相同結果，那樣的比對通過與否毫無資訊。
+# 名稱只用 Windows 也合法的字元——`*` 與 `?` 不能出現在檔名裡，故僅出現在樣式側。
+# These three exist for the character-class, range and escape patterns: with only the three
+# above, `[a-z].log`, `[!...]` and `\*` would match nothing in every implementation, and a
+# comparison that passes for that reason carries no information. The names use only
+# characters Windows allows -- `*` and `?` cannot appear in a filename, so they appear on
+# the pattern side alone.
+print -- d > "$work/src/a.log"
+print -- e > "$work/src/note-.txt"
+print -- f > "$work/src/br[ack].txt"
 
 # 目錄成員的結尾斜線在各實作間拼法不同，故一律去除後再比對——本檔比的是「哪些成員在」，
 # 不是「名稱怎麼拼」。
@@ -109,7 +138,27 @@ members() {  # <tar> <樣式>
 
 # 兩個參照實作一致的樣式：swift_tar 必須與兩者皆同。
 # Shapes the references agree on: swift_tar must match both.
-AGREED=('sub' '*.log' 'src/*.log' '*/deep.log' 'deep.log' '*' 'nomatch')
+# 後 15 個涵蓋 `?`、字元類、範圍、`!`／`^` 反向、`[]]`、`[a-]`、未閉合的 `[`，以及反斜線
+# 逸出。加進來的原因是這些規則先前一條也沒被測到：原本的七個樣式只用到 `*` 與字面字元。
+#
+# 那個空白在 Windows 上特別重。POSIX 端 `--exclude` 直接呼叫 `fnmatch`，Windows 端沒有
+# 這個函式，走的是 `#if os(Windows)` 內另一份實作——也就是說，唯一沒有參照可比的那份
+# 實作，恰好是唯一沒被測到的那份。實測後兩邊皆一致（Windows 對 bsdtar 15/15，Linux 對
+# GNU tar 15/15），所以這裡釘住的是量到的結果，不是假設。
+#
+# The last 15 cover `?`, character classes, ranges, `!`/`^` negation, `[]]`, `[a-]`, an
+# unterminated `[`, and backslash escapes. They are here because not one of those rules was
+# exercised before: the original seven use only `*` and literal characters.
+#
+# That gap mattered most on Windows. On POSIX `--exclude` calls `fnmatch` directly; Windows
+# has no such function and runs a separate implementation under `#if os(Windows)` -- so the
+# one implementation with nothing to compare against was also the one nothing tested. Both
+# platforms were measured before these were added (Windows 15/15 against bsdtar, Linux 15/15
+# against GNU tar), so what is pinned here is a measurement, not an assumption.
+AGREED=('sub' '*.log' 'src/*.log' '*/deep.log' 'deep.log' '*' 'nomatch'
+        '?.log' '????.log' '[ad]*.log' '[a-z].log' '[!a-z]*.log' '[^a-z]*.log'
+        'br[ack].txt' 'br[]].txt' '[.txt' 'br[a-c]ck].txt' '*[.]log' '[a-]*'
+        '\*.log' 'note\-.txt' '*.???')
 # 兩者分歧的樣式：swift_tar 必須與 bsdtar 同，且必須與 GNU 不同——後者同樣是斷言，
 # 因為若 GNU 哪天改成與 bsdtar 一致，這個註解與選擇就該重新檢視。
 # Shapes they disagree on: swift_tar must match bsdtar and must differ from GNU. The second

@@ -1,6 +1,6 @@
-swift_tar_version=20260816-014809
-libarchive_version=v3.7.5-1328-g51060e49
-libarchive_commit=51060e492b7499e9d26ea21b926f09e7aebe1aee
+swift_tar_version=20260906-014314
+libarchive_version=v3.7.5-1790-gddf82473
+libarchive_commit=ddf8247381814977c2f55a59f48d17460f7d00f0
 libarchive_linkage=static
 zlib_dylib_version=1.2.12
 zlib_path=/usr/lib/libz.1.dylib

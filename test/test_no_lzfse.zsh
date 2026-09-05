@@ -33,22 +33,72 @@ cd "$ROOT"
 
 LOG="$HERE/test_no_lzfse.log"
 exec > >(tee "$LOG") 2>&1
-# Neutral temp name (no "lzfse" substring, which would false-match grep checks).
-TMP="$(mktemp -d "$HERE/.test_nolz.XXXXXX")"
-# Rebuild the full binary at the end so the working tree / install stays full.
-# 測試結束重建完整版，讓工作目錄／安裝維持完整版。
-# 以該平台的完整版重建，讓工作目錄／安裝維持完整版。build_full 在下方依平台決定，但
-# trap 必須在建立 TMP 之後立刻設好，因此先宣告為空陣列：`set -u` 之下，若在分派之前就
-# 退出（例如缺 lzfse2），未宣告的陣列會讓 cleanup 自己出錯。
-# build_full is chosen per platform below, but the trap has to be armed as soon
-# as TMP exists, so declare it empty first: under `set -u` an exit before the
-# dispatch (a missing lzfse2, say) would otherwise make cleanup itself fail.
+# 暫存改建在 $TMPDIR 而非 $HERE：先前建在 test/ 之下，被中斷的執行會把殘留留在版控
+# 目錄裡（實際累積過 12 個）。名稱刻意不含 "lzfse" 子字串，否則會誤中本測試的 grep 檢查。
+# Temp now lives in $TMPDIR rather than $HERE: it used to be created under test/,
+# so an interrupted run left debris inside the versioned tree (12 had accumulated).
+# The name deliberately avoids the substring "lzfse", which would false-match the
+# grep checks this test performs.
+# ---------------------------------------------------------------------------
+# 清理與還原是兩件事，過去合在一個叫 cleanup 的函式裡。
+#
+# 那個函式除了 rm -rf，還會重跑一次**完整編譯**——一個名為 cleanup 的函式做了它名字沒說
+# 的事，而那正是缺陷本身：兩件語意無關的責任綁在同一個名字下，其中一件瞬間且冪等，另一件
+# 分鐘級且有副作用。於是「只想清掉暫存」的場合（收到訊號時）無法只做前者，因此當初只能把
+# trap 限制在 EXIT，洩漏也就無解。拆開之後 trap 該掛哪些訊號不再是問題。
+#
+# Cleanup and restore are two different things that used to share one function named
+# `cleanup`, which also re-ran a full compile. A function doing what its name does not
+# say is the defect; the trap only exposed it. Split, the question of which signals to
+# trap stops being a dilemma.
+# ---------------------------------------------------------------------------
+
+# 只做清理：冪等、瞬間、不需要任何外部狀態，因此掛在任何訊號上都安全。
+# 用 glob 而非只刪 "$TMP"，是為了同時掃掉先前被中斷的執行所遺留的目錄——見下方為何
+# 這件事不能只靠 trap。(N) 是必要的：zsh 預設 NOMATCH 在無相符時中止，而本機某處
+# unsetopt nomatch 會把它藏起來，只有 `zsh -f` 或乾淨環境才看得見。
+# Idempotent, instant, needs no state, so it is safe on any signal. The glob also
+# sweeps debris left by earlier interrupted runs. (N) is required: zsh's default
+# NOMATCH aborts when nothing matches, and a local unsetopt hides that here.
+remove_temps() { rm -rf "${TMPDIR:-/tmp}"/.test_nolz.*(N) }
+
+# 啟動時先掃一次。**這一行才是 Windows 上真正生效的部分**：實測本機 MSYS/mingw zsh 在
+# 阻塞於外部指令時，跨行程送來的 INT／TERM 不會執行 trap，行程以預設處置死亡（自我送
+# 訊號則會執行）。而 `timeout` 送的正是 SIGTERM。所以訊號 trap 在 macOS／Linux 上有效，
+# 在此平台上不可依賴——啟動時清掃不依賴任何訊號，因此在哪裡都成立。
+# Sweep on startup. This line, not the signal traps, is what works on Windows:
+# measured here, an externally delivered INT/TERM does not run the trap while zsh is
+# blocked in an external command; the process dies with the default disposition. And
+# SIGTERM is what `timeout` sends. The startup sweep depends on no signal at all.
+remove_temps
+
+# 掃完才建立本次的 TMP。順序不能顛倒：glob 匹配所有 .test_nolz.*，若先建再掃，會把剛
+# 建好的那個一併刪掉——實測確認過，而且腳本要到後面用到 TMP 時才會以「目錄不存在」的
+# 形式失敗，離成因很遠。
+# Create this run's TMP only after the sweep. The order matters: the glob matches every
+# .test_nolz.*, so sweeping after creating would delete the directory just made —
+# measured — and the script would only fail later, far from the cause.
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/.test_nolz.XXXXXX")"
+
+# 還原完整版建置：這不是清理。它必須在提前失敗時也執行（例如下方的 FATAL），否則樹上
+# 留下的會是無 LZFSE 的公開版——所以它掛在 EXIT，而非只放在正常路徑的結尾。但收到訊號時
+# 不執行：使用者按 Ctrl-C 要的是立刻停止，不是再等數分鐘的編譯。
+# Restoring the full build is not cleanup. It must also run on an early failure (the
+# FATAL below), or the tree keeps the LZFSE-less public binary — hence EXIT rather than
+# the end of the happy path. It is skipped on a signal: Ctrl-C means stop now, not wait
+# minutes for a compile.
+# build_full 在下方依平台決定，但 trap 必須在 TMP 存在後立刻設好，故先宣告為空陣列：
+# `set -u` 之下，若在分派之前就退出（例如缺 lzfse2），未宣告的陣列會讓函式自己出錯。
+# build_full is chosen per platform below; declare it empty first so an exit before the
+# dispatch does not make the handler itself fail under `set -u`.
 build_full=()
-cleanup() {
-  rm -rf "$TMP"
-  (( ${#build_full} )) && "${build_full[@]}" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
+restore_full_build() { (( ${#build_full} )) && "${build_full[@]}" >/dev/null 2>&1 || true }
+
+interrupted=0
+on_exit()   { remove_temps; (( interrupted )) || restore_full_build }
+on_signal() { interrupted=1; exit 130 }
+trap on_exit EXIT
+trap on_signal INT TERM HUP
 
 # The OS build, not just the product version, identifies the environment:
 # macOS 27.0 build 26A5388g reported CPU Power 0 mW where 26A5406e did not.

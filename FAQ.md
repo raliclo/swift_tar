@@ -173,6 +173,31 @@ at CPU-side work in the extract path rather than at I/O.
 Naming that work would need profiling, which has not been done. Recorded as a
 bounded open question, not a conclusion.
 
+**Re-measured 2026-09-06, and the gap is Linux-only.** Same script, same three
+shapes, both platforms —
+[`verifications/profile/`](verifications/profile/README.md):
+
+| shape | macOS | Linux (QEMU aarch64) |
+|---|---|---|
+| 20 × 8 MB | 70 / 76 ms = **0.92×** | 38 / 26 ms = **1.46×** |
+| 200 × 800 KB | 47 / 61 ms = **0.77×** | 31 / 25 ms = **1.24×** |
+| 2000 × 80 KB | 85 / 156 ms = **0.54×** | 50 / 35 ms = **1.43×** |
+
+So **the paragraph above is no longer true of macOS**: swift_tar does not land
+between 95 and 130 ms there, and it is now the faster of the two on all three
+shapes, its lead growing as the corpus fragments. The gap itself is real and
+still present — on Linux, at 1.24× to 1.46×.
+
+That decides where to look. **Profiling belongs on Linux**, which is also the
+only end where it is feasible: on macOS the extract runs about 0.17 s and four
+separate sampling approaches returned at most 52 samples, which is recorded in
+that folder's README so nobody spends the afternoon again.
+
+One confound, stated rather than buried: the two references are different
+versions — bsdtar 3.5.3 / libarchive 3.7.4 on macOS against 3.8.8 / 3.8.8 on
+Linux. Platform is therefore not the only variable between those columns, and
+no claim is made here that it is.
+
 **Four candidates excluded, none remaining (2026-09-04).**
 `verifications/zstd_decode_gap.zsh` split "why is native slower" into facets that
 can be measured one at a time and eliminated three: the E-cluster, the `-n`
@@ -249,6 +274,27 @@ files, not decoding — where no choice of tar helps.
 的比值比 macOS 寫入磁碟更差——這指向解壓路徑的 CPU 側工作，而非 I/O。
 
 要指出那是什麼工作需要 profiling，尚未進行。此處記為一個範圍明確的未決問題，而非結論。
+
+**2026-09-06 重測，該差距只在 Linux 出現。** 同一支腳本、同樣三種形狀、兩個平台——
+見 [`verifications/profile/`](verifications/profile/README.md)：
+
+| 形狀 | macOS | Linux（QEMU aarch64） |
+|---|---|---|
+| 20 × 8 MB | 70 / 76 毫秒 = **0.92×** | 38 / 26 毫秒 = **1.46×** |
+| 200 × 800 KB | 47 / 61 毫秒 = **0.77×** | 31 / 25 毫秒 = **1.24×** |
+| 2000 × 80 KB | 85 / 156 毫秒 = **0.54×** | 50 / 35 毫秒 = **1.43×** |
+
+因此**上一段關於 macOS 的敘述已不成立**：swift_tar 在該處並非落在 95–130 毫秒，而且
+三種形狀下都是較快的一方，語料愈碎領先愈多。差距本身是真的、也仍然存在——在 Linux 上，
+1.24 到 1.46 倍。
+
+這決定了該往哪裡看。**profile 要在 Linux 上做**，而那也是唯一做得到的一端：macOS 上
+解壓只跑約 0.17 秒，四種取樣做法最多只取到 52 個樣本，該資料夾的 README 記下了這件事，
+以免有人再花掉一個下午。
+
+一個干擾項，寫出來而不是埋掉：兩端的參照實作版本不同——macOS 是 bsdtar 3.5.3 /
+libarchive 3.7.4，Linux 是 3.8.8 / 3.8.8。所以「平台」不是那兩欄之間唯一的變數，此處
+不作那個宣稱。
 
 **四個候選皆已排除，一個不剩（2026-09-04）。** `verifications/zstd_decode_gap.zsh` 把
 「native 為何較慢」拆成可逐項量測的面向，排除了三個：E-cluster、`-n` 設定、平行度。剩下

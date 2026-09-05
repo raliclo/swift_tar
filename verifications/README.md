@@ -591,3 +591,31 @@ penalty, so it must never wrap a timed run.
 > `background` arm leaves the machine in a different state than it found it.
 > Sequential sweeps of anything scheduler- or thermal-sensitive are not
 > trustworthy; the arms are interleaved and the median reported.
+
+---
+
+## Per-platform performance data → `profile/` (2026-09-06)
+
+[`verifications/profile/`](profile/README.md) holds the timing data for each
+platform and the script that produces it. The section above measured extraction
+on macOS alone; the folder exists because the answer turned out to depend on
+which platform you ask.
+
+Same script, same three shapes, both platforms, minima of five interleaved reps:
+
+| shape | macOS | Linux (QEMU aarch64) |
+|---|---|---|
+| 20 × 8 MB | 70 / 76 ms = **0.92×** | 38 / 26 ms = **1.46×** |
+| 200 × 800 KB | 47 / 61 ms = **0.77×** | 31 / 25 ms = **1.24×** |
+| 2000 × 80 KB | 85 / 156 ms = **0.54×** | 50 / 35 ms = **1.43×** |
+
+The extract gap the FAQ tracked as an open question is **real and Linux-only**.
+On macOS swift_tar is now the faster of the two on all three shapes, which
+extends the finding above — it no longer merely wins on small files, it wins
+across the range, by more as the corpus fragments.
+
+Two things in that folder's README are worth knowing before measuring anything
+here: sampling profilers do not work against a 0.17 s target (four approaches
+tried, at most 52 samples), and the reference tar must be chosen by asking it
+what it is — `/usr/bin/tar` in the Linux VM *is* swift_tar, so choosing by
+filename compares it with itself and reports a flawless 1.00×.

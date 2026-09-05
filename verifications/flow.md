@@ -404,6 +404,30 @@ catalogues its own bugs teaches the reader to distrust the parts that are fine.
   路徑少了一層；守門是 `if [ -f "$fixture" ]`，於是 17 項斷言——路徑穿越與 raw
   typeflag，也就是最具敵意的那批——停止執行，而整體仍回報 `FAIL: 0`。請讀 skip 行，
   並與上一次的斷言總數比對。
+- **Confirm the phenomenon before profiling it.** A profiler always returns some
+  hottest function, and that function then gets mistaken for the cause. The
+  decode-gap section of the FAQ had three mechanisms named and overturned that
+  way. Asked to profile it on 2026-09-06, the first measurement found the gap
+  had **reversed on macOS** — swift_tar was the faster of the two on all three
+  shapes — while remaining real on Linux at 1.24–1.46×. Profiling on macOS would
+  have produced a confident mechanism for a gap that is not there.
+  **先確認現象還在，再 profile。** profiler 一定會回報「某個最花時間的函式」，而那個
+  函式接著就會被當成成因。FAQ 解壓差距那一節已有三個機制以這種方式被提出又推翻。
+  2026-09-06 受託去 profile 時，第一次量測就發現該差距在 **macOS 上已經反轉**——三種
+  形狀下 swift_tar 都較快——而在 Linux 上仍為 1.24–1.46 倍。若當時直接在 macOS 上
+  profile，得到的會是一個為「並不存在的差距」寫下的、看起來很有把握的機制。
+- **A short-lived target defeats sampling profilers, and the failure is silent.**
+  Extracting a RAM-disk archive runs about 0.17 s. `sample <pid>` and
+  `sample -wait` both returned **zero** samples; `xctrace --launch` returned 52;
+  recording a 25-iteration loop returned 13, all attributed to the wrapper shell
+  because `--launch` does not follow child processes. None of these reported an
+  error — each produced an empty or near-empty profile that reads like a result.
+  Check the sample count before reading a profile.
+  **壽命短的目標會讓取樣式 profiler 失效，而且失敗是無聲的。** 解開 RAM disk 上的封存
+  約 0.17 秒：`sample <pid>` 與 `sample -wait` 各取到 **0** 個樣本；`xctrace --launch`
+  取到 52 個；錄一個 25 次的迴圈只得 13 個，且全部歸給外層 shell——`--launch` 不追子
+  行程。這些都沒有報錯，各自產出一份空的或近乎空的 profile，讀起來就像一個結果。讀
+  profile 之前先看樣本數。
 - **`.sh` → `.zsh` renames drop the exec bit.** Eleven committed scripts became
   non-executable that way; two test suites failed with 126 as a result.
   **`.sh` → `.zsh` 改名會掉執行位元。** 曾有十一支入版腳本因此無法執行。

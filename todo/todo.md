@@ -8,10 +8,19 @@
 > CRLF in the `-t` / `--identify` output on Windows. The suite fails 11 of its
 > checks against the previous binary and passes all 15 against this one.
 >
-> **Nothing is open, 2026-09-04.** Every defect recorded below is fixed and under
-> regression test — `test/test_blind_findings.zsh` is at 137 checks on Windows and
+> **One entry is open, 2026-09-06:** the ZIP and tar paths disagree on macOS
+> filename normalisation — tar preserves the on-disk NFC bytes, ZIP stores NFD.
+> Cause located to one line in the vendored libarchive whose justifying comment
+> describes HFS+ behaviour that APFS no longer has. Not a regression from the
+> libarchive bump: the system's older bsdtar does the same. Three bridge-level
+> fixes were tried and measured; all three still produced NFD, and the option that
+> would clear the flag is internal to libarchive.
+>
+> **Everything else recorded below is fixed and under regression test** —
+> `test/test_blind_findings.zsh` is at 137 checks on Windows and
 > 142 on Linux, all passing, and it fails against every earlier binary. The two
-> entries that carried 🔴 are both closed by this date's work: `release_matrix.csv2`
+> entries that carried 🔴 on 2026-09-04 were both closed by that date's work:
+> `release_matrix.csv2`
 > exists (`ef97509`) and holds four rows, and the ZIP backend no longer stores its
 > own output (`f0ef58e`). No entry is left marked "recorded, not actioned": the
 > case-collision *warning* option was the last one, and it was actioned on
@@ -1486,6 +1495,70 @@ sha256，那才是答案。」但沒有這個檔案——本 repo 沒有，父�
 
 兩份 README 原本寫著 `--version`「回報編譯 binary 時擷取的本機日期時間」，該敘述自
 `d868dc3` 起不再為真，已於同一次變更中更正。
+
+## ZIP 與 tar 兩條路徑對 macOS 檔名的正規化不一致 / The ZIP and tar paths disagree on macOS filename normalisation  ▸ 🔴 未決 / open
+
+同一個檔案、同一支 swift_tar，換個格式就換一種檔名編碼：
+
+```
+磁碟上          63 61 66 c3 a9        caf + é(U+00E9)      NFC
+tar  路徑       63 61 66 c3 a9        原樣保留             NFC ✅
+zip  路徑       63 61 66 65 cc 81     e + 結合尖音符        NFD ❌
+```
+
+螢幕上兩者完全相同，`diff -r` 會判定為兩個不同的檔案——這正是它被發現的方式。
+
+**成因已定位到行**：`libarchive/libarchive/archive_string.c:1271`，`#if defined(__APPLE__)`
+之下的 `flag |= SCONV_NORMALIZATION_D`。該處註解寫著理由：「On Mac OS X, although its
+filesystem layer automatically convert filenames to NFD...」
+
+**那個前提已經過時。** HFS+ 確實會自動轉 NFD；APFS 不會。此處實測：先建
+`caf\xc3\xa9.txt`（NFC）再建 `cafe\xcc\x81.txt`（NFD），磁碟上只剩**一個**檔案，名稱是
+NFC 那一種——APFS 查找時對正規化不敏感、儲存時原樣保留。**libarchive 轉換了一個檔案
+系統並未轉換的名稱。**
+
+**這不是本次 libarchive 升級造成的。** 系統的 bsdtar 3.5.3（libarchive 3.7.4，升級前
+就在機器上）從同一份來源產生的 ZIP **也是 NFD**。新舊版本行為相同。
+
+### 為什麼這件事在 macOS 之外才會咬人
+
+macOS 本機不會有感覺：APFS 兩種寫法都找得到同一個檔。但封存的用途是離開這台機器，而
+**ext4 對正規化是敏感的**——這種 ZIP 解到 Linux 上，會得到一個與原始檔名不同的檔案。
+逐位元組比對檔名的腳本也會判定不一致。
+
+### 已排除的修法（都實測過，不是推論）
+
+| 嘗試 | 結果 |
+|---|---|
+| bridge 內以 `archive_entry_set_pathname_utf8` 從 `pathname` 設回 | 仍 NFD |
+| 停用 `archive_write_set_options(writer, "hdrcharset=UTF-8")` | 仍 NFD |
+| 同上但改從 `archive_entry_sourcepath` 取值 | 仍 NFD |
+
+第三項值得記下細節：`sourcepath` **是** NFC（實測 `caf\xc3\xa9`），`pathname` 在 entry
+到達呼叫端時**已經**是 NFD。但即使從 sourcepath 重設，writer 在寫出時仍會再轉一次。
+
+`SCONV_SET_OPT_NORMALIZATION_C` 這個能清掉 NFD 的選項是**內部 API**，只有 tar reader
+用得到，公開介面搆不到。
+
+**因此「在 bridge 端解決」這條路不存在。** 該方向是本 session 先前建議的，那個建議在提出
+時沒有先確認可行性。
+
+### 剩下的選項
+
+1. **patch vendored libarchive**（`archive_string.c:1271` 一行）。問題不在改動本身，而在
+   它會被下一次 `sync_all.zsh --update` 抹掉；要走這條，得先決定「vendored 上游是否開始
+   帶 patch」以及重貼機制。那是政策決定，不該由一個檔名問題順手決定。
+2. **上游修 libarchive**。前提確實過時，理據站得住，但時程不由我們控制。
+3. **不修，記錄之**（目前狀態）。跨平台傳輸時，tar 路徑是忠實的那一條。
+
+The two paths disagree: tar preserves the on-disk bytes (NFC), ZIP stores NFD, for the same
+file. The cause is one line in the vendored libarchive under `#if defined(__APPLE__)`, whose
+comment justifies it by HFS+ behaviour that APFS no longer has — measured here: APFS keeps
+the NFC bytes it was given. It is not a regression from the libarchive bump; the system's
+older bsdtar does the same. Three bridge-level fixes were tried and all three still produced
+NFD, and the option that would clear the flag is internal to libarchive, so the
+"fix it in the bridge" route proposed earlier does not exist. It bites off macOS: ext4 is
+normalisation-sensitive, so such a ZIP extracted on Linux yields a differently named file.
 
 ## The ZIP backend stores its own output file / ZIP 後端會把自己的輸出檔收進封存  ▸ ✅ 已結案 2026-09-04 / closed
 

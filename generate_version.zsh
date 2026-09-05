@@ -9,7 +9,21 @@
 # 每個平台一個檔案。共用 version.txt 會使 macOS 建置覆寫 Windows 建置腳本所記錄的
 # 版本戳與連結來源，反之亦然——兩者描述的是連結到不同建置產物的不同執行檔，本來就
 # 不是同一件事實。
+#
+#   zsh ./generate_version.zsh <output-swift-file>   write the version constant
+#                                                    寫出版本常數
+#   zsh ./generate_version.zsh --help                print this synopsis and exit
+#                                                    印出本說明後結束
 set -eu
+
+# Answered before the ${1:?} below, which would otherwise take --help as the
+# output path and write a Swift file named after the flag.
+# 必須在下方 ${1:?} 之前回答：否則 --help 會被當成輸出路徑，寫出一個以旗標為名的 Swift 檔。
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    sed -n '2,16p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
 
 SCRIPT_DIR=${SWIFT_TAR_SOURCE_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
 output_swift=${1:?Usage: generate_version.zsh <output-swift-file>}

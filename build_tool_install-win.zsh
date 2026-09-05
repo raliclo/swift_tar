@@ -30,7 +30,17 @@
 #     zsh ./build_zlib-win.zsh
 #     zsh ./build_zstd-win.zsh
 #     ./compile_tar-win.bat
+#
+#   zsh ./build_tool_install-win.zsh --help
+#       print this synopsis and exit, installing nothing
+#       印出本說明後結束，不安裝任何東西
 set -e
+
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    sed -n '3,36p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
 
 echo "=== swift_tar Windows build toolchain installer ==="
 

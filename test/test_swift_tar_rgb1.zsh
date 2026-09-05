@@ -10,7 +10,24 @@
 # 封存往返後，必須位元組級一致，且 --rgb1-info 與 --rgb1-raw 仍能正確解析。
 # 另驗證互通：系統標準 tar 能解出 swift_tar 的純 tar .rgb1 而不損壞。此測試補足
 # test_rgb1.zsh（後者單獨測 RGB1 三個模式）。
+#
+#   ./test/test_swift_tar_rgb1.zsh           run the integration test
+#                                            執行整合測試
+#   ./test/test_swift_tar_rgb1.zsh --record  also write the measurement record
+#                                            並一併寫入量測紀錄
+#   ./test/test_swift_tar_rgb1.zsh --help    print this synopsis and exit
+#                                            印出本說明後結束
 set -euo pipefail
+
+# Answered above the log redirect, the temp dir and the cleanup trap below, and
+# above the --record loop, which would otherwise reject --help with exit 2.
+# 在下方的 log 導向、暫存目錄與 cleanup trap 之前回答，也在 --record 迴圈之前——否則
+# --help 會被該迴圈當成未知參數並以 exit 2 拒絕。
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  sed -n '2,19p' "$script_path" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="${HERE:h}"

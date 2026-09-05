@@ -10,7 +10,22 @@
 # 沒有的功能），並與系統 tar 對比。每個封存都以解出後的檔案樹與參考樹做 diff
 # 比對，因此比的是內容等價，而非位元組佈局。該 diff 看不到的部分另行斷言：第 4 節
 # 檢查追加的 symlink 是否仍以 symlink 形式存活，因為 diff -r 會跟隨連結。
+#
+#   ./test/test_append_update.zsh          run the suite against release/swift_tar
+#                                          以 release/swift_tar 執行測試
+#   ST=/path/to/bin ./test/test_append_update.zsh   test a specific binary
+#                                          指定要測試的執行檔
+#   ./test/test_append_update.zsh --help   print this synopsis and exit, running nothing
+#                                          印出本說明後結束，不執行任何測試
 set -euo pipefail
+
+# Answered above the log redirect, the temp dir and the cleanup trap below.
+# 在下方的 log 導向、暫存目錄與 cleanup trap 之前回答。
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  sed -n '2,19p' "$script_path" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="${HERE:h}"

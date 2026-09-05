@@ -1,4 +1,11 @@
 #!/usr/bin/env zsh
+# test/test_touch_alias.zsh -- verify `-m` behaves as the short form of `--touch`.
+# test/test_touch_alias.zsh -- 驗證 `-m` 的行為等同 `--touch` 的短寫。
+#
+#   ./test/test_touch_alias.zsh          run the suite against release/swift_tar
+#                                        以 release/swift_tar 執行測試
+#   ./test/test_touch_alias.zsh --help   print this synopsis and exit
+#                                        印出本說明後結束
 set -uo pipefail
 
 # `-m` 是 `--touch` 的短寫，如同其他每一個 tar。
@@ -19,7 +26,13 @@ set -uo pipefail
 # no longer reports an unknown option would pass an implementation that accepts
 # the flag and then ignores it, which is the way an alias most easily goes wrong.
 
-script_dir=${0:A:h}
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  sed -n '2,8p' "$script_path" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
+
+script_dir=${script_path:h}
 root=${script_dir:h}
 cd "$root"
 

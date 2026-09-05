@@ -7,7 +7,25 @@
 # 驗證公開版（compile_no_lzfse.zsh）完全不含私有 LZFSE 引擎：binary 內無
 # bvx3/other3、LZFSE codec 不可用、LZFSE 封存無法解碼——同時標準 codec 與純 tar
 # 仍可用。以完整版（compile_tar.zsh）作為「含 LZFSE」的對照。
+#
+#   ./test/test_no_lzfse.zsh          build both binaries and run the checks
+#                                     建置兩份執行檔並執行檢查
+#   ./test/test_no_lzfse.zsh --help   print this synopsis and exit, building nothing
+#                                     印出本說明後結束，不進行任何建置
 set -euo pipefail
+
+# --help is answered here, above everything. Below this point the script
+# redirects stdout into a log, creates a temp dir and arms a cleanup trap, then
+# runs two full builds; asking for usage used to start all of that and print
+# "building full + public binaries..." instead of a synopsis.
+# --help 在此、在一切之前回答。此行以下腳本會把 stdout 導入 log、建立暫存目錄並設好
+# cleanup trap，接著跑兩次完整建置；先前只是想看用法，卻會啟動上述全部流程，印出的是
+# 「building full + public binaries...」而不是說明。
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  sed -n '2,14p' "$script_path" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="${HERE:h}"

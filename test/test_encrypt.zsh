@@ -7,7 +7,22 @@
 # 驗證 swift_tar 加密層：以 ChaCha20-Poly1305 對 4 MiB 分塊加密，包在壓縮 codec
 # 之外。涵蓋 RFC 測試向量、keyfile 與密語兩種金鑰路徑、與各 codec 的疊層，以及
 # 最重要的——錯誤金鑰、竄改、重排與截斷皆須被拒絕。
+#
+#   ./test/test_encrypt.zsh          run the suite against release/swift_tar
+#                                    以 release/swift_tar 執行測試
+#   SKIP_SLOW_XZ=1 ./test/test_encrypt.zsh   skip the slow xz layering cases
+#                                    跳過較慢的 xz 疊層案例
+#   ./test/test_encrypt.zsh --help   print this synopsis and exit, running nothing
+#                                    印出本說明後結束，不執行任何測試
 set -euo pipefail
+
+# Answered above the log redirect, the temp dir and the cleanup trap below.
+# 在下方的 log 導向、暫存目錄與 cleanup trap 之前回答。
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  sed -n '2,16p' "$script_path" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="${HERE:h}"

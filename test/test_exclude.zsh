@@ -1,4 +1,11 @@
 #!/usr/bin/env zsh
+# test/test_exclude.zsh -- compare `--exclude <pattern>` against a reference tar.
+# test/test_exclude.zsh -- 以參照 tar 對照 `--exclude <pattern>` 的行為。
+#
+#   ./test/test_exclude.zsh          run the comparison suite
+#                                    執行對照測試
+#   ./test/test_exclude.zsh --help   print this synopsis and exit, running nothing
+#                                    印出本說明後結束，不執行任何測試
 set -uo pipefail
 
 # `--exclude <pattern>` 的相容性。
@@ -38,7 +45,13 @@ set -uo pipefail
 # macOS and GNU on Linux, while `gtar` is GNU on macOS. Guessing by name compares against
 # the wrong implementation on one platform and nothing reports it.
 
-script_dir=${0:A:h}
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  sed -n '2,8p' "$script_path" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
+
+script_dir=${script_path:h}
 root=${script_dir:h}
 cd "$root"
 

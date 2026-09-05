@@ -29,8 +29,18 @@
 #
 # Usage / 用法:
 #   zsh ./strip_runcli.zsh <source.swift> <dest.swift>
+#   zsh ./strip_runcli.zsh --help   print this synopsis and exit
+#                                   印出本說明後結束
 # =====================================================================
 set -euo pipefail
+
+# Answered before the ${1:?} below, which would otherwise treat --help as the
+# source path. / 必須在下方 ${1:?} 之前回答，否則 --help 會被當成來源路徑。
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    sed -n '3,33p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
 
 src="${1:?Usage: strip_runcli.zsh <source.swift> <dest.swift>}"
 dest="${2:?Usage: strip_runcli.zsh <source.swift> <dest.swift>}"

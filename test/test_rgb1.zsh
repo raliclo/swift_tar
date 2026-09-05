@@ -9,7 +9,22 @@
 # 涵蓋 header 佈局（magic + 固定 876-byte header）、payload round-trip、大端
 # geo（E7）精度、ASCII 欄位驗證、stdin/stdout 串流與參數守衛。RGB1 自足
 # （rgb1.swift），全功能版與 --no-lzfse 版皆可用。
+#
+#   ./test/test_rgb1.zsh          run the suite against release/swift_tar
+#                                 以 release/swift_tar 執行測試
+#   ST=/path/to/bin ./test/test_rgb1.zsh   test a specific binary
+#                                 指定要測試的執行檔
+#   ./test/test_rgb1.zsh --help   print this synopsis and exit, running nothing
+#                                 印出本說明後結束，不執行任何測試
 set -euo pipefail
+
+# Answered above the log redirect, the temp dir and the cleanup trap below.
+# 在下方的 log 導向、暫存目錄與 cleanup trap 之前回答。
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  sed -n '2,18p' "$script_path" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="${HERE:h}"

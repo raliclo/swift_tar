@@ -18,8 +18,17 @@
 #                             參數會原樣傳給該平台的建置腳本
 #   ./build.zsh --platform     print the detected platform and exit
 #                             印出偵測到的平台後結束
+#   ./build.zsh --help         print this synopsis and exit, building nothing
+#                             印出本說明後結束，不進行任何建置
 # =====================================================================
 set -eu
+
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    sed -n '3,22p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
 cd "$(dirname "$0")"
 . ./platform.zsh
 

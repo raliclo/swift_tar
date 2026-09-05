@@ -3,7 +3,18 @@
 # static library, then record the exact dependency version for packaging.
 # build_zstd-win.zsh -- 同步固定版本的 zstd submodule、重建 Windows 靜態庫，
 # 並記錄封裝所需的精確相依版本。
+#
+#   zsh ./build_zstd-win.zsh          clean-rebuild the static libzstd
+#                                     乾淨重建靜態 libzstd
+#   zsh ./build_zstd-win.zsh --help   print this synopsis and exit
+#                                     印出本說明後結束
 set -eu
+
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    sed -n '2,10p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"

@@ -1,4 +1,11 @@
 #!/usr/bin/env zsh
+# test/test_same_permissions.zsh -- verify -p / --same-permissions on extract.
+# test/test_same_permissions.zsh -- 驗證解壓時的 -p／--same-permissions。
+#
+#   ./test/test_same_permissions.zsh          run the suite (POSIX hosts only)
+#                                             執行測試（僅限 POSIX 平台）
+#   ./test/test_same_permissions.zsh --help   print this synopsis and exit
+#                                             印出本說明後結束
 set -uo pipefail
 
 # `-p` / `--same-permissions` / `--no-same-permissions` on extract.
@@ -25,7 +32,13 @@ set -uo pipefail
 # The fixture is 0666 rather than the more usual 0644: a umask of 022 has no
 # visible effect on 0644, so that test would pass whether the code worked or not.
 
-script_dir=${0:A:h}
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  sed -n '2,8p' "$script_path" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
+
+script_dir=${script_path:h}
 root=${script_dir:h}
 cd "$root"
 

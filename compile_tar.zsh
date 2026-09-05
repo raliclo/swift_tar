@@ -16,8 +16,21 @@
 #   -llz4    : liblz4 (homebrew)     — standard LZ4 frames / 標準 LZ4 frame
 #
 # Output / 輸出：release/swift_tar
+#
+# Usage / 用法:
+#   ./compile_tar.zsh [--no-lzfse]   build; --no-lzfse omits the private engine
+#                                    建置；--no-lzfse 不含私有引擎
+#   ./compile_tar.zsh --help         print this synopsis and exit, building nothing
+#                                    印出本說明後結束，不進行任何建置
 # =====================================================================
 set -e
+
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    sed -n '3,24p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
 cd "$(dirname "$0")"
 . ./platform.zsh
 

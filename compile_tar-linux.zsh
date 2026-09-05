@@ -39,8 +39,21 @@
 # 發行版上兩者皆會自動偵測。
 #
 # Output / 輸出：release/swift_tar
+#
+# Usage / 用法:
+#   ./compile_tar-linux.zsh          build for this Linux host
+#                                    在此 Linux 主機上建置
+#   ./compile_tar-linux.zsh --help   print this synopsis and exit, building nothing
+#                                    印出本說明後結束，不進行任何建置
 # =====================================================================
 set -euo pipefail
+
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    sed -n '3,47p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
 cd "$(dirname "$0")"
 . ./platform.zsh
 

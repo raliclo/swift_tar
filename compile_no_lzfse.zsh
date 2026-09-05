@@ -14,6 +14,21 @@
 #
 # Thin wrapper over `compile_tar.zsh --no-lzfse`. Extra args pass through.
 # 為 `compile_tar.zsh --no-lzfse` 的精簡包裝；額外參數會一併傳入。
+#
+#   ./compile_no_lzfse.zsh [args...]   build the public/distributable binary
+#                                      建置公開／可散布版執行檔
+#   ./compile_no_lzfse.zsh --help      print this synopsis and exit, building nothing
+#                                      印出本說明後結束，不進行任何建置
 # =====================================================================
+
+# Answered here rather than passed through: --help would otherwise reach
+# compile_tar.zsh and describe that script instead of this one.
+# 在此回答而非傳遞下去：否則 --help 會傳到 compile_tar.zsh，說明的就是那支腳本而非本檔。
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    sed -n '3,21p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
 cd "$(dirname "$0")"
 exec ./compile_tar.zsh --no-lzfse "$@"

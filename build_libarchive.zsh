@@ -1,7 +1,18 @@
 #!/usr/bin/env zsh
 # Build the bundled static libarchive ZIP backend for macOS or Linux.
 # 建置 macOS 或 Linux 使用的內附靜態 libarchive ZIP 後端。
+#
+#   zsh ./build_libarchive.zsh          build it for the detected platform
+#                                       依偵測到的平台建置
+#   zsh ./build_libarchive.zsh --help   print this synopsis and exit
+#                                       印出本說明後結束
 set -eu
+
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    sed -n '2,8p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"

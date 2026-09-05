@@ -1,7 +1,20 @@
 #!/usr/bin/env zsh
 # test/test_strip_components.zsh -- verify --strip-components extraction semantics.
 # test/test_strip_components.zsh -- 驗證 --strip-components 解出語意。
+#
+#   ./test/test_strip_components.zsh          run the suite against release/swift_tar
+#                                             以 release/swift_tar 執行測試
+#   ./test/test_strip_components.zsh --help   print this synopsis and exit
+#                                             印出本說明後結束
 set -euo pipefail
+
+# Answered above the reference-tar probe below, which creates a temp dir.
+# 在下方會建立暫存目錄的參照 tar 探測之前回答。
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  sed -n '2,8p' "$script_path" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="${HERE:h}"

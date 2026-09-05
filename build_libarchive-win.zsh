@@ -1,7 +1,18 @@
 #!/usr/bin/env zsh
 # Build the bundled static libarchive ZIP backend with MSVC for Windows.
 # 使用 MSVC 建置 Windows 使用的內附靜態 libarchive ZIP 後端。
+#
+#   zsh ./build_libarchive-win.zsh          build it; run build_zlib-win.zsh first
+#                                           建置；須先執行 build_zlib-win.zsh
+#   zsh ./build_libarchive-win.zsh --help   print this synopsis and exit
+#                                           印出本說明後結束
 set -eu
+
+script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    sed -n '2,8p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"

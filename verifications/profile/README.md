@@ -146,3 +146,16 @@ profiling belongs on Linux, which is also the end where sampling is feasible.
 One confound stated plainly: the two references are different versions (bsdtar 3.5.3 /
 libarchive 3.7.4 on macOS, 3.8.8 / 3.8.8 on Linux), so platform is not the only variable
 between the two columns. No claim is made here that it is.
+
+---
+
+## 已完成的量測 / Measurements taken
+
+- [`pgo-linux-20260906.md`](pgo-linux-20260906.md) — Linux 的逐函式計數(LLVM PGO)。
+  結論是**否定的**:那些時間不在 swift_tar 自己的 Swift 程式碼裡。解開 160 MB 只讓
+  被儀器化的區塊執行 21,743 次,`readExactly` 全場 63 次,**沒有任何計數隨位元組數
+  成長**。選 PGO 而非取樣,是因為計數與機器負載無關——當時 load 4.63,其中最大宗是
+  另一個專案的 Android 模擬器。
+  Per-function counts on Linux. A negative result: the time is not in swift_tar's own
+  Swift code — 21,743 instrumented counter increments for 160 MB, and nothing that
+  scales with bytes. PGO was chosen over sampling because counts are load-independent.

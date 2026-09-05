@@ -579,7 +579,10 @@ would not predict.
 | `--zstd-level <N>` | (`--zstd` only) Compression level, `1`…`22`, default `9`. Out of range or non-numeric exits **2**. Silently ignored if `--zstd` is not also given — see below |
 | `-n <N>`    | In-flight parallel chunks (default: one per core, capped at 4 × cores) |
 | `-v`        | Name each member as it is processed, on stderr, and print the detected filter chain. **It does not produce a long listing** — there are no sizes, modes or timestamps, and `-t -v` prints the same names as `-t` plus one filter-chain line. If you arrived from `tar -tvf` expecting a table, this is not it. |
-| `--touch`   | (`-x` only) Do **not** restore the archived mtime; extracted files get the current time |
+| `-m`, `--touch` | (`-x` only) Do **not** restore the archived mtime; extracted files get the current time. `-m` is the GNU tar spelling and is accepted as an exact alias |
+| `-O`, `--to-stdout` | (`-x` only) Write members' contents to stdout and nothing to disk — the bsdtar / GNU tar spelling. Distinct from `--cat`, which emits the tar *stream* rather than the members inside it |
+| `-p`, `--same-permissions` | (`-x` only) Restore the archive's permission bits exactly. **This is already the default here, unlike GNU tar, where it is the default only for root** — so `-p` changes nothing and exists for compatibility. The flag that changes behaviour is the one below |
+| `--no-same-permissions` | (`-x` only) Apply the process umask to extracted modes, which is GNU tar's default for a non-root user. Given together with `-p`, `-p` wins, as in GNU tar. **If you are porting from GNU tar and relied on umask being applied, you need this flag** — otherwise modes come out of the archive verbatim, group- and world-writable bits included |
 | `-i`, `--ignore-zeros` | (`-x`, `-t`) Read past the zero blocks that end an archive, so concatenated archives are read as one |
 | `-o`, `--no-same-owner` | Accepted for `tar` compatibility and does nothing: swift_tar never restores ownership, with or without it |
 | `--encrypt` | (`-c` only) Encrypt with ChaCha20-Poly1305; prompts for a passphrase |

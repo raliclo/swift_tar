@@ -37,6 +37,13 @@
 # =====================================================================
 set -euo pipefail
 
+# --help answers before any work starts / --help 在任何工作開始前先回答。
+script_path="${0:A}"
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    sed -n '2,37p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
 HERE="${0:A:h}"
 ST="${SWIFT_TAR:-${HERE:h:h:h}/release/swift_tar}"
 SRC="${1:?usage: $0 <source-video> / 用法：$0 <來源影片>}"

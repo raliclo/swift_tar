@@ -23,6 +23,13 @@
 # =====================================================================
 set -euo pipefail
 
+# --help answers before any work starts / --help 在任何工作開始前先回答。
+script_path="${0:A}"
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    sed -n '2,23p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
 SCRIPT_DIR="${0:A:h}"
 SWIFT_TAR_BIN="${SWIFT_TAR_BIN:-${SCRIPT_DIR:h}/release/swift_tar}"
 CORPUS="${1:-${SCRIPT_DIR:h:h}/claw-code}"

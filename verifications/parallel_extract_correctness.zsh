@@ -35,6 +35,13 @@
 emulate -L zsh
 setopt no_unset pipe_fail
 
+# --help answers before any work starts / --help 在任何工作開始前先回答。
+script_path="${0:A}"
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    sed -n '2,33p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
 HERE=${0:A:h}
 ST=${SWIFT_TAR:-$HERE/../release/swift_tar}
 BSDTAR=${BSDTAR:-/usr/bin/tar}

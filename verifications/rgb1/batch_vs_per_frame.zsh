@@ -26,6 +26,13 @@
 # =====================================================================
 set -euo pipefail
 
+# --help answers before any work starts / --help 在任何工作開始前先回答。
+script_path="${0:A}"
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    sed -n '2,26p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
 # --dry-run validates and reports without writing the committed record. Testing
 # the sampling guards used to mean running the script for real, and one such
 # test overwrote this file's record with data from t=5 s -- the opening the

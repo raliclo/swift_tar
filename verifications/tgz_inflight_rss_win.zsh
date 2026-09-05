@@ -26,6 +26,17 @@
 # =====================================================================
 set -euo pipefail
 
+# --help answers before any work starts / --help 在任何工作開始前先回答。
+# ${0:A} is used here despite the note below: it was re-checked on the installed
+# zsh (5.9.999.3-test, mingw32), which now resolves a C:/... $0 correctly.
+# 此處使用 ${0:A}，與下方註記不同：已在安裝版 zsh（5.9.999.3-test, mingw32）重新確認，
+# 該版本已能正確解析 C:/... 形式的 $0。
+script_path="${0:A}"
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    sed -n '2,26p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
 # Not ${0:A:h}: this script runs on Windows, and the installed zsh does not treat
 # a Windows drive path as absolute -- with $0 = C:/... it prepends the cwd and
 # produces a directory that does not exist. Upstream has fixed this, but that

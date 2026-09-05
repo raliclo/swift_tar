@@ -4,7 +4,17 @@
 #
 # encrypt_windows_correctness.zsh -- 在 Windows/MSYS 上快速驗證 swift_tar 的
 # ChaCha20-Poly1305 加密層正確性。
+#
+# Usage / 用法:
+#   verifications/encrypt_windows_correctness.zsh
 set -euo pipefail
+
+# --help answers before any work starts / --help 在任何工作開始前先回答。
+script_path="${0:A}"
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    sed -n '2,9p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"

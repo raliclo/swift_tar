@@ -57,6 +57,13 @@
 # =====================================================================
 set -euo pipefail
 
+# --help answers before any work starts / --help 在任何工作開始前先回答。
+script_path="${0:A}"
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    sed -n '2,57p' "$script_path" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
 SWIFT_TAR_BIN="${SWIFT_TAR_BIN:-/opt/homebrew/bin/swift_tar}"
 CORPUS="${1:?Usage: $0 <path-to-corpus>}"
 TMP_DIR="$(mktemp -d)"

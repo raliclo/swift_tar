@@ -1529,9 +1529,13 @@ patch 觸發，確認它回報「需要人看」並以 1 結束）。
 
 驗證：macOS 全套 148 + 78 + 35 + 14 + 7 + 8 全過，互通矩陣 PASS 13 / FAIL 0 / SKIP 0。
 
-**仍未做的**：上游修正。此處的前提（APFS 不再正規化）對 libarchive 全體使用者都成立，
-把它送回上游會讓這個 patch 有一天可以刪掉。`apply_patches.zsh` 會在那一天到來時，以
-「既套不上也反套不上」告訴我們。
+**這個 patch 是常設的，不當作暫時措施。** 若上游哪天自己移除了那段正規化，
+`apply_patches.zsh` 會以「既套不上也反套不上」回報並以 1 結束，屆時再判斷刪除即可——
+不需要有人記得去追蹤這件事。
+
+The patch is treated as permanent rather than as a stopgap. If upstream ever removes that
+normalisation, `apply_patches.zsh` reports the patch as neither applying nor reversing and
+exits 1; nobody has to remember to watch for it.
 
 Fixed by patching the vendored libarchive and building the re-apply mechanism at the same
 time, because a patch without one disappears silently at the next submodule update. The

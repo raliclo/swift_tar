@@ -20,6 +20,37 @@ cd "$SCRIPT_DIR"
 
 git submodule update --init libarchive
 
+# 套用本樹對 libarchive 的 patch，建置完成後還原，使 submodule 只在編譯期間是「髒」的。
+#
+# 為什麼要還原：一個長期帶著本地修改的 submodule 會擋住它自己的升級。`sync_all.zsh`
+# 刻意跳過有本地修改的 submodule（不覆蓋別人未提交的工作），所以 patch 若一直留在工作區，
+# `--update libarchive` 就永遠只會印「跳過」而什麼都不做——升級失敗的樣子和沒事一樣。
+# 還原之後，`git status` 乾淨、`sync_all.zsh` 正常運作，而編譯出來的靜態庫仍帶著修正。
+#
+# 用 trap：建置失敗時也要還原，否則一次失敗的建置會把工作區留在髒狀態，而下一個人不會
+# 知道那是 patch 還是自己改的。
+#
+# 這樣是安全的，因為**每一次**建置都會先套用再還原：不存在「還原後某次增量編譯偷偷用到
+# 未修正的原始碼」的空隙。
+#
+# Apply this tree's libarchive patches, and revert them once the build is done, so the
+# submodule is dirty only while compiling.
+#
+# Why revert: a submodule left permanently modified blocks its own upgrade. `sync_all.zsh`
+# skips submodules with local changes on purpose, so a patch parked in the working tree
+# makes `--update libarchive` print "skipped" forever and do nothing — a failed upgrade that
+# looks exactly like an uneventful one. Reverting leaves `git status` clean and sync_all
+# working, while the static library that was just built still carries the fix.
+#
+# Via a trap, so a failed build reverts too: otherwise one failure leaves the tree dirty and
+# the next person cannot tell the patch from their own edit. Safe because every build
+# applies first, so there is no window in which an incremental compile quietly uses
+# unpatched sources.
+if [ -x ./patch/apply_patches.zsh ]; then
+    trap './patch/apply_patches.zsh --revert >/dev/null 2>&1 || true' EXIT
+    ./patch/apply_patches.zsh
+fi
+
 case "$(swift_tar_platform)" in
     mac)   build_dir="build/libarchive-macos"; version_file="version-mac.txt" ;;
     linux) build_dir="build/libarchive-linux"; version_file="version-linux.txt" ;;

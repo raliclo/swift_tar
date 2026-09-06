@@ -29,7 +29,30 @@ behaviour is back. Keeping the change here makes "is it still there?" a command.
 
 ---
 
-## 用法 / Usage
+## 平常不必手動執行:建置會自己處理
+
+`build_libarchive.zsh` 會**套用 → 建置 → 還原**,所以 submodule 只在編譯期間是「髒」的,
+建置結束後 `git status` 是乾淨的,而剛建好的靜態庫仍帶著修正。
+
+還原用 `trap`,**建置失敗時也會還原**——否則一次失敗的建置會把工作區留在髒狀態,而下一個
+人分不出那是 patch 還是自己改的。
+
+這樣安全的理由是:**每一次建置都先套用再還原**,不存在「還原之後某次增量編譯偷偷用到未
+修正原始碼」的空隙。
+
+實測(2026-09-06):自乾淨工作區跑 `./build.zsh` → 建置過程印出「已套用」→ 結束後
+`git -C libarchive status --porcelain` 為 0 行 → 而產出的 ZIP 仍存 NFC,三項正規化斷言
+全過。**原始碼已還原,產物仍帶修正。**
+
+`build_libarchive.zsh` applies, builds, then reverts, so the submodule is dirty only while
+compiling. The revert runs from a trap so a failed build reverts too. Safe because every
+build applies first: there is no window where an incremental compile silently uses unpatched
+sources. Verified: after a full build the submodule shows zero changes and the resulting ZIP
+still stores NFC.
+
+---
+
+## 手動用法 / Manual usage
 
 ```zsh
 ./patch/apply_patches.zsh            # 套用全部(已套用者略過)
@@ -37,28 +60,37 @@ behaviour is back. Keeping the change here makes "is it still there?" a command.
 ./patch/apply_patches.zsh --revert   # 還原全部
 ```
 
-`--check` 適合放進提交前的檢查或 CI:**它在 patch 沒套用時以 1 結束**,所以「忘了重貼」
-會被擋下來,而不是變成一次安靜的行為回歸。
+`--check` 適合放進提交前的檢查或 CI:**它在 patch 沒套用時以 1 結束**。不過既然建置會
+自己套用,`--check` 在建置之外的時機通常會回報「未套用」——那是正常的,不是警訊。它真正
+的用途是在**編譯當下**確認,以及檢查 patch 是否已經對不上上游(見下一節的第三種狀態)。
 
 ---
 
-## 升級 submodule 的順序,不可調換
+## 升級 submodule 的順序
 
-`sync_all.zsh` **會跳過有本地修改的 submodule**,那是刻意的(不覆蓋別人未提交的工作)。
-而套用了 patch 的 submodule 就是「有本地修改」。因此:
+因為建置會自己還原,平常工作區是乾淨的,所以升級通常可以直接:
 
 ```zsh
-./patch/apply_patches.zsh --revert       # 1. 先讓工作區乾淨
-./sync_all.zsh --update libarchive       # 2. 移動 pin
-./patch/apply_patches.zsh                # 3. 重新套用
-# 4. 重建與重測 —— sync_all.zsh 會把該做的六件事印出來
+./sync_all.zsh --update libarchive       # 移動 pin
+./build.zsh                              # 建置(自動套用 → 建置 → 還原)
+# 然後照 sync_all.zsh 印出的六個步驟重測
 ```
 
-**跳過第 1 步的後果不是失敗,是什麼都沒發生**:`sync_all.zsh` 會印一行「跳過:有本地
-修改」,升級沒有進行,而畫面上只是一行提示。
+**但若工作區當下是髒的**(例如有人手動套了 patch、或上一次建置被中斷),`sync_all.zsh`
+**會跳過那個 submodule**——那是刻意的,它不覆蓋別人未提交的工作。此時要先還原:
 
-Revert first, update, re-apply. Skipping the revert leaves sync_all reporting "skipped:
-local changes" and doing nothing — not a failure, just nothing.
+```zsh
+./patch/apply_patches.zsh --revert       # 先讓工作區乾淨
+./sync_all.zsh --update libarchive
+```
+
+**跳過還原的後果不是失敗,是什麼都沒發生**:`sync_all.zsh` 印一行「跳過:有本地修改」,
+升級沒有進行,而畫面上只是一行提示。
+
+Because the build reverts for you, the tree is normally clean and an upgrade is just
+`sync_all.zsh --update` followed by a build. If the tree *is* dirty — someone applied by
+hand, or a build was interrupted — sync_all skips that submodule on purpose, so revert
+first. Skipping the revert is not a failure; it is nothing happening.
 
 ---
 

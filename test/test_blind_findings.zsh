@@ -1485,6 +1485,60 @@ mkdir -p "$TMP/zipself_x"
 eq "--zip: the resulting archive extracts both members" \
    "2" "$(find "$TMP/zipself_x" -type f | grep -c -e 'a\.txt' -e 'z\.txt')"
 
+# ---- tar and ZIP must spell a name the same way ----
+# macOS only, because the divergence is: libarchive normalises filenames to NFD
+# under `#if defined(__APPLE__)`, justified by a comment describing HFS+, which
+# APFS is not -- it preserves the bytes it is given. Left alone, the same file
+# came out of the tar path as NFC and the ZIP path as NFD, and the ZIP form is
+# the lossy one: ext4 is normalisation-sensitive, so such an archive extracted on
+# Linux yields a differently named file.
+#
+# This is pinned by a test and not only by patch/apply_patches.zsh --check,
+# because the patch that fixes it lives in a vendored submodule and
+# `sync_all.zsh --update` overwrites the working tree. When that happens the build
+# still succeeds and every other test still passes; only this one notices.
+#
+# The comparison is on bytes, deliberately. The two spellings are identical on a
+# terminal, which is exactly why the original round-trip failure looked like data
+# loss rather than a naming difference.
+#
+# 僅 macOS，因為分歧的來源是：libarchive 在 `#if defined(__APPLE__)` 下把檔名正規化為
+# NFD，其理由的註解描述的是 HFS+，而 APFS 並非如此——它原樣保留收到的位元組。放著不管
+# 時，同一個檔案經 tar 路徑出來是 NFC、經 ZIP 路徑出來是 NFD，而後者是有損的那一個：
+# ext4 對正規化敏感，故這種封存解到 Linux 上會得到不同的檔名。
+#
+# 以測試釘住而不只靠 patch/apply_patches.zsh --check，是因為修正它的 patch 位於
+# vendored submodule 內，而 `sync_all.zsh --update` 會覆蓋工作區。那發生時建置仍會成功、
+# 其他測試也全數通過，只有這一項會察覺。
+#
+# 刻意比對位元組：兩種寫法在終端機上完全相同，這正是當初往返失敗看起來像資料遺失、而非
+# 命名差異的原因。
+if [ "$(uname -s)" = "Darwin" ]; then
+  NRM="$TMP/nrm"
+  mkdir -p "$NRM/src"
+  # An NFC name: 'caf' + U+00E9. Written as explicit bytes so the fixture cannot
+  # be silently re-normalised by whatever edited this file.
+  # NFC 名稱：'caf' + U+00E9。以明確位元組寫出，使 fixture 不會被編輯此檔的工具靜默改寫。
+  printf 'payload\n' > "$NRM/src/$(printf 'caf\xc3\xa9').txt"
+  disk_bytes=$(ls "$NRM/src" | od -An -tx1 | tr -d ' \n')
+  "$ST" -c -f "$NRM/a.tar" -C "$NRM" src >/dev/null 2>&1
+  "$ST" -c --zip -f "$NRM/a.zip" -C "$NRM" src >/dev/null 2>&1
+  tar_bytes=$("$ST" -t -f "$NRM/a.tar" 2>/dev/null | grep caf | od -An -tx1 | tr -d ' \n')
+  zip_bytes=$("$ST" -t -f "$NRM/a.zip" 2>/dev/null | grep caf | od -An -tx1 | tr -d ' \n')
+
+  # The fixture must be NFC on disk for the rest to mean anything: c3a9 present,
+  # and the NFD spelling (65cc81) absent. If APFS ever starts normalising, this
+  # says so instead of the assertions below quietly comparing two NFD strings.
+  # 磁碟上必須是 NFC，其餘斷言才有意義：要有 c3a9，且不得有 NFD 寫法 65cc81。若 APFS
+  # 哪天開始正規化，這一項會說出來，而不是讓下面兩項安靜地比較兩個 NFD 字串。
+  eq "normalisation: the fixture is NFC on disk" \
+     "yes" "$(case "$disk_bytes" in *c3a9*) case "$disk_bytes" in *65cc81*) echo no;; *) echo yes;; esac;; *) echo no;; esac)"
+  eq "normalisation: tar stores the on-disk spelling" \
+     "yes" "$(case "$tar_bytes" in *63616663a9*|*636166c3a9*) echo yes;; *) echo no;; esac)"
+  eq "normalisation: zip stores the same spelling as tar" \
+     "$tar_bytes" "$zip_bytes"
+fi
+
 # ---- a typeflag '6' entry from a raw fixture ----
 # This runs on every platform, including Windows, which is the point: the
 # platform that cannot create a FIFO is the one whose branch would otherwise

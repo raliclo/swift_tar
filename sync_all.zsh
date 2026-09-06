@@ -166,6 +166,11 @@ print -- "已移動 / moved:"
 for l in $MOVED; do print -- "  $l"; done
 print --
 print -- "接下來必須做的事（腳本不會替你做）/ what must follow, none of it automatic:"
+print -- "  0. ./patch/apply_patches.zsh —— 剛才的 checkout 覆蓋了工作區，本樹對 vendored"
+print -- "     上游的 patch 已被抹掉。不重貼的話建置仍會成功、測試仍會通過，只有被修掉的"
+print -- "     行為會安靜地回來。./patch/apply_patches.zsh --check 在缺任何一份時以 1 結束。"
+print -- "     Re-apply the patches: this checkout just overwrote them, and without them the"
+print -- "     build still succeeds and the tests still pass -- only the behaviour comes back."
 print -- "  1. 四個平台各自重建：./build.zsh（mac/win）、./compile_tar-linux.zsh（linux/WSL）"
 print -- "     Rebuild on all four platforms."
 print -- "  2. 各平台跑測試：test/ 底下的套件，以及 verifications/tar_interop_matrix.zsh"

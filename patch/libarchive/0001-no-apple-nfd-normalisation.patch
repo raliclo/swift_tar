@@ -1,0 +1,42 @@
+diff --git a/libarchive/archive_string.c b/libarchive/archive_string.c
+index bd57ed94..96f783df 100644
+--- a/libarchive/archive_string.c
++++ b/libarchive/archive_string.c
+@@ -1264,13 +1264,21 @@ create_sconv_object(const char *fc, const char *tc,
+ 	 * comparing to find out the same filenames that we normalize
+ 	 * that to be NFD ourselves.
+ 	 */
++	/* swift_tar: the NFD normalisation below is disabled on Apple platforms.
++	 * The justification in the comment above -- "its filesystem layer
++	 * automatically convert filenames to NFD" -- describes HFS+. APFS does
++	 * not: it is normalisation-insensitive for lookup and preserving for
++	 * storage, so a name created as NFC stays NFC on disk. Normalising here
++	 * therefore rewrites a name the filesystem did not, which is lossy once
++	 * the archive leaves macOS for a normalisation-sensitive filesystem such
++	 * as ext4. See patch/README.md and todo/todo.md in the superproject.
++	 * swift_tar：以下的 NFD 正規化在 Apple 平台停用。上方註解所述理由（檔案系統層
++	 * 會自動把檔名轉為 NFD）描述的是 HFS+；APFS 並非如此——查找時對正規化不敏感、
++	 * 儲存時原樣保留，故以 NFC 建立的名稱在磁碟上仍是 NFC。在此正規化等於改寫一個
++	 * 檔案系統並未改寫的名稱，而封存一旦離開 macOS 到達對正規化敏感的檔案系統
++	 * （如 ext4），那就是有損的。 */
+ 	if ((flag & SCONV_FROM_CHARSET) &&
+ 	    (flag & (SCONV_FROM_UTF16 | SCONV_FROM_UTF8))) {
+-#if defined(__APPLE__)
+-		if (flag & SCONV_TO_UTF8)
+-			flag |= SCONV_NORMALIZATION_D;
+-		else
+-#endif
+ 			flag |= SCONV_NORMALIZATION_C;
+ 	}
+ #if defined(__APPLE__)
+@@ -1291,7 +1299,9 @@ create_sconv_object(const char *fc, const char *tc,
+ 	 * correctly compare the filename with other one which comes
+ 	 * from HFS Plus filesystem.
+ 	 */
+-	if ((flag & SCONV_FROM_CHARSET) &&
++	/* swift_tar: disabled for the same reason as the block above. */
++	/* swift_tar：停用理由同上一段。 */
++	if (0 && (flag & SCONV_FROM_CHARSET) &&
+ 	   !(flag & (SCONV_FROM_UTF16 | SCONV_FROM_UTF8)) &&
+ 	    (flag & SCONV_TO_UTF8))
+ 		flag |= SCONV_NORMALIZATION_D;

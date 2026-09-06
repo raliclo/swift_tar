@@ -8,13 +8,11 @@
 > CRLF in the `-t` / `--identify` output on Windows. The suite fails 11 of its
 > checks against the previous binary and passes all 15 against this one.
 >
-> **One entry is open, 2026-09-06:** the ZIP and tar paths disagree on macOS
-> filename normalisation — tar preserves the on-disk NFC bytes, ZIP stores NFD.
-> Cause located to one line in the vendored libarchive whose justifying comment
-> describes HFS+ behaviour that APFS no longer has. Not a regression from the
-> libarchive bump: the system's older bsdtar does the same. Three bridge-level
-> fixes were tried and measured; all three still produced NFD, and the option that
-> would clear the flag is internal to libarchive.
+> **Nothing is open, 2026-09-06.** The ZIP/tar normalisation split opened and closed
+> on the same day: patched in the vendored libarchive, with patch/apply_patches.zsh to
+> re-apply it after a submodule update and three byte-level assertions in
+> test_blind_findings.zsh to notice if it ever goes missing. Both were checked against
+> the unpatched build.
 >
 > **Everything else recorded below is fixed and under regression test** —
 > `test/test_blind_findings.zsh` is at 137 checks on Windows and
@@ -1496,7 +1494,53 @@ sha256，那才是答案。」但沒有這個檔案——本 repo 沒有，父�
 兩份 README 原本寫著 `--version`「回報編譯 binary 時擷取的本機日期時間」，該敘述自
 `d868dc3` 起不再為真，已於同一次變更中更正。
 
-## ZIP 與 tar 兩條路徑對 macOS 檔名的正規化不一致 / The ZIP and tar paths disagree on macOS filename normalisation  ▸ 🔴 未決 / open
+## ZIP 與 tar 兩條路徑對 macOS 檔名的正規化不一致 / The ZIP and tar paths disagree on macOS filename normalisation  ▸ ✅ 已修正 2026-09-06，以 patch + 重貼機制 / fixed via a patch and a re-apply mechanism
+
+**2026-09-06 更新：已修正。** 走的是本條目下方三條路中的第一條——patch vendored 上游，
+並同時建立重貼機制，因為沒有機制的 patch 會在下一次 `sync_all.zsh --update` 靜默消失。
+
+```
+磁碟   63 61 66 c3 a9      NFC
+tar    63 61 66 c3 a9      NFC   ✅
+zip    63 61 66 c3 a9      NFC   ✅  ← 修正前為 63 61 66 65 cc 81（NFD）
+```
+
+新增的東西，以及各自擋住什麼：
+
+- `patch/libarchive/0001-no-apple-nfd-normalisation.patch` —— 停用 `archive_string.c`
+  中兩處 Apple 專屬的 `SCONV_NORMALIZATION_D`。
+- `patch/apply_patches.zsh` —— 重貼、`--check`、`--revert`。它分辨三種狀態，因為三種
+  要人做的事完全不同：套得上／已套用／**兩者皆否**。第三種代表上游動了，可能是上游修
+  好了（該刪 patch）或周邊變了（該重做 patch），腳本不猜也不 `--force`。
+- `sync_all.zsh` 的後續步驟表新增第 0 步：升級後必須重貼。
+- **`test_blind_findings.zsh` 新增三項斷言**（僅 macOS），逐位元組比對磁碟／tar／zip。
+
+最後一項才是真正的安全網。`--check` 只在有人執行時擋得住；測試是例行跑的。而這個防護
+必須存在的理由很具體：修正它的 patch 位於 vendored submodule 內，而
+`sync_all.zsh --update` 會覆蓋工作區——那發生時**建置仍會成功、其他測試仍全數通過**，
+只有這三項會察覺。
+
+已實走驗證其鑑別力，不是只寫出來：拿掉 patch 重建後，
+`normalisation: zip stores the same spelling as tar` **失敗**並指名兩串位元組
+（`…636166c3a9…` 對 `…63616665cc81…`）；重貼後 148 項全過。
+
+`apply_patches.zsh` 的五種狀態亦全部實走過，包含最重要的 stale 分支（以刻意改壞的
+patch 觸發，確認它回報「需要人看」並以 1 結束）。
+
+驗證：macOS 全套 148 + 78 + 35 + 14 + 7 + 8 全過，互通矩陣 PASS 13 / FAIL 0 / SKIP 0。
+
+**仍未做的**：上游修正。此處的前提（APFS 不再正規化）對 libarchive 全體使用者都成立，
+把它送回上游會讓這個 patch 有一天可以刪掉。`apply_patches.zsh` 會在那一天到來時，以
+「既套不上也反套不上」告訴我們。
+
+Fixed by patching the vendored libarchive and building the re-apply mechanism at the same
+time, because a patch without one disappears silently at the next submodule update. The
+real safety net is the three byte-level assertions added to the test suite: `--check` only
+helps when someone runs it, whereas the suite runs anyway, and when the patch goes missing
+the build still succeeds and every other test still passes. Both were exercised against the
+unpatched build to confirm they discriminate.
+
+### 原始記錄（2026-09-06 修正前）/ Original record, before the fix
 
 同一個檔案、同一支 swift_tar，換個格式就換一種檔名編碼：
 

@@ -39,7 +39,16 @@ cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT INT TERM
 
 command -v swiftc >/dev/null 2>&1 || { print -- "SKIP: no swiftc"; exit 0 }
-swiftc -O -o "$BIN" verifications/rgb1/rgb1_sampler.swift rgb1.swift 2>/dev/null \
+# No `2>/dev/null`: CLAUDE.md forbids hiding build output, and here it hid the one thing
+# that explains a failed build -- the compiler's own message -- behind "cannot build".
+# Measured 2026-09-17 with it removed: WSL prints nothing, and Windows prints only
+# link.exe's "Creating library ... .lib" line, so nothing was being hidden but noise and
+# the next real error.
+# 不加 `2>/dev/null`：CLAUDE.md 禁止藏起建置輸出，而此處藏起的正是唯一能解釋建置失敗的
+# 東西——編譯器自己的訊息——只留下「無法建置」。2026-09-17 拿掉後實測：WSL 不印任何東西，
+# Windows 只印 link.exe 的「Creating library ... .lib」那一行，所以被藏起的只有雜訊，
+# 以及下一個真正的錯誤。
+swiftc -O -o "$BIN" verifications/rgb1/rgb1_sampler.swift rgb1.swift \
   || { print -ru2 -- "error: cannot build rgb1_sampler / 無法建置"; exit 1 }
 
 pass=0; fail=0

@@ -2146,9 +2146,16 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
                 return createFailureMessage(dest, errnoValue: Int32(errno))
             }
         }
+        // Reported, not `try?`: see the .ucrt case below for the measurement.
+        // 回報而非 `try?`：實測見下方 .ucrt 分支。
         if restoreMtime {
-            try? FileManager.default.setAttributes([.modificationDate:
-                Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+            do {
+                try FileManager.default.setAttributes([.modificationDate:
+                    Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+            } catch {
+                return "cannot restore mtime on '\(dest)' (\(error.localizedDescription))"
+                     + " / 無法還原 mtime '\(dest)'"
+            }
         }
         return nil
     case .ucrt:
@@ -2191,12 +2198,45 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
                 off += Int(n)
             }
         }
+        // The Windows half of 0614a89's [P3]. That commit made posixWriteFile report a
+        // failed fchmod/futimens, but posixWriteFile sits inside `#if !os(Windows)`, so
+        // this function -- the one Windows actually runs -- kept `_ = _futime64(...)` and
+        // `try? setAttributes(...)`, and a failed mtime restore still exited 0 with no
+        // message. The reasoning is the one written at posixWriteFile; not repeated here.
+        //
+        // Unlike on macOS, where 0614a89 could only force the failure, it occurs naturally
+        // here. Measured 2026-09-17 with GNU-format archives (base-256 mtime):
+        //   mtime in year 3237   _futime64 rejects anything past 3000-12-31 (EINVAL);
+        //                        the file kept its extraction time, rc=0, no output.
+        //                        The foundation backend restored it correctly.
+        //   mtime in year 33658  past SetFileTime's range as well: both backends kept
+        //                        the extraction time, rc=0, no output.
+        // errno is read before _close, which may overwrite it.
+        //
+        // 0614a89 [P3] 的 Windows 那一半。該 commit 讓 posixWriteFile 回報 fchmod／futimens
+        // 失敗，但 posixWriteFile 位於 `#if !os(Windows)` 之內，於是本函式——Windows 實際
+        // 執行的那一個——仍是 `_ = _futime64(...)` 與 `try? setAttributes(...)`，mtime 還原
+        // 失敗照樣以 0 結束且無任何訊息。理由見 posixWriteFile，不在此重述。
+        //
+        // 與 macOS 不同（0614a89 在那裡只能強制觸發），此處會自然發生。2026-09-17 以 GNU
+        // 格式封存（base-256 mtime）實測：
+        //   mtime 在 3237 年    _futime64 拒絕 3000-12-31 之後的時間（EINVAL）；檔案留著
+        //                       解壓當下的時間，rc=0，無輸出。foundation 後端則正確還原。
+        //   mtime 在 33658 年   亦超出 SetFileTime 的範圍：兩個後端都留著解壓當下的時間，
+        //                       rc=0，無輸出。
+        // errno 須在 _close 之前取得，_close 可能覆寫它。
+        var mtimeErrno: Int32? = nil
         if writeOK && restoreMtime {
             var tb = __utimbuf64(actime: __time64_t(mtime), modtime: __time64_t(mtime))
-            _ = _futime64(fd, &tb)
+            if _futime64(fd, &tb) != 0 { mtimeErrno = errno }
         }
         _ = _close(fd)
-        return writeOK ? nil : "write failed for '\(dest)' / 寫入失敗 '\(dest)'"
+        guard writeOK else { return "write failed for '\(dest)' / 寫入失敗 '\(dest)'" }
+        if let e = mtimeErrno {
+            return "cannot restore mtime on '\(dest)' (errno \(e))"
+                 + " / 無法還原 mtime '\(dest)'"
+        }
+        return nil
     }
 }
 

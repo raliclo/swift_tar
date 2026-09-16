@@ -1612,6 +1612,53 @@ done
 eq "an intact .tar.gz still lists its members" "2" \
    "$("$ST" -t -f "$TG/full.tgz" 2>/dev/null | wc -l | tr -d ' ')"
 
+
+# ---- a failed mtime restore is not a success (Windows) ----
+# 0614a89 stopped posixWriteFile discarding fchmod/futimens failures, but Windows
+# extracts through winWriteFile, which kept `_ = _futime64(...)`: an mtime the CRT
+# rejects -- anything past 3000-12-31 -- left the file with its extraction time and
+# the run still ended 0 with no output. Unlike the POSIX half, which could only be
+# forced, this happens on a real NTFS volume, so the test uses a real archive.
+#
+# Windows only, deliberately. Elsewhere year 3237 is representable, and where it is
+# not (ext4 stops at 2446) the kernel clamps the time and reports success, so there
+# is no failure for swift_tar to report. `-m` is the control: the same archive must
+# extract cleanly without the mtime step, which proves the fixture is valid and the
+# failure is that step and nothing else.
+#
+# 0614a89 讓 posixWriteFile 不再丟棄 fchmod／futimens 的失敗，但 Windows 解壓走的是
+# winWriteFile，那裡仍是 `_ = _futime64(...)`：CRT 拒絕的 mtime（3000-12-31 之後）會
+# 讓檔案留著解壓當下的時間，而整次執行仍以 0 結束且無任何輸出。POSIX 那一半只能強制
+# 觸發，這一半在真實的 NTFS 上就會發生，故本測試用的是真實封存。
+#
+# 刻意只在 Windows 斷言。其他平台上 3237 年可以表示；表示不了之處（ext4 止於 2446 年）
+# 核心會夾限時間並回報成功，swift_tar 沒有失敗可報。`-m` 是對照組：同一份封存略過 mtime
+# 步驟時必須順利解出，藉此證明 fixture 有效、且失敗確實來自該步驟而非其他。
+case "$(uname -s)" in
+  MSYS*|MINGW*|CYGWIN*)
+    if [ -f "$RAW" ]; then
+      FM="$TMP/farmtime"
+      mkdir -p "$FM/out" "$FM/out-m"
+      # 452013710000 octal = 40000000000 s = 3237-07-20.
+      RAW_TAR_MTIME=452013710000 zsh "$RAW" "$FM/far.tar" file far.txt far >/dev/null
+      rc=0; out=$("$ST" -x -f "$FM/far.tar" -C "$FM/out" 2>&1) || rc=$?
+      if [ "$rc" -ne 0 ]; then
+        ok "an mtime _futime64 rejects does not exit 0"
+      else
+        bad "an mtime _futime64 rejects does not exit 0"
+      fi
+      case "$out" in
+        *"cannot restore mtime"*far.txt*) ok "the failed mtime restore names the file" ;;
+        *) bad "the failed mtime restore names the file (got: $(printf '%s' "$out" | head -1))" ;;
+      esac
+      rc=0; "$ST" -x -m -f "$FM/far.tar" -C "$FM/out-m" >/dev/null 2>&1 || rc=$?
+      eq "the same archive extracts cleanly with -m" "0" "$rc"
+      eq "the member lands with -m" "far" "$(cat "$FM/out-m/far.txt" 2>/dev/null)"
+    else
+      bad "far-future mtime fixture (missing fixture generator $RAW)"
+    fi ;;
+esac
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

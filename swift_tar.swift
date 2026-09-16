@@ -1721,7 +1721,23 @@ final class ParallelChunkSink {
         self.codec = codec
         self.output = output
         self.chunkSize = chunkSize
-        self.sem = DispatchSemaphore(value: max(2, inflight))
+        // `inflight`, not `max(2, inflight)`. `-n` is already clamped to at least 1
+        // where it is parsed, so the floor here only ever raised 1 to 2 -- which made
+        // `-n 1` run two tasks concurrently, the one thing `-n 1` is asked for.
+        //
+        // Lowering it cannot deadlock: each task does exactly one `sem.wait()`, and
+        // the same task signals once on completion. No task holds two slots, and the
+        // workers never call back into the producer, so a value of 1 serialises rather
+        // than blocking.
+        //
+        // 用 `inflight` 而非 `max(2, inflight)`。`-n` 在解析處已夾限為至少 1，故此處的
+        // 下限唯一的作用就是把 1 抬成 2——而那使 `-n 1` 併發跑兩個任務，正是 `-n 1` 唯一
+        // 被要求別做的事。
+        //
+        // 調降不會死結：每個任務只做一次 `sem.wait()`，並由同一個任務在完成時 signal
+        // 一次；沒有任務同時持有兩個名額，工作者也不會回頭呼叫生產者。值為 1 的結果是
+        // 序列化，不是卡住。
+        self.sem = DispatchSemaphore(value: inflight)
     }
 
     func write(_ data: Data) throws {
@@ -2468,11 +2484,42 @@ private func posixWriteFile(dest: String, data: Data, mtime: UInt64, mode: UInt3
     }
     guard writeOK else { return "write failed for '\(dest)' / 寫入失敗 '\(dest)'" }
 
-    _ = fchmod(fd, mode_t(effectiveMode))
+    // These two were `_ =`. Discarding them meant a file whose permissions or mtime
+    // could not be restored was reported as extracted successfully -- the exit status
+    // said 0 and nothing named the file.
+    //
+    // That matters here more than it would elsewhere, because this tool restores the
+    // archive's mode unconditionally (see restorePermissions above: the behaviour is
+    // GNU tar with `-p` always on). A silent fchmod failure is that documented promise
+    // quietly not being kept.
+    //
+    // The tradeoff, stated rather than hidden: extraction onto a filesystem that does
+    // not implement chmod or utimes now fails where it used to succeed with the wrong
+    // attributes. That is the intended direction -- the alternative is a success that
+    // is not one -- and `--no-same-permissions` remains for callers who do not want
+    // the archive's modes applied at all.
+    //
+    // 這兩處原本是 `_ =`。丟棄回傳值的後果是：一個權限或 mtime 還原失敗的檔案，會被回報
+    // 為解出成功——離開碼是 0，而且沒有任何訊息指出是哪個檔案。
+    //
+    // 這件事在此處比在別處更要緊，因為本工具是**無條件**還原封存中的 mode（見上方
+    // restorePermissions：行為等同 GNU tar 恆常帶著 `-p`）。一個無聲的 fchmod 失敗，
+    // 就是那個明載的承諾被靜默地不履行。
+    //
+    // 取捨寫出來而不是藏起來：解壓到不實作 chmod 或 utimes 的檔案系統時，現在會失敗，
+    // 而先前會「帶著錯誤的屬性成功」。這是刻意選的方向——另一邊是一個名不副實的成功
+    // ——且不想套用封存 mode 的呼叫端仍有 `--no-same-permissions` 可用。
+    if fchmod(fd, mode_t(effectiveMode)) != 0 {
+        return "cannot restore permissions on '\(dest)' (errno \(errno))"
+             + " / 無法還原權限 '\(dest)'"
+    }
     if restoreMtime {
         var ts = [timespec(tv_sec: time_t(mtime), tv_nsec: 0),
                   timespec(tv_sec: time_t(mtime), tv_nsec: 0)]
-        _ = futimens(fd, &ts)
+        if futimens(fd, &ts) != 0 {
+            return "cannot restore mtime on '\(dest)' (errno \(errno))"
+                 + " / 無法還原 mtime '\(dest)'"
+        }
     }
     return nil
 }
@@ -2525,7 +2572,23 @@ final class FileWriterPool {
     init(backend: WriteBackend, inflight: Int, restoreMtime: Bool = true) {
         self.backend = backend
         self.restoreMtime = restoreMtime
-        self.sem = DispatchSemaphore(value: max(2, inflight))
+        // `inflight`, not `max(2, inflight)`. `-n` is already clamped to at least 1
+        // where it is parsed, so the floor here only ever raised 1 to 2 -- which made
+        // `-n 1` run two tasks concurrently, the one thing `-n 1` is asked for.
+        //
+        // Lowering it cannot deadlock: each task does exactly one `sem.wait()`, and
+        // the same task signals once on completion. No task holds two slots, and the
+        // workers never call back into the producer, so a value of 1 serialises rather
+        // than blocking.
+        //
+        // 用 `inflight` 而非 `max(2, inflight)`。`-n` 在解析處已夾限為至少 1，故此處的
+        // 下限唯一的作用就是把 1 抬成 2——而那使 `-n 1` 併發跑兩個任務，正是 `-n 1` 唯一
+        // 被要求別做的事。
+        //
+        // 調降不會死結：每個任務只做一次 `sem.wait()`，並由同一個任務在完成時 signal
+        // 一次；沒有任務同時持有兩個名額，工作者也不會回頭呼叫生產者。值為 1 的結果是
+        // 序列化，不是卡住。
+        self.sem = DispatchSemaphore(value: inflight)
     }
 
     var failure: String? { shared.m.withLock { $0 } }

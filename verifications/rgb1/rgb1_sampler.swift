@@ -72,12 +72,56 @@ let cleanOnly = argv.contains("--clean-only")
 // dir` parses `dir` as the interval and silently falls back to ./sample.
 // --out 明確指定目錄。讓破壞性旗標依賴位置順序，正是語料曾被誤刪的原因：
 // `--clean-only x dir` 會把 dir 當成間隔秒數，並靜默退回 ./sample。
+// Two failures the previous version had, both of which ended at the same place --
+// deleting ./sample without being asked to:
+//
+//   `--out` with no value. The old guard was `i + 1 < argv.count`, so a trailing
+//   `--out` failed the condition, left explicitOut nil AND left `--out` in argv for
+//   the blanket `removeAll { hasPrefix("--") }` below to swallow. `rgb1_sampler
+//   --clean-only --out` therefore cleaned the default directory in silence.
+//
+//   An unknown long option. `removeAll { hasPrefix("--") }` deleted anything starting
+//   with `--`, so `--ou /corpus` dropped the typo and promoted `/corpus` to a
+//   positional, while `--clean-onlyy` simply stopped protecting anything.
+//
+// Both are the failure the comment above already describes. Parsing one option at a
+// time and refusing what is not recognised is what the comment was asking for.
+//
+// 前一版有兩個缺陷，而兩者的結局相同——在沒有被要求的情況下刪掉 ./sample：
+//
+//   `--out` 沒有帶值。舊的守門是 `i + 1 < argv.count`，故 `--out` 位於結尾時條件不成立，
+//   explicitOut 維持 nil，且 `--out` 被留在 argv 裡，接著被下方那個「一律移除 `--` 開頭」
+//   吞掉。於是 `rgb1_sampler --clean-only --out` 會靜默清掉預設目錄。
+//
+//   未知的長選項。`removeAll { hasPrefix("--") }` 會刪掉任何 `--` 開頭的字串，所以
+//   `--ou /corpus` 會丟掉那個錯字並把 `/corpus` 升格為位置引數；而 `--clean-onlyy` 則
+//   單純不再保護任何東西。
+//
+// 這兩者正是上方註解已經描述過的那個失敗。逐一解析選項、並拒絕不認得的，才是那段註解
+// 真正要求的作法。
 var explicitOut: String? = nil
-if let i = argv.firstIndex(of: "--out"), i + 1 < argv.count {
-    explicitOut = argv[i + 1]
-    argv.removeSubrange(i...(i + 1))
+var positional: [String] = []
+var i = 0
+while i < argv.count {
+    let a = argv[i]
+    switch a {
+    case "--clean", "--clean-only":
+        i += 1
+    case "--out":
+        guard i + 1 < argv.count else {
+            fail("--out needs a directory / --out 需要一個目錄")
+        }
+        explicitOut = argv[i + 1]
+        i += 2
+    default:
+        guard !a.hasPrefix("--") else {
+            fail("unknown option '\(a)' / 無法辨識的選項 '\(a)'")
+        }
+        positional.append(a)
+        i += 1
+    }
 }
-argv.removeAll { $0.hasPrefix("--") }
+argv = positional
 
 guard cleanOnly || !argv.isEmpty else {
     fail("""

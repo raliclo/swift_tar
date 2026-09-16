@@ -30,13 +30,17 @@ compression engine and modeled on **libarchive**'s filter architecture.
 
 ## Build
 
-Requires the Xcode toolchain (`swiftc`) and a few Homebrew libraries:
+Requires the Xcode toolchain (`swiftc`) and `cmake`:
 
 ```sh
-brew install lz4 xz zstd      # liblz4 / liblzma / libzstd
-git submodule update --init   # fetch lzfse2 + libarchive + zlib
+git submodule update --init   # lzfse2 + libarchive + zlib + xz + lz4 + zstd
 ./build.zsh                    # → release/swift_tar
 ```
+
+No Homebrew packages are needed. `liblzma`, `liblz4` and `libzstd` are built
+from the pinned submodules by `build_codecs.zsh` and linked statically, so the
+version in a binary is a committed fact rather than whatever `brew upgrade` last
+installed. `zlib` and `libbz2` still come from the SDK, dynamically.
 
 `build.zsh` detects the platform with `uname` and runs that platform's build —
 `compile_tar.zsh` on macOS, `compile_tar-linux.zsh` on Linux,

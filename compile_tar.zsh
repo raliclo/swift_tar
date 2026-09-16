@@ -9,11 +9,16 @@
 # runCLI() 進入點後兩檔合併編譯）。
 #
 # Links / 連結：
-#   -lz      : zlib (SDK)            — gzip members / gzip 成員
-#   -lbz2    : libbz2 (SDK)          — bzip2 streams / bzip2 串流
-#   -llzma   : liblzma (homebrew xz) — xz / lzma / lzip
-#   -lzstd   : libzstd (homebrew)    — zstd frames
-#   -llz4    : liblz4 (homebrew)     — standard LZ4 frames / 標準 LZ4 frame
+#   -lz        : zlib (SDK, dynamic)     — gzip members / gzip 成員
+#   -lbz2      : libbz2 (SDK, dynamic)   — bzip2 streams / bzip2 串流
+#   liblzma.a  : xz submodule (static)   — xz / lzma / lzip
+#   libzstd.a  : zstd submodule (static) — zstd frames
+#   liblz4.a   : lz4 submodule (static)  — standard LZ4 frames / 標準 LZ4 frame
+#
+# The three codec libraries are built from this tree's own submodules by
+# build_codecs.zsh, not taken from homebrew; that script records why.
+# 三個 codec 函式庫由本樹自己的 submodule 經 build_codecs.zsh 建出，而非取自
+# homebrew；理由記於該腳本。
 #
 # Output / 輸出：release/swift_tar
 #
@@ -27,7 +32,7 @@ set -e
 
 script_path="${0:A}"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-    sed -n '3,24p' "$script_path" | sed 's/^# \{0,1\}//'
+    sed -n '3,29p' "$script_path" | sed 's/^# \{0,1\}//'
     exit 0
 fi
 
@@ -51,15 +56,6 @@ done
 if [[ "$EXCLUDE_LZFSE" == 1 ]]; then
     echo "Excluding the private LZFSE engine (EXCLUDE_LZFSE): lzfse-cli.swift not compiled / 排除私有 LZFSE 引擎：不編譯 lzfse-cli.swift"
 fi
-
-BREW_LIB="/opt/homebrew/lib"
-for lib in liblz4.dylib liblzma.dylib libzstd.dylib; do
-    if [[ ! -e "$BREW_LIB/$lib" ]]; then
-        echo "Missing $BREW_LIB/$lib — install with: brew install lz4 xz zstd" >&2
-        echo "缺少 $BREW_LIB/$lib —— 請執行：brew install lz4 xz zstd" >&2
-        exit 1
-    fi
-done
 
 # Include lzfse-cli.swift as a library only when LZFSE is not excluded. Strip its
 # top-level runCLI() entry point (not valid in multi-file builds).
@@ -97,9 +93,11 @@ zsh ./generate_version.zsh "$TEMP_VERSION"
 # Build into the release/ folder / 建置輸出至 release/ 資料夾
 mkdir -p release
 zsh ./build_libarchive.zsh
+zsh ./build_codecs.zsh
 swiftc -O -swift-version 6 $SWIFT_DEFINES $CLI_SRC "$TEMP_VERSION" swift_tar.swift rgb1.swift crypto.swift \
     build/libarchive_zip_bridge.o build/libarchive-macos/libarchive/libarchive.a \
-    -o release/swift_tar -lz -lbz2 -L"$BREW_LIB" -llz4 -llzma -lzstd
+    build/xz-macos/liblzma.a build/lz4-macos/liblz4.a build/zstd-macos/lib/libzstd.a \
+    -o release/swift_tar -lz -lbz2
 
 echo "Built ./release/swift_tar / 已建置 ./release/swift_tar"
 
@@ -114,14 +112,21 @@ echo "Built ./release/swift_tar / 已建置 ./release/swift_tar"
 # 根本沒選用的那一份。此處沒有 libarchive，因為它是靜態連結；build_libarchive.zsh 會
 # 依 submodule 自身的 gitlink 記錄它，與 Windows 建置腳本作法相同。
 #
+# Only zlib and bzip2 are read back this way now. lz4, xz and zstd left the dylib
+# world when they moved to the submodule builds, so build_codecs.zsh records their
+# gitlinks instead -- and the filter below must NOT strip those keys, or each build
+# would delete a record it has no way to rewrite.
+# 現在只有 zlib 與 bzip2 以此方式讀回。lz4、xz 與 zstd 改由 submodule 建置後已不再是
+# dylib，故改由 build_codecs.zsh 記錄其 gitlink——而下方的過濾器**不得**刪掉那些鍵，
+# 否則每次建置都會刪去一筆自己無從重寫的紀錄。
+#
 # The version recorded is the Mach-O "current version" of the dylib, hence the
-# key name. For zlib, bzip2, lz4 and zstd it happens to equal the upstream
-# release; for liblzma it does not — xz 5.x ships a dylib numbered 14.3.0. Naming
-# the field after what it actually is keeps that from reading as a wrong xz
-# version. The path is the identifying half of the record anyway.
-# 所記錄的版本是該 dylib 的 Mach-O「current version」，鍵名即據此命名。zlib、bzip2、
-# lz4 與 zstd 恰好與上游發行版號相同，liblzma 則否——xz 5.x 的 dylib 版號為 14.3.0。
-# 依欄位的實際含意命名，可避免它被誤讀為錯誤的 xz 版本。何況真正用於辨識的是路徑。
+# key name. For zlib and bzip2 it happens to equal the upstream release; it does
+# not always — xz 5.x shipped a dylib numbered 14.3.0, which is what made this
+# naming necessary in the first place. The path is the identifying half anyway.
+# 所記錄的版本是該 dylib 的 Mach-O「current version」，鍵名即據此命名。zlib 與 bzip2
+# 恰好與上游發行版號相同，但並非總是如此——xz 5.x 的 dylib 版號為 14.3.0，那正是當初
+# 需要這種命名的原因。何況真正用於辨識的是路徑。
 record_linked() {        # key  first-field pattern / 鍵名 與 第一欄比對樣式
     otool -L release/swift_tar | awk -v k="$1" -v pat="$2" '
         $1 ~ pat {
@@ -133,12 +138,9 @@ record_linked() {        # key  first-field pattern / 鍵名 與 第一欄比對
 version_file="version-$(swift_tar_platform).txt"
 tmp_version="$version_file.tmp"
 {
-    grep -vE '^(zlib|bzip2|lz4|xz|zstd)_(dylib_version|path|linkage)=' "$version_file" 2>/dev/null || true
+    grep -vE '^(zlib|bzip2)_(dylib_version|path|linkage)=' "$version_file" 2>/dev/null || true
     record_linked zlib  'libz\.'
     record_linked bzip2 'libbz2\.'
-    record_linked lz4   'liblz4\.'
-    record_linked xz    'liblzma\.'
-    record_linked zstd  'libzstd\.'
 } > "$tmp_version"
 mv "$tmp_version" "$version_file"
 echo "Recorded linked libraries in $version_file / 已將連結的函式庫記入 $version_file"

@@ -14,6 +14,17 @@
 > test_blind_findings.zsh to notice if it ever goes missing. Both were checked against
 > the unpatched build.
 >
+> **Still nothing open, 2026-09-17.** One entry was added and closed the same day:
+> macOS was linking liblzma/liblz4/libzstd from homebrew while the tree carried
+> submodule pins for all three that nothing built, so a `brew upgrade` could change
+> what a release binary contains — and had. Now built statically from the pins by
+> `build_codecs.zsh`. It carries two costs worth reading before relying on it.
+>
+> **2026-09-17：仍無未處理項目。** 當日新增並同日結案一項：macOS 原本自 homebrew
+> 連結 liblzma／liblz4／libzstd，而樹中三者皆有無人建置的 submodule pin，使得一次
+> `brew upgrade` 就能改變發行執行檔的內容——而它確實發生過。現已由 `build_codecs.zsh`
+> 依 pin 靜態建置。該項附帶兩點代價，依賴它之前請先讀過。
+>
 > **Everything else recorded below is fixed and under regression test** —
 > `test/test_blind_findings.zsh` is at 137 checks on Windows and
 > 142 on Linux, all passing, and it fails against every earlier binary. The two
@@ -1738,6 +1749,65 @@ GNU tar 直接拒絕（"archive cannot contain itself; not dumped"）；bsdtar �
 刻意不與尾隨斜線一併修正：後者是 Swift 端一行正規化、且有明確的重現步驟，而此項需要在
 C bridge 內做身分比對，該處的 `archive_entry_pathname` 相對於走訪根目錄，封存路徑則否。
 兩個恰好相鄰的不同問題。
+
+## macOS 上的 liblzma／liblz4／libzstd 改由 submodule 靜態建置 / macOS builds liblzma, liblz4 and libzstd statically from the submodules  ▸ ✅ 已處理 2026-09-17 / done
+
+`b6d26c7` 以 submodule 內置 lz4 與 xz，與 zstd 並列，理由寫得很完整——但它只加了 pin。
+沒有任何東西建置它們：`git submodule status` 顯示 xz 與 lz4 從未 init，而
+`compile_tar.zsh` 仍以 `-L/opt/homebrew/lib -llz4 -llzma -lzstd` 連結。於是發行執行檔
+裡的三個 codec 版本，等於這台機器上 `brew upgrade` 最後裝上的那一份。
+
+這不是假設。2026-09-17 的 `5b47a84` 把 `xz_dylib_version` 由 14.3.0 改成 14.4.0，
+而沒有任何 commit 要求更動 codec——homebrew 換掉了 liblzma，`version-mac.txt` 只是
+忠實記錄了它。**一個發行產物的輸入不受版本控制**，唯一的痕跡是一次例行建置改寫了
+provenance 檔。
+
+`b6d26c7` vendored lz4 and xz as submodules alongside zstd and explained why at length,
+but it added only the pins. Nothing built them and `compile_tar.zsh` went on linking
+`/opt/homebrew`, so the codec versions inside a release binary were whatever `brew
+upgrade` had last installed. Not hypothetical: `5b47a84` recorded xz moving 14.3.0 →
+14.4.0 with no commit asking for a codec change.
+
+現況（`build_codecs.zsh`）：三者以 cmake 從固定的 submodule 建成 `.a` 並靜態連結，
+`version-mac.txt` 改記 gitlink 而非 dylib 版號與路徑。`otool -L release/swift_tar`
+已無任何 `/opt/homebrew` 項目；`zlib` 與 `libbz2` 仍取自 SDK，動態連結。
+README 的 `brew install lz4 xz zstd` 前置需求已移除。
+
+### 兩件必須記著的事 / Two things this costs
+
+**一、liblzma 的 CVE 修補不再由 `brew upgrade` 帶進來。** 靜態連結表示修補需要重跑
+`build_codecs.zsh` 並重新發行執行檔。這是靜態化的代價，換到的是「版本是被 commit 過的
+事實」。`sync_all.zsh` 會回報 xz 落後上游幾個 commit，那是目前唯一的提醒機制。
+
+A liblzma CVE fix no longer arrives via `brew upgrade`; it needs this script re-run and
+the binary re-released. `sync_all.zsh` reporting the pin as behind is the only prompt.
+
+**二、macOS 版不再能解 v0.8 之前的舊 zstd frame。** `build_codecs.zsh` 採用
+`ZSTD_LEGACY_SUPPORT=OFF`，與 `build_zstd-win.zsh` 一致；homebrew 的 libzstd 則是帶
+legacy 支援的。因此這是 macOS 上的**行為縮減**：在此之前 macOS 版讀得到、Windows 版
+讀不到的那些 frame，現在兩者都讀不到。
+
+之所以選擇對齊而非保留：同一棵樹的一個平台讀得到、另一個拒收，比兩者都不支援一個
+上游自 2016 年起就不再產生的格式更糟——而這個專案有一份 macOS↔Windows 互通矩陣，
+不對稱會直接出現在那裡。若日後有人帶著真正的舊 frame 出現，把該旗標改回 `ON` 即可，
+代價只是一次重建。
+
+The macOS binary can no longer decode pre-v0.8 zstd frames: `ZSTD_LEGACY_SUPPORT=OFF`
+now matches `build_zstd-win.zsh`, while homebrew's libzstd had it on. This is a
+reduction on macOS, chosen because an archive one platform of this tree reads and
+another rejects is worse than neither reading a format upstream stopped producing in
+2016 — and this project ships a macOS↔Windows interop matrix where the asymmetry would
+surface. Reversible by flipping the flag and rebuilding.
+
+### 驗證 / Verified
+
+- `otool -L release/swift_tar` 無 `/opt/homebrew` 項目
+- xz／lz4／zstd 建立與解出往返皆通過（`test_swift_tar_rgb1.zsh`，各 codec 逐項）
+- `.lzma`（alone decoder）與 `.lz`（lzip decoder）解出往返通過——這兩條路徑最容易在
+  精簡 cmake 選項時被關掉，且因 `@_silgen_name` 在連結期解析，關掉不會有編譯錯誤
+- 套件測試：`test_encrypt` 78、`test_blind_findings` 148、`test_rgb1` 35、
+  `test_swift_tar_rgb1` 27、`test_no_lzfse` 14、`test_append_update` 9、
+  `test_strip_components` 8、`test_sampler_args` 9，全數 0 失敗
 
 ## zsh port / zsh 移植版
 

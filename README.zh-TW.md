@@ -27,13 +27,16 @@
 
 ## 建置
 
-需要 Xcode 工具鏈（`swiftc`）與數個 Homebrew 函式庫：
+需要 Xcode 工具鏈（`swiftc`）與 `cmake`：
 
 ```sh
-brew install lz4 xz zstd      # liblz4 / liblzma / libzstd
-git submodule update --init   # 取得 lzfse2 + libarchive + zlib
+git submodule update --init   # lzfse2 + libarchive + zlib + xz + lz4 + zstd
 ./build.zsh                    # → release/swift_tar
 ```
+
+不需要任何 Homebrew 套件。`liblzma`、`liblz4` 與 `libzstd` 由 `build_codecs.zsh`
+以固定版本的 submodule 建出並靜態連結，因此執行檔內的版本是一項被 commit 過的事實，
+而非 `brew upgrade` 最後裝上的那一份。`zlib` 與 `libbz2` 仍取自 SDK，動態連結。
 
 `build.zsh` 以 `uname` 偵測平台並執行該平台的建置——macOS 用 `compile_tar.zsh`、
 Linux 用 `compile_tar-linux.zsh`、Windows 用 `compile_tar-win.bat`——故同一道指令在

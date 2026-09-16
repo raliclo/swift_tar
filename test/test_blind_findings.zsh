@@ -1613,6 +1613,108 @@ eq "an intact .tar.gz still lists its members" "2" \
    "$("$ST" -t -f "$TG/full.tgz" 2>/dev/null | wc -l | tr -d ' ')"
 
 
+# ---- mtime beyond the ustar field: pax in, pax out, no crash ----
+# Three defects in one family, all found 2026-09-17 and all ending rc=0 or in a crash:
+#
+#   reader   a pax `mtime` record was parsed and dropped: a fixture with
+#            `mtime=1700000000` over a zero header field extracted as 1970.
+#   writer   the 11-digit field was cut to its last eleven digits: a file dated 3237
+#            was archived as 2148, and GNU tar read 2148 too.
+#   range    `time_t(mtime)` trapped past Int64.max: a base-256 field of 0x80 and
+#            eleven 0xff bytes ended extraction with rc=132 on WSL. The reader fix
+#            opens a second route to the same trap, through a pax record.
+#
+# The dates used are chosen to be representable everywhere this runs: 2286 is past the
+# field's 2242 ceiling but inside ext4 (2446), NTFS and APFS. mtimes are read with
+# zsh/stat rather than an external stat, for the reason recorded in test_touch_alias.zsh.
+#
+# 同一族的三個缺陷，皆於 2026-09-17 發現，結局都是 rc=0 或崩潰：
+#
+#   讀取端   pax 的 `mtime` 記錄被解析後丟棄：零標頭欄位上帶 `mtime=1700000000` 的
+#            fixture 解出為 1970 年。
+#   寫入端   11 位數欄位被截成最後 11 位：日期為 3237 年的檔案被寫成 2148 年，GNU tar
+#            也讀成 2148 年。
+#   範圍     `time_t(mtime)` 超過 Int64.max 時 trap：0x80 後接十一個 0xff 的 base-256
+#            欄位，在 WSL 上以 rc=132 中斷解壓。讀取端的修正會經由 pax 記錄再開一條通往
+#            同一個 trap 的路。
+#
+# 所選日期在本測試會執行的每個平台上都可表示：2286 年超過欄位的 2242 年上限，但仍在
+# ext4（2446 年）、NTFS 與 APFS 之內。mtime 以 zsh/stat 讀取而非外部 stat，理由見
+# test_touch_alias.zsh。
+zmodload zsh/stat
+mtime_of() {
+  local -A st
+  if zstat -H st +mtime -- "$1" 2>/dev/null; then printf '%s' "${st[mtime]}"
+  else printf 'STAT_FAILED'; fi
+}
+
+if [ -f "$RAW" ]; then
+  # Reader. Both entries carry 1600000000 (octal 13727410000, from `printf '%o'`) in the
+  # header; the pax record in front of the first must override it there and nowhere else.
+  # The fraction is the form GNU tar writes.
+  # 讀取端。兩個項目的標頭都是 1600000000（八進位 13727410000，由 `printf '%o'` 算出）；
+  # 第一個項目前的 pax 記錄必須只在該處覆寫它。小數是 GNU tar 寫出的形式。
+  PM="$TMP/paxmtime"
+  mkdir -p "$PM/out"
+  RAW_TAR_MTIME=13727410000 zsh "$RAW" "$PM/p.tar" \
+    pax '' 'mtime=1700000000.75' file a.txt a file b.txt b >/dev/null
+  rc=0; "$ST" -x -f "$PM/p.tar" -C "$PM/out" >/dev/null 2>&1 || rc=$?
+  eq "an archive with a pax mtime record extracts" "0" "$rc"
+  eq "a pax mtime record sets its entry's mtime, fraction dropped" \
+     "1700000000" "$(mtime_of "$PM/out/a.txt")"
+  eq "a pax mtime record does not carry into the next entry" \
+     "1600000000" "$(mtime_of "$PM/out/b.txt")"
+
+  # Range. 2^64-1 fits the UInt64 the reader parses into and nothing the kernel or CRT
+  # takes. It must be this member's reported error, not a crash, and the member after
+  # it must still land. rc < 128 separates "failed" from "killed by a signal" on POSIX;
+  # a crash on Windows exits with an NTSTATUS far above that too.
+  # 範圍。2^64-1 放得進讀取端解析用的 UInt64，卻放不進核心或 CRT 接受的任何型別。它必須是
+  # 該成員被回報的錯誤而非崩潰，且其後的成員仍須落地。在 POSIX 上 rc < 128 區分「失敗」與
+  # 「被訊號終止」；Windows 上的崩潰以 NTSTATUS 結束，同樣遠大於此。
+  mkdir -p "$PM/huge"
+  zsh "$RAW" "$PM/huge.tar" \
+    pax '' 'mtime=18446744073709551615' file h.txt h file after.txt after >/dev/null
+  rc=0; out=$("$ST" -x -f "$PM/huge.tar" -C "$PM/huge" 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -lt 128 ]; then
+    ok "an out-of-range mtime is an error, not a crash"
+  else
+    bad "an out-of-range mtime is an error, not a crash (rc=$rc)"
+  fi
+  case "$out" in
+    *"cannot restore mtime"*h.txt*"out of range"*) ok "the out-of-range mtime names the file" ;;
+    *) bad "the out-of-range mtime names the file (got: $(printf '%s' "$out" | head -1))" ;;
+  esac
+  eq "the member after an out-of-range mtime still lands" \
+     "after" "$(cat "$PM/huge/after.txt" 2>/dev/null)"
+else
+  bad "pax mtime fixtures (missing fixture generator $RAW)"
+fi
+
+# Writer. swift_tar archives a file dated 2286 and must get 2286 back. The source
+# mtime is checked first: a filesystem or touch that cannot hold the date is a
+# statement about this machine, not about swift_tar, and is reported as a skip.
+# 寫入端。swift_tar 封存一個日期為 2286 年的檔案，並必須取回 2286 年。先檢查來源 mtime：
+# 存不下該日期的檔案系統或 touch，說明的是這台機器而非 swift_tar，故以略過回報。
+WM="$TMP/farwrite"
+mkdir -p "$WM/src" "$WM/out"
+printf 'late\n' > "$WM/src/late.txt"
+# `|| true` is deliberate: a touch that rejects the date must reach the skip below, not
+# end the suite under set -e. Its message is left visible. / `|| true` 是刻意的：拒絕該日期
+# 的 touch 必須走到下方的略過，而不是在 set -e 下結束整個套件。其訊息保留可見。
+touch -d '2286-11-20T17:46:40Z' "$WM/src/late.txt" || true
+if [ "$(mtime_of "$WM/src/late.txt")" = "10000000000" ]; then
+  rc=0; "$ST" -c -f "$WM/late.tar" -C "$WM/src" late.txt >/dev/null 2>&1 || rc=$?
+  eq "a file dated past 2242 archives" "0" "$rc"
+  rc=0; "$ST" -x -f "$WM/late.tar" -C "$WM/out" >/dev/null 2>&1 || rc=$?
+  eq "a file dated past 2242 extracts" "0" "$rc"
+  eq "a file dated past 2242 keeps its mtime through create and extract" \
+     "10000000000" "$(mtime_of "$WM/out/late.txt")"
+else
+  echo "SKIP: this filesystem or touch cannot hold 2286-11-20 (got $(mtime_of "$WM/src/late.txt"))"
+fi
+
+
 # ---- a failed mtime restore is not a success (Windows) ----
 # 0614a89 stopped posixWriteFile discarding fchmod/futimens failures, but Windows
 # extracts through winWriteFile, which kept `_ = _futime64(...)`: an mtime the CRT

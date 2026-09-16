@@ -2225,15 +2225,26 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
         //   mtime 在 33658 年   亦超出 SetFileTime 的範圍：兩個後端都留著解壓當下的時間，
         //                       rc=0，無輸出。
         // errno 須在 _close 之前取得，_close 可能覆寫它。
-        var mtimeErrno: Int32? = nil
+        //
+        // `__time64_t(exactly:)`, not `__time64_t(mtime)`: the latter traps for a value
+        // past Int64.max, which a base-256 header field or a pax record can carry. See
+        // "mtimeOutOfRange" in posixWriteFile.
+        // 用 `__time64_t(exactly:)` 而非 `__time64_t(mtime)`：後者遇到超過 Int64.max 的值
+        // 會 trap，而 base-256 標頭欄位或 pax 記錄都帶得進這種值。見 posixWriteFile 中的
+        // 「mtimeOutOfRange」。
+        var mtimeFailure: String? = nil
         if writeOK && restoreMtime {
-            var tb = __utimbuf64(actime: __time64_t(mtime), modtime: __time64_t(mtime))
-            if _futime64(fd, &tb) != 0 { mtimeErrno = errno }
+            if let t = __time64_t(exactly: mtime) {
+                var tb = __utimbuf64(actime: t, modtime: t)
+                if _futime64(fd, &tb) != 0 { mtimeFailure = "errno \(errno)" }
+            } else {
+                mtimeFailure = "out of range: \(mtime)"
+            }
         }
         _ = _close(fd)
         guard writeOK else { return "write failed for '\(dest)' / 寫入失敗 '\(dest)'" }
-        if let e = mtimeErrno {
-            return "cannot restore mtime on '\(dest)' (errno \(e))"
+        if let why = mtimeFailure {
+            return "cannot restore mtime on '\(dest)' (\(why))"
                  + " / 無法還原 mtime '\(dest)'"
         }
         return nil
@@ -2554,8 +2565,27 @@ private func posixWriteFile(dest: String, data: Data, mtime: UInt64, mode: UInt3
              + " / 無法還原權限 '\(dest)'"
     }
     if restoreMtime {
-        var ts = [timespec(tv_sec: time_t(mtime), tv_nsec: 0),
-                  timespec(tv_sec: time_t(mtime), tv_nsec: 0)]
+        // mtimeOutOfRange. `time_t(mtime)` used to trap here for any value past
+        // Int64.max, and the archive decides that value: a base-256 header field can
+        // hold one, and since 2026-09-17 so can a pax `mtime` record. Measured on WSL
+        // with a field of 0x80 followed by eleven 0xff bytes: rc=132, "Illegal
+        // instruction", the whole extraction gone. GNU tar reports "Archive base-256
+        // value is out of time_t range" and carries on. `exactly:` turns the trap into
+        // this member's error, reported like any other failed restore.
+        // The same conversion is guarded in winWriteFile and at the symlink restore.
+        //
+        // mtimeOutOfRange。`time_t(mtime)` 過去會在此對任何超過 Int64.max 的值 trap，而那個
+        // 值由封存決定：base-256 標頭欄位裝得下，自 2026-09-17 起 pax 的 `mtime` 記錄也
+        // 裝得下。於 WSL 以 0x80 後接十一個 0xff 的欄位實測：rc=132、「Illegal instruction」，
+        // 整次解壓就此中斷。GNU tar 回報「Archive base-256 value is out of time_t range」
+        // 並繼續。`exactly:` 把 trap 變成該成員的錯誤，與其他還原失敗一樣回報。
+        // winWriteFile 與 symlink 還原處的同一個轉型亦已加上防護。
+        guard let t = time_t(exactly: mtime) else {
+            return "cannot restore mtime on '\(dest)' (out of range: \(mtime))"
+                 + " / 無法還原 mtime '\(dest)'"
+        }
+        var ts = [timespec(tv_sec: t, tv_nsec: 0),
+                  timespec(tv_sec: t, tv_nsec: 0)]
         if futimens(fd, &ts) != 0 {
             return "cannot restore mtime on '\(dest)' (errno \(errno))"
                  + " / 無法還原 mtime '\(dest)'"
@@ -2895,11 +2925,37 @@ final class TarWriter {
             pax.append(TarWriter.paxRecord("size", String(size)))
             hdrSize = 0
         }
+        // The mtime field has the same 11-digit ceiling as size, 8^11 s, which ends at
+        // 2242-03-16 -- and until 2026-09-17 nothing checked it. octalField keeps the
+        // *last* eleven digits, so a later time lost its leading digit: a file dated
+        // 3237 (octal 452013710000) was archived as 52013710000, year 2148, with rc=0,
+        // and GNU tar then read 2148 as well, so the archive itself was wrong, not one
+        // reader. A pax record carries the full value, as it already does for size.
+        //
+        // The header keeps 0o77777777777 rather than 0, which is what GNU tar writes in
+        // the same case: a reader that ignores the record lands on the nearest time the
+        // field can say, not 1970. The pax header's own mtime gets the same value, since
+        // it goes through the same field.
+        //
+        // mtime 欄位與 size 有相同的 11 位數上限 8^11 秒，止於 2242-03-16——而在 2026-09-17
+        // 之前沒有任何地方檢查它。octalField 保留的是*最後* 11 位，於是更晚的時間會丟掉最前面
+        // 那一位：日期為 3237 年的檔案（八進位 452013710000）被寫成 52013710000，即 2148 年，
+        // rc=0；GNU tar 隨後也讀成 2148 年，所以錯的是封存本身，不是某個讀取器。pax 記錄帶的
+        // 是完整值，一如它已為 size 所做的。
+        //
+        // 標頭填 0o77777777777 而非 0，與 GNU tar 在同一情況下的寫法相同：忽略該記錄的讀取器
+        // 會落在欄位能表達的最接近時間，而不是 1970 年。pax 標頭自己的 mtime 也用同一個值，
+        // 因為它走的是同一個欄位。
+        var hdrMtime = mtime
+        if mtime >= (1 << 33) {
+            pax.append(TarWriter.paxRecord("mtime", String(mtime)))
+            hdrMtime = (1 << 33) - 1
+        }
         if !pax.isEmpty {
-            try writePaxHeader(records: pax, mtime: mtime)
+            try writePaxHeader(records: pax, mtime: hdrMtime)
         }
         let hdr = buildHeader(name: hdrName, prefix: hdrPrefix, mode: mode,
-                              uid: uid, gid: gid, size: hdrSize, mtime: mtime,
+                              uid: uid, gid: gid, size: hdrSize, mtime: hdrMtime,
                               typeflag: typeflag, linkname: hdrLink)
         try sink.write(Data(hdr))
     }
@@ -3609,6 +3665,7 @@ final class TarReader {
     func run(options: Options) throws {
         var zeroBlocks = 0
         var paxPath: String? = nil, paxLink: String? = nil, paxSize: UInt64? = nil
+        var paxMtime: UInt64? = nil
         var gnuLongName: String? = nil, gnuLongLink: String? = nil
         // Deferred directory mtimes (children would bump them) / 目錄 mtime 延後套用
         var dirTimes: [(path: String, mtime: UInt64)] = []
@@ -3721,7 +3778,7 @@ final class TarReader {
             if !prefix.isEmpty { name = prefix + "/" + name }
             let mode = UInt32(parseTarNumber(h[100..<108]))
             var size = parseTarNumber(h[124..<136])
-            let mtime = parseTarNumber(h[136..<148])
+            let headerMtime = parseTarNumber(h[136..<148])
             let typeflag = h[156]
             var linkname = str(157..<257)
 
@@ -3744,6 +3801,34 @@ final class TarReader {
                         case "path":     paxPath = val
                         case "linkpath": paxLink = val
                         case "size":     paxSize = UInt64(val)
+                        // A pax `mtime` record was read and dropped until 2026-09-17,
+                        // so every entry kept its header field instead. Two ways that
+                        // is wrong, both measured on Windows with rc=0 and no output:
+                        // a fixture holding `mtime=1700000000` over a zero field
+                        // extracted as 1970, and a GNU tar pax archive dated 2300 --
+                        // which must use the record, since 8^11 s ends in 2242 --
+                        // extracted as 1970 too. GNU tar honoured both.
+                        //
+                        // The value is decimal seconds with an optional fraction
+                        // ("1789598174.9740288" is what GNU tar writes); the fraction
+                        // is dropped, as the header field has no room for it either.
+                        // A negative (pre-1970) or unparsable value leaves the header
+                        // field in effect: UInt64 cannot hold the former, and the rest
+                        // of the extractor is UInt64 throughout.
+                        //
+                        // pax 的 `mtime` 記錄在 2026-09-17 之前是讀到後就丟掉的，於是每個
+                        // 項目都沿用標頭欄位。兩種錯法皆於 Windows 實測，rc=0 且無輸出：在
+                        // 零欄位上帶 `mtime=1700000000` 的 fixture 解出為 1970 年；GNU tar
+                        // 寫出、日期為 2300 年的 pax 封存——8^11 秒止於 2242 年，故必須靠
+                        // 該記錄——同樣解出為 1970 年。GNU tar 兩者皆正確。
+                        //
+                        // 值為十進位秒數，可帶小數（GNU tar 寫的是 "1789598174.9740288"）；
+                        // 小數捨去，標頭欄位同樣沒有容納它的空間。負值（1970 年之前）或無法
+                        // 解析的值，沿用標頭欄位：UInt64 表示不了前者，而解壓端通篇都是 UInt64。
+                        case "mtime":
+                            let whole = val.split(separator: ".", maxSplits: 1,
+                                                  omittingEmptySubsequences: false).first
+                            if let whole = whole, let v = UInt64(whole) { paxMtime = v }
                         default:         break
                         }
                     }
@@ -3775,7 +3860,8 @@ final class TarReader {
             if let p = paxPath { name = p }
             if let l = paxLink { linkname = l }
             if let s = paxSize { size = s }
-            paxPath = nil; paxLink = nil; paxSize = nil
+            let mtime = paxMtime ?? headerMtime
+            paxPath = nil; paxLink = nil; paxSize = nil; paxMtime = nil
             if let n = gnuLongName { name = n; gnuLongName = nil }
             if let l = gnuLongLink { linkname = l; gnuLongLink = nil }
 
@@ -4014,9 +4100,17 @@ final class TarReader {
 #if os(Windows)
                     winSetLinkMtime(dest, mtime)
 #else
-                    var ts = [timespec(tv_sec: time_t(mtime), tv_nsec: 0),
-                              timespec(tv_sec: time_t(mtime), tv_nsec: 0)]
-                    _ = utimensat(AT_FDCWD, dest, &ts, AT_SYMLINK_NOFOLLOW)
+                    // `exactly:` for the trap described at "mtimeOutOfRange" in
+                    // posixWriteFile. An out-of-range value is skipped rather than
+                    // reported, which is this branch's existing policy for a failed
+                    // utimensat, not a new one.
+                    // 使用 `exactly:`，理由見 posixWriteFile 中的「mtimeOutOfRange」。超出範圍
+                    // 的值是略過而非回報，那是本分支對 utimensat 失敗的既有政策，並非新訂。
+                    if let t = time_t(exactly: mtime) {
+                        var ts = [timespec(tv_sec: t, tv_nsec: 0),
+                                  timespec(tv_sec: t, tv_nsec: 0)]
+                        _ = utimensat(AT_FDCWD, dest, &ts, AT_SYMLINK_NOFOLLOW)
+                    }
 #endif
                 }
             case UInt8(ascii: "6"):

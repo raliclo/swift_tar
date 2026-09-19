@@ -199,6 +199,77 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 5) UPDATE (-u) on an unchanged tree changes nothing. Section 2 checks that -u
+#    adds what is newer; this checks the other half, which was wrong in two ways
+#    until 2026-09-19 and in both cases grew the archive on every run:
+#
+#      the baseline read only the 512-byte header, so an mtime carried in a pax
+#      record -- anything past the field's 2242 ceiling -- compared against the
+#      clamp and always looked older. Two runs over an untouched tree left three
+#      copies of a file dated 2286.
+#
+#      directories bypassed the gate entirely, so one header per directory was
+#      appended every run, for ever.
+#
+#    The assertion is the entry list, not the file size: GNU tar's 10240-byte
+#    blocking hides growth this small, and a byte count would have called the
+#    directory case equal. Compared against GNU tar, whose listing is unchanged
+#    across the same runs in both its gnu and pax formats.
+#
+#    5）對未改動的樹執行 -u 不得改變任何東西。第 2 節驗證 -u 會加入較新的項目；此處驗證
+#    另一半。在 2026-09-19 之前它有兩種錯法，且兩者都讓封存每執行一次就變大：
+#
+#      基準只讀 512-byte 標頭，故由 pax 記錄攜帶的 mtime——即超過該欄位 2242 年上限者
+#      ——被拿去與上限值比較，永遠顯得較舊。未改動的樹跑兩次之後，日期為 2286 年的檔案
+#      留下三份。
+#
+#      目錄完全不經過閘門，於是每次執行都為每個目錄追加一個標頭，永無止境。
+#
+#    斷言的是項目清單而非檔案大小：GNU tar 10240 位元組的區塊化會蓋掉這種程度的成長，
+#    而以位元組數比較會把目錄那一例判為相等。對照組是 GNU tar，其清單在同樣的執行下、
+#    於 gnu 與 pax 兩種格式中皆不變。
+# ---------------------------------------------------------------------------
+UP="$TMP/noop"; mkdir -p "$UP/src/sub"
+printf 'late\n' > "$UP/src/late.txt"
+printf 'norm\n' > "$UP/src/norm.txt"
+printf 'deep\n' > "$UP/src/sub/deep.txt"
+# 2286-11-20T17:46:40Z = 10000000000 s: past the ustar field, inside ext4, NTFS and APFS.
+# 2286-11-20T17:46:40Z = 10000000000 秒：超過 ustar 欄位，但在 ext4、NTFS 與 APFS 之內。
+# `|| true` is deliberate: a touch that rejects the date must reach the skip below rather
+# than end the suite under set -e. / `|| true` 是刻意的：拒絕該日期的 touch 必須走到下方的
+# 略過，而不是在 set -e 下結束整個套件。
+touch -d '2286-11-20T17:46:40Z' "$UP/src/late.txt" || true
+zmodload zsh/stat
+typeset -A up_st
+zstat -H up_st +mtime -- "$UP/src/late.txt"
+if [ "${up_st[mtime]}" = "10000000000" ]; then
+  "$ST" -c -f "$UP/u.tar" -C "$UP/src" .
+  listing0="$("$ST" -t -f "$UP/u.tar" | tr -d '\r' | tr '\n' ' ')"
+  "$ST" -u -f "$UP/u.tar" -C "$UP/src" .
+  listing1="$("$ST" -t -f "$UP/u.tar" | tr -d '\r' | tr '\n' ' ')"
+  "$ST" -u -f "$UP/u.tar" -C "$UP/src" .
+  listing2="$("$ST" -t -f "$UP/u.tar" | tr -d '\r' | tr '\n' ' ')"
+  [ "$listing1" = "$listing0" ] \
+    && ok "UPDATE -u: an unchanged tree is left alone (first run)" \
+    || bad "UPDATE -u: first run changed the archive: [$listing0] -> [$listing1]"
+  [ "$listing2" = "$listing0" ] \
+    && ok "UPDATE -u: an unchanged tree is left alone (second run)" \
+    || bad "UPDATE -u: second run changed the archive: [$listing0] -> [$listing2]"
+
+  # The gate must not swallow a real change under a directory it skipped.
+  # 閘門不得把「被略過的目錄底下確實有改動」一併吞掉。
+  sleep 1
+  printf 'deep-UPDATED\n' > "$UP/src/sub/deep.txt"
+  "$ST" -u -f "$UP/u.tar" -C "$UP/src" .
+  added="$("$ST" -t -f "$UP/u.tar" | tr -d '\r' | grep -c 'deep.txt')"
+  [ "$added" = "2" ] \
+    && ok "UPDATE -u: a newer file under a skipped directory is still added" \
+    || bad "UPDATE -u: newer file under a skipped directory (deep.txt count=$added, want 2)"
+else
+  echo "SKIP: -u on a post-2242 mtime — this filesystem or touch cannot hold 2286-11-20 / 略過：此檔案系統或 touch 存不下 2286-11-20"
+fi
+
+# ---------------------------------------------------------------------------
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

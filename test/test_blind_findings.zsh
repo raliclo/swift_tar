@@ -1715,39 +1715,57 @@ else
 fi
 
 
-# ---- a failed mtime restore is not a success (Windows) ----
-# 0614a89 stopped posixWriteFile discarding fchmod/futimens failures, but Windows
-# extracts through winWriteFile, which kept `_ = _futime64(...)`: an mtime the CRT
-# rejects -- anything past 3000-12-31 -- left the file with its extraction time and
-# the run still ended 0 with no output. Unlike the POSIX half, which could only be
-# forced, this happens on a real NTFS volume, so the test uses a real archive.
+# ---- a failed mtime restore is not a success, and 3237 is not a failure (Windows) ----
+# 0614a89 stopped posixWriteFile discarding fchmod/futimens failures, but Windows extracts
+# through winWriteFile, which kept `_ = _futime64(...)`: an mtime the CRT rejects left the
+# file with its extraction time and the run still ended 0 with no output.
 #
-# Windows only, deliberately. Elsewhere year 3237 is representable, and where it is
-# not (ext4 stops at 2446) the kernel clamps the time and reports success, so there
-# is no failure for swift_tar to report. `-m` is the control: the same archive must
-# extract cleanly without the mtime step, which proves the fixture is valid and the
-# failure is that step and nothing else.
+# The boundary moved once since. _futime64 refused everything past 3000-12-31, so year 3237
+# was the natural trigger; that backend now calls SetFileTime, which NTFS backs to year
+# 30828, so 3237 is restored here exactly as bsdtar restores it. What remains unrepresentable
+# is past 30828, and that is what must still be reported rather than passed off as success.
+# Both halves are checked, because a fix that reports everything would pass the first.
+#
+# Windows only, deliberately. Elsewhere the kernel clamps an out-of-range time and reports
+# success (ext4 stops at 2446), so swift_tar has no failure to report. `-m` is the control:
+# the same archive must extract cleanly without the mtime step, which proves the fixture is
+# valid and the failure is that step and nothing else.
 #
 # 0614a89 讓 posixWriteFile 不再丟棄 fchmod／futimens 的失敗，但 Windows 解壓走的是
-# winWriteFile，那裡仍是 `_ = _futime64(...)`：CRT 拒絕的 mtime（3000-12-31 之後）會
-# 讓檔案留著解壓當下的時間，而整次執行仍以 0 結束且無任何輸出。POSIX 那一半只能強制
-# 觸發，這一半在真實的 NTFS 上就會發生，故本測試用的是真實封存。
+# winWriteFile，那裡仍是 `_ = _futime64(...)`：CRT 拒絕的 mtime 會讓檔案留著解壓當下的時間，
+# 而整次執行仍以 0 結束且無任何輸出。
 #
-# 刻意只在 Windows 斷言。其他平台上 3237 年可以表示；表示不了之處（ext4 止於 2446 年）
-# 核心會夾限時間並回報成功，swift_tar 沒有失敗可報。`-m` 是對照組：同一份封存略過 mtime
-# 步驟時必須順利解出，藉此證明 fixture 有效、且失敗確實來自該步驟而非其他。
+# 其後分界移動過一次。_futime64 拒絕 3000-12-31 之後的一切，故 3237 年曾是自然的觸發點；該
+# 後端現已改呼叫 SetFileTime，而 NTFS 支援到 30828 年，於是 3237 年在此能被還原，與 bsdtar
+# 一致。仍然表示不了的是 30828 年之後，那才是必須回報、不得充作成功的部分。兩半都檢查，因為
+# 一個「全部都回報」的修法會通過前半。
+#
+# 刻意只在 Windows 斷言。其他平台上核心會夾限超出範圍的時間並回報成功（ext4 止於 2446 年），
+# swift_tar 沒有失敗可報。`-m` 是對照組：同一份封存略過 mtime 步驟時必須順利解出，藉此證明
+# fixture 有效、且失敗確實來自該步驟而非其他。
 case "$(uname -s)" in
   MSYS*|MINGW*|CYGWIN*)
     if [ -f "$RAW" ]; then
       FM="$TMP/farmtime"
-      mkdir -p "$FM/out" "$FM/out-m"
-      # 452013710000 octal = 40000000000 s = 3237-07-20.
-      RAW_TAR_MTIME=452013710000 zsh "$RAW" "$FM/far.tar" file far.txt far >/dev/null
+      mkdir -p "$FM/ok" "$FM/out" "$FM/out-m"
+      # Representable: 452013710000 octal = 40000000000 s = 3237-07-20, inside NTFS.
+      # 可表示：八進位 452013710000 = 40000000000 秒 = 3237-07-20，在 NTFS 範圍內。
+      RAW_TAR_MTIME=452013710000 zsh "$RAW" "$FM/y3237.tar" file far.txt far >/dev/null
+      rc=0; "$ST" -x -f "$FM/y3237.tar" -C "$FM/ok" >/dev/null 2>&1 || rc=$?
+      eq "a year-3237 mtime extracts cleanly on NTFS" "0" "$rc"
+      eq "a year-3237 mtime is restored, not dropped" \
+         "40000000000" "$(mtime_of "$FM/ok/far.txt")"
+
+      # Unrepresentable: 1000000000000 s is year 33658, past FILETIME's 30828. Carried as a
+      # pax record because a twelve-digit octal field stops at year 4147.
+      # 表示不了：1000000000000 秒為 33658 年，超過 FILETIME 的 30828 年。以 pax 記錄攜帶，
+      # 因為 12 位數的八進位欄位最多只到 4147 年。
+      zsh "$RAW" "$FM/far.tar" pax '' 'mtime=1000000000000' file far.txt far >/dev/null
       rc=0; out=$("$ST" -x -f "$FM/far.tar" -C "$FM/out" 2>&1) || rc=$?
       if [ "$rc" -ne 0 ]; then
-        ok "an mtime _futime64 rejects does not exit 0"
+        ok "an mtime past FILETIME's range does not exit 0"
       else
-        bad "an mtime _futime64 rejects does not exit 0"
+        bad "an mtime past FILETIME's range does not exit 0"
       fi
       case "$out" in
         *"cannot restore mtime"*far.txt*) ok "the failed mtime restore names the file" ;;

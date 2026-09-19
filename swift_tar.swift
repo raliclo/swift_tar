@@ -1974,13 +1974,30 @@ private func winCreateSymlink(dest: String, target: String) {
 ///
 /// Failure is skipped silently, the same policy as winCreateSymlink: the link
 /// itself exists, and a wrong timestamp does not justify ending the extraction.
+/// A Unix mtime as FILETIME, or nil if the conversion overflows.
+/// 將 Unix mtime 轉為 FILETIME；轉換溢位時回傳 nil。
+///
+/// FILETIME 以 100ns 為單位、自 1601-01-01 起算；與 Unix epoch 相差 11644473600 秒。
+/// FILETIME counts 100ns ticks from 1601-01-01; the Unix epoch is 11644473600 seconds later.
+///
+/// Reporting overflow rather than wrapping (`&+`, `&*`): the multiplication wraps for any
+/// mtime past about year 30828, and a wrapped value is a *plausible* date somewhere else
+/// entirely, which SetFileTime then accepts. The callers' contract is that an unrepresentable
+/// time is refused, not quietly relocated.
+/// 以溢位回報取代環繞運算（`&+`、`&*`）：約 30828 年之後的 mtime 會讓乘法環繞，而環繞後的值
+/// 是「另一個看起來完全合理的日期」，SetFileTime 會照單全收。呼叫端的約定是：表示不了的時間
+/// 要被拒絕，而不是被悄悄搬到別處。
+private func winFileTime(_ mtime: UInt64) -> FILETIME? {
+    let (secs, addOverflow) = mtime.addingReportingOverflow(11_644_473_600)
+    guard !addOverflow else { return nil }
+    let (ticks, mulOverflow) = secs.multipliedReportingOverflow(by: 10_000_000)
+    guard !mulOverflow else { return nil }
+    return FILETIME(dwLowDateTime: DWORD(truncatingIfNeeded: ticks),
+                    dwHighDateTime: DWORD(truncatingIfNeeded: ticks >> 32))
+}
+
 private func winSetLinkMtime(_ path: String, _ mtime: UInt64) {
-    // FILETIME 以 100ns 為單位、自 1601-01-01 起算；與 Unix epoch 相差 11644473600 秒。
-    // FILETIME counts 100ns ticks from 1601-01-01; the Unix epoch is
-    // 11644473600 seconds later.
-    let ticks = (mtime &+ 11_644_473_600) &* 10_000_000
-    var ft = FILETIME(dwLowDateTime: DWORD(truncatingIfNeeded: ticks),
-                      dwHighDateTime: DWORD(truncatingIfNeeded: ticks >> 32))
+    guard var ft = winFileTime(mtime) else { return }
     let handle = path.withCString(encodedAs: UTF16.self) { wide in
         CreateFileW(wide,
                     DWORD(FILE_WRITE_ATTRIBUTES),
@@ -2211,7 +2228,9 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
         //                        The foundation backend restored it correctly.
         //   mtime in year 33658  past SetFileTime's range as well: both backends kept
         //                        the extraction time, rc=0, no output.
-        // errno is read before _close, which may overwrite it.
+        // Both rows are the record as taken, not current behaviour: this backend moved off
+        // _futime64 two days later (see below), so 3237 now succeeds and only 33658 fails.
+        // The reporting is what the rows argued for, and it is what remains.
         //
         // 0614a89 [P3] 的 Windows 那一半。該 commit 讓 posixWriteFile 回報 fchmod／futimens
         // 失敗，但 posixWriteFile 位於 `#if !os(Windows)` 之內，於是本函式——Windows 實際
@@ -2224,19 +2243,49 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
         //                       解壓當下的時間，rc=0，無輸出。foundation 後端則正確還原。
         //   mtime 在 33658 年   亦超出 SetFileTime 的範圍：兩個後端都留著解壓當下的時間，
         //                       rc=0，無輸出。
-        // errno 須在 _close 之前取得，_close 可能覆寫它。
+        // 以上兩列是當時的記錄，不是現行行為：本後端兩天後改用 SetFileTime（見下方），故 3237
+        // 年現在會成功，只有 33658 年仍失敗。那兩列論證的是「要回報」，而回報保留至今。
         //
-        // `__time64_t(exactly:)`, not `__time64_t(mtime)`: the latter traps for a value
-        // past Int64.max, which a base-256 header field or a pax record can carry. See
-        // "mtimeOutOfRange" in posixWriteFile.
-        // 用 `__time64_t(exactly:)` 而非 `__time64_t(mtime)`：後者遇到超過 Int64.max 的值
-        // 會 trap，而 base-256 標頭欄位或 pax 記錄都帶得進這種值。見 posixWriteFile 中的
-        // 「mtimeOutOfRange」。
+        // SetFileTime on this descriptor's handle, not _futime64.
+        //
+        // _futime64 refuses anything past 3000-12-31 with EINVAL, which is a limit of the
+        // CRT and of nothing else here: NTFS stores to year 30828, bsdtar 3.8.8 restores a
+        // 3237 date on the same volume, and so do this extractor's other three time paths,
+        // which all go through SetFileTime already -- directories and symlinks via
+        // winSetLinkMtime, and the .foundation backend via setAttributes. Only the default
+        // backend disagreed, and only about dates the writer could not produce until the
+        // truncation above it was fixed, which is why it stayed hidden.
+        //
+        // _get_osfhandle converts the descriptor, it does not open anything, so the one
+        // open per file that this backend exists for is unchanged. The handle comes from
+        // _O_WRONLY, whose GENERIC_WRITE includes FILE_WRITE_ATTRIBUTES.
+        //
+        // Both access and write times are set, matching what _futime64 did with
+        // __utimbuf64(actime:modtime:); winSetLinkMtime sets only the write time, and that
+        // difference is kept rather than quietly aligned.
+        //
+        // 對本 fd 的 handle 呼叫 SetFileTime，不用 _futime64。
+        //
+        // _futime64 以 EINVAL 拒絕 3000-12-31 之後的一切，而那是 CRT 的限制，此處無他：NTFS
+        // 存得到 30828 年，bsdtar 3.8.8 在同一個磁碟區上還原得了 3237 年的日期，本解壓端另外
+        // 三條時間路徑也都做得到——它們本來就走 SetFileTime：目錄與 symlink 經 winSetLinkMtime，
+        // .foundation 後端經 setAttributes。只有預設後端不一致，而且只在「寫入端截斷修好之前
+        // 根本產生不出來」的日期上不一致，所以它一直沒被看見。
+        //
+        // _get_osfhandle 只是轉換 fd，不會開啟任何東西，故本後端賴以存在的「每檔一次開檔」
+        // 不變。handle 來自 _O_WRONLY，其 GENERIC_WRITE 已含 FILE_WRITE_ATTRIBUTES。
+        //
+        // 存取時間與寫入時間都設定，與 _futime64 搭配 __utimbuf64(actime:modtime:) 的行為一致；
+        // winSetLinkMtime 只設寫入時間，該差異予以保留，不順手對齊。
         var mtimeFailure: String? = nil
         if writeOK && restoreMtime {
-            if let t = __time64_t(exactly: mtime) {
-                var tb = __utimbuf64(actime: t, modtime: t)
-                if _futime64(fd, &tb) != 0 { mtimeFailure = "errno \(errno)" }
+            if var ft = winFileTime(mtime) {
+                let handle = HANDLE(bitPattern: _get_osfhandle(fd))
+                if handle == nil || handle == INVALID_HANDLE_VALUE {
+                    mtimeFailure = "no handle for descriptor"
+                } else if !SetFileTime(handle, nil, &ft, &ft) {
+                    mtimeFailure = "GetLastError \(GetLastError())"
+                }
             } else {
                 mtimeFailure = "out of range: \(mtime)"
             }
@@ -2728,11 +2777,11 @@ final class TarWriter {
     /// Hardlink tracking: (dev, ino) → archived name, for st_nlink > 1 files.
     /// 硬連結追蹤：(dev, ino) → 已入檔名稱，用於 st_nlink > 1 的檔案。
     private var seenInodes: [String: String] = [:]
-    /// Update (-u) baseline: archived name → mtime. When set, a non-directory
-    /// entry whose mtime is not newer than the archived copy is skipped
+    /// Update (-u) baseline: archived name → mtime. When set, an entry whose mtime is
+    /// not newer than the archived copy is skipped, directories included
     /// (GNU tar --update semantics). nil for plain append (-r) / create (-c).
-    /// 更新（-u）基準：檔內名稱 → mtime。設定後，mtime 未比封存副本新的非目錄
-    /// 項目會被略過（GNU tar --update 語意）。純追加（-r）／建立（-c）為 nil。
+    /// 更新（-u）基準：檔內名稱 → mtime。設定後，mtime 未比封存副本新的項目會被略過，
+    /// 目錄亦然（GNU tar --update 語意）。純追加（-r）／建立（-c）為 nil。
     private let updateBaseline: [String: UInt64]?
     /// Filesystem identity of the archive being written, so the walk can leave
     /// it out of itself. `tar -cf backup.tar .` run inside the directory being
@@ -2782,9 +2831,10 @@ final class TarWriter {
     }
 
     /// -u gate: true ⟺ an archived copy exists and is at least as new, so this
-    /// entry should be skipped. Directories are never gated (we still descend).
-    /// -u 閘門：true ⟺ 已有同名且不比其舊的封存副本，故此項目應略過。目錄不受
-    /// 閘門限制（仍需向下遞迴尋找較新的子檔）。
+    /// entry should be skipped. A directory's header is gated like any other entry;
+    /// the descent into it is not, so a newer child is still found.
+    /// -u 閘門：true ⟺ 已有同名且不比其舊的封存副本，故此項目應略過。目錄自身的標頭
+    /// 與其他項目一樣受閘門限制；向下遞迴則不受限，故較新的子檔仍會被找到。
     private func skipForUpdate(_ name: String, _ mtime: UInt64) -> Bool {
         guard let base = updateBaseline, let old = base[name] else { return false }
         return mtime <= old
@@ -3207,9 +3257,31 @@ final class TarWriter {
                 if verbose { eprint("skipping \(name)/ / 略過 \(name)/") }
                 return
             }
-            if verbose { eprint("a \(name)/") }
-            try writeEntryHeader(name: name + "/", mode: mode, uid: uid, gid: gid,
-                                 size: 0, mtime: mtime, typeflag: UInt8(ascii: "5"), linkname: "")
+            // The gate applies to the directory's own header, never to the descent: the
+            // entry is what -u should leave alone when it is not newer, while its children
+            // still have to be examined one by one.
+            //
+            // Until 2026-09-19 directories bypassed the gate entirely, so every `-u` run
+            // appended one header per directory for ever. Measured on an unchanged tree:
+            // `./` appeared four times after two runs and the archive grew 512 bytes each
+            // time, while GNU tar's listing stayed `./ ./norm.txt ./late.txt` across the
+            // same runs. GNU tar's *size* looked constant either way, because its
+            // 10240-byte blocking hides growth this small -- the entry list is what shows
+            // it, which is why the check here is a listing and not a byte count.
+            //
+            // 閘門作用於目錄自身的標頭，絕不作用於遞迴：不比封存新時，-u 該放著不動的是這個
+            // 項目本身，其子項目仍必須逐一檢視。
+            //
+            // 在 2026-09-19 之前，目錄完全不經過閘門，於是每次 `-u` 都為每個目錄永久追加一個
+            // 標頭。在未改動的樹上實測：兩次執行之後 `./` 出現四次，封存每次長 512 bytes，而
+            // GNU tar 在同樣的執行下清單始終是 `./ ./norm.txt ./late.txt`。GNU tar 的*大小*
+            // 無論如何看起來都不變，因為它 10240 位元組的區塊化會蓋掉這種程度的成長——能看出
+            // 差異的是項目清單，這也是此處以清單而非位元組數檢驗的原因。
+            if !skipForUpdate(name, mtime) {
+                if verbose { eprint("a \(name)/") }
+                try writeEntryHeader(name: name + "/", mode: mode, uid: uid, gid: gid,
+                                     size: 0, mtime: mtime, typeflag: UInt8(ascii: "5"), linkname: "")
+            }
             let children = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
             for child in children.sorted() {
                 try add(path: path + "/" + child)
@@ -3320,9 +3392,13 @@ final class TarWriter {
                 if verbose { eprint("skipping \(name)/ / 略過 \(name)/") }
                 return
             }
-            if verbose { eprint("a \(name)/") }
-            try writeEntryHeader(name: name + "/", mode: mode, uid: uid, gid: gid,
-                                 size: 0, mtime: mtime, typeflag: UInt8(ascii: "5"), linkname: "")
+            // Gate the header, not the descent; see the Windows branch above for the
+            // measurement. / 閘門作用於標頭而非遞迴；實測見上方 Windows 分支。
+            if !skipForUpdate(name, mtime) {
+                if verbose { eprint("a \(name)/") }
+                try writeEntryHeader(name: name + "/", mode: mode, uid: uid, gid: gid,
+                                     size: 0, mtime: mtime, typeflag: UInt8(ascii: "5"), linkname: "")
+            }
             let children = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
             for child in children.sorted() {
                 try add(path: path + "/" + child)
@@ -5958,15 +6034,32 @@ struct SwiftTarMain {
 
     /// Scan an uncompressed tar to find (a) the logical EOF offset — the start
     /// of the first zero-block terminator — and (b) an archived name → mtime
-    /// baseline for -u. Only 512-byte headers are read; entry data is skipped
-    /// by seeking, so this is cheap on large archives. Extended headers
-    /// (pax x/g, GNU L/K) are skipped by size like any entry, so the EOF offset
-    /// stays correct even though their long names are not resolved into the
-    /// baseline (an unresolved long-name entry simply gets re-added by -u).
-    /// 掃描未壓縮 tar，取得 (a) 邏輯 EOF 位移——第一個零塊結尾的起點——與 (b)
-    /// 供 -u 用的「檔內名稱 → mtime」基準。只讀 512-byte 標頭，資料以 seek 跳過，
-    /// 故對大型封存很省。擴充標頭（pax x/g、GNU L/K）與一般項目一樣依 size 跳過，
-    /// 因此即使未解析其長檔名，EOF 位移仍正確（未解析的長檔名項目只會被 -u 重新追加）。
+    /// baseline for -u. Ordinary entry data is skipped by seeking, so this stays
+    /// cheap on large archives; pax `x` and GNU `L` headers are read, because the
+    /// name and mtime they carry are the archived truth and the 512-byte header
+    /// beside them is not.
+    ///
+    /// Until 2026-09-19 they were skipped by size like any entry, and -u then
+    /// compared against whatever the ustar field happened to hold. For an mtime past
+    /// the field's 2242 ceiling that is the clamp, 8589934591, so a file dated 2286
+    /// read as "newer than the archive" every time: measured on an unchanged tree,
+    /// two `-u` runs left three copies of it, 4608 -> 7168 -> 9728 bytes, while the
+    /// file beside it stayed at one. GNU tar keeps one copy and a constant size, in
+    /// both its gnu and pax formats. A long name was wrong the same way -- the key
+    /// came from the truncated field -- which the old comment here recorded as
+    /// acceptable, and repeated re-adding is what it costs.
+    ///
+    /// 掃描未壓縮 tar，取得 (a) 邏輯 EOF 位移——第一個零塊結尾的起點——與 (b) 供 -u 用的
+    /// 「檔內名稱 → mtime」基準。一般項目的資料仍以 seek 跳過，故對大型封存很省；pax 的
+    /// `x` 與 GNU 的 `L` 標頭則會讀入，因為它們攜帶的名稱與 mtime 才是封存中的真值，
+    /// 旁邊那個 512-byte 標頭不是。
+    ///
+    /// 在 2026-09-19 之前，它們與一般項目一樣依 size 跳過，於是 -u 拿 ustar 欄位裡碰巧存在
+    /// 的值來比較。對超過該欄位 2242 年上限的 mtime，那個值是上限 8589934591，因此日期為
+    /// 2286 年的檔案每次都被判定為「比封存新」：在未改動的樹上實測，兩次 `-u` 之後該檔有
+    /// 三份，封存 4608 → 7168 → 9728 bytes，而它旁邊的檔案維持一份。GNU tar 在 gnu 與 pax
+    /// 兩種格式下都維持一份且大小不變。長檔名也錯在同一處——鍵取自被截斷的欄位——此處舊註解
+    /// 曾記載那是可接受的，而其代價就是反覆重新追加。
     static func scanTarEntries(path: String) throws -> (eofOffset: UInt64, baseline: [String: UInt64]) {
         guard let fh = FileHandle(forReadingAtPath: path) else {
             throw TarError.io("cannot open '\(path)' / 無法開啟 '\(path)'")
@@ -5980,6 +6073,16 @@ struct SwiftTarMain {
 
         var offset: UInt64 = 0
         var baseline: [String: UInt64] = [:]
+        // Overrides from the extended header in front of the next entry.
+        // 來自下一個項目前方擴充標頭的覆寫值。
+        var pendingName: String? = nil
+        var pendingMtime: UInt64? = nil
+        // An extended header holds a few records; anything larger is not one this scan
+        // needs, and reading it on the strength of a size field in the file itself is how
+        // an archive gets to choose an allocation. Past the cap it is skipped as before.
+        // 擴充標頭只裝少量記錄；更大的東西不是本掃描需要的，而僅憑檔案自身的 size 欄位就去
+        // 讀取它，正是讓封存決定配置多少記憶體的途徑。超過上限者一如既往跳過。
+        let extendedHeaderMax: UInt64 = 1 << 20
         while true {
             try fh.seek(toOffset: offset)
             guard let block = try fh.read(upToCount: TAR_BLOCK), block.count == TAR_BLOCK else {
@@ -5998,16 +6101,60 @@ struct SwiftTarMain {
             let size = parseTarNumber(h[124..<136])
             let mtime = parseTarNumber(h[136..<148])
             let typeflag = h[156]
-            if typeflag != UInt8(ascii: "x") && typeflag != UInt8(ascii: "g")
-                && typeflag != UInt8(ascii: "L") && typeflag != UInt8(ascii: "K") {
-                // Directory names are stored with a trailing "/"; strip it so the
-                // key matches TarWriter.archiveName for dirs (though dirs are not
-                // gated by -u). / 目錄名以 "/" 結尾，去除以對齊 archiveName。
-                var key = name
-                if key.hasSuffix("/") { key.removeLast() }
-                baseline[key] = mtime
-            }
             let dataBlocks = (size + UInt64(TAR_BLOCK) - 1) / UInt64(TAR_BLOCK) * UInt64(TAR_BLOCK)
+
+            switch typeflag {
+            case UInt8(ascii: "x"), UInt8(ascii: "L"):
+                // The handle sits just past the header, so the records read directly.
+                // 讀取位置正好在標頭之後，故記錄可直接讀出。
+                if size > 0, size <= extendedHeaderMax,
+                   let data = try fh.read(upToCount: Int(size)), data.count == Int(size) {
+                    if typeflag == UInt8(ascii: "L") {
+                        let end = data.firstIndex(of: 0) ?? data.endIndex
+                        pendingName = String(decoding: data[data.startIndex..<end], as: UTF8.self)
+                    } else {
+                        var pos = data.startIndex
+                        while pos < data.endIndex {
+                            guard let sp = data[pos...].firstIndex(of: UInt8(ascii: " ")),
+                                  let len = Int(String(decoding: data[pos..<sp], as: UTF8.self)),
+                                  len > 0, pos + len <= data.endIndex else { break }
+                            let rec = data[sp + 1..<pos + len - 1]   // strip trailing "\n"
+                            if let eq = rec.firstIndex(of: UInt8(ascii: "=")) {
+                                let key = String(decoding: rec[rec.startIndex..<eq], as: UTF8.self)
+                                let val = String(decoding: rec[rec.index(after: eq)...], as: UTF8.self)
+                                if key == "path" { pendingName = val }
+                                if key == "mtime" {
+                                    let whole = val.split(separator: ".", maxSplits: 1,
+                                                          omittingEmptySubsequences: false).first
+                                    if let whole = whole, let v = UInt64(whole) { pendingMtime = v }
+                                }
+                            }
+                            pos += len
+                        }
+                    }
+                }
+                offset += UInt64(TAR_BLOCK) + dataBlocks
+                continue
+            case UInt8(ascii: "g"), UInt8(ascii: "K"):
+                // A global header applies to every following entry and a long linkname
+                // says nothing about this entry's name or mtime; both are skipped, and
+                // neither clears a pending override.
+                // 全域標頭作用於其後所有項目，長連結名則與本項目的名稱與 mtime 無關；
+                // 兩者皆跳過，也都不清除待套用的覆寫值。
+                offset += UInt64(TAR_BLOCK) + dataBlocks
+                continue
+            default:
+                break
+            }
+
+            // Directory names are stored with a trailing "/"; strip it so the
+            // key matches TarWriter.archiveName for dirs (though dirs are not
+            // gated by -u). / 目錄名以 "/" 結尾，去除以對齊 archiveName。
+            var key = pendingName ?? name
+            if key.hasSuffix("/") { key.removeLast() }
+            baseline[key] = pendingMtime ?? mtime
+            pendingName = nil
+            pendingMtime = nil
             offset += UInt64(TAR_BLOCK) + dataBlocks
         }
         return (offset, baseline)

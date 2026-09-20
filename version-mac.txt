@@ -1,12 +1,12 @@
-swift_tar_version=20260917-065248
+swift_tar_version=20260920-090112
 libarchive_version=v3.7.5-1790-gddf82473
 libarchive_commit=ddf8247381814977c2f55a59f48d17460f7d00f0
 libarchive_linkage=static
 lz4_version=v1.9.2-1552-g0774d055
 lz4_commit=0774d05537f9762f838f7ab541b7765f1a729cb5
 lz4_linkage=static
-xz_version=v5.8.3-75-ge38f738e
-xz_commit=e38f738e5cc5b72afc160285e65f5973f44db2fb
+xz_version=v5.8.4-2-g3b1efb04
+xz_commit=3b1efb04d17c3a9ef7f473d73af13f1531428ffe
 xz_linkage=static
 zstd_version=v1.5.7
 zstd_commit=f8745da6ff1ad1e7bab384bd1f9d742439278e99

@@ -14,20 +14,43 @@
 > test_blind_findings.zsh to notice if it ever goes missing. Both were checked against
 > the unpatched build.
 >
-> **Still nothing open, 2026-09-17.** One entry was added and closed the same day:
+> **Still nothing open, 2026-09-17.** *(True as written; superseded on 2026-09-20 by the
+> `./` prefix entry above. Kept because what it got wrong is instructive: it was written
+> on the same day four mtime defects were being found in this tree, and it did not wait
+> to see whether they closed.)* One entry was added and closed the same day:
 > macOS was linking liblzma/liblz4/libzstd from homebrew while the tree carried
 > submodule pins for all three that nothing built, so a `brew upgrade` could change
 > what a release binary contains — and had. Now built statically from the pins by
 > `build_codecs.zsh`. It carries two costs worth reading before relying on it.
 >
-> **2026-09-17：仍無未處理項目。** 當日新增並同日結案一項：macOS 原本自 homebrew
+> **2026-09-17：仍無未處理項目。** *（就其寫下當時為真；2026-09-20 已被上方的 `./` 前綴
+> 條目取代。保留是因為它錯得有教育意義：它寫於這棵樹上正被找出四個 mtime 缺陷的同一天，
+> 卻沒有等到它們是否結案就下了結論。）* 當日新增並同日結案一項：macOS 原本自 homebrew
 > 連結 liblzma／liblz4／libzstd，而樹中三者皆有無人建置的 submodule pin，使得一次
 > `brew upgrade` 就能改變發行執行檔的內容——而它確實發生過。現已由 `build_codecs.zsh`
 > 依 pin 靜態建置。該項附帶兩點代價，依賴它之前請先讀過。
 >
+> **One entry is open, 2026-09-20: the `./` prefix.** `swift_tar -cf a.tar -C src .`
+> stores `a.txt` where GNU tar 1.35 and bsdtar 3.8.8 both store `./a.txt`, so `-u`
+> across two tools re-adds every member once, measured in both directions. Named
+> here because a banner that says "nothing is open" is the sentence that stops
+> anyone reading the entry that follows.
+>
+> **2026-09-20：有一項未結案——`./` 前綴。** `swift_tar -cf a.tar -C src .` 存成
+> `a.txt`，而 GNU tar 1.35 與 bsdtar 3.8.8 都存成 `./a.txt`，於是跨兩種工具的 `-u`
+> 會把每個成員各重新加入一次，雙向皆已實測。之所以寫在橫幅裡：一句「已無未處理項目」
+> 正是讓人不再往下讀到該條目的那句話。
+>
 > **Everything else recorded below is fixed and under regression test** —
-> `test/test_blind_findings.zsh` is at 137 checks on Windows and
-> 142 on Linux, all passing, and it fails against every earlier binary. The two
+> `test/test_blind_findings.zsh` is at 152 checks on Windows and 151 on WSL, all
+> passing, and it fails against every earlier binary. Re-derive rather than trust
+> this pair — `zsh test/test_blind_findings.zsh | tail -1` on each platform — they
+> were measured on 2026-09-20 at `f3b644b` and they move whenever a defect is found.
+> The count read "137 on Windows and 142 on Linux" until then, which was true when
+> written on 2026-09-06 and wrong from 2026-09-17, when the mtime work added checks
+> on both. "Linux" is this machine's WSL2/Ubuntu/glibc 2.43 build; the macOS figure
+> is not restated here because nothing in this session ran it — `21ecf33` reported
+> 148 for its own run, before those checks existed. The two
 > entries that carried 🔴 on 2026-09-04 were both closed by that date's work:
 > `release_matrix.csv2`
 > exists (`ef97509`) and holds four rows, and the ZIP backend no longer stores its
@@ -54,8 +77,15 @@
 > 寫法、`--zstd-level` 特立獨行的 exit 2，以及 Windows 上 `-t`／`--identify` 輸出
 > 的 CRLF。該套件對舊 binary 有 11 項失敗，對新 binary 15 項全過。
 >
-> **2026-09-04：已無未處理項目。** 以下記錄的每一項缺陷皆已修復並納入回歸測試——
-> `test/test_blind_findings.zsh` 在 Windows 上有 137 項檢查、Linux 上 142 項，全數通過，
+> **2026-09-04：已無未處理項目。** *（當日為真；現況見上方 2026-09-20 的 `./` 前綴條目。）*
+> 以下記錄的每一項缺陷皆已修復並納入回歸測試——
+> `test/test_blind_findings.zsh` 現為 Windows 152 項、WSL 151 項，全數通過；請以
+> `zsh test/test_blind_findings.zsh | tail -1` 在各平台重新取得，不要相信此處的數字——
+> 它量於 2026-09-20 的 `f3b644b`，且每找到一個缺陷就會變動。本行原寫「Windows 137 項、
+> Linux 142 項」，那在 2026-09-06 寫下時為真，自 2026-09-17 起為誤，因為 mtime 那一輪
+> 在兩個平台都加了檢查。此處的「Linux」指本機的 WSL2／Ubuntu／glibc 2.43；macOS 的數字
+> 不在此重述，因為本階段沒有執行過它——`21ecf33` 就其自身的執行回報 148 項，而那是在
+> 上述檢查存在之前。原文接續：全數通過，
 > 且對先前每一版 binary 都會失敗。原本標著 🔴 的兩項於本日一併結案：`release_matrix.csv2`
 > 已存在（`ef97509`）並有四列，ZIP 後端也不再把自己的輸出收進封存（`f0ef58e`）。
 > 已無任何條目仍標著「記錄，未處理」：大小寫碰撞的「警告」選項是最後一項，且已於
@@ -86,6 +116,76 @@ file has to exist for that reference to mean anything.
 
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
+
+## `.` 作為 operand 時，成員名少了 `./` 前綴，而兩個參照實作都保留 ▸ 🔴 2026-09-20
+
+`swift_tar -cf a.tar -C src .` 把成員存成 `a.txt`；GNU tar 1.35 與 bsdtar 3.8.8 對同一
+棵樹、同一個 operand 都存成 `./a.txt`。目錄項目 `./` 三者皆有，所以差異只在其下的成員。
+改用明確 operand（`-C src a.txt`）時三者一致，故這是 `.` 這條路徑獨有的。
+
+實測 2026-09-20（Windows，`f3b644b`），雙向皆會重複追加——因為 `-u` 的鍵就是成員名：
+
+```
+# GNU tar 建立，swift_tar -u（來源未改動）
+./ ./a.txt ./b.txt            -> ./ ./a.txt ./b.txt a.txt b.txt
+# swift_tar 建立，GNU tar -u（來源未改動）
+./ a.txt b.txt                -> ./ a.txt b.txt ./a.txt ./b.txt
+```
+
+第二次 `-u` 才穩定下來，因為此時兩種拼法都已在封存中。單一工具內部不受影響：同一支
+工具建立與更新時拼法一致，`test_append_update` 的既有斷言因此全部通過——**這正是它能
+存活至今的原因，而不是它無害的證據**。
+
+為何未在發現當下一併修：改的是成員名，影響所有既有封存的比對與 `--exclude`／
+`--strip-components` 等依名稱運作的功能，值得單獨一輪並自帶互通矩陣，而不是搭在
+mtime 那一系列的末尾。
+
+`swift_tar -cf a.tar -C src .` stores `a.txt` where GNU tar 1.35 and bsdtar 3.8.8 both
+store `./a.txt` from the same tree and operand; all three write the `./` directory entry
+itself. An explicit operand agrees across all three, so this is specific to `.`. Because
+`-u` keys on the member name, an update across two tools re-adds every member once, in
+both directions, and only settles on the second run when both spellings are present.
+Within one tool nothing shows, which is why `test_append_update` passed throughout --
+that is how it survived, not evidence that it is harmless. Not fixed alongside the mtime
+work because changing a member name reaches every name-matching feature and deserves its
+own round with an interop matrix.
+
+## mtime 的四個缺陷，全部以 rc=0 或崩潰收場 ▸ ✅ 已修正 2026-09-17〜09-20
+
+一族，起於查證「P3 是否在 Windows 上也修好了」。每一項都先量到修正前的行為，再以對
+修正前 binary 會失敗的斷言收尾。
+
+| 缺陷 | 修正前實測 | commit |
+|---|---|---|
+| Windows 解壓丟棄 mtime 還原失敗 | `_ = _futime64`：3237 年的檔案留著解壓當下的時間，rc=0、無訊息 | `5110583` |
+| 讀取端丟棄 pax 的 `mtime=` | 帶 `mtime=1700000000` 的 fixture 解出為 1970 年；GNU tar 正確 | `8edeff9` |
+| 寫入端截斷 mtime 欄位 | 3237 年（八進位 452013710000）被寫成 2148 年，GNU tar 也讀成 2148——**錯的是封存本身** | `8edeff9` |
+| `time_t(mtime)` 超過 Int64.max 時 trap | base-256 欄位 0x80＋十一個 0xff：WSL 上 rc=132、Illegal instruction，整次解壓中斷 | `8edeff9` |
+| Windows 還原不了 3000 年之後的時間 | 同一份封存 bsdtar 解得開，swift_tar 回報 errno 22；`_futime64` 的上限，NTFS 存得下 | `f3b644b` |
+| `-u` 基準只讀 512-byte 標頭 | 未改動的樹跑兩次，2286 年的檔案留下三份、`./` 出現四次，封存 4608→7168→9728 bytes | `f3b644b` |
+
+三件值得記著的事：
+
+**一、截斷掩蓋了上限。** Windows 還原不了 3237 年這件事，在寫入端截斷修好之前**產生不
+出來**，所以它以「沒有症狀」的形式存在了很久。修好一個缺陷會讓下一個現身，這一族連續
+四次都是如此。
+
+**二、測試的斷言對象決定它抓不抓得到。** `-u` 那一項在檔案大小上看不出來：GNU tar
+10240 位元組的區塊化會蓋掉每次 512 bytes 的成長，而以位元組數比較會把目錄那一例判為
+相等。斷言改看項目清單才顯現。
+
+**三、fixture 本身也會錯。** 撰寫 pax 測試時把 1600000000 的八進位算錯（`13727024000`
+實為 1599875072），兩個平台都因此多失敗一項。是「修正前的 binary 也讀到同一個錯值」
+才看出問題在 fixture 而非 swift_tar——**單看修正後的失敗無從分辨這兩者**。
+
+A single family, found while checking whether [P3] had reached Windows. Each was measured
+before the fix and closed with assertions that fail against the pre-fix binary. Three
+things worth keeping: the writer's truncation hid the CRT's year-3000 ceiling, so fixing
+one defect exposed the next, four times running; the `-u` defect was invisible to a byte
+count because GNU tar's 10240-byte blocking hides growth that small, and only an entry
+listing shows it; and a miscomputed octal constant in the new fixture failed on both
+platforms until the pre-fix binary read the same wrong value, which is what distinguished
+a broken fixture from a broken program.
 
 ## Resolved expected failure / 已解決的預期失敗
 

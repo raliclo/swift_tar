@@ -46,6 +46,19 @@
 > 那說的是 `grep -n '^## .*🔴' todo/todo.md` 沒有回報，而不是宣稱這棵樹是乾淨的：上方
 > 四個缺陷中有三個，是在查別的東西時撞見的。
 >
+> **One item is open, 2026-09-20 (later the same day).** The `./` entry's new check
+> `the reference tar's -u over this archive adds nothing` fails on macOS and cannot
+> pass there: `/usr/bin/tar` is bsdtar 3.5.3, whose `-u` duplicates members over its
+> **own** archive identically. Nothing to do with swift_tar, and not caused by the
+> libarchive bump — the same source rebuilt against the old pin fails byte-identically.
+> The counts below are Windows/WSL; macOS reads `PASS: 158 FAIL: 1`.
+>
+> **2026-09-20 稍晚：有一項未處理。** `./` 那個條目新加的
+> `the reference tar's -u over this archive adds nothing` 在 macOS 上失敗，且不可能通過：
+> `/usr/bin/tar` 是 bsdtar 3.5.3，它的 `-u` 對**自己的**封存會以完全相同的方式重複成員。
+> 與 swift_tar 無關，也不是 libarchive 升級造成的——同一份原始碼以舊 pin 重建後失敗逐字相同。
+> 下方的數字是 Windows／WSL 的；macOS 讀到的是 `PASS: 158  FAIL: 1`。
+>
 > **Everything else recorded below is fixed and under regression test** —
 > `test/test_blind_findings.zsh` is at 157 checks on Windows and 156 on WSL, all
 > passing, and it fails against every earlier binary. Re-derive rather than trust
@@ -123,6 +136,65 @@ file has to exist for that reference to mean anything.
 
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
+
+## 🔴 `the reference tar's -u over this archive adds nothing` 在 macOS 上必然失敗，且與 swift_tar 無關 / The check cannot pass on macOS, and it is not about swift_tar
+
+**症狀**：`test/test_blind_findings.zsh` 在 macOS 上 `PASS: 158  FAIL: 1`。失敗的是
+`ad285c3` 隨 `./` 前綴修正一併加入的那條：
+
+```
+FAIL: the reference tar's -u over this archive adds nothing
+  want './ ./a.txt ./sub/ ./sub/b.txt '
+  got  './ ./ ./a.txt ./a.txt ./sub/ ./sub/ ./sub/b.txt ./sub/b.txt '
+```
+
+**它量不到 swift_tar。** 把參照 tar 指向**它自己產生的封存**，結果逐字相同：
+
+```
+$ /usr/bin/tar -c -f ref.tar -C src .
+$ /usr/bin/tar -u -f ref.tar -C src .
+before: ./ ./a.txt ./sub/ ./sub/b.txt
+after : ./ ./ ./a.txt ./a.txt ./sub/ ./sub/ ./sub/b.txt ./sub/b.txt
+```
+
+macOS 的 `/usr/bin/tar` 是 **bsdtar 3.5.3（libarchive 3.7.4）**，而該條目的參照是
+**bsdtar 3.8.8**。3.5.3 的 `-u` 對自己的封存並非冪等，因此無論 swift_tar 寫出什麼，
+這條斷言在這台機器上都不會通過。
+
+**兩層各自成立**，分開量過：
+
+- **目錄**永遠重複，即使 mtime 是整秒：`touch -t 202601011200.00` 之後，`./a.txt` 與
+  `./sub/b.txt` 不再重複，而 `./` 與 `./sub/` 仍然重複。
+- **一般檔案**在自然（子秒）mtime 下重複。兩邊都只寫 ustar、沒有 pax mtime 記錄
+  （`strings ref.tar | grep -c 'mtime='` 為 0），故磁碟上的 1789895159.325339628 被截成整秒，
+  bsdtar 3.5.3 於是判定磁碟較新。
+
+**不是 libarchive 升級造成的。** 把同一份原始碼以舊 pin `ddf82473` 重建後出現 want/got
+逐字相同的失敗；`abaa707d` 那筆升級對此零影響。
+
+**該怎麼修，是那條目擁有者的決定。** 可能的形式是：在斷言之前先跑一次同樣的對照
+（參照 tar 對自己的封存），若它也重複就 SKIP 並說明理由——那正是本樹「加守門就要有對照組」
+的作法，而且會把「這台機器的參照工具太舊」與「swift_tar 寫錯了」區分開來。
+在此之前，macOS 上這支套件會一直是紅的。
+
+**Symptom**: `test_blind_findings.zsh` reports `PASS: 158 FAIL: 1` on macOS, on the check
+`ad285c3` added alongside the `./` prefix fix. The check does not measure swift_tar: pointing
+the reference tar at its own archive produces the identical duplication. macOS ships
+**bsdtar 3.5.3 (libarchive 3.7.4)** as `/usr/bin/tar`, while that entry's reference is
+**bsdtar 3.8.8**, and 3.5.3's `-u` is not idempotent over its own output — so no output from
+swift_tar can make this pass here.
+
+Two separable layers, each measured: directories duplicate even at whole-second mtimes, and
+regular files duplicate at natural sub-second mtimes because neither tool writes a pax mtime
+record here, so the stored value is truncated and 3.5.3 reads the on-disk file as newer.
+
+Not caused by the libarchive bump: the same source rebuilt against the old pin `ddf82473`
+fails with a byte-identical want/got.
+
+The repair is the owning entry's call. One shape: run the same control before asserting —
+the reference tar over its own archive — and SKIP with the reason when it also duplicates.
+That is this tree's own "put a value on each side of a new guard" rule, and it separates
+"this machine's reference tool is too old" from "swift_tar wrote the wrong thing".
 
 ## `.` 作為 operand 時，成員名少了 `./` 前綴，而兩個參照實作都保留 ▸ ✅ 已修正 2026-09-20
 

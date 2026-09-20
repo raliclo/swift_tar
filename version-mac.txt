@@ -1,6 +1,6 @@
-swift_tar_version=20260920-090112
-libarchive_version=v3.7.5-1790-gddf82473
-libarchive_commit=ddf8247381814977c2f55a59f48d17460f7d00f0
+swift_tar_version=20260920-170352
+libarchive_version=v3.7.5-1889-gabaa707d
+libarchive_commit=abaa707d92fce052f386b6cc2c8d0593ce61e639
 libarchive_linkage=static
 lz4_version=v1.9.2-1552-g0774d055
 lz4_commit=0774d05537f9762f838f7ab541b7765f1a729cb5

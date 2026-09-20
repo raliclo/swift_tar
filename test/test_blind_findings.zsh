@@ -1613,6 +1613,57 @@ eq "an intact .tar.gz still lists its members" "2" \
    "$("$ST" -t -f "$TG/full.tgz" 2>/dev/null | wc -l | tr -d ' ')"
 
 
+# ---- `.` as the operand keeps its "./" prefix ----
+# `-C src .` stored `a.txt` until 2026-09-20 while the reference tar, bsdtar and this
+# tool's own ZIP backend all store `./a.txt`. Since `-u` keys on the member name, an
+# update across two tools re-added every member once, measured in both directions, and
+# settled only on the second run once both spellings were in the archive. Within one
+# tool nothing showed: create and update agreed with each other while agreeing with
+# nobody else, so every existing check passed throughout.
+#
+# The cross-tool `-u` is the assertion that would have caught it, so it is the one kept
+# here; the spelling comparison beside it says *why* when it fails. An explicit operand
+# was never affected and is checked too, because a fix that simply prefixed everything
+# would pass the first assertion and break this one.
+#
+# 在 2026-09-20 之前，`-C src .` 在此存成 `a.txt`，而參考 tar、bsdtar、以及本工具自己的
+# ZIP 後端都存成 `./a.txt`。由於 `-u` 以成員名為鍵，跨兩種工具的更新會把每個成員各重新
+# 加入一次（雙向皆已實測），且要到第二次執行、封存中同時存在兩種拼法時才穩定。單一工具
+# 內部看不出任何異狀：建立與更新彼此一致，卻與其他所有人都不一致，因此既有檢查全數通過。
+#
+# 能抓到它的斷言是「跨工具的 -u」，故以它為主；旁邊的拼法比對則在它失敗時說明*為何*。
+# 明確運算元從未受影響，亦一併檢查——因為一個「無腦全部加前綴」的修法會通過第一項斷言，
+# 卻會弄壞這一項。
+DS="$TMP/dotslash"
+mkdir -p "$DS/src/sub"
+printf 'a\n' > "$DS/src/a.txt"
+printf 'b\n' > "$DS/src/sub/b.txt"
+
+( cd "$DS" && "$ST" -c -f sw.tar -C src . ) >/dev/null 2>&1
+( cd "$DS" && "$SYS_TAR" -c -f ref.tar -C src . ) >/dev/null 2>&1
+sw_list="$("$ST" -t -f "$DS/sw.tar" | tr -d '\r' | sort | tr '\n' ' ')"
+ref_list="$("$SYS_TAR" -t -f "$DS/ref.tar" | tr -d '\r' | sort | tr '\n' ' ')"
+eq "a '.' operand is spelled as the reference tar spells it" "$ref_list" "$sw_list"
+
+( cd "$DS" && "$ST" -c --zip -f sw.zip -C src . ) >/dev/null 2>&1
+zip_list="$("$ST" -t -f "$DS/sw.zip" | tr -d '\r' | sort | tr '\n' ' ')"
+eq "the tar and ZIP backends spell a '.' operand alike" "$sw_list" "$zip_list"
+
+( cd "$DS" && "$ST" -c -f exp.tar -C src a.txt ) >/dev/null 2>&1
+eq "an explicit operand carries no prefix" "a.txt" \
+   "$("$ST" -t -f "$DS/exp.tar" | tr -d '\r' | tr -d '\n')"
+
+# The archives are unchanged on disk, so -u must add nothing -- each tool over the
+# other's archive, then each over its own.
+# 磁碟上的檔案未變動，故 -u 不得加入任何東西——先以各自更新對方的封存，再更新自己的。
+( cd "$DS" && "$ST" -u -f ref.tar -C src . ) >/dev/null 2>&1
+eq "-u over the reference tar's archive adds nothing" "$ref_list" \
+   "$("$ST" -t -f "$DS/ref.tar" | tr -d '\r' | sort | tr '\n' ' ')"
+( cd "$DS" && "$SYS_TAR" -u -f sw.tar -C src . ) >/dev/null 2>&1
+eq "the reference tar's -u over this archive adds nothing" "$sw_list" \
+   "$("$SYS_TAR" -t -f "$DS/sw.tar" | tr -d '\r' | sort | tr '\n' ' ')"
+
+
 # ---- mtime beyond the ustar field: pax in, pax out, no crash ----
 # Three defects in one family, all found 2026-09-17 and all ending rc=0 or in a crash:
 #

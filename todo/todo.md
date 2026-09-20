@@ -30,22 +30,28 @@
 > `brew upgrade` 就能改變發行執行檔的內容——而它確實發生過。現已由 `build_codecs.zsh`
 > 依 pin 靜態建置。該項附帶兩點代價，依賴它之前請先讀過。
 >
-> **One entry is open, 2026-09-20: the `./` prefix.** `swift_tar -cf a.tar -C src .`
-> stores `a.txt` where GNU tar 1.35 and bsdtar 3.8.8 both store `./a.txt`, so `-u`
-> across two tools re-adds every member once, measured in both directions. Named
-> here because a banner that says "nothing is open" is the sentence that stops
-> anyone reading the entry that follows.
+> **Opened and closed on 2026-09-20: the `./` prefix.** `swift_tar -cf a.tar -C src .`
+> stored `a.txt` where GNU tar 1.35 and bsdtar 3.8.8 both store `./a.txt` -- and so
+> does this tool's own ZIP backend, which does not go through the tar namer. `-u`
+> keys on the member name, so an update across two tools re-added every member once,
+> in both directions. Fixed the same day; five checks pin it. Nothing carries 🔴 as
+> this is written, which is a statement about `grep -n '^## .*🔴' todo/todo.md`
+> returning nothing, not a claim that the tree is clean -- three of the four defects
+> above were found by looking at something else.
 >
-> **2026-09-20：有一項未結案——`./` 前綴。** `swift_tar -cf a.tar -C src .` 存成
-> `a.txt`，而 GNU tar 1.35 與 bsdtar 3.8.8 都存成 `./a.txt`，於是跨兩種工具的 `-u`
-> 會把每個成員各重新加入一次，雙向皆已實測。之所以寫在橫幅裡：一句「已無未處理項目」
-> 正是讓人不再往下讀到該條目的那句話。
+> **2026-09-20 當日開啟並結案：`./` 前綴。** `swift_tar -cf a.tar -C src .` 存成
+> `a.txt`，而 GNU tar 1.35 與 bsdtar 3.8.8 都存成 `./a.txt`——本工具自己的 ZIP 後端亦然，
+> 因為它不經過 tar 這邊的命名函式。`-u` 以成員名為鍵，故跨兩種工具的更新會把每個成員各
+> 重新加入一次，雙向皆然。當日修正，並以 5 項檢查釘住。撰寫本段時無任何條目標著 🔴——
+> 那說的是 `grep -n '^## .*🔴' todo/todo.md` 沒有回報，而不是宣稱這棵樹是乾淨的：上方
+> 四個缺陷中有三個，是在查別的東西時撞見的。
 >
 > **Everything else recorded below is fixed and under regression test** —
-> `test/test_blind_findings.zsh` is at 152 checks on Windows and 151 on WSL, all
+> `test/test_blind_findings.zsh` is at 157 checks on Windows and 156 on WSL, all
 > passing, and it fails against every earlier binary. Re-derive rather than trust
 > this pair — `zsh test/test_blind_findings.zsh | tail -1` on each platform — they
-> were measured on 2026-09-20 at `f3b644b` and they move whenever a defect is found.
+> were measured on 2026-09-20 after the `./` fix and they move whenever a defect is
+> found; they read 152 and 151 earlier the same day, before that entry's checks.
 > The count read "137 on Windows and 142 on Linux" until then, which was true when
 > written on 2026-09-06 and wrong from 2026-09-17, when the mtime work added checks
 > on both. "Linux" is this machine's WSL2/Ubuntu/glibc 2.43 build; the macOS figure
@@ -79,7 +85,8 @@
 >
 > **2026-09-04：已無未處理項目。** *（當日為真；現況見上方 2026-09-20 的 `./` 前綴條目。）*
 > 以下記錄的每一項缺陷皆已修復並納入回歸測試——
-> `test/test_blind_findings.zsh` 現為 Windows 152 項、WSL 151 項，全數通過；請以
+> `test/test_blind_findings.zsh` 現為 Windows 157 項、WSL 156 項（`./` 修正後量測；
+> 同日稍早、該條目的檢查加入之前為 152 與 151），全數通過；請以
 > `zsh test/test_blind_findings.zsh | tail -1` 在各平台重新取得，不要相信此處的數字——
 > 它量於 2026-09-20 的 `f3b644b`，且每找到一個缺陷就會變動。本行原寫「Windows 137 項、
 > Linux 142 項」，那在 2026-09-06 寫下時為真，自 2026-09-17 起為誤，因為 mtime 那一輪
@@ -117,7 +124,36 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## `.` 作為 operand 時，成員名少了 `./` 前綴，而兩個參照實作都保留 ▸ 🔴 2026-09-20
+## `.` 作為 operand 時，成員名少了 `./` 前綴，而兩個參照實作都保留 ▸ ✅ 已修正 2026-09-20
+
+修正：`TarWriter.archiveName()` 不再剝除開頭的 `./`（其餘正規化——反斜線、磁碟機代號、
+開頭的 `/`、重複與尾隨的 `/`——全部保留）。比對端同步調整：`isExcluded()` 在比對前把
+**樣式與名稱兩邊**開頭的 `./` 去掉，使運算元的拼法無法改變一條排除規則涵蓋哪些檔案。
+
+與修正前的 binary 逐一對照六種 `--exclude` 樣式，只有一種改變：`./sub/*` 先前**完全不
+匹配**（靜默地什麼都沒排除），現在會匹配——而那是 GNU tar 的行為。其餘五種結果相同。
+
+修正後三者一致，且跨工具 `-u` 雙向皆為 no-op：
+
+```
+swift_tar tar  ./ ./a.txt ./sub/ ./sub/b.txt
+swift_tar ZIP  ./ ./a.txt ./sub/ ./sub/b.txt     （本來就如此，它不經過 archiveName）
+bsdtar 3.8.8   ./ ./a.txt ./sub/ ./sub/b.txt
+明確運算元     a.txt                              （三者皆同，未受影響）
+```
+
+回歸測試：`test_blind_findings.zsh` 新增 5 項（與參考 tar 的清單相同、tar 與 ZIP 拼法
+相同、明確運算元不帶前綴、雙向跨工具 `-u` 不新增任何東西）。對修正前的 binary 失敗 4 項，
+而「明確運算元不帶前綴」在兩顆 binary 上都通過——它擋的是「無腦全部加前綴」的錯誤修法。
+全套：Windows 157/0、WSL 156/0，互通矩陣 12 PASS／0 FAIL／0 SKIP。
+
+`archiveName()` no longer strips a leading `./`, and `isExcluded()` drops one from both the
+pattern and the name before matching, so the operand's spelling cannot change what an
+exclusion covers. Six exclude patterns were compared against the pre-fix binary and only
+`./sub/*` changed: it matched nothing before and now matches, as GNU tar does. Five new
+checks, failing four ways against the pre-fix binary.
+
+### 原始記錄（2026-09-20 修正前）/ Original record, before the fix
 
 `swift_tar -cf a.tar -C src .` 把成員存成 `a.txt`；GNU tar 1.35 與 bsdtar 3.8.8 對同一
 棵樹、同一個 operand 都存成 `./a.txt`。目錄項目 `./` 三者皆有，所以差異只在其下的成員。

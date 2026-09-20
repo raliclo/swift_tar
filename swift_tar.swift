@@ -3013,19 +3013,51 @@ final class TarWriter {
     // ---- entry walkers / 項目走訪 ----
 
     /// Archive-internal name: normalize "\" to "/", strip a Windows drive
-    /// letter (e.g. "C:"), then strip leading "/" and "./" -- keeps entries
+    /// letter (e.g. "C:"), then strip a leading "/" -- keeps entries
     /// portable POSIX-relative paths regardless of platform, matching
     /// bsdtar's own behavior when given an absolute Windows path.
-    /// 檔內名稱：把 "\" 正規化成 "/"、去除 Windows 磁碟機代號（例如 "C:"），
-    /// 再去除開頭的 "/" 與 "./"——不論平台，項目一律維持可攜的 POSIX 相對
-    /// 路徑，與 bsdtar 收到 Windows 絕對路徑時的行為一致。
+    ///
+    /// A leading "./" is kept, because every other writer in reach keeps it.
+    /// `-C src .` stored `a.txt` here until 2026-09-20 while GNU tar 1.35 and
+    /// bsdtar 3.8.8 both store `./a.txt` from the same tree and operand -- and so
+    /// does this tool's own ZIP backend, which hands the operand to libarchive's
+    /// disk reader rather than coming through here. So the spelling disagreed with
+    /// two reference implementations and with the other half of this program.
+    ///
+    /// What it cost, measured in both directions: `-u` keys on the member name, so
+    /// an update run across two tools re-added every member once --
+    /// `./ ./a.txt ./b.txt` gained `a.txt b.txt` under this tool, and `./ a.txt
+    /// b.txt` gained `./a.txt ./b.txt` under GNU tar. Only the second run settled,
+    /// once both spellings were present. Nothing showed within one tool, which is
+    /// how it survived: create and update agreed with each other while agreeing
+    /// with nobody else.
+    ///
+    /// Only "./" is affected. An explicit operand (`-C src a.txt`) already agreed
+    /// with both references and still does.
+    ///
+    /// 檔內名稱：把 "\" 正規化成 "/"、去除 Windows 磁碟機代號（例如 "C:"），再去除開頭
+    /// 的 "/"——不論平台，項目一律維持可攜的 POSIX 相對路徑，與 bsdtar 收到 Windows
+    /// 絕對路徑時的行為一致。
+    ///
+    /// 開頭的 "./" 予以保留，因為觸目所及的每一個寫入端都保留它。在 2026-09-20 之前，
+    /// `-C src .` 在此存成 `a.txt`，而 GNU tar 1.35 與 bsdtar 3.8.8 對同一棵樹、同一個
+    /// 運算元都存成 `./a.txt`——本工具自己的 ZIP 後端亦然，因為它把運算元交給 libarchive
+    /// 的 disk reader，並不經過這裡。也就是說，這個拼法同時與兩個參照實作、以及本程式的
+    /// 另一半不一致。
+    ///
+    /// 代價，雙向實測：`-u` 以成員名為鍵，故跨兩種工具的更新會把每個成員各重新加入一次
+    /// ——`./ ./a.txt ./b.txt` 在本工具下多出 `a.txt b.txt`，而 `./ a.txt b.txt` 在 GNU
+    /// tar 下多出 `./a.txt ./b.txt`。要到第二次執行才穩定，因為此時兩種拼法都已在封存中。
+    /// 單一工具內部看不出任何異狀，這正是它得以存活的方式：建立與更新彼此一致，卻與其他
+    /// 所有人都不一致。
+    ///
+    /// 只影響 "./"。明確指定的運算元（`-C src a.txt`）本來就與兩個參照實作一致，現在依然。
     private static func archiveName(_ path: String) -> String {
         var p = path.replacingOccurrences(of: "\\", with: "/")
         if p.count >= 2, p[p.startIndex].isLetter, p[p.index(after: p.startIndex)] == ":" {
             p.removeFirst(2)
         }
         while p.hasPrefix("/") { p.removeFirst() }
-        while p.hasPrefix("./") && p.count > 2 { p.removeFirst(2) }
         // Collapse repeated "/" and drop a trailing one. `tar -c tree/` must
         // store "tree/a.txt" as bsdtar does, but the walker recurses with
         // path + "/" + child on the argument as given, so a trailing slash
@@ -3089,10 +3121,29 @@ final class TarWriter {
     /// 而非臆測：該處的 `--exclude 'src/*.log'` 同樣會丟掉 `src/sub/deep.log`。不含
     /// `/` 的樣式另外會逐一比對每個路徑元件，這正是 bsdtar 中單獨的 `sub` 與單獨的
     /// `deep.log` 都能生效的原因。
+    /// A leading "./" is dropped from both sides before matching, so the spelling of
+    /// the operand cannot change which files an exclusion covers. Measured on GNU tar
+    /// 1.35 with `-C src .`, whose members are `./sub/b.txt`: `--exclude='sub/*'` and
+    /// `--exclude='./sub/*'` both drop them. Without this, `sub/*` would stop matching
+    /// the moment archiveName started keeping the prefix -- an exclusion that silently
+    /// covers nothing is the shape that puts files into an archive that were meant to
+    /// stay out of it.
+    /// 比對前先把兩邊開頭的 "./" 去掉，使運算元的拼法無法改變一條排除規則涵蓋哪些檔案。
+    /// 以 GNU tar 1.35、`-C src .`（成員為 `./sub/b.txt`）實測：`--exclude='sub/*'` 與
+    /// `--exclude='./sub/*'` 都會排除它們。若不這麼做，`sub/*` 會在 archiveName 開始保留
+    /// 該前綴的當下失效——而一條靜默地什麼都不涵蓋的排除規則，正是「本應留在封存外的檔案
+    /// 被收了進去」的那種形狀。
     private func isExcluded(_ name: String) -> Bool {
         let patterns = tarExcludePatterns
         guard !patterns.isEmpty else { return false }
-        for p in patterns {
+        func withoutDotSlash(_ s: String) -> String {
+            var t = s
+            while t.hasPrefix("./") && t.count > 2 { t.removeFirst(2) }
+            return t
+        }
+        let name = withoutDotSlash(name)
+        for pattern in patterns {
+            let p = withoutDotSlash(pattern)
             if globNoFlags(p, name) { return true }
             guard !p.contains("/") else { continue }
             for comp in name.split(separator: "/") {

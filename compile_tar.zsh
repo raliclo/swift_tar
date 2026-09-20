@@ -79,6 +79,45 @@ if [[ "$EXCLUDE_LZFSE" != 1 ]]; then
 fi
 TEMP_VERSION="$(mktemp -t swift-tar-version).swift"
 trap 'rm -f "$TEMP_CLI" "$TEMP_VERSION"' EXIT
+
+# Build into the release/ folder / 建置輸出至 release/ 資料夾
+mkdir -p release
+
+# The dependency builders run BEFORE generate_version.zsh, not after.
+#
+# generate_version.zsh decides whether to issue a new build stamp by comparing the
+# rest of version-<plat>.txt against the committed copy: unchanged provenance reuses
+# the stamp, so a rebuild of identical inputs does not produce a spurious diff. But
+# these two scripts are what write that provenance. Called after, they hand
+# generate_version.zsh the PREVIOUS build's dependency versions, and the stamp is
+# reused even when a submodule pin has moved.
+#
+# Caught on 2026-09-20 upgrading xz e38f738e → 3b1efb04 (5.8.3 → 5.8.4): version-mac.txt
+# correctly recorded the new commit, while `swift_tar --version` still reported
+# 20260917-065248 — the same string as the binary containing the older liblzma. Nothing
+# failed; the two binaries simply became indistinguishable by the field that exists to
+# distinguish them.
+#
+# zlib and bzip2 stay one build behind by necessity: their record is read back from the
+# finished binary with otool, which cannot happen before the stamp is compiled into it.
+# They come from the SDK and move only with the OS.
+#
+# 相依建置腳本要在 generate_version.zsh **之前**執行，不是之後。
+#
+# generate_version.zsh 以「version-<平台>.txt 的其餘內容與已提交版本是否相同」決定要不要
+# 發新的建置戳記：provenance 未變就重用戳記，使輸入相同的重建不產生多餘 diff。但寫入那份
+# provenance 的正是這兩支腳本。放在後面呼叫，等於把**上一次**建置的相依版本交給
+# generate_version.zsh，於是即使 submodule pin 已經移動，戳記仍被重用。
+#
+# 2026-09-20 升級 xz e38f738e → 3b1efb04（5.8.3 → 5.8.4）時發現：version-mac.txt 正確記下
+# 了新 commit，而 `swift_tar --version` 仍回報 20260917-065248——與內含舊 liblzma 的那個
+# 執行檔同一個字串。沒有任何一步失敗，只是兩個執行檔在「用來區分它們的那個欄位」上再也分不開。
+#
+# zlib 與 bzip2 必然落後一次建置：它們的紀錄是以 otool 自完成的執行檔讀回，而那不可能發生在
+# 戳記被編進去之前。兩者取自 SDK，只隨 OS 變動。
+zsh ./build_libarchive.zsh
+zsh ./build_codecs.zsh
+
 # zsh, not sh: both callees declare `#!/usr/bin/env zsh`, and `sh script`
 # ignores the shebang. Running a zsh script under sh works only for as long as
 # it happens to stay POSIX — the moment either one uses `print`, a `(N)` glob
@@ -90,10 +129,6 @@ trap 'rm -f "$TEMP_CLI" "$TEMP_VERSION"' EXIT
 # 毫無關聯之處失敗。
 zsh ./generate_version.zsh "$TEMP_VERSION"
 
-# Build into the release/ folder / 建置輸出至 release/ 資料夾
-mkdir -p release
-zsh ./build_libarchive.zsh
-zsh ./build_codecs.zsh
 swiftc -O -swift-version 6 $SWIFT_DEFINES $CLI_SRC "$TEMP_VERSION" swift_tar.swift rgb1.swift crypto.swift \
     build/libarchive_zip_bridge.o build/libarchive-macos/libarchive/libarchive.a \
     build/xz-macos/liblzma.a build/lz4-macos/liblz4.a build/zstd-macos/lib/libzstd.a \

@@ -46,18 +46,21 @@
 > 那說的是 `grep -n '^## .*🔴' todo/todo.md` 沒有回報，而不是宣稱這棵樹是乾淨的：上方
 > 四個缺陷中有三個，是在查別的東西時撞見的。
 >
-> **One item is open, 2026-09-20 (later the same day).** The `./` entry's new check
-> `the reference tar's -u over this archive adds nothing` fails on macOS and cannot
-> pass there: `/usr/bin/tar` is bsdtar 3.5.3, whose `-u` duplicates members over its
-> **own** archive identically. Nothing to do with swift_tar, and not caused by the
-> libarchive bump — the same source rebuilt against the old pin fails byte-identically.
-> The counts below are Windows/WSL; macOS reads `PASS: 158 FAIL: 1`.
+> **Opened 2026-09-20, closed 2026-09-21: a check that could not pass on macOS.** The
+> `./` entry's new `the reference tar's -u over this archive adds nothing` asserted a
+> property of the reference tar, not of the archive handed to it — macOS ships bsdtar
+> 3.5.3, whose `-u` duplicates members over its **own** archive identically, so no
+> output from swift_tar could satisfy it. It now compares against that control instead
+> of a constant, passes on 3.5.3 and 3.8.8 alike, and still fails against a binary
+> rebuilt from `ad285c3~1`, which was measured rather than assumed. macOS now reads
+> `PASS: 160 FAIL: 0`; the Windows/WSL counts below predate both changes.
 >
-> **2026-09-20 稍晚：有一項未處理。** `./` 那個條目新加的
-> `the reference tar's -u over this archive adds nothing` 在 macOS 上失敗，且不可能通過：
-> `/usr/bin/tar` 是 bsdtar 3.5.3，它的 `-u` 對**自己的**封存會以完全相同的方式重複成員。
-> 與 swift_tar 無關，也不是 libarchive 升級造成的——同一份原始碼以舊 pin 重建後失敗逐字相同。
-> 下方的數字是 Windows／WSL 的；macOS 讀到的是 `PASS: 158  FAIL: 1`。
+> **2026-09-20 開啟、2026-09-21 結案：一條在 macOS 上不可能通過的檢查。** `./` 那個條目新加的
+> `the reference tar's -u over this archive adds nothing` 斷言的是**參照 tar 的**性質，而非交給
+> 它的封存的性質——macOS 的 bsdtar 3.5.3 對自己的封存也會以相同方式重複成員，故 swift_tar
+> 寫出什麼都無法滿足它。現改為與該對照組比對而非與常數比對，在 3.5.3 與 3.8.8 上都通過，且對
+> 以 `ad285c3~1` 重建的 binary 仍會失敗——那是實測出來的，不是推論。macOS 現為
+> `PASS: 160  FAIL: 0`；下方的 Windows／WSL 數字早於這兩次改動。
 >
 > **Everything else recorded below is fixed and under regression test** —
 > `test/test_blind_findings.zsh` is at 157 checks on Windows and 156 on WSL, all
@@ -137,7 +140,7 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## 🔴 `the reference tar's -u over this archive adds nothing` 在 macOS 上必然失敗，且與 swift_tar 無關 / The check cannot pass on macOS, and it is not about swift_tar
+## `the reference tar's -u over this archive adds nothing` 在 macOS 上必然失敗，且與 swift_tar 無關 ▸ ✅ 已修正 2026-09-21，改為與對照組比對 / Fixed by comparing against a control
 
 **症狀**：`test/test_blind_findings.zsh` 在 macOS 上 `PASS: 158  FAIL: 1`。失敗的是
 `ad285c3` 隨 `./` 前綴修正一併加入的那條：
@@ -172,10 +175,42 @@ macOS 的 `/usr/bin/tar` 是 **bsdtar 3.5.3（libarchive 3.7.4）**，而該條�
 **不是 libarchive 升級造成的。** 把同一份原始碼以舊 pin `ddf82473` 重建後出現 want/got
 逐字相同的失敗；`abaa707d` 那筆升級對此零影響。
 
-**該怎麼修，是那條目擁有者的決定。** 可能的形式是：在斷言之前先跑一次同樣的對照
-（參照 tar 對自己的封存），若它也重複就 SKIP 並說明理由——那正是本樹「加守門就要有對照組」
-的作法，而且會把「這台機器的參照工具太舊」與「swift_tar 寫錯了」區分開來。
-在此之前，macOS 上這支套件會一直是紅的。
+**2026-09-21 已修正,但不是用 SKIP。** 原本提議的是「跑對照，若參照 tar 也重複就 SKIP」，
+而本檔自己在 traversal 區塊已經記下**SKIP 永遠不會變成 FAIL，因此無人回報**——那會把一條
+還能抓缺陷的檢查換成一條永遠不說話的。
+
+改成**與對照組比對而非與常數比對**：先讓參照 tar 對自己封存的副本跑一次 `-u`，再對
+swift_tar 的封存跑一次，然後比對兩份清單。斷言改寫為
+`the reference tar's -u cannot tell this archive from its own`。
+
+  - bsdtar 3.8.8（Windows／WSL）：兩邊都不變 → 相同 → 通過
+  - bsdtar 3.5.3（macOS）：兩邊以相同方式重複 → 相同 → 通過
+  - `./` 前綴一旦退化：參照 tar 會往 sw.tar 加入它自己的封存不會收到的 `./` 拼法成員，
+    兩份清單在**兩種版本上都會不同** → 失敗
+
+**反向對照實測過**，不是推理：以 `ad285c3~1` 的 `swift_tar.swift` 重建一個帶該缺陷的
+執行檔，再以 `ST=… zsh test/test_blind_findings.zsh` 跑，這條新斷言確實失敗——
+
+```
+FAIL: the reference tar's -u cannot tell this archive from its own
+  want './ ./ ./a.txt ./a.txt ./sub/ ./sub/ ./sub/b.txt ./sub/b.txt a.txt sub/ sub/b.txt '
+  got  './ ./ ./a.txt ./sub/ ./sub/b.txt a.txt sub/ sub/b.txt '
+```
+
+同時補上該區塊註解已經承諾、但程式碼沒做的第四項：`-u over this tool's own archive adds
+nothing`。要講清楚的是**它抓不到 `./` 缺陷**——對那個缺陷 binary 它是通過的，因為單一工具
+內部本來就自洽（該區塊上方的註解正是這麼寫的）。它釘的是另一件事：swift_tar 的 `-u` 對
+自己的封存冪等。
+
+macOS 上該套件現為 `PASS: 160  FAIL: 0`。
+
+Fixed 2026-09-21, and not with a SKIP: this file already records that a SKIP never becomes a
+FAIL and so nobody reports it. The assertion now compares against a control -- the reference
+tar's `-u` over a copy of its own archive -- instead of against a constant, so it passes on
+both bsdtar versions and still fails if the `./` prefix regresses. Proved by rebuilding a
+binary from `ad285c3~1` and running the suite against it, where the new assertion fails. The
+fourth leg the block's comment already promised was added too; note it does NOT catch the `./`
+defect, since a single tool is self-consistent.
 
 **Symptom**: `test_blind_findings.zsh` reports `PASS: 158 FAIL: 1` on macOS, on the check
 `ad285c3` added alongside the `./` prefix fix. The check does not measure swift_tar: pointing

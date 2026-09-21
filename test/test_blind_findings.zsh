@@ -1659,8 +1659,51 @@ eq "an explicit operand carries no prefix" "a.txt" \
 ( cd "$DS" && "$ST" -u -f ref.tar -C src . ) >/dev/null 2>&1
 eq "-u over the reference tar's archive adds nothing" "$ref_list" \
    "$("$ST" -t -f "$DS/ref.tar" | tr -d '\r' | sort | tr '\n' ' ')"
+cp "$DS/sw.tar" "$DS/sw_self.tar"
+( cd "$DS" && "$ST" -u -f sw_self.tar -C src . ) >/dev/null 2>&1
+eq "-u over this tool's own archive adds nothing" "$sw_list" \
+   "$("$ST" -t -f "$DS/sw_self.tar" | tr -d '\r' | sort | tr '\n' ' ')"
+
+# The reverse direction cannot assert "adds nothing", because on this leg that is a
+# property of the reference tar rather than of the archive handed to it.
+#
+# macOS ships bsdtar 3.5.3 (libarchive 3.7.4) as /usr/bin/tar, and its `-u` is not
+# idempotent over its OWN archive. Measured 2026-09-20, reference tar on both sides:
+#
+#   /usr/bin/tar -c -f ref.tar -C src .   ./ ./a.txt ./sub/ ./sub/b.txt
+#   /usr/bin/tar -u -f ref.tar -C src .   ./ ./ ./a.txt ./a.txt ./sub/ ./sub/ ./sub/b.txt ./sub/b.txt
+#
+# Two layers, each measured separately: directories duplicate even at whole-second
+# mtimes, and regular files duplicate at natural sub-second mtimes because neither tool
+# writes a pax mtime record here, so the stored value is truncated and 3.5.3 reads the
+# on-disk file as newer. So the old spelling of this check could not pass on macOS no
+# matter what swift_tar wrote, and it did not -- it was the one FAIL in an otherwise
+# green suite while Windows and WSL, on bsdtar 3.8.8, saw nothing.
+#
+# Comparing against the control instead of against a constant keeps the defect this
+# entry was written for. If the `./` prefix regressed, the reference tar would add
+# `./`-spelled members to sw.tar that its own archive never receives, and the two lists
+# would differ on 3.5.3 and on 3.8.8 alike. A SKIP was the other option and is worse:
+# this file already records, at the traversal block, that a SKIP never becomes a FAIL
+# and so nobody reports it.
+#
+# 反方向不能斷言「不得加入任何東西」，因為在這一段上那是**參照 tar 的**性質，而非交給它的
+# 封存的性質。macOS 的 /usr/bin/tar 是 bsdtar 3.5.3（libarchive 3.7.4），它的 `-u` 對自己的
+# 封存並非冪等（2026-09-20 實測，上方兩行兩端皆為參照 tar）。兩層分別量過：目錄即使在整秒
+# mtime 下仍重複；一般檔案在自然子秒 mtime 下重複，因為此處兩邊都只寫 ustar、沒有 pax mtime
+# 記錄，磁碟上的值被截斷後 3.5.3 便判定磁碟較新。因此這條檢查的舊寫法在 macOS 上無論
+# swift_tar 寫出什麼都不會通過——它確實成為整套唯一的 FAIL，而 Windows 與 WSL 用的是
+# bsdtar 3.8.8，什麼都沒看到。
+#
+# 改為與對照組比對而非與常數比對，保留了本條目原本要抓的缺陷：若 `./` 前綴退化，參照 tar 會
+# 往 sw.tar 加入它自己的封存不會收到的 `./` 拼法成員，兩份清單在 3.5.3 與 3.8.8 上都會不同。
+# 另一個選項是 SKIP，而它更差：本檔在 traversal 區塊已經記下「SKIP 永遠不會變成 FAIL，
+# 因此無人回報」。
+cp "$DS/ref.tar" "$DS/ref_ctl.tar"
+( cd "$DS" && "$SYS_TAR" -u -f ref_ctl.tar -C src . ) >/dev/null 2>&1
 ( cd "$DS" && "$SYS_TAR" -u -f sw.tar -C src . ) >/dev/null 2>&1
-eq "the reference tar's -u over this archive adds nothing" "$sw_list" \
+eq "the reference tar's -u cannot tell this archive from its own" \
+   "$("$SYS_TAR" -t -f "$DS/ref_ctl.tar" | tr -d '\r' | sort | tr '\n' ' ')" \
    "$("$SYS_TAR" -t -f "$DS/sw.tar" | tr -d '\r' | sort | tr '\n' ' ')"
 
 

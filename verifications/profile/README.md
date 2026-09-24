@@ -54,7 +54,7 @@ wall for 0.54 s of CPU — three quarters of it waiting.
 
 ---
 
-## 三個會讓數字說謊的陷阱 / Three traps that make the numbers lie
+## 四個會讓數字說謊的陷阱 / Four traps that make the numbers lie
 
 ### 1. 參照 tar 要以「自我描述」挑選，絕不以檔名
 
@@ -77,7 +77,29 @@ average 記進每一列——**不是裝飾，是讓後來的人能判斷該不�
 變長不會變短，故最小值最接近「沒有干擾」的那一次。但這只降低雜訊，不能救一台 load 15
 的機器。**如果 loadavg 那一欄很大，那一列就只能當成下限。**
 
-### 3. 取樣式 profiler 在這個目標上無效——這是量過的，不是猜的
+### 3. 這支腳本看不到 codec 的任何改動——語料是未壓縮的 tar
+
+`extract_shapes.zsh` 以 `"$BIN" -c -f "$WORK/a.tar"` 產生語料,**沒有壓縮旗標**。所以
+liblzma、liblz4、libzstd 在整輪量測中**一次都沒有被呼叫**。
+
+這件事值得寫下來,因為 `sync_all.zsh` 在移動任何 pin 之後都會列出「第 5 步:效能可能改變,
+`extract_shapes.zsh --record`」,而那一步在 codec pin 移動之後**不會驗到任何東西**。
+2026-09-25 就是這樣:xz 由 5.8.3 升到 5.8.4、三個 codec 由 homebrew 動態連結改為 submodule
+靜態連結,而這支腳本量到的形狀完全不經過它們。那一輪的數字是誠實的,只是它回答的不是
+「codec 換了之後如何」這個問題。
+
+要量 codec,需要壓縮過的形狀——`test/test_swift_tar_rgb1.zsh` 的 codec 表已經逐一跑
+gzip／bzip2／xz／zstd／lz4 並印出 MB/s,那裡才看得到。本資料夾刻意只量「純 tar 的解壓
+路徑」,因為 FAQ 的解壓差距問題就是在那條路徑上。
+
+`extract_shapes.zsh` builds its corpus with no compression flag, so liblzma, liblz4 and
+libzstd are never called during a run. Worth recording, because `sync_all.zsh` prints
+"step 5: performance may have moved, run `extract_shapes.zsh --record`" after *any* pin
+move, and after a codec pin move that step verifies nothing. That happened on 2026-09-25.
+The numbers from such a round are honest; they simply do not answer the question asked.
+For codecs, use the codec table in `test/test_swift_tar_rgb1.zsh`, which times each one.
+
+### 4. 取樣式 profiler 在這個目標上無效——這是量過的，不是猜的
 
 2026-09-06 在 macOS 上試了四種做法要取 symbol profile，全部失敗，因為**解壓一個 RAM
 disk 上的封存只跑約 0.17 秒**：
@@ -159,3 +181,33 @@ between the two columns. No claim is made here that it is.
   Per-function counts on Linux. A negative result: the time is not in swift_tar's own
   Swift code — 21,743 instrumented counter increments for 160 MB, and nothing that
   scales with bytes. PGO was chosen over sampling because counts are load-independent.
+
+- **2026-09-25,macOS 重量一輪**(`extract_shapes.csv2` 的第二組 mac 列,戳記
+  `20260920-170352`,reps 10,RAM disk,load 3.72)。這是 `sync_all.zsh` 升級流程第 5 步,
+  在 xz 5.8.3→5.8.4 與「三個 codec 改為 submodule 靜態連結」之後補做的。
+
+  | 形狀 | 08-16 swift/ref/比值 (load 2.00) | 09-25 swift/ref/比值 (load 3.72) |
+  |---|---|---|
+  | 20x8MB | 70 / 76 / **0.92** | 59 / 54 / **1.09** |
+  | 200x800KB | 47 / 61 / **0.77** | 43 / 57 / **0.75** |
+  | 2000x80KB | 85 / 156 / **0.54** | 67 / 151 / **0.44** |
+
+  **不要把這裡的任何變化歸給那兩次升級。** 三個理由,每一個單獨就足夠:
+
+  1. 語料是未壓縮的 tar,**codec 一次都沒被呼叫**(見上方陷阱 3)。
+  2. 兩輪之間相隔五週,swift_tar 自己有 `./` 前綴、mtime/pax 等多筆改動,macOS 與 Xcode
+     也都動過。靜態連結不是唯一的變數,甚至不是最可能的那個。
+  3. load 由 2.00 變成 3.72,故**絕對毫秒不可並排**;交錯取最小值讓比值仍可比,但
+     20x8MB 那個 0.92→1.09 的幅度(約 18%)正落在本樹六次「複量後消失」的假差異範圍內
+     (+9.5%、+13.6%、−10.7%、+21%、+22.4%)。單獨一輪不足以下結論。
+
+  **能說的是**:swift_tar 在三個形狀上的絕對時間都比 08-16 那輪更快(70→59、47→43、
+  85→67),而且是在負載更高的機器上。沒有看到回歸。macOS 上 swift_tar 仍是兩者中較快的
+  一端(2000x80KB 為 0.44×),與「差距是 Linux 限定」的既有結論一致。
+
+  A macOS round taken after the xz and static-codec changes, as step 5 of sync_all's
+  checklist. Attribute none of the movement to those changes: the corpus is an
+  uncompressed tar so no codec is called, five weeks and several swift_tar commits sit
+  between the rounds, and loadavg went 2.00 → 3.72 so absolute milliseconds are not
+  comparable. What can be said is that swift_tar is faster in absolute terms on all three
+  shapes despite the higher load, and remains the faster of the two on macOS.

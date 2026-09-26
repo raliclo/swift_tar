@@ -225,9 +225,15 @@ struct RGB1Image {
     }
 
     static func payloadByteCount(width: UInt32, height: UInt32) throws -> Int {
+        // The first product cannot overflow: (2^32 - 1)^2 = 2^64 - 2^33 + 1 < 2^64. The
+        // second can, and it used to be a plain `*`, so width = height = 0xFFFFFFFF from
+        // a file header trapped before the guard below could reject it (2026-09-27 review).
+        // 第一個乘積不會溢位：(2^32 - 1)^2 = 2^64 - 2^33 + 1 < 2^64。第二個會，而它原本是
+        // 單純的 `*`，所以檔頭裡寬 = 高 = 0xFFFFFFFF 會在下方守門拒絕它之前就 trap
+        // （2026-09-27 審查）。
         let pixels = UInt64(width) * UInt64(height)
-        let bytes = pixels * UInt64(bytesPerPixel)
-        guard bytes <= UInt64(Int.max) else { throw RGB1Error.badDimensions }
+        let (bytes, overflow) = pixels.multipliedReportingOverflow(by: UInt64(bytesPerPixel))
+        guard !overflow, bytes <= UInt64(Int.max) else { throw RGB1Error.badDimensions }
         return Int(bytes)
     }
 

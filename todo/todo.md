@@ -204,7 +204,12 @@ symlink 與硬連結時都會呼叫 `forget`。`test_blind_findings.zsh` 新增�
 attribute」並以 rc=1 結束。同一段解析在 `scanTarEntries`（`-r`/`-u`）與 `runDelete` 各有
 一份，三處都要修，最好合成一個函式。
 
-## 🔴 RGB1 寬高相乘溢位崩潰 / RGB1 dimension multiply traps
+## RGB1 寬高相乘溢位崩潰 ▸ ✅ 已修正 2026-09-27 / RGB1 dimension multiply traps
+
+**修正**：第二個乘法改用 `multipliedReportingOverflow`，溢位時丟出 `badDimensions`。第一個乘積
+（寬 × 高）在 UInt64 內不會溢位，已在註解中寫明理由。`test/test_rgb1.zsh` 新增一條，斷言
+**rc == 1** 而不只是「非零」——同檔既有的兩條拒絕測試用 `if ! cmd`，崩潰也會滿足它，那樣寫
+的檢查對它要抓的執行檔也會通過。新測試對修正前得到 133 而失敗，修正後通過。
 
 `rgb1.swift` 的 `payloadByteCount`：`pixels * UInt64(bytesPerPixel)` 未檢查溢位，下一行的
 `guard bytes <= Int.max` 根本跑不到。寬高 `0xFFFFFFFF`：**`--rgb1-info` rc=133**；對照組

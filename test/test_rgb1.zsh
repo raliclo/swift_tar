@@ -199,6 +199,25 @@ else
   ok "reject: --rgb1-info on non-RGB1 magic"
 fi
 
+# Dimensions whose byte count overflows UInt64 must be a reported error, not a trap.
+# width = height = 0xFFFFFFFF: pixels fit in UInt64, pixels x 3 does not. The
+# multiply was unchecked, so --rgb1-info died with SIGTRAP (rc=133) before the
+# `bytes <= Int.max` guard could run (2026-09-27 review).
+#
+# Asserts rc == 1, not merely "non-zero". The two rejections above use `if ! cmd`,
+# which a crash also satisfies -- a check written that way passes against the very
+# binary it exists to catch.
+#
+# 位元組數會溢出 UInt64 的寬高，必須是回報的錯誤而不是 trap。寬 = 高 = 0xFFFFFFFF：
+# 像素數放得進 UInt64，乘以 3 就放不下。那個乘法原本沒檢查溢位，於是 --rgb1-info 在
+# `bytes <= Int.max` 那道守門執行之前就以 SIGTRAP（rc=133）結束（2026-09-27 審查）。
+#
+# 斷言 rc == 1，而不只是「非零」。上面兩項拒絕用的是 `if ! cmd`，崩潰也會滿足它——
+# 那樣寫的檢查，對它本來要抓的那個執行檔也會通過。
+{ printf 'RGB1\377\377\377\377\377\377\377\377\000\000\000\001'; head -c 1004 /dev/zero; } > "$TMP/huge.rgb1"
+rc=0; "$ST" --rgb1-info -f "$TMP/huge.rgb1" >/dev/null 2>&1 || rc=$?
+eq "reject: --rgb1-info on dimensions whose byte count overflows (rc)" "1" "$rc"
+
 # ---------------------------------------------------------------------------
 # Negative geo values must survive the CLI. Combined-short-flag expansion used
 # to split any single-dash token longer than two characters, so --lat -33.8688

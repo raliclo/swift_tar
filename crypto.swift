@@ -135,10 +135,21 @@ struct Poly1305 {
         h[0] &+= c &* 5; c = h[0] >> 26; h[0] &= 0x3ff_ffff; h[1] &+= c
 
         // compute h + -p, select if no borrow / 計算 h + -p，無借位則採用
+        //
+        // g[4] is h[4] + carry - 2^26, NOT masked first. The loop used to run over all five
+        // limbs, masking g[4] to 26 bits before the subtraction, so g[4] - 2^26 was always
+        // negative, the mask always chose h, and h >= p was never reduced. RFC 8439 A.3
+        // vector #5 exists for exactly this and failed; §2.5.2, the only vector tested
+        // before, never reaches h >= p (2026-09-27 review). Same shape as poly1305-donna.
+        //
+        // g[4] 是 h[4] + 進位 - 2^26，**不先遮罩**。原本的迴圈跑遍五個 limb，在減法之前就把
+        // g[4] 遮成 26 bits，於是 g[4] - 2^26 永遠為負，mask 永遠選 h，h >= p 從不約簡。
+        // RFC 8439 A.3 第 5 組正是為此而設，而它失敗了；先前唯一測試的 §2.5.2 永遠到不了
+        // h >= p（2026-09-27 審查）。寫法與 poly1305-donna 相同。
         var g = [UInt32](repeating: 0, count: 5)
         c = 5
-        for i in 0..<5 { let s = h[i] &+ c; c = s >> 26; g[i] = s & 0x3ff_ffff }
-        g[4] = g[4] &- (1 << 26)
+        for i in 0..<4 { let s = h[i] &+ c; c = s >> 26; g[i] = s & 0x3ff_ffff }
+        g[4] = h[4] &+ c &- (1 << 26)
         let mask: UInt32 = (g[4] >> 31) &- 1     // 0xffffffff if h >= p
         for i in 0..<5 { h[i] = (h[i] & ~mask) | (g[i] & mask) }
 
@@ -1067,6 +1078,43 @@ func cryptoSelfTest() -> Bool {
     var mac = Poly1305(key: hexBytes("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b"))
     mac.update(Array("Cryptographic Forum Research Group".utf8))
     check("Poly1305 (RFC 8439 2.5.2)", hexString(mac.finish()), "a8061dc1305136c6c22b8baf0c0127a9")
+
+    // RFC 8439 Appendix A.3, vectors #5-#11 -- the edge cases, written to exercise the
+    // carries and the final reduction. §2.5.2 alone never reaches h >= p, which is how a
+    // final reduction that could not run (g[4] masked before the subtraction) passed this
+    // self-test (2026-09-27 review). Each expected tag was cross-checked against OpenSSL
+    // 3.6.4's Poly1305 before being written here, rather than transcribed from memory.
+    // RFC 8439 附錄 A.3 的第 5–11 組——專為進位與最終約簡設計的邊界向量。只靠 §2.5.2
+    // 永遠到不了 h >= p，這正是一個根本不會執行的最終約簡（g[4] 在減法前就被遮罩）能通過
+    // 本自我測試的原因（2026-09-27 審查）。每一個期望的 tag 在寫入前都已與 OpenSSL 3.6.4 的
+    // Poly1305 交叉比對，而非憑記憶抄寫。
+    let z16 = "00000000000000000000000000000000", f16 = "ffffffffffffffffffffffffffffffff"
+    let edgeVectors: [(String, String, String, String)] = [
+        ("#5", "02000000000000000000000000000000" + z16, f16, "03000000000000000000000000000000"),
+        ("#6", "02000000000000000000000000000000" + f16,
+         "02000000000000000000000000000000", "03000000000000000000000000000000"),
+        ("#7", "01000000000000000000000000000000" + z16,
+         f16 + "f0ffffffffffffffffffffffffffffff" + "11000000000000000000000000000000",
+         "05000000000000000000000000000000"),
+        ("#8", "01000000000000000000000000000000" + z16,
+         f16 + "fbfefefefefefefefefefefefefefefe" + "01010101010101010101010101010101",
+         "00000000000000000000000000000000"),
+        ("#9", "02000000000000000000000000000000" + z16,
+         "fdffffffffffffffffffffffffffffff", "faffffffffffffffffffffffffffffff"),
+        ("#10", "01000000000000000400000000000000" + z16,
+         "e33594d7505e43b90000000000000000" + "3394d7505e4379cd0100000000000000"
+         + "00000000000000000000000000000000" + "01000000000000000000000000000000",
+         "14000000000000005500000000000000"),
+        ("#11", "01000000000000000400000000000000" + z16,
+         "e33594d7505e43b90000000000000000" + "3394d7505e4379cd0100000000000000"
+         + "00000000000000000000000000000000",
+         "13000000000000000000000000000000"),
+    ]
+    for (label, key, data, tag) in edgeVectors {
+        var edge = Poly1305(key: hexBytes(key))
+        edge.update(hexBytes(data))
+        check("Poly1305 edge \(label) (RFC 8439 A.3)", hexString(edge.finish()), tag)
+    }
 
     // RFC 8439 §2.8.2 — ChaCha20-Poly1305 AEAD
     let aeadPlain = Array("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.".utf8)

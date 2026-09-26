@@ -655,13 +655,39 @@ int swift_tar_zip_read(const char *archive_path,
         }
     }
 
+    /* The same rule as the create side (add_path): only ARCHIVE_FATAL ends the run.
+     * ARCHIVE_FAILED or ARCHIVE_RETRY means this one entry cannot be handled -- report it
+     * and move on; ARCHIVE_WARN means it can, so report and carry on with it. This loop
+     * used to stop at anything below ARCHIVE_OK, so one member that could not be written
+     * (for instance `a/b` when `a` is a file) left every member after it unextracted,
+     * while bsdtar skipped it and went on. Decided 2026-09-27 that both sides match.
+     * A skipped member is reported on stderr and the run still exits 0, as the create
+     * side and the tar extractor already do.
+     *
+     * 與建立端（add_path）同一條規則：只有 ARCHIVE_FATAL 結束整次執行。ARCHIVE_FAILED
+     * 或 ARCHIVE_RETRY 代表這一項處理不了——報告後往下走；ARCHIVE_WARN 代表可以處理——
+     * 報告後照常處理它。這個迴圈原本遇到任何小於 ARCHIVE_OK 的狀態就停止，於是一個寫不
+     * 進去的成員（例如 `a` 是檔案時的 `a/b`）會讓其後所有成員都沒被解出，而 bsdtar 是略過
+     * 它並繼續。2026-09-27 決定兩端一致。略過的成員會印在 stderr，整次執行仍以 0 結束，
+     * 與建立端和 tar 解出路徑既有的作法相同。 */
     while ((status = archive_read_next_header(reader, &entry)) != ARCHIVE_EOF) {
         const char *path;
-        if (status < ARCHIVE_OK) {
+        if (status == ARCHIVE_FATAL) {
             set_archive_error(error_buffer, error_capacity, "archive_read_next_header", reader);
             goto cleanup;
         }
         path = archive_entry_pathname(entry);
+        if (status == ARCHIVE_FAILED || status == ARCHIVE_RETRY) {
+            /* The next archive_read_next_header skips whatever data is left unread.
+             * 下一次 archive_read_next_header 會自動略過尚未讀取的資料。 */
+            fprintf(stderr, "swift_tar: %s: %s\n", path != NULL ? path : "",
+                    archive_error_string(reader));
+            continue;
+        }
+        if (status < ARCHIVE_OK) {
+            fprintf(stderr, "swift_tar: %s: %s\n", path != NULL ? path : "",
+                    archive_error_string(reader));
+        }
         if (!extract) {
             printf("%s\n", path != NULL ? path : "");
         } else if (verbose) {
@@ -679,17 +705,30 @@ int swift_tar_zip_read(const char *archive_path,
             }
         } else if (extract) {
             status = archive_write_header(disk, entry);
-            if (status < ARCHIVE_OK) {
+            if (status == ARCHIVE_FATAL) {
                 set_archive_error(error_buffer, error_capacity, "archive_write_header", disk);
                 goto cleanup;
+            }
+            if (status == ARCHIVE_FAILED || status == ARCHIVE_RETRY) {
+                fprintf(stderr, "swift_tar: %s: %s\n", path != NULL ? path : "",
+                        archive_error_string(disk));
+                continue;
+            }
+            if (status < ARCHIVE_OK) {
+                fprintf(stderr, "swift_tar: %s: %s\n", path != NULL ? path : "",
+                        archive_error_string(disk));
             }
             if (copy_archive_data(reader, disk, error_buffer, error_capacity) != 0) {
                 goto cleanup;
             }
             status = archive_write_finish_entry(disk);
-            if (status < ARCHIVE_OK) {
+            if (status == ARCHIVE_FATAL) {
                 set_archive_error(error_buffer, error_capacity, "archive_write_finish_entry", disk);
                 goto cleanup;
+            }
+            if (status < ARCHIVE_OK) {
+                fprintf(stderr, "swift_tar: %s: %s\n", path != NULL ? path : "",
+                        archive_error_string(disk));
             }
         } else {
             archive_read_data_skip(reader);

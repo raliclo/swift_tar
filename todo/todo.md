@@ -418,7 +418,19 @@ Windows 上實際建置一次，已列入驗證清單。
 `build_zstd-win.zsh` 與 `build_libarchive-win.zsh` 的寫法是「只清掉自己的鍵、其餘保留」
 （`grep -vE`），改成相同。同時拿掉 `2>/dev/null || true`。僅影響 Windows。
 
-## 🔴 ZIP 解壓端改為與建立端相同的錯誤處理 / Make ZIP extraction handle errors the way ZIP creation does
+## ZIP 解壓端改為與建立端相同的錯誤處理 ▸ ✅ 已修正 2026-09-27 / Make ZIP extraction handle errors the way ZIP creation does
+
+**修正**：`swift_tar_zip_read` 的三處（`read_next_header`、`write_header`、`finish_entry`）改為
+與建立端相同的規則：FATAL 中止；FAILED 或 RETRY 以 `swift_tar: <路徑>: <原因>` 報告並略過
+該項；WARN 報告後照常處理。略過之後整次執行仍以 0 結束，與建立端、tar 解出路徑既有作法
+相同。
+
+**測試**：`test_blind_findings.zsh` 以 bsdtar 做出依序含 `a`（檔案）、`a/b`、`c` 的 ZIP。修正前
+只解出 `a`、rc=1，`c` 缺席；修正後解出 `a` 與 `c`、rc=0，stderr 為 `swift_tar: a/b: Could not
+stat a/b`。整套 178/0。
+
+**另記一點，未改動**：三條路徑（tar 解出、ZIP 建立、ZIP 解壓）略過成員後都以 0 結束；bsdtar
+在同樣情況以 1 結束，GNU tar 以 2 結束。要不要改變這個慣例是另一個決定。
 
 **2026-09-27 決定：兩端一致。** 解壓端（`swift_tar_zip_read`）遇到 WARN 或 FAILED 就中止整次
 解壓；建立端自 `5af2a12` 起是 FATAL 才中止、FAILED 報告並略過該項、WARN 報告後繼續。解壓端

@@ -2059,6 +2059,38 @@ else
   echo "SKIP: -h/--dereference (no real symlink here)"
 fi
 
+# ---- ZIP extraction skips a member it cannot write, like ZIP creation does ----
+# The ZIP read loop stopped at any status below ARCHIVE_OK, so one member that could not
+# be written left every member after it unextracted: `a` (file), `a/b`, `c` extracted
+# only `a`, rc=1. The create side has skipped an ARCHIVE_FAILED entry and gone on since
+# 5af2a12, and bsdtar does the same on extraction; decided 2026-09-27 that both sides
+# match. The fixture needs a ZIP with a file and a path under it of the same name, which
+# only bsdtar builds (--format zip with several -C), so a tool that calls itself bsdtar is
+# looked for, and the block is skipped with the reason when there is none.
+# ZIP 讀取迴圈原本遇到任何小於 ARCHIVE_OK 的狀態就停止，於是一個寫不進去的成員會讓其後所有
+# 成員都沒被解出：`a`（檔案）、`a/b`、`c` 只解出 `a`，rc=1。建立端自 5af2a12 起就是略過
+# ARCHIVE_FAILED 的項目並繼續，bsdtar 解壓時也是如此；2026-09-27 決定兩端一致。測資需要一個
+# 同時含有檔案與「以它為上層」之路徑的 ZIP，只有 bsdtar 做得出來（--format zip 加上多個
+# -C），所以會找一個自稱 bsdtar 的工具，沒有時以原因略過本區。
+ZBSD=""
+for cand in "$SYS_TAR" bsdtar; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" --version 2>&1 | grep -q bsdtar; then ZBSD=$cand; break; fi
+done
+if [ -n "$ZBSD" ]; then
+  ZF="$TMP/zipfail"; rm -rf "$ZF"; mkdir -p "$ZF/d1" "$ZF/d2/a" "$ZF/out"
+  print -r -- A > "$ZF/d1/a"; print -r -- C > "$ZF/d1/c"; print -r -- B > "$ZF/d2/a/b"
+  ( cd "$ZF" && COPYFILE_DISABLE=1 "$ZBSD" --format zip -cf z.zip -C d1 a -C ../d2 a/b -C ../d1 c ) >/dev/null 2>&1 || true
+  zf_rc=0; "$ST" -x -f "$ZF/z.zip" -C "$ZF/out" >"$ZF/x.out" 2>&1 || zf_rc=$?
+  eq "ZIP extraction: the member after an unwritable one still lands" "C" "$(cat "$ZF/out/c" 2>/dev/null)"
+  eq "ZIP extraction: a skipped member does not fail the run, as on the create side" "0" "$zf_rc"
+  case $(cat "$ZF/x.out") in
+    *"a/b"*) ok "ZIP extraction: the skipped member is named on stderr" ;;
+    *) bad "ZIP extraction: the skipped member is named on stderr" ;;
+  esac
+else
+  echo "SKIP: ZIP extraction skip test (no bsdtar here to build the fixture)"
+fi
+
 # ---- sub-second mtime is stored, as bsdtar stores it ----
 # swift_tar kept whole seconds only, so `bsdtar -u` over a swift_tar archive re-added
 # every file whose mtime had a fraction -- on macOS 27.2 bsdtar's own archives carry the

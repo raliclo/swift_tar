@@ -203,6 +203,21 @@ static int add_path(struct archive *writer,
      * 存的是它所指向的內容（2026-09-27 審查）。 */
     if (follow_symlinks) archive_read_disk_set_symlink_logical(disk);
     else archive_read_disk_set_symlink_physical(disk);
+    /* No disk-read behaviour flags, deliberately. archive_read_disk_new() turns on
+     * ARCHIVE_READDISK_MAC_COPYFILE by default, and with it every directory walked had
+     * its mtime changed to "now" -- creating a ZIP modified the tree it was reading.
+     * Bisected 2026-09-27 with a probe that only walks, against this vendored libarchive:
+     * every flag combination containing MAC_COPYFILE changes it, none without does. The
+     * flag gathers macOS metadata for AppleDouble members, and this ZIP writer emits none
+     * (no `._` or `__MACOSX` entries were ever in its output), so clearing it removes a
+     * side effect and changes nothing written. The tar path never read that metadata.
+     * 刻意不設任何讀取行為旗標。archive_read_disk_new() 預設會開啟
+     * ARCHIVE_READDISK_MAC_COPYFILE，而它使每個被走訪的目錄 mtime 變成「現在」——建立 ZIP
+     * 會修改它正在讀取的樹。2026-09-27 以只走訪的探針對這份內附 libarchive 二分：凡含
+     * MAC_COPYFILE 的組合都會改動，不含的都不會。該旗標是為 AppleDouble 成員收集 macOS
+     * 中繼資料，而本 ZIP 寫出端從不產生這類成員（輸出中從未有 `._` 或 `__MACOSX`），所以
+     * 清掉它只移除副作用，不改變任何寫出的內容。tar 路徑本來就不讀這些中繼資料。 */
+    archive_read_disk_set_behavior(disk, 0);
     archive_read_disk_set_standard_lookup(disk);
 
     status = archive_read_disk_open(disk, path);

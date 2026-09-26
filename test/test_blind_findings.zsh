@@ -1783,14 +1783,13 @@ eq "an explicit operand carries no prefix" "a.txt" \
 # The archives are unchanged on disk, so -u must add nothing -- each tool over the
 # other's archive, then each over its own.
 # 磁碟上的檔案未變動，故 -u 不得加入任何東西——先以各自更新對方的封存，再更新自己的。
-# Re-applied, because the `-c --zip` step above changes src/ and src/sub/'s mtime to
-# "now" -- a separate, pre-existing defect recorded in todo (the ZIP backend modifies
-# the directories it reads; the tar path and bsdtar --format zip do not). Left in, it
-# makes every -u below re-add the directories for a reason unrelated to this block.
-# 重新設定一次，因為上方的 `-c --zip` 會把 src/ 與 src/sub/ 的 mtime 改成「現在」——那是
-# 另一個既有缺陷，已記於 todo（ZIP 後端會改動它讀取的目錄；tar 路徑與 bsdtar --format zip
-# 不會）。若不處理，下方每一個 -u 都會因與本區塊無關的原因重新加入目錄。
-touch -t 202601011200.00 "$DS/src/sub" "$DS/src"
+# The `-c --zip` step above used to change src/ and src/sub/'s mtime to "now", which made
+# every -u below re-add the directories; a re-touch here worked around it. That cause is
+# fixed in the ZIP backend and pinned by its own check further down, so there is nothing
+# to undo here -- this block passing is a second witness to that fix.
+# 上方的 `-c --zip` 原本會把 src/ 與 src/sub/ 的 mtime 改成「現在」，使下方每一個 -u 都重新
+# 加入目錄；這裡原本以重設 mtime 繞過。成因已在 ZIP 後端修好，並由下方另一條檢查釘住，所以
+# 這裡沒有東西需要還原——本區通過，就是該修正的第二個證人。
 
 # Listed with the reference tar on both sides, not swift_tar on one. ref.tar may hold
 # `._` AppleDouble members (see the mtime note above); bsdtar's -t folds them away and
@@ -2090,6 +2089,25 @@ if [ -n "$ZBSD" ]; then
 else
   echo "SKIP: ZIP extraction skip test (no bsdtar here to build the fixture)"
 fi
+
+# ---- -c --zip leaves the source tree's timestamps alone ----
+# Creating a ZIP changed the mtime of every directory it walked to "now". Found
+# 2026-09-27 while fixing the `./` block's -u checks, which it made re-add directories.
+# Bisected with a probe that only walks (no archive written) against the vendored
+# libarchive: libarchive's default disk-read flag ARCHIVE_READDISK_MAC_COPYFILE causes it,
+# and nothing else does. The tar path never had it. Compared with -nt against a reference
+# file given the same timestamp, so no platform-specific stat format is needed.
+# 建立 ZIP 會把它走訪的每個目錄的 mtime 改成「現在」。2026-09-27 修 `./` 區塊的 -u 檢查時
+# 發現，它讓那裡重新加入目錄。以一個只走訪、不寫封存的探針對內附的 libarchive 二分：成因是
+# libarchive 預設的讀取旗標 ARCHIVE_READDISK_MAC_COPYFILE，別無其他。tar 路徑從未有此問題。
+# 以 -nt 與一個設成相同時間的參考檔比較，因此不需要各平台不同的 stat 格式。
+ZM="$TMP/zipmtime"; rm -rf "$ZM"; mkdir -p "$ZM/src/sub"
+print -r -- a > "$ZM/src/a.txt"; print -r -- b > "$ZM/src/sub/b.txt"; print -r -- r > "$ZM/ref"
+touch -t 202601011200.00 "$ZM/src/a.txt" "$ZM/src/sub/b.txt" "$ZM/src/sub" "$ZM/src" "$ZM/ref"
+( cd "$ZM" && "$ST" -c --zip -f z.zip -C src . ) >/dev/null 2>&1 || true
+zm_touched=""
+for d in "$ZM/src" "$ZM/src/sub"; do [[ $d -nt "$ZM/ref" ]] && zm_touched+="${d#$ZM/} "; done
+eq "-c --zip does not change the mtime of the directories it reads" "" "$zm_touched"
 
 # ---- sub-second mtime is stored, as bsdtar stores it ----
 # swift_tar kept whole seconds only, so `bsdtar -u` over a swift_tar archive re-added

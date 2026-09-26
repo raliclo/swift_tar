@@ -366,7 +366,20 @@ AppleDouble 成員：
 第二條量到的是真實差異（bsdtar 能分辨兩者），但它已不是該區塊要抓的 `./` 前綴缺陷。修法
 要在測試端決定：讓測資在建立後移除該延伸屬性，或讓比較不受 `._` 成員與 mtime 精度影響。
 
-## 🔴 `-c --zip` 會改動它所讀取的來源目錄的 mtime / `-c --zip` changes the mtime of the source directories it reads
+## `-c --zip` 會改動它所讀取的來源目錄的 mtime ▸ ✅ 已修正 2026-09-27 / `-c --zip` changes the mtime of the source directories it reads
+
+**成因（已查證）**：寫了一個只走訪、不寫任何封存的探針，連結同一份內附 libarchive 二分讀取
+旗標：`archive_read_disk_new()` 預設開啟的 `ARCHIVE_READDISK_MAC_COPYFILE` 是唯一成因——凡含
+它的組合都會改動目錄 mtime，不含的都不會。同樣帶這個旗標的 bsdtar 預設組合，在探針裡也會
+改動；系統 bsdtar 實際上不會，但它用的是 Apple 自建的 libarchive 3.7.4，所以這個差異只記錄、
+不推論。
+
+**修正**：bridge 明確呼叫 `archive_read_disk_set_behavior(disk, 0)`。該旗標是為 AppleDouble
+成員收集 macOS 中繼資料，而本 ZIP 寫出端從不產生這類成員，修正前後的 ZIP 成員清單完全相同。
+
+**測試**：`test_blind_findings.zsh` 新增一條，以 `-nt` 與同時間的參考檔比較（不需要各平台不同
+的 stat 格式），修正前失敗（`src`、`src/sub` 都被改動）、修正後通過。`./` 區塊原本為此重設
+mtime 的繞道已拿掉，該區照樣通過，成為第二個證人。整套 179/0。
 
 2026-09-27 修上一項時發現。來源目錄先設成 2026-01-01，執行 `swift_tar -c --zip -f z.zip -C src .`
 之後，`src/` 與 `src/sub/` 的 mtime 都變成「現在」；檔案本身的 mtime 不變。**建立封存不應

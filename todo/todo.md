@@ -439,8 +439,9 @@ mtime 的繞道已拿掉，該區照樣通過，成為第二個證人。整套 1
   mtime、單一列表工具，都只在 bsdtar 3.5.3 上量過；要在 bsdtar 3.8.8 與 GNU tar 上確認仍通過。
 - **`extract_shapes.zsh` 依 `$PLAT` 選擇執行檔**（`dd9b63a`）：在 Windows 上確認選到 `.exe`。
 - **子秒 mtime**：POSIX 已寫 pax `mtime=` 小數；Windows 分支的 `winStat` 只有整秒，所以
-  Windows 建立的封存仍只存整秒。確認該平台上 bsdtar `-u` 的行為，再決定是否要讓 `winStat`
-  帶出 100 ns 精度。WSL 上確認 `touch -d` 與新測試通過。
+  Windows 建立的封存仍只存整秒；解壓端的 `winWriteFile`／`winSetLinkMtime` 也只還原整秒。確認
+  該平台上 bsdtar `-u` 的行為，再決定是否讓 Windows 分支帶出並還原 100 ns 精度。WSL 上確認
+  `touch -d`、`touch -h -d` 與兩組子秒測試通過（建立端 3 條、解壓端 5 條）。
 - **其餘平台無關的修正**（`--` 參數、Poly1305、RGB1 溢位、`sync_all.zsh`）：跑完整套件確認。
 - **三支 Windows 建置腳本**（`b5a92bd`）：改寫 `version-win.txt` 的區塊只以取出的文字測過，
   要實際建置一次，確認 `version-win.txt` 的鍵都保留。
@@ -479,8 +480,9 @@ Windows 上實際建置一次，已列入驗證清單。
 只解出 `a`、rc=1，`c` 缺席；修正後解出 `a` 與 `c`、rc=0，stderr 為 `swift_tar: a/b: Could not
 stat a/b`。整套 178/0。
 
-**另記一點，未改動**：三條路徑（tar 解出、ZIP 建立、ZIP 解壓）略過成員後都以 0 結束；bsdtar
-在同樣情況以 1 結束，GNU tar 以 2 結束。要不要改變這個慣例是另一個決定。
+**退出碼（2026-09-27 決定：維持 0）**：三條路徑（tar 解出、ZIP 建立、ZIP 解壓）略過成員後都
+以 0 結束；bsdtar 在同樣情況以 1 結束，GNU tar 以 2 結束。使用者決定本工具維持 0，略過的成員
+一律印在 stderr。
 
 **2026-09-27 決定：兩端一致。** 解壓端（`swift_tar_zip_read`）遇到 WARN 或 FAILED 就中止整次
 解壓；建立端自 `5af2a12` 起是 FATAL 才中止、FAILED 報告並略過該項、WARN 報告後繼續。解壓端
@@ -499,7 +501,21 @@ stat a/b`。整套 178/0。
 
 **實測代價**：`verifications/` 目錄約 161 個成員，封存多出 164,864 B，**每成員正好 1024 B**。
 
-**未涵蓋**：Windows 分支的 `winStat` 只提供整秒，仍存整秒；解壓端讀到小數時仍只還原整秒。
+**解壓端（2026-09-27 使用者決定要修，已修正）**：讀取端原本只保留 pax `mtime=` 的整秒。現在把
+小數讀成奈秒（至多九位，右側補零，所以 GNU 的七位 `.9740288` 是 974028800 ns），並在五條設定
+時間的路徑上還原：寫入池的 `futimens`、inline 大檔、目錄、symlink 與 FIFO。後三者與 inline 原本
+用 `FileManager.setAttributes`，它的 `Date` 是 double，在今天的時間值上只有約 238 ns 精度，無法
+精確還原奈秒，所以改走新的 `posixSetTimes`（`utimensat`，不跟隨最後一層 symlink）。
+`test_blind_findings.zsh` 新增 5 條，逐一檢查上述五種項目，對修正前的執行檔 5 條皆失敗，修正後
+189/0。
+
+查證時發現測試本身的一個陷阱：symlink 那條起初在修正前也通過。原因是本檔稍早載入了
+`zsh/stat`，之後 `stat` 變成 zsh 的內建指令，兩種外部 `stat` 的寫法它都不認得、什麼也不印，
+於是兩邊都是空字串而「相等」。改用 `command stat`，並在讀不到來源值時直接判為失敗。檔內在
+該處之後沒有其他未經 `command` 的 `stat` 呼叫。
+
+**仍未涵蓋**：Windows 分支的 `winStat` 與 `winWriteFile`／`winSetLinkMtime` 只處理整秒，建立與
+解壓在 Windows 上都仍只有整秒，已列入驗證清單。
 
 **2026-09-27 決定：跟隨 bsdtar。** swift_tar 的 tar 路徑只存整秒 mtime；macOS 27.2 上系統
 bsdtar 會寫子秒精度的 pax `mtime=`，所以對 swift_tar 的封存執行 bsdtar `-u`，同一秒內改過的

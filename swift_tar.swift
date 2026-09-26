@@ -2529,6 +2529,25 @@ private func winClearReadOnly(_ dest: String) {
 }
 
 #if !os(Windows)
+/// Set a path's atime and mtime to `seconds.nanos` without following a final symlink,
+/// as posixWriteFile's futimens already does for pool-written files. Used where extraction
+/// had called FileManager.setAttributes, whose Date is a double and cannot hold a pax
+/// mtime's nanoseconds exactly (about 238 ns resolution at today's epoch values). Returns
+/// false for an out-of-range value or a failed call; callers keep their existing policy of
+/// skipping rather than reporting, which is what `try? setAttributes` did.
+/// 將路徑的 atime 與 mtime 設為 `seconds.nanos`，不跟隨最後一層 symlink——與 posixWriteFile
+/// 對寫入池檔案所用的 futimens 相同。用於解壓時原本呼叫 FileManager.setAttributes 的地方：
+/// 它的 Date 是 double，無法精確容納 pax mtime 的奈秒（以今日的時間值約只有 238 ns 精度）。
+/// 值超出範圍或呼叫失敗時回傳 false；呼叫端維持原本「略過而不回報」的政策，與
+/// `try? setAttributes` 相同。
+@discardableResult
+private func posixSetTimes(_ path: String, _ seconds: UInt64, _ nanos: UInt32) -> Bool {
+    guard let t = time_t(exactly: seconds) else { return false }
+    var ts = [timespec(tv_sec: t, tv_nsec: Int(nanos)),
+              timespec(tv_sec: t, tv_nsec: Int(nanos))]
+    return utimensat(AT_FDCWD, path, &ts, AT_SYMLINK_NOFOLLOW) == 0
+}
+
 /// Write one extracted regular file on POSIX; returns an error message on
 /// failure, nil on success. Called from FileWriterPool workers (distinct
 /// paths only, no shared state).
@@ -2553,8 +2572,8 @@ private func winClearReadOnly(_ dest: String) {
 /// worker 競態。權限必須明確套用而不能依賴 open 的 mode 參數：後者受 umask
 /// 遮罩且僅在建立時生效，因此標記為 0755 的成員會變成 0755 & ~umask，覆蓋既有
 /// 檔案時更完全不會被修正。
-private func posixWriteFile(dest: String, data: Data, mtime: UInt64, mode: UInt32,
-                            restoreMtime: Bool) -> String? {
+private func posixWriteFile(dest: String, data: Data, mtime: UInt64, mtimeNanos: UInt32 = 0,
+                            mode: UInt32, restoreMtime: Bool) -> String? {
     // Apply the umask when permissions are not being restored. Both the open()
     // and the fchmod() below have to use the same value: open() alone would be
     // undone by the fchmod, and fchmod alone would leave a window in which the
@@ -2669,8 +2688,8 @@ private func posixWriteFile(dest: String, data: Data, mtime: UInt64, mode: UInt3
             return "cannot restore mtime on '\(dest)' (out of range: \(mtime))"
                  + " / 無法還原 mtime '\(dest)'"
         }
-        var ts = [timespec(tv_sec: t, tv_nsec: 0),
-                  timespec(tv_sec: t, tv_nsec: 0)]
+        var ts = [timespec(tv_sec: t, tv_nsec: Int(mtimeNanos)),
+                  timespec(tv_sec: t, tv_nsec: Int(mtimeNanos))]
         if futimens(fd, &ts) != 0 {
             return "cannot restore mtime on '\(dest)' (errno \(errno))"
                  + " / 無法還原 mtime '\(dest)'"
@@ -2750,7 +2769,7 @@ final class FileWriterPool {
 
     /// `mode` is ignored on Windows, which has no POSIX permission bits.
     /// `mode` 在 Windows 上被忽略：該平台沒有 POSIX 權限位元。
-    func submit(dest: String, data: Data, mtime: UInt64, mode: UInt32) {
+    func submit(dest: String, data: Data, mtime: UInt64, mtimeNanos: UInt32 = 0, mode: UInt32) {
         sem.wait()                            // backpressure / 反壓
         group.enter()
         let restoreMtime = self.restoreMtime
@@ -2778,8 +2797,8 @@ final class FileWriterPool {
             let err = winWriteFile(dest: dest, data: data, mtime: mtime, backend: backend,
                                    restoreMtime: restoreMtime)
 #else
-            let err = posixWriteFile(dest: dest, data: data, mtime: mtime, mode: mode,
-                                     restoreMtime: restoreMtime)
+            let err = posixWriteFile(dest: dest, data: data, mtime: mtime, mtimeNanos: mtimeNanos,
+                                     mode: mode, restoreMtime: restoreMtime)
 #endif
             if let err = err {
                 shared.m.withLock { $0 = $0 ?? err }
@@ -3935,9 +3954,10 @@ final class TarReader {
         var zeroBlocks = 0
         var paxPath: String? = nil, paxLink: String? = nil, paxSize: UInt64? = nil
         var paxMtime: UInt64? = nil
+        var paxMtimeNanos: UInt32 = 0
         var gnuLongName: String? = nil, gnuLongLink: String? = nil
         // Deferred directory mtimes (children would bump them) / 目錄 mtime 延後套用
-        var dirTimes: [(path: String, mtime: UInt64)] = []
+        var dirTimes: [(path: String, mtime: UInt64, nanos: UInt32)] = []
         let fm = FileManager.default
         // Parallel small-file writer pool + dests already handed to it (for
         // ordering barriers: duplicate paths, hardlink targets).
@@ -4105,10 +4125,31 @@ final class TarReader {
                         // 值為十進位秒數，可帶小數（GNU tar 寫的是 "1789598174.9740288"）；
                         // 小數捨去，標頭欄位同樣沒有容納它的空間。負值（1970 年之前）或無法
                         // 解析的值，沿用標頭欄位：UInt64 表示不了前者，而解壓端通篇都是 UInt64。
+                        // The fraction is kept now, as nanoseconds (up to nine digits,
+                        // padded on the right: GNU's seven-digit ".9740288" is 974028800 ns),
+                        // and restored on extraction. Until 2026-09-27 it was dropped, so a
+                        // file came back at whole seconds even though swift_tar itself now
+                        // writes the fraction, and bsdtar restores it.
+                        // 小數部分現在會保留為奈秒（至多九位，右側補零：GNU 的七位
+                        // ".9740288" 即 974028800 ns），並在解壓時還原。2026-09-27 之前它被捨去，
+                        // 所以檔案解出後只有整秒——即使 swift_tar 自己現在會寫入小數，而
+                        // bsdtar 會還原它。
                         case "mtime":
-                            let whole = val.split(separator: ".", maxSplits: 1,
-                                                  omittingEmptySubsequences: false).first
-                            if let whole = whole, let v = UInt64(whole) { paxMtime = v }
+                            let parts = val.split(separator: ".", maxSplits: 1,
+                                                  omittingEmptySubsequences: false)
+                            if let whole = parts.first, let v = UInt64(whole) {
+                                paxMtime = v
+                                paxMtimeNanos = 0
+                                if parts.count == 2 {
+                                    let digits = parts[1].prefix(9)
+                                    if !digits.isEmpty, digits.allSatisfy({ ("0"..."9").contains($0) }),
+                                       let n = UInt32(digits) {
+                                        var scale: UInt32 = 1
+                                        for _ in digits.count..<9 { scale *= 10 }
+                                        paxMtimeNanos = n * scale
+                                    }
+                                }
+                            }
                         default:         break
                         }
                     }
@@ -4141,7 +4182,10 @@ final class TarReader {
             if let l = paxLink { linkname = l }
             if let s = paxSize { size = s }
             let mtime = paxMtime ?? headerMtime
-            paxPath = nil; paxLink = nil; paxSize = nil; paxMtime = nil
+            // The header field holds whole seconds only; a fraction exists only with a pax record.
+            // 標頭欄位只有整秒；只有帶 pax 記錄時才有小數。
+            let mtimeNanos: UInt32 = paxMtime != nil ? paxMtimeNanos : 0
+            paxPath = nil; paxLink = nil; paxSize = nil; paxMtime = nil; paxMtimeNanos = 0
             if let n = gnuLongName { name = n; gnuLongName = nil }
             if let l = gnuLongLink { linkname = l; gnuLongLink = nil }
 
@@ -4291,7 +4335,7 @@ final class TarReader {
 #if !os(Windows)
                 chmod(dest, mode_t(mode))
 #endif
-                dirTimes.append((dest, mtime))
+                dirTimes.append((dest, mtime, mtimeNanos))
             case UInt8(ascii: "2"):
                 // A queued write to the same name must land before removeItem,
                 // or the worker would recreate the file after the symlink was
@@ -4392,11 +4436,7 @@ final class TarReader {
                     // utimensat, not a new one.
                     // 使用 `exactly:`，理由見 posixWriteFile 中的「mtimeOutOfRange」。超出範圍
                     // 的值是略過而非回報，那是本分支對 utimensat 失敗的既有政策，並非新訂。
-                    if let t = time_t(exactly: mtime) {
-                        var ts = [timespec(tv_sec: t, tv_nsec: 0),
-                                  timespec(tv_sec: t, tv_nsec: 0)]
-                        _ = utimensat(AT_FDCWD, dest, &ts, AT_SYMLINK_NOFOLLOW)
-                    }
+                    posixSetTimes(dest, mtime, mtimeNanos)
 #endif
                 }
             case UInt8(ascii: "6"):
@@ -4441,8 +4481,7 @@ final class TarReader {
                 // 與封存所記錄的內容產生一個無聲的差異。
                 chmod(dest, mode_t(mode))
                 if options.restoreMtime {
-                    try? fm.setAttributes([.modificationDate:
-                        Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+                    posixSetTimes(dest, mtime, mtimeNanos)
                 }
 #endif
             case UInt8(ascii: "1"):
@@ -4515,7 +4554,7 @@ final class TarReader {
 #else
                     try? fm.createDirectory(atPath: dest, withIntermediateDirectories: true)
 #endif
-                    dirTimes.append((dest, mtime))
+                    dirTimes.append((dest, mtime, mtimeNanos))
                     continue
                 }
                 // Small files go to the pool, large ones stream inline. The
@@ -4570,7 +4609,7 @@ final class TarReader {
                         }
                         eprint("swift_tar: warning: '\(rel)' overwrites '\(clash)' (case-insensitive destination) / 警告：'\(rel)' 覆蓋了 '\(clash)'（目的地不區分大小寫）")
                     }
-                    pool.submit(dest: dest, data: data, mtime: mtime, mode: mode)
+                    pool.submit(dest: dest, data: data, mtime: mtime, mtimeNanos: mtimeNanos, mode: mode)
                     wroteViaPool = true
                 } else {
                     // Large file (or list mode): inline streaming. A queued
@@ -4632,8 +4671,7 @@ final class TarReader {
                 if !wroteViaPool {
                     chmod(dest, mode_t(mode))
                     if options.restoreMtime {
-                        try? fm.setAttributes([.modificationDate:
-                            Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+                        posixSetTimes(dest, mtime, mtimeNanos)
                     }
                 }
 #endif
@@ -4699,12 +4737,16 @@ final class TarReader {
         // `FILE_FLAG_OPEN_REPARSE_POINT` is harmless on a plain directory -- with
         // no reparse point to follow, it opens the directory itself.
         if options.restoreMtime {
-            for (path, mtime) in dirTimes.sorted(by: { $0.path.count > $1.path.count }) {
+            // Fields by name rather than destructured: the Windows branch has no use for
+            // `nanos` (winSetLinkMtime takes whole seconds), and an unused binding there
+            // would be a warning on that platform alone.
+            // 以欄位名稱取值而不解構：Windows 分支用不到 `nanos`（winSetLinkMtime 只收整秒），
+            // 未使用的綁定會只在那個平台產生警告。
+            for d in dirTimes.sorted(by: { $0.path.count > $1.path.count }) {
 #if os(Windows)
-                winSetLinkMtime(path, mtime)
+                winSetLinkMtime(d.path, d.mtime)
 #else
-                try? fm.setAttributes([.modificationDate:
-                    Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: path)
+                posixSetTimes(d.path, d.mtime, d.nanos)
 #endif
             }
         }

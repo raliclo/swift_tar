@@ -2173,6 +2173,69 @@ eq "whole-second mtime: no pax mtime record, so no extra header" "0" \
 eq "sub-second mtime: the reference tar's -u does not re-add the file" "1" \
    "$("$SYS_TAR" -t -f "$SUB/frac.tar" 2>/dev/null | tr -d '\r' | grep -c '^frac.txt$' || true)"
 
+# ---- extraction restores the sub-second mtime too ----
+# The reader kept only whole seconds of a pax `mtime=` record, so everything came back at
+# .000000000 even from archives that carry the fraction -- swift_tar's own since 46fc9b8,
+# and bsdtar's. Decided 2026-09-27 that it needs a fix. Each kind of entry sets its time
+# through a different path, so each is checked: a small file (write pool, futimens), a
+# file over the 4 MiB pool limit (inline), a directory (set last), a symlink (the link
+# itself) and a FIFO. Files, directory and FIFO are compared with -nt both ways against a
+# reference touched to the same instant -- zsh's -nt resolves one nanosecond -- and the
+# symlink with stat, since -nt follows links.
+# 讀取端只保留 pax `mtime=` 記錄的整秒，所以即使封存帶有小數——swift_tar 自 46fc9b8 起自己
+# 寫的、以及 bsdtar 寫的——解出後一律是 .000000000。2026-09-27 決定要修。不同種類的項目走
+# 不同的設定路徑，所以逐一檢查：小檔（寫入池，futimens）、超過 4 MiB 門檻的檔案（inline）、
+# 目錄（最後才設定）、symlink（連結本身）與 FIFO。檔案、目錄與 FIFO 以 -nt 雙向與設成同一
+# 時刻的參考檔比較——zsh 的 -nt 分辨得出 1 ns——symlink 則用 stat，因為 -nt 會跟隨連結。
+NS="$TMP/nsx"; rm -rf "$NS"; mkdir -p "$NS/src/d" "$NS/out"
+ns_t='2026-01-01T12:00:00.123456789'
+print -r -- small > "$NS/src/small.txt"
+head -c $(( (4 << 20) + 1 )) /dev/zero > "$NS/src/big.bin"
+print -r -- inner > "$NS/src/d/inner.txt"
+ln -s small.txt "$NS/src/link" 2>/dev/null || true
+command -v mkfifo >/dev/null 2>&1 && mkfifo "$NS/src/fifo" 2>/dev/null || true
+print -r -- ref > "$NS/ref"
+# `|| true`: a touch without -d, or without -h for the link, fails the checks below with
+# its own message visible, rather than ending the suite under `set -e`.
+# `|| true`：不支援 -d、或對連結不支援 -h 的 touch，會讓下方檢查失敗並印出自己的訊息，而不是
+# 在 `set -e` 之下結束整個套件。
+touch -d "$ns_t" "$NS/src/small.txt" "$NS/src/big.bin" "$NS/src/d/inner.txt" "$NS/ref" || true
+[ -p "$NS/src/fifo" ] && { touch -d "$ns_t" "$NS/src/fifo" || true; }
+[ -L "$NS/src/link" ] && { touch -h -d "$ns_t" "$NS/src/link" || true; }
+touch -d "$ns_t" "$NS/src/d" || true
+( cd "$NS" && "$ST" -c -f ns.tar -C src . ) >/dev/null 2>&1 || true
+"$ST" -x -f "$NS/ns.tar" -C "$NS/out" >/dev/null 2>&1 || true
+same_instant() {  # <path> -> same | differs | absent
+  [ -e "$1" ] || { print -r -- absent; return; }
+  if [[ $1 -nt $NS/ref || $NS/ref -nt $1 ]]; then print -r -- differs; else print -r -- same; fi
+}
+eq "sub-second mtime restored: small file (write pool)" "same" "$(same_instant "$NS/out/small.txt")"
+eq "sub-second mtime restored: file over the pool limit (inline)" "same" "$(same_instant "$NS/out/big.bin")"
+eq "sub-second mtime restored: directory" "same" "$(same_instant "$NS/out/d")"
+if [ -p "$NS/src/fifo" ]; then
+  eq "sub-second mtime restored: FIFO" "same" "$(same_instant "$NS/out/fifo")"
+fi
+if [ -L "$NS/src/link" ]; then
+  # GNU stat first: BSD stat has no -c and fails, and then answers the second form.
+  # `command stat`, not `stat`: this file loads zsh/stat earlier (`zmodload zsh/stat`),
+  # after which `stat` is zsh's builtin, which understands neither form and printed
+  # nothing. Both sides were then "", equal, and this check passed against a binary that
+  # restored .000000000 -- caught because it passed before the fix as well as after. An
+  # empty source value now fails instead of comparing.
+  # 先試 GNU stat：BSD stat 沒有 -c 會失敗，改由第二種寫法回答。用 `command stat` 而非
+  # `stat`：本檔稍早載入了 zsh/stat（`zmodload zsh/stat`），之後 `stat` 就是 zsh 的內建指令，
+  # 兩種寫法它都不認得，什麼也不印。於是兩邊都是 ""、相等，這條檢查對一個只還原到
+  # .000000000 的執行檔也通過了——之所以被發現，是因為它在修正前後都通過。現在來源值為空時
+  # 直接判為失敗，不再拿來比較。
+  link_ns() { command stat -c %.9Y "$1" 2>/dev/null || command stat -f %Fm "$1"; }
+  src_ns=$(link_ns "$NS/src/link"); out_ns=$(link_ns "$NS/out/link")
+  if [[ -z $src_ns ]]; then
+    bad "sub-second mtime restored: symlink (could not read the source link's time)"
+  else
+    eq "sub-second mtime restored: symlink (the link itself)" "$src_ns" "$out_ns"
+  fi
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

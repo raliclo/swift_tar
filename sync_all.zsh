@@ -82,7 +82,7 @@ print -- "  repo: $ROOT"
 (( FETCH )) && print -- "  fetching remotes… / 正在 fetch…"
 print --
 
-typeset -a MOVED STALE
+typeset -a MOVED STALE FETCHFAIL
 for m in $NAMES; do
   br=$(git config -f .gitmodules --get "submodule.$m.branch" 2>/dev/null || true)
   private=""; [[ ${PRIVATE[(Ie)$m]} -ne 0 ]] && private=" [private]"
@@ -104,7 +104,24 @@ for m in $NAMES; do
   dirty=""
   [[ -n $(git -C $m status --porcelain 2>/dev/null) ]] && dirty=" (有本地修改／dirty)"
 
-  (( FETCH )) && git -C $m fetch --quiet origin 2>/dev/null || true
+  # A failed fetch is reported, not swallowed. This line used to end in
+  # `2>/dev/null || true`, so with the network down every submodule was compared against
+  # its stale local origin/<branch> and printed "✓ at tip" with nothing on screen to say
+  # the comparison was against yesterday. The report still runs -- the local refs are
+  # worth seeing -- but each affected line is marked, --update refuses to move that pin
+  # onto a ref that may be old, and the run exits 1. (2026-09-27 review.)
+  # fetch 失敗要回報，不吞掉。這一行原本以 `2>/dev/null || true` 結尾，於是斷線時每個
+  # submodule 都拿本地舊的 origin/<分支> 比對並印出「✓ 已是 tip」，畫面上沒有任何東西說明
+  # 那是與過去的狀態比。報告仍照常產生——本地的 ref 仍值得一看——但受影響的各列會被標記，
+  # --update 拒絕把該 pin 移到一個可能過期的 ref 上，且整次執行以 1 結束。（2026-09-27 審查）
+  fetchnote=""
+  if (( FETCH )); then
+    if ! fetch_err=$(git -C $m fetch --quiet origin 2>&1); then
+      FETCHFAIL+=("$m")
+      fetchnote="  ⚠ fetch 失敗，依本地舊的 ref／fetch failed, stale ref"
+      print -ru2 -- "  $m: fetch failed / fetch 失敗: $fetch_err"
+    fi
+  fi
 
   pin=$(git -C $m rev-parse --short HEAD 2>/dev/null || print -r -- "?")
   desc=$(git -C $m describe --tags HEAD 2>/dev/null | head -1 || true)
@@ -125,11 +142,11 @@ for m in $NAMES; do
   fi
 
   if [[ $behind == 0 ]]; then
-    print -- "  ✓ $m$private — 已是 origin/$br 的 tip / at tip  ($pin${desc:+ $desc})$dirty"
+    print -- "  ✓ $m$private — 已是 origin/$br 的 tip / at tip  ($pin${desc:+ $desc})$dirty$fetchnote"
     continue
   fi
 
-  print -- "  ↑ $m$private — 落後 $behind / behind  ($pin${desc:+ $desc} → $tip, $onbranch)$dirty"
+  print -- "  ↑ $m$private — 落後 $behind / behind  ($pin${desc:+ $desc} → $tip, $onbranch)$dirty$fetchnote"
 
   wanted=0
   (( ALL )) && [[ ${PRIVATE[(Ie)$m]} -eq 0 ]] && wanted=1
@@ -138,6 +155,10 @@ for m in $NAMES; do
 
   if [[ -n $dirty ]]; then
     print -- "      跳過：有本地修改 / skipped: local changes"
+    continue
+  fi
+  if [[ -n $fetchnote ]]; then
+    print -- "      跳過：fetch 失敗，origin/$br 可能不是最新 / skipped: fetch failed, origin/$br may be old"
     continue
   fi
   git -C $m checkout --quiet --detach "origin/$br"
@@ -151,10 +172,17 @@ if (( ${#STALE} )); then
   print -- "無法處理 / could not handle: ${STALE[*]}"
 fi
 
+rc=0
+if (( ${#FETCHFAIL} )); then
+  print -- "fetch 失敗 / fetch failed: ${FETCHFAIL[*]} —— 標 ⚠ 的各列是與本地舊的 ref 比對，不是遠端現況"
+  print -- "  rows marked ⚠ compare against stale local refs, not the remote"
+  rc=1
+fi
+
 if (( ${#MOVED} == 0 )); then
   (( UPDATE )) && print -- "沒有任何 pin 被移動 / no pin was moved" \
                 || print -- "只回報，未改動任何東西。加 --update 才會移動 / report only; --update moves pins"
-  exit 0
+  exit $rc
 fi
 
 # 移動了 pin 就一定要跟著這些步驟。把它們印出來，而不是假設下一個人記得——這棵樹已經
@@ -183,3 +211,4 @@ print -- "  5. 效能可能改變：verifications/profile/extract_shapes.zsh --r
 print -- "     Performance may move; re-measure."
 print -- "  6. 最後才提交 gitlink，且訊息要寫明升級了什麼、在哪些平台驗過"
 print -- "     Commit the gitlink last, saying what moved and where it was verified."
+exit $rc

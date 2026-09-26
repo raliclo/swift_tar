@@ -164,15 +164,6 @@ mkdir -p build release
 TEMP_VERSION="build/swift_tar_version.swift"
 trap 'rm -f "$TEMP_CLI"' EXIT
 
-log_msg "Generate version constants / 產生版本常數"
-# zsh, not sh: the callee declares `#!/usr/bin/env zsh` and `sh script` ignores
-# the shebang, so it would only keep working for as long as that script happens
-# to stay POSIX. Same for build_libarchive.zsh below.
-# 使用 zsh 而非 sh：被呼叫者宣告 `#!/usr/bin/env zsh`，而 `sh script` 會忽略
-# shebang，故只在該腳本剛好維持 POSIX 的期間內可行。下方的 build_libarchive.zsh
-# 亦同。
-zsh ./generate_version.zsh "$TEMP_VERSION"
-
 log_msg "Compile the libarchive ZIP bridge / 編譯 libarchive ZIP bridge"
 "$CLANG" -O2 -fPIC -I"$SYSROOT/include" \
     -c libarchive_zip_bridge.c -o build/libarchive_zip_bridge.o
@@ -183,6 +174,28 @@ if [[ "${LIBARCHIVE_STATIC:-0}" == 1 ]]; then
     zsh ./build_libarchive.zsh
     ARCHIVE_LINK=("build/libarchive-$(swift_tar_platform)/libarchive/libarchive.a")
 fi
+
+# After build_libarchive.zsh, not before. generate_version.zsh reuses the stamp when
+# the rest of version-linux.txt matches the committed copy, and build_libarchive.zsh
+# is what writes libarchive_version/commit there. Called first, it compared against
+# the previous build's libarchive and reused the stamp across a pin move -- the same
+# ordering f4386b7 fixed in compile_tar.zsh on 2026-09-20, missed here until the
+# 2026-09-27 review.
+#
+# zsh, not sh: the callee declares `#!/usr/bin/env zsh` and `sh script` ignores
+# the shebang, so it would only keep working for as long as that script happens
+# to stay POSIX. Same for build_libarchive.zsh above.
+#
+# 放在 build_libarchive.zsh 之後，不是之前。generate_version.zsh 在 version-linux.txt
+# 其餘內容與已提交版本相同時會重用戳記，而寫入 libarchive_version/commit 的正是
+# build_libarchive.zsh。先呼叫它，就會拿上一次建置的 libarchive 來比對，於是 pin 移動後
+# 戳記仍被重用——與 f4386b7 於 2026-09-20 在 compile_tar.zsh 修掉的順序問題相同，這裡
+# 一直漏到 2026-09-27 審查才發現。
+#
+# 使用 zsh 而非 sh：被呼叫者宣告 `#!/usr/bin/env zsh`，而 `sh script` 會忽略
+# shebang，故只在該腳本剛好維持 POSIX 的期間內可行。上方的 build_libarchive.zsh 亦同。
+log_msg "Generate version constants / 產生版本常數"
+zsh ./generate_version.zsh "$TEMP_VERSION"
 
 ZLIB_MODULEMAP="build/zlib-sysroot.modulemap"
 cat > "$ZLIB_MODULEMAP" <<MODMAP

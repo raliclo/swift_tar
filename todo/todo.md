@@ -223,13 +223,21 @@ attribute」並以 rc=1 結束。同一段解析在 `scanTarEntries`（`-r`/`-u`
 of…」且 rc=1；**`-cf v.tar -- -v n.txt` 靜默開啟 verbose**（印出 `a -v`、`a n.txt`）。bsdtar
 兩者皆正常。旗標偵測應只看 `--` 之前。
 
-## 🔴 `compile_tar-linux.zsh` 仍在 libarchive 建置之前發戳記 / The Linux build still stamps before building libarchive
+## `compile_tar-linux.zsh` 仍在 libarchive 建置之前發戳記 ▸ ✅ 已修正 2026-09-27 / The Linux build still stamps before building libarchive
+
+**修正**：`generate_version.zsh` 移到 libarchive 區塊之後、`swiftc` 之前。只在 macOS 上做了
+語法檢查，**沒有在 Linux 上實際執行**。
 
 `f4386b7` 只修了 `compile_tar.zsh`。Linux 腳本第 174 行呼叫 `generate_version.zsh`，第 183
 行才（在 `LIBARCHIVE_STATIC=1` 時）執行 `build_libarchive.zsh`。libarchive 升版後兩個執行檔
 的 `--version` 相同——與 2026-09-20 那次事故同形，只是換了平台。
 
-## 🔴 `extract_shapes.zsh` 把執行失敗記成「很快」/ `extract_shapes.zsh` records a failed run as a fast one
+## `extract_shapes.zsh` 把執行失敗記成「很快」▸ ✅ 已修正 2026-09-27 / `extract_shapes.zsh` records a failed run as a fast one
+
+**修正**：`ms()` 檢查被量測指令的退出碼，失敗時印出 stderr 並回傳 1；因為每次呼叫都是
+`set -e` 下的 `x=$(ms ...)`，整輪會中止，不寫入任何資料。`BIN` 改為依 `$PLAT` 選擇，不退而
+求其次。對照組：以取出的函式本文測試，`ms true` 正常計時、`ms false` 以 rc=1 中止並印出原因；
+穩定狀態下的額外成本為 0 ms。
 
 `ms()` 以 `>/dev/null 2>&1` 丟掉被量測指令的退出碼。swift_tar 若崩潰或 rc=1 立即結束，
 那一輪只有幾毫秒，比值顯示「swift_tar 較快」，`--record` 還會寫進 csv2。**2026-09-25 那三列
@@ -237,12 +245,20 @@ of…」且 rc=1；**`-cf v.tar -- -v n.txt` 靜默開啟 verbose**（印出 `a 
 本身證明不了。另外 `BIN` 以「先找到哪個」挑選，`record_release.zsh` 早已因同一問題改為依
 `$PLAT` 選擇。
 
-## 🔴 `sync_all.zsh` 吞掉 fetch 失敗，並依過期的 ref 回報「已是 tip」/ `sync_all.zsh` swallows fetch failures
+## `sync_all.zsh` 吞掉 fetch 失敗，並依過期的 ref 回報「已是 tip」▸ ✅ 已修正 2026-09-27 / `sync_all.zsh` swallows fetch failures
+
+**修正**：fetch 失敗時印出 git 的錯誤、在該列標上 ⚠、`--update` 拒絕移動那個 pin，整次執行
+以 1 結束；報告本身仍照常產生。對照組：以一次性的 `GIT_CONFIG_*` 把 https 網址改寫到無法
+解析的主機（不動任何設定檔），五個 https 的 submodule 全部標 ⚠ 且 rc=1；正常情況 rc=0。
 
 第 107 行 `git -C $m fetch --quiet origin 2>/dev/null || true`。斷線或認證失敗時，每個
 submodule 都依本地舊的 remote ref 顯示「✓ 已是 tip」，畫面上沒有任何失敗跡象。
 
-## 🔴 `build_libarchive.zsh` 靜默 patch 還原失敗 / `build_libarchive.zsh` hides a failed patch revert
+## `build_libarchive.zsh` 靜默 patch 還原失敗 ▸ ✅ 已修正 2026-09-27 / `build_libarchive.zsh` hides a failed patch revert
+
+**修正**：trap 改呼叫 `revert_patches`，還原失敗時把輸出印到 stderr 並讓建置失敗；建置本身已
+失敗時保留原本的退出碼。對照組：以取出的函式本文搭配假的 `apply_patches.zsh` 測四種組合——
+還原成功／建置成功 rc=0 且安靜，還原失敗 rc=1 並印出原因，建置失敗時兩種情況都保留 rc=3。
 
 第 50 行 EXIT trap 以 `>/dev/null 2>&1 || true` 包住 `apply_patches.zsh --revert`。還原失敗時
 建置仍回報成功，submodule 留在髒狀態，之後 `sync_all.zsh --update libarchive` 永遠印「跳過」

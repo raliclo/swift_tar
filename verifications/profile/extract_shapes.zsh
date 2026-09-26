@@ -56,9 +56,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-BIN="$ROOT/release/swift_tar"
-[[ -f $BIN ]] || BIN="$ROOT/release/swift_tar.exe"
-[[ -f $BIN ]] || { print -ru2 -- "no built swift_tar; run the build first / 找不到已建置的 swift_tar"; exit 1 }
+# By $PLAT, not first-one-found -- the same fix record_release.zsh already carries.
+# WSL builds land in the Windows checkout's release/, so both files can exist and the
+# old order picked the Linux ELF on Windows. No fallback: timing the other platform's
+# binary would be the wrong row, not a missing one.
+# 依 $PLAT 選擇，而非「先找到哪個就用哪個」——與 record_release.zsh 既有的修法相同。WSL 的
+# 建置產物會落在 Windows checkout 的 release/，兩個檔案可能同時存在，舊的順序在 Windows 上
+# 會挑到 Linux ELF。不退而求其次：量到另一個平台的執行檔是一列錯的資料，而不是缺一列。
+case $PLAT in
+  win) BIN="$ROOT/release/swift_tar.exe" ;;
+  *)   BIN="$ROOT/release/swift_tar" ;;
+esac
+[[ -f $BIN ]] || { print -ru2 -- "no built swift_tar for $PLAT at $BIN; run the build first / 找不到本平台已建置的 swift_tar"; exit 1 }
 
 # 語料要放在 I/O 最便宜的地方。FAQ 的結論是「差距在 I/O 最便宜時最大」，所以在慢的
 # 檔案系統上量會把要看的東西埋掉——那裡量到的是磁碟，不是 tar。
@@ -91,7 +100,32 @@ done
 [[ -n $REF ]] || { print -ru2 -- "no bsdtar or GNU tar found to compare against / 找不到可比對的 bsdtar 或 GNU tar"; exit 1 }
 
 zmodload zsh/datetime
-ms() { local t0=$EPOCHREALTIME; "$@" >/dev/null 2>&1; local t1=$EPOCHREALTIME; printf "%.0f" $(( (t1-t0)*1000 )); }
+# A failed run is fatal, not a fast one. This used to be `"$@" >/dev/null 2>&1`, so a
+# swift_tar that crashed or exited 1 at once was timed at a few milliseconds, the ratio
+# read "swift_tar is faster", and --record wrote it into the csv2. Found by the
+# 2026-09-27 review; the 2026-09-25 mac rows went through the old form.
+#
+# Returning non-zero is enough to stop the run: every call is `x=$(ms ...)` under
+# `set -e`, and an assignment takes the substitution's status. stderr goes to a file
+# instead of /dev/null so the reason is printed; opening it costs microseconds against
+# a millisecond result.
+#
+# 失敗的一次執行是致命錯誤，不是很快的一次。這裡原本是 `"$@" >/dev/null 2>&1`，所以一個
+# 立即崩潰或以 1 結束的 swift_tar 會被計為幾毫秒，比值顯示「swift_tar 較快」，--record
+# 還會把它寫進 csv2。2026-09-27 審查找到；2026-09-25 的 mac 各列就經過舊寫法。
+#
+# 回傳非零即足以中止：每次呼叫都是 `set -e` 下的 `x=$(ms ...)`，而指派會取用命令替換的
+# 狀態。stderr 改寫入檔案而非 /dev/null，以便印出原因；開檔的成本是微秒，而結果是毫秒。
+ms() {
+  local t0=$EPOCHREALTIME err="$WORK/ms.stderr"
+  if ! "$@" >/dev/null 2>"$err"; then
+    print -ru2 -- "measured command failed, nothing recorded / 被量測的指令失敗，未記錄任何資料：$*"
+    cat "$err" >&2
+    return 1
+  fi
+  local t1=$EPOCHREALTIME
+  printf "%.0f" $(( (t1-t0)*1000 ))
+}
 
 STAMP=$(sed -n 's/^swift_tar_version=//p' "$ROOT/version-$PLAT.txt" 2>/dev/null | sed -n '1p')
 [[ -n $STAMP ]] || STAMP="(none)"
@@ -133,7 +167,7 @@ for shape in "20 8192" "200 800" "2000 80"; do
     (( a < amin )) && amin=$a
     (( b < bmin )) && bmin=$b
   done
-  rm -rf "$WORK/out" "$WORK/a.tar"
+  rm -rf "$WORK/out" "$WORK/a.tar" "$WORK/ms.stderr"
 
   ratio=$(printf "%.2f" $(( amin * 1.0 / bmin )))
   printf "  %-16s %6s ms  %6s ms   %sx\n" "$label" "$amin" "$bmin" "$ratio"

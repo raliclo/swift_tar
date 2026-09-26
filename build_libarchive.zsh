@@ -46,8 +46,32 @@ git submodule update --init libarchive
 # the next person cannot tell the patch from their own edit. Safe because every build
 # applies first, so there is no window in which an incremental compile quietly uses
 # unpatched sources.
+#
+# A failed revert is loud and fails the build. This trap used to be
+# `--revert >/dev/null 2>&1 || true`, so a revert that failed left the submodule dirty
+# while the build reported success -- and then sync_all.zsh --update libarchive printed
+# "skipped: local changes" forever, the exact outcome described above, with nothing on
+# screen to say why (2026-09-27 review). The output is kept only for the failure case:
+# a successful revert is routine and says nothing worth reading. A build that had
+# already failed keeps its own status rather than being replaced by 1.
+#
+# 還原失敗時要大聲說，並讓建置失敗。這個 trap 原本是 `--revert >/dev/null 2>&1 || true`，
+# 所以還原失敗會讓 submodule 留在髒狀態，建置卻回報成功——接著 sync_all.zsh --update
+# libarchive 就永遠印「跳過：有本地修改」，正是上方描述的結局，而畫面上沒有任何東西說明
+# 原因（2026-09-27 審查）。輸出只在失敗時保留：成功的還原是例行公事，沒有值得讀的內容。
+# 若建置本身已經失敗，保留它自己的退出碼，而不是換成 1。
+revert_patches() {
+    local st=$? out
+    if ! out=$(./patch/apply_patches.zsh --revert 2>&1); then
+        print -ru2 -- "[FAIL] patch revert failed; libarchive/ is left modified / patch 還原失敗，libarchive/ 仍留有修改："
+        print -ru2 -- "$out"
+        print -ru2 -- "       sync_all.zsh --update libarchive will skip it until this is fixed / 修好之前 sync_all.zsh --update libarchive 會一直跳過它"
+        (( st == 0 )) && st=1
+    fi
+    exit $st
+}
 if [ -x ./patch/apply_patches.zsh ]; then
-    trap './patch/apply_patches.zsh --revert >/dev/null 2>&1 || true' EXIT
+    trap revert_patches EXIT
     ./patch/apply_patches.zsh
 fi
 

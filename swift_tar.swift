@@ -2958,7 +2958,7 @@ final class TarWriter {
     /// Emit one entry header (+ pax header first if needed).
     /// 送出一筆項目標頭（必要時先送 pax 擴充標頭）。
     private func writeEntryHeader(name: String, mode: UInt32, uid: UInt32, gid: UInt32,
-                                  size: UInt64, mtime: UInt64,
+                                  size: UInt64, mtime: UInt64, mtimeNanos: UInt32 = 0,
                                   typeflag: UInt8, linkname: String) throws {
         // A pax "path" record is required for two separate reasons, and only the
         // first is about length. pax records are defined to be UTF-8, so the
@@ -3025,10 +3025,28 @@ final class TarWriter {
         // 標頭填 0o77777777777 而非 0，與 GNU tar 在同一情況下的寫法相同：忽略該記錄的讀取器
         // 會落在欄位能表達的最接近時間，而不是 1970 年。pax 標頭自己的 mtime 也用同一個值，
         // 因為它走的是同一個欄位。
+        //
+        // Sub-second precision goes in the same record, as bsdtar writes it: seconds, a
+        // dot, nine digits of nanoseconds. Decided 2026-09-27 to follow bsdtar's result
+        // rather than its trigger. bsdtar only adds the fraction when it already writes a
+        // pax header for another reason, and on macOS 27.2 every file carries the
+        // com.apple.provenance xattr, so every one of its entries has it. swift_tar stored
+        // whole seconds, so `bsdtar -u` over a swift_tar archive re-added any file whose
+        // mtime had a fraction -- nearly all of them. The cost is a pax header per such
+        // entry, about 1 KB each; the header field still holds the whole seconds for a
+        // reader that ignores the record.
+        //
+        // 子秒精度放在同一筆記錄裡，寫法與 bsdtar 相同：秒、小數點、九位奈秒。2026-09-27 決定
+        // 跟隨 bsdtar 的結果而非其觸發條件。bsdtar 只在本來就要為其他原因寫 pax 標頭時才順帶
+        // 寫小數，而 macOS 27.2 上每個檔案都帶 com.apple.provenance 延伸屬性，所以它的每個成員都
+        // 有。swift_tar 原本只存整秒，於是對 swift_tar 封存執行 `bsdtar -u`，凡 mtime 有小數的
+        // 檔案——幾乎全部——都會被重新加入。代價是每個這類成員多一個 pax 標頭，約 1 KB；標頭
+        // 欄位仍存整秒，給忽略該記錄的讀取器用。
         var hdrMtime = mtime
-        if mtime >= (1 << 33) {
-            pax.append(TarWriter.paxRecord("mtime", String(mtime)))
-            hdrMtime = (1 << 33) - 1
+        if mtime >= (1 << 33) || mtimeNanos != 0 {
+            let fraction = mtimeNanos != 0 ? "." + String(format: "%09u", mtimeNanos) : ""
+            pax.append(TarWriter.paxRecord("mtime", String(mtime) + fraction))
+            if mtime >= (1 << 33) { hdrMtime = (1 << 33) - 1 }
         }
         if !pax.isEmpty {
             try writePaxHeader(records: pax, mtime: hdrMtime)
@@ -3465,8 +3483,10 @@ final class TarWriter {
         // 兩者型別同為 struct timespec，僅名稱不同。
         #if os(Linux)
         let mtime = UInt64(max(0, st.st_mtim.tv_sec))
+        let mtimeNanos = UInt32(clamping: max(0, st.st_mtim.tv_nsec))
         #else
         let mtime = UInt64(max(0, st.st_mtimespec.tv_sec))
+        let mtimeNanos = UInt32(clamping: max(0, st.st_mtimespec.tv_nsec))
         #endif
 
         // -u: skip non-directory entries that are not newer than the archived
@@ -3484,7 +3504,8 @@ final class TarWriter {
             if !skipForUpdate(name, mtime) {
                 if verbose { eprint("a \(name)/") }
                 try writeEntryHeader(name: name + "/", mode: mode, uid: uid, gid: gid,
-                                     size: 0, mtime: mtime, typeflag: UInt8(ascii: "5"), linkname: "")
+                                     size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
+                                     typeflag: UInt8(ascii: "5"), linkname: "")
             }
             let children = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
             for child in children.sorted() {
@@ -3494,22 +3515,24 @@ final class TarWriter {
             if verbose { eprint("a \(name)") }
             let dest = (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) ?? ""
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
-                                 size: 0, mtime: mtime, typeflag: UInt8(ascii: "2"), linkname: dest)
+                                 size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
+                                 typeflag: UInt8(ascii: "2"), linkname: dest)
         case S_IFREG:
             // Hardlink dedup, same behavior as bsdtar / 硬連結去重，行為同 bsdtar
             let key = "\(st.st_dev)/\(st.st_ino)"
             if st.st_nlink > 1, let first = seenInodes[key] {
                 if verbose { eprint("a \(name) link to \(first)") }
                 try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
-                                     size: 0, mtime: mtime, typeflag: UInt8(ascii: "1"),
-                                     linkname: first)
+                                     size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
+                                     typeflag: UInt8(ascii: "1"), linkname: first)
                 return
             }
             if st.st_nlink > 1 { seenInodes[key] = name }
             if verbose { eprint("a \(name)") }
             let size = UInt64(st.st_size)
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
-                                 size: size, mtime: mtime, typeflag: UInt8(ascii: "0"), linkname: "")
+                                 size: size, mtime: mtime, mtimeNanos: mtimeNanos,
+                                 typeflag: UInt8(ascii: "0"), linkname: "")
             guard let fh = FileHandle(forReadingAtPath: path) else {
                 throw TarError.io("cannot open '\(path)' / 無法開啟 '\(path)'")
             }
@@ -3544,7 +3567,8 @@ final class TarWriter {
             // 前者需要 root，後者無法由封存有意義地重建。
             if verbose { eprint("a \(name)") }
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
-                                 size: 0, mtime: mtime, typeflag: UInt8(ascii: "6"), linkname: "")
+                                 size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
+                                 typeflag: UInt8(ascii: "6"), linkname: "")
         default:
             eprint("swift_tar: skipping special file '\(path)' / 略過特殊檔案 '\(path)'")
         }

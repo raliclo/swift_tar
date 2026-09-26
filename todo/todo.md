@@ -397,6 +397,9 @@ AppleDouble 成員：
 - **`test_blind_findings.zsh` 的 `./` 區塊**（`939d34d`、`c86a921`）：改成對照組比對、整秒
   mtime、單一列表工具，都只在 bsdtar 3.5.3 上量過；要在 bsdtar 3.8.8 與 GNU tar 上確認仍通過。
 - **`extract_shapes.zsh` 依 `$PLAT` 選擇執行檔**（`dd9b63a`）：在 Windows 上確認選到 `.exe`。
+- **子秒 mtime**：POSIX 已寫 pax `mtime=` 小數；Windows 分支的 `winStat` 只有整秒，所以
+  Windows 建立的封存仍只存整秒。確認該平台上 bsdtar `-u` 的行為，再決定是否要讓 `winStat`
+  帶出 100 ns 精度。WSL 上確認 `touch -d` 與新測試通過。
 - **其餘平台無關的修正**（`--` 參數、Poly1305、RGB1 溢位、`sync_all.zsh`）：跑完整套件確認。
 
 ## 🔴 `build_zlib-win.zsh` 改為與其他建置腳本相同的寫法 / Make `build_zlib-win.zsh` rewrite version-win.txt like the other builders
@@ -413,7 +416,19 @@ AppleDouble 成員：
 改為相同規則，並補一條測試：一個寫不進去的成員之後的成員仍要解出。`5af2a12` 當時刻意沒動
 解壓端，原因未記錄。
 
-## 🔴 tar 路徑的 mtime 精度跟隨 bsdtar / Store mtime precision the way bsdtar does
+## tar 路徑的 mtime 精度跟隨 bsdtar ▸ ✅ 已修正 2026-09-27（POSIX；Windows 見驗證清單）/ Store mtime precision the way bsdtar does
+
+**使用者選擇第 2 種讀法**：只要 mtime 有小數就寫 pax 標頭。`writeEntryHeader` 新增
+`mtimeNanos`，不為零時寫 `mtime=秒.九位奈秒`（與 bsdtar 的格式相同），標頭欄位仍存整秒；
+為零時不多寫任何東西。POSIX 分支從 `st_mtimespec`／`st_mtim` 取奈秒。
+
+**測試**：`test_blind_findings.zsh` 新增 3 條——以 `touch -d` 設定已知小數後封存裡有對應記錄；
+整秒的檔案不多寫標頭；參照 tar 的 `-u` 不再重新加入該檔案。修正前第 1、3 條失敗（沒有記錄；
+`-u` 後出現 2 筆），修正後 175/0。
+
+**實測代價**：`verifications/` 目錄約 161 個成員，封存多出 164,864 B，**每成員正好 1024 B**。
+
+**未涵蓋**：Windows 分支的 `winStat` 只提供整秒，仍存整秒；解壓端讀到小數時仍只還原整秒。
 
 **2026-09-27 決定：跟隨 bsdtar。** swift_tar 的 tar 路徑只存整秒 mtime；macOS 27.2 上系統
 bsdtar 會寫子秒精度的 pax `mtime=`，所以對 swift_tar 的封存執行 bsdtar `-u`，同一秒內改過的

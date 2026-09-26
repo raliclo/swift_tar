@@ -2059,6 +2059,36 @@ else
   echo "SKIP: -h/--dereference (no real symlink here)"
 fi
 
+# ---- sub-second mtime is stored, as bsdtar stores it ----
+# swift_tar kept whole seconds only, so `bsdtar -u` over a swift_tar archive re-added
+# every file whose mtime had a fraction -- on macOS 27.2 bsdtar's own archives carry the
+# fraction for every file. Decided 2026-09-27 to follow bsdtar: a pax `mtime=` record with
+# nine digits of nanoseconds whenever the fraction is non-zero, and nothing extra when it
+# is zero. Asserted on what is written (a known fraction set with touch -d) rather than on
+# a reference tar's -u, whose idempotence differs between versions.
+# swift_tar 原本只存整秒，所以對 swift_tar 封存執行 `bsdtar -u`，凡 mtime 帶小數的檔案都會被
+# 重新加入——而 macOS 27.2 上 bsdtar 自己的封存每個檔案都帶小數。2026-09-27 決定跟隨
+# bsdtar：小數不為零時寫一筆九位奈秒的 pax `mtime=` 記錄，為零時不多寫任何東西。斷言的是
+# 寫出的內容（以 touch -d 設定已知的小數），而不是參照 tar 的 -u——後者的冪等性因版本而異。
+SUB="$TMP/subsec"; rm -rf "$SUB"; mkdir -p "$SUB/src"
+print -r -- frac  > "$SUB/src/frac.txt"
+print -r -- whole > "$SUB/src/whole.txt"
+# `|| true` so a touch without -d support fails this block's first check, loudly (its
+# error is not hidden), rather than ending the whole suite under `set -e`.
+# 加 `|| true`：不支援 -d 的 touch 會讓本區第一條檢查失敗（錯誤訊息照常印出），而不是在
+# `set -e` 之下結束整個套件。
+touch -d '2026-01-01T12:00:00.123456789' "$SUB/src/frac.txt" || true
+touch -t 202601011200.00 "$SUB/src/whole.txt"
+"$ST" -c -f "$SUB/frac.tar"  -C "$SUB/src" frac.txt  >/dev/null 2>&1 || true
+"$ST" -c -f "$SUB/whole.tar" -C "$SUB/src" whole.txt >/dev/null 2>&1 || true
+eq "sub-second mtime: stored as a pax record with nine digits of nanoseconds" "1" \
+   "$(grep -a -c 'mtime=[0-9]*\.123456789' "$SUB/frac.tar" 2>/dev/null || true)"
+eq "whole-second mtime: no pax mtime record, so no extra header" "0" \
+   "$(grep -a -c 'mtime=' "$SUB/whole.tar" 2>/dev/null || true)"
+( cd "$SUB" && "$SYS_TAR" -u -f frac.tar -C src frac.txt ) >/dev/null 2>&1 || true
+eq "sub-second mtime: the reference tar's -u does not re-add the file" "1" \
+   "$("$SYS_TAR" -t -f "$SUB/frac.tar" 2>/dev/null | tr -d '\r' | grep -c '^frac.txt$' || true)"
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

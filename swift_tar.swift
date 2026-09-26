@@ -3677,9 +3677,9 @@ final class TarReader {
     ///
     /// The entry is safe to keep because the threat is a symlink planted by an
     /// earlier entry *of this same archive*, and only this extraction can plant
-    /// one. `forgetVerifiedDirectory` is therefore called wherever a symlink is
-    /// created, which is the single way a cached path can stop being what it
-    /// was. A symlink planted by a *different* process mid-extraction was never
+    /// one. `VerifiedDirectories.forget` is therefore called wherever a symlink
+    /// or a hardlink is created, which is the only way a cached path can stop
+    /// being what it was. A symlink planted by a *different* process mid-extraction was never
     /// covered: the original form re-checked before each member but still left
     /// a window between its check and the open, so this changes how wide that
     /// window is, not whether it exists.
@@ -3691,12 +3691,55 @@ final class TarReader {
     /// 正是它被辨識出來的線索。
     ///
     /// 快取之所以安全，是因為威脅是「同一封存中較早的項目」所植入的 symlink，而只有
-    /// 本次解壓能植入。故凡建立 symlink 之處皆呼叫 forgetVerifiedDirectory——那是快取
-    /// 中的路徑唯一可能不再是原本那個東西的途徑。至於「解壓進行中由*其他行程*植入」，
+    /// 本次解壓能植入。故凡建立 symlink 或硬連結之處皆呼叫 VerifiedDirectories.forget
+    /// ——那是快取中的路徑唯一可能不再是原本那個東西的途徑。至於「解壓進行中由*其他行程*植入」，
     /// 原本就未被涵蓋：舊寫法雖在每個成員前重新檢查，檢查與開檔之間仍留有空隙。本次
     /// 改動改變的是該空隙的寬度，而非它是否存在。
+    /// Directories this extraction has already shown not to be symlinks.
+    ///
+    /// Looked up by exact spelling, forgotten by every spelling that differs only in
+    /// case. A plain `Set<String>` forgot only the symlink's own spelling, so on a
+    /// case-insensitive volume -- APFS by default, NTFS -- a symlink `A` replaced the
+    /// directory cached as `a` while `a` stayed cached, and a later member under `a/`
+    /// skipped the check (2026-09-27 review).
+    ///
+    /// Folding is applied to forgetting only, never to lookup. A folded lookup would be
+    /// unsafe on a case-sensitive volume: `a` verified, then an unrelated symlink `A`,
+    /// and a member under `A/` would hit `a`'s entry. Forgetting too much only costs a
+    /// repeated lstat. Canonically equivalent spellings (NFC/NFD) already compare equal
+    /// as Swift strings, so APFS's normalisation-insensitivity needs no extra step.
+    ///
+    /// 本次解壓已確認不是 symlink 的目錄。
+    ///
+    /// 以確切拼法查詢，以「僅大小寫不同」的所有拼法失效。原本的 `Set<String>` 只移除 symlink
+    /// 自己的拼法，於是在不分大小寫的卷宗上（預設的 APFS、NTFS），symlink `A` 取代了快取中的
+    /// 目錄 `a`，而 `a` 仍留在快取裡，其後位於 `a/` 之下的成員便略過了檢查（2026-09-27 審查）。
+    ///
+    /// 摺疊大小寫只用於失效，絕不用於查詢。以摺疊後的鍵查詢在區分大小寫的卷宗上並不安全：
+    /// `a` 已驗證，接著一個無關的 symlink `A`，位於 `A/` 之下的成員就會命中 `a` 的項目。
+    /// 失效範圍過大只會多一次 lstat。標準等價的拼法（NFC／NFD）作為 Swift 字串本就相等，故
+    /// APFS 不分正規化形式這一點不需要額外處理。
+    struct VerifiedDirectories {
+        private var exact = Set<String>()
+        private var byFolded: [String: Set<String>] = [:]
+
+        func contains(_ path: String) -> Bool { exact.contains(path) }
+
+        mutating func insert(_ path: String) {
+            exact.insert(path)
+            byFolded[path.lowercased(), default: []].insert(path)
+        }
+
+        /// Call wherever an entry replaces `path` with something that may be a symlink.
+        /// 凡有項目以「可能是 symlink 的東西」取代 `path` 之處皆須呼叫。
+        mutating func forget(_ path: String) {
+            guard let spellings = byFolded.removeValue(forKey: path.lowercased()) else { return }
+            exact.subtract(spellings)
+        }
+    }
+
     private static func passesThroughSymlink(dest: String, below root: String,
-                                             cleared: inout Set<String>) -> Bool {
+                                             cleared: inout VerifiedDirectories) -> Bool {
         let fm = FileManager.default
         let rootPrefix = root.isEmpty ? "" : (root.hasSuffix("/") ? root : root + "/")
         var walked = rootPrefix
@@ -3865,7 +3908,7 @@ final class TarReader {
         // bsdtar 對其下的每一種大小都以「Unrecognized archive format」拒絕。
         // Directories this extraction has already shown not to be symlinks.
         // 本次解壓已確認不是 symlink 的目錄。
-        var clearedDirs = Set<String>()
+        var clearedDirs = VerifiedDirectories()
         while true {
             guard let block = readExactly(TAR_BLOCK) else {
                 // Ran out mid-block. Zero bytes left means the source ended on a
@@ -4187,7 +4230,7 @@ final class TarReader {
                 // 「同一封存中稍早寫入的目錄被符號連結取代」單獨在 Windows 上失敗，而
                 // 其餘每一項 traversal 守門都通過。過期的快取項目宣稱該路徑是已清空的
                 // 目錄，於是連結之後的那個成員就穿過它寫了出去。
-                clearedDirs.remove(dest)
+                clearedDirs.forget(dest)
                 // A symlink's own mtime was left at "now". Every other entry
                 // type here restores it -- the FIFO case below, the regular
                 // file's futimens, the directory pass -- so a link was the one
@@ -4306,6 +4349,19 @@ final class TarReader {
                     continue
                 }
                 let target = options.destDir.isEmpty ? strippedLink : options.destDir + "/" + strippedLink
+                // The target's name being clean is not enough: a directory on the way
+                // to it can be a symlink this archive planted, and then link() makes
+                // `dest` a second name for a file outside the destination. The same
+                // guard the member's own path gets, applied to the target's path.
+                // GNU tar 1.35 and bsdtar 3.5.3 both refuse. (2026-09-27 review.)
+                // 目標名稱乾淨並不足夠：通往它的某一層目錄可能是本封存植入的 symlink，
+                // 此時 link() 會讓 `dest` 成為目的地之外某個檔案的第二個名字。對目標路徑
+                // 套用與成員自身路徑相同的守門。GNU tar 1.35 與 bsdtar 3.5.3 都拒絕。
+                if TarReader.passesThroughSymlink(dest: target, below: options.destDir,
+                                                  cleared: &clearedDirs) {
+                    eprint("swift_tar: skipping hardlink '\(rel)': target '\(linkname)' passes through a symlink / 略過硬連結 '\(rel)'：目標 '\(linkname)' 穿過 symlink")
+                    continue
+                }
                 // The link target may still be queued in the pool -- barrier
                 // before linking, or link(2) fails with ENOENT on a target that
                 // is about to exist. Hardlinks are rare, so the drain is cheap.
@@ -4313,10 +4369,24 @@ final class TarReader {
                 // 一個「即將存在」的目標回 ENOENT。硬連結稀少，drain 成本低。
                 pool?.drain()
                 try? fm.removeItem(atPath: dest)
+                // `dest` may now be a symlink: see linkat below.
+                // `dest` 此時可能是 symlink：見下方 linkat。
+                clearedDirs.forget(dest)
 #if os(Windows)
                 winCreateHardlink(dest: dest, target: target)
 #else
-                if link(target, dest) != 0 {
+                // linkat with no AT_SYMLINK_FOLLOW, not link(). When the target is
+                // itself a symlink, macOS's link() follows it and Linux's does not;
+                // on macOS that let `L -> ../escape/victim` then `hard H L` make
+                // out/H share an inode with a file outside the destination, with no
+                // later member needed. linkat(..., 0) links the symlink itself on
+                // both, which is what GNU tar and bsdtar produce: out/H is a symlink.
+                // 使用不帶 AT_SYMLINK_FOLLOW 的 linkat，而非 link()。目標本身是 symlink
+                // 時，macOS 的 link() 會跟隨它而 Linux 的不會；在 macOS 上這讓
+                // `L -> ../escape/victim` 接著 `hard H L` 使 out/H 與目的地之外的檔案
+                // 共用 inode，不需要任何後續成員。linkat(..., 0) 在兩者上都連結 symlink
+                // 本身，與 GNU tar、bsdtar 的結果相同：out/H 是一個 symlink。
+                if linkat(AT_FDCWD, target, AT_FDCWD, dest, 0) != 0 {
                     throw TarError.io("hardlink failed for '\(dest)' / 建立硬連結失敗")
                 }
 #endif

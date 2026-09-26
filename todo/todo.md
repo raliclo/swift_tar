@@ -163,7 +163,13 @@ CLAUDE.md 的「`2>/dev/null` 不要用來藏建置訊息」與「`|| true` 不�
 
 以下只在 macOS 上驗證過。
 
-## 🔴 硬連結的目標可穿過 symlink，在 `-C` 之外建立連結並覆寫內容 / A hardlink target can go through a symlink and write outside `-C`
+## 硬連結的目標可穿過 symlink，在 `-C` 之外建立連結並覆寫內容 ▸ ✅ 已修正 2026-09-27 / A hardlink target can go through a symlink and write outside `-C`
+
+**修正**：硬連結的目標路徑套用與成員自身路徑相同的 `passesThroughSymlink`；建立連結改用
+`linkat(AT_FDCWD, target, AT_FDCWD, dest, 0)`（不跟隨 symlink），行為與 GNU tar、bsdtar 相同：
+目標是 symlink 時，`out/H` 成為 symlink 而非外部檔案的第二個名字。`test_blind_findings.zsh`
+新增兩條，對修正前的執行檔皆失敗、修正後皆通過。正常的硬連結（swift_tar 或 bsdtar 建立）
+解出後仍共用 inode。Windows 的 `winCreateHardlink` 未改動，也未在該平台驗證。
 
 `swift_tar.swift` 解出端 typeflag `1` 分支。linkname 只經過 `safeRelativePath`，從未經過
 `passesThroughSymlink`。
@@ -177,7 +183,12 @@ CLAUDE.md 的「`2>/dev/null` 不要用來藏建置訊息」與「`|| true` 不�
 **不需要後續的寫入成員**：使用者日後編輯 `out/H` 就會改到目的地之外的檔案。只檢查目標的
 祖先目錄擋不住它——symlink 是目標本身，不是祖先。
 
-## 🔴 在不分大小寫的卷宗上，大小寫不同的 symlink 可繞過已驗證目錄快取 / A differently-cased symlink bypasses the verified-directory cache
+## 在不分大小寫的卷宗上，大小寫不同的 symlink 可繞過已驗證目錄快取 ▸ ✅ 已修正 2026-09-27 / A differently-cased symlink bypasses the verified-directory cache
+
+**修正**：快取改為 `VerifiedDirectories`，以確切拼法查詢，但以「僅大小寫不同」的所有拼法
+失效。摺疊只用於失效、不用於查詢，因為摺疊後查詢在區分大小寫的卷宗上反而不安全。建立
+symlink 與硬連結時都會呼叫 `forget`。`test_blind_findings.zsh` 新增一條，對修正前失敗、
+修正後通過；該條只在不分大小寫的卷宗上有作用。
 
 `clearedDirs` 以確切拼法為鍵，建立 symlink 時只移除 symlink 自己那個拼法。封存依序含
 `a/x`（快取 `out/a`）、`A -> ../escape`、`a/pwned`（命中快取、略過檢查）：**`escape/pwned`
@@ -242,6 +253,24 @@ submodule 都依本地舊的 remote ref 顯示「✓ 已是 tip」，畫面上�
 `crypto.swift` `finish()`：`g[4]` 先被遮成 26 bits 才減去 `1 << 26`，結果永遠為負，`mask`
 永遠選 `h`，故 h ≥ p 時從不約簡。已讀碼確認。觸發機率約 2⁻¹²⁸，實務上碰不到，但這是加密
 原語偏離 RFC 8439。修法是一行；測試應補 RFC 8439 附錄 A.3 的邊界向量。
+
+## 🔴 macOS 27.2 之後 `./` 前綴區塊有 2 條 `-u` 測試失敗 / Two `-u` checks fail after macOS 27.2
+
+**不是 swift_tar 的改動造成的**：以 HEAD 版本的測試檔對同一執行檔執行，結果為
+`PASS: 158  FAIL: 2`，失敗的正是這兩條。
+
+成因是系統更新。macOS 27.2 會替行程新建立的每個檔案加上 `com.apple.provenance` 延伸屬性，
+於是系統 bsdtar 3.5.3 替每個檔案寫出 pax 記錄（其中含子秒精度的 `mtime=`）以及 `._`
+AppleDouble 成員：
+
+- `-u over the reference tar's archive adds nothing`：期望值用 bsdtar `-t` 列出，實際值用
+  swift_tar `-t` 列出。bsdtar 會把 `._` 成員藏起來，swift_tar 會列出來，兩份清單因而不同。
+- `the reference tar's -u cannot tell this archive from its own`：bsdtar 自己的封存現在帶有子秒
+  mtime，`-u` 不再重複加入檔案；swift_tar 只存整秒，仍會被重複加入。2026-09-21 改成對照組
+  比對時量到的「兩邊以相同方式重複」，在這個系統上已不成立。
+
+第二條量到的是真實差異（bsdtar 能分辨兩者），但它已不是該區塊要抓的 `./` 前綴缺陷。修法
+要在測試端決定：讓測資在建立後移除該延伸屬性，或讓比較不受 `._` 成員與 mtime 精度影響。
 
 ## 低優先、不列為未處理項的觀察 / Lower-priority observations, not tracked as open
 

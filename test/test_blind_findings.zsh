@@ -920,6 +920,94 @@ if [ -f "$RAW" ]; then
     *) bad "an unsafe hardlink target is reported, not dropped in silence" ;;
   esac
 
+  # A hardlink whose TARGET goes through a symlink the archive planted. The target
+  # name `L/victim` is clean -- no "..", not absolute -- so the check above passes it,
+  # while `L -> ../escape` puts the real file outside. link() then makes `out/H` a
+  # second name for escape/victim, and the regular member `H` after it opens that
+  # existing file with O_TRUNC. Found by the 2026-09-27 review: escape/victim read
+  # OVERWRITTEN and the run exited 0. GNU tar 1.35 and bsdtar 3.5.3 both leave it alone.
+  # 目標穿過封存所植入之 symlink 的硬連結。目標名稱 `L/victim` 是乾淨的——不含 ".."、
+  # 也非絕對路徑——故上方的檢查放行它，而 `L -> ../escape` 讓真正的檔案位於外面。
+  # link() 於是讓 `out/H` 成為 escape/victim 的第二個名字，其後的一般成員 `H` 以 O_TRUNC
+  # 開啟那個既有檔案。2026-09-27 審查找到：escape/victim 變成 OVERWRITTEN，離開碼 0。
+  # GNU tar 1.35 與 bsdtar 3.5.3 都不會動到它。
+  #
+  # The three `|| true` below are deliberate: each assertion is about what reached the
+  # filesystem, not the exit code, and a refused member may legitimately end the run
+  # non-zero -- under `set -e` that would stop the whole suite at this line.
+  # 以下三處 `|| true` 是刻意的：每個斷言看的是「什麼落到了檔案系統」而非離開碼，而一個
+  # 被拒絕的成員可以合理地讓執行以非零結束——在 `set -e` 之下那會讓整個套件停在這一行。
+  rm -rf "$TRAV/hla"; mkdir -p "$TRAV/hla/out" "$TRAV/hla/escape"
+  print -r -- ORIGINAL > "$TRAV/hla/escape/victim"
+  zsh "$RAW" "$TMP/hla.tar" link L ../escape hard H L/victim file H OVERWRITTEN >/dev/null 2>&1
+  "$ST" -x -f "$TMP/hla.tar" -C "$TRAV/hla/out" >/dev/null 2>&1 || true
+  eq "traversal blocked: a hardlink target that goes through a planted symlink" \
+     "ORIGINAL" "$(cat "$TRAV/hla/escape/victim")"
+
+  # The target IS the symlink rather than going through one, so the ancestor walk
+  # above cannot see it. macOS's link() follows a symlink given as its first argument
+  # (Linux's does not), so `hard H L` with `L -> ../escape/victim` made out/H share an
+  # inode with escape/victim -- no later member needed; the user editing out/H later
+  # would do it. Found while verifying the review, which had not listed it. Both
+  # references make out/H a symlink instead: a hardlink of the link itself, which is
+  # what linkat() with no AT_SYMLINK_FOLLOW does on every platform.
+  #
+  # Compared by inode rather than by writing to out/H: once fixed, out/H is a symlink
+  # to ../escape/victim, and writing through it would modify victim legitimately --
+  # that is the user following a link, not the archive escaping.
+  #
+  # 目標*本身*就是 symlink，而非穿過一個 symlink，故上方的祖先走訪看不到它。macOS 的
+  # link() 會跟隨作為第一個引數的 symlink（Linux 不會），於是 `hard H L` 搭配
+  # `L -> ../escape/victim` 讓 out/H 與 escape/victim 共用 inode——不需要後續成員，
+  # 使用者日後編輯 out/H 就會改到它。查證審查時找到，審查本身沒有列出。兩個參照實作
+  # 都改讓 out/H 成為 symlink：對連結本身建立硬連結，這正是不帶 AT_SYMLINK_FOLLOW 的
+  # linkat() 在每個平台上的行為。
+  #
+  # 以 inode 比對，而非寫入 out/H：修好之後 out/H 是指向 ../escape/victim 的 symlink，
+  # 經由它寫入會合法地改到 victim——那是使用者跟隨連結，不是封存逃逸。
+  rm -rf "$TRAV/hlb"; mkdir -p "$TRAV/hlb/out" "$TRAV/hlb/escape"
+  print -r -- ORIGINAL > "$TRAV/hlb/escape/victim"
+  zsh "$RAW" "$TMP/hlb.tar" link L ../escape/victim hard H L >/dev/null 2>&1
+  "$ST" -x -f "$TMP/hlb.tar" -C "$TRAV/hlb/out" >/dev/null 2>&1 || true
+  read -r victim_ino _ <<< "$(ls -di "$TRAV/hlb/escape/victim")"
+  h_ino="(absent)"
+  if [ -e "$TRAV/hlb/out/H" ] || [ -L "$TRAV/hlb/out/H" ]; then
+    read -r h_ino _ <<< "$(ls -di "$TRAV/hlb/out/H")"
+  fi
+  if [ "$h_ino" != "$victim_ino" ]; then
+    ok "traversal blocked: a hardlink to a planted symlink does not share the outside file's inode"
+  else
+    bad "traversal blocked: a hardlink to a planted symlink does not share the outside file's inode (out/H is inode $h_ino, the same as escape/victim)"
+  fi
+
+  # A symlink whose spelling differs only in case from a directory already verified.
+  # The verified-directory cache was keyed by exact spelling and invalidated only the
+  # symlink's own spelling, so on a case-insensitive volume `A -> ../escape` replaced
+  # the cached `a`, and `a/pwned` after it skipped the check. Found by the 2026-09-27
+  # review: escape/pwned appeared and out/a/x vanished, exit 0.
+  #
+  # This only has teeth on a case-insensitive volume -- APFS by default, NTFS. On ext4
+  # `A` and `a` are separate directories and it passes whatever the cache does. That is
+  # stated rather than turned into a SKIP: the platforms where it can fail are the two
+  # the defect was found on, and a SKIP never becomes a FAIL (see the RAW block above).
+  #
+  # 拼法與已驗證目錄只差大小寫的 symlink。已驗證目錄快取以確切拼法為鍵，失效時只移除
+  # symlink 自己那個拼法，於是在不分大小寫的卷宗上 `A -> ../escape` 取代了已快取的 `a`，
+  # 其後的 `a/pwned` 就略過了檢查。2026-09-27 審查找到：escape/pwned 出現、out/a/x 消失，
+  # 離開碼 0。
+  #
+  # 本項只在不分大小寫的卷宗上有作用——預設的 APFS、NTFS。在 ext4 上 `A` 與 `a` 是不同
+  # 目錄，無論快取怎麼做都會通過。此處明說而不改成 SKIP：它能失敗的平台正是缺陷被找到的
+  # 那兩個，而 SKIP 永遠不會變成 FAIL（見上方 RAW 區塊）。
+  rm -rf "$TRAV/ci"; mkdir -p "$TRAV/ci/out" "$TRAV/ci/escape"
+  zsh "$RAW" "$TMP/ci.tar" file a/x hello link A ../escape file a/pwned PWNED >/dev/null 2>&1
+  "$ST" -x -f "$TMP/ci.tar" -C "$TRAV/ci/out" >/dev/null 2>&1 || true
+  if [ ! -e "$TRAV/ci/escape/pwned" ]; then
+    ok "traversal blocked: a symlink differing only in case from a verified directory"
+  else
+    bad "traversal blocked: a symlink differing only in case from a verified directory"
+  fi
+
   # The same write-through attack, with the portal built by the two override
   # mechanisms rather than a plain symlink header: a pax "linkpath" record and a
   # GNU 'K' long-link entry. Both are separate parse paths, and the guard covers

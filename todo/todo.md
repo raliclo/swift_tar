@@ -46,6 +46,15 @@
 > 那說的是 `grep -n '^## .*🔴' todo/todo.md` 沒有回報，而不是宣稱這棵樹是乾淨的：上方
 > 四個缺陷中有三個，是在查別的東西時撞見的。
 >
+> **Seven items open, 2026-09-27 (updated).** The three below, plus four added after the
+> user's decisions that day: verify every fix on Windows and WSL (all were measured on macOS
+> only), make build_zlib-win.zsh and ZIP extraction consistent with their counterparts, and
+> store mtime precision the way bsdtar does (scope to be confirmed before implementing).
+>
+> **2026-09-27（更新）：7 項未處理。** 下方 3 項，加上當日依使用者決定新增的 4 項：在 Windows
+> 與 WSL 上驗證所有修正（全部只在 macOS 量過）、讓 build_zlib-win.zsh 與 ZIP 解壓端和各自的
+> 對應者一致、mtime 精度跟隨 bsdtar（實作前先確認範圍）。
+>
 > **Three items open, end of 2026-09-27.** Of the twelve opened that day (eleven from the
 > review, one for the macOS 27.2 test failures), ten are closed, each with a test shown to
 > fail against the unfixed binary. Still open: the pax record length (not attempted in
@@ -371,20 +380,56 @@ AppleDouble 成員：
 - 後果之一：`./` 區塊的 `-u` 檢查原本會因它而重新加入目錄。那裡現在以重設 mtime 隔開，
   但缺陷本身仍在。
 
-## 低優先、不列為未處理項的觀察 / Lower-priority observations, not tracked as open
+## 🔴 在 Windows 與 WSL 上驗證 2026-09-27 的所有修正 / Verify every 2026-09-27 fix on Windows and WSL
 
-- **`build_zlib-win.zsh`**：以白名單保留 `version-win.txt` 的鍵，其他建置腳本日後新增的鍵會被
-  靜默丟棄。僅影響 Windows。
-- **ZIP 解壓遇到 WARN/FAILED 即中止整次解壓**（`libarchive_zip_bridge.c`）。`5af2a12` 修建立端時
-  刻意沒動解壓端；這次應重新決定兩端是否一致。
-- **swift_tar 的 `-t` 會列出 `._` AppleDouble 成員**，bsdtar 的 `-t` 會把它們收起來。在 macOS
-  27.2 上系統 bsdtar 替每個檔案都寫 `._` 成員，差異因而常見。GNU tar 同樣會列出它們，所以
-  這比較像是呈現方式的選擇，不一定是缺陷（2026-09-27）。
-- **swift_tar 的 tar 路徑只存整秒 mtime**。系統 bsdtar 在 macOS 27.2 上會寫子秒精度的 pax
-  `mtime=`，所以對 swift_tar 建立的封存執行 bsdtar `-u`，同一秒內修改過的檔案會被重新加入
-  （2026-09-27）。
-- **`./` 前綴對舊封存的 `-u`**：舊版建立、存為 `a.txt` 的成員，會以 `./a.txt` 再加入一次。這是
-  `ad285c3` 的設計後果，bsdtar 亦同，**不是缺陷**。
+2026-09-27 的修正**全部只在 macOS 驗證過**。以下每一項都要在 Windows（原生，bsdtar 3.8.8）
+與 WSL（Linux）上重建並重跑，結果記進 `release_matrix.csv2`：
+
+- **重建**：Windows 以 `build_libarchive-win.zsh` 用新 pin `abaa707d` 重建——`version-win.txt`
+  仍記著舊的 `ddf8247`。WSL 以 `compile_tar-linux.zsh`（含 `LIBARCHIVE_STATIC=1` 一次）重建。
+- **`compile_tar-linux.zsh` 的呼叫順序**（`dd9b63a`）：只做過語法檢查，**從未在 Linux 上執行**。
+  確認 libarchive pin 移動後 `--version` 會換新戳記。
+- **ZIP bridge 介面改變**（`15db429`）：Windows 必須重建 bridge，並驗 `--zip --exclude`、
+  `--zip -h`（`test_exclude.zsh` 的 ZIP 對照走的是 Windows 自己的樣式比對實作）。
+- **硬連結與 symlink**（`e15bd40`）：Linux 改用 `linkat(..., 0)`；Windows 的
+  `winCreateHardlink` 未改動，要確認「硬連結指向 symlink」不會共用外部檔案的 inode。
+- **大小寫不同的 symlink**（`e15bd40`）：NTFS 不分大小寫，那條測試在 Windows 上才真正有作用。
+- **`test_blind_findings.zsh` 的 `./` 區塊**（`939d34d`、`c86a921`）：改成對照組比對、整秒
+  mtime、單一列表工具，都只在 bsdtar 3.5.3 上量過；要在 bsdtar 3.8.8 與 GNU tar 上確認仍通過。
+- **`extract_shapes.zsh` 依 `$PLAT` 選擇執行檔**（`dd9b63a`）：在 Windows 上確認選到 `.exe`。
+- **其餘平台無關的修正**（`--` 參數、Poly1305、RGB1 溢位、`sync_all.zsh`）：跑完整套件確認。
+
+## 🔴 `build_zlib-win.zsh` 改為與其他建置腳本相同的寫法 / Make `build_zlib-win.zsh` rewrite version-win.txt like the other builders
+
+**2026-09-27 決定：與其他建置腳本一致。** 它以白名單保留 `version-win.txt` 的鍵
+（`grep -E '^(zstd|libarchive)_...'`），其他建置腳本日後新增的鍵會被靜默丟棄。
+`build_zstd-win.zsh` 與 `build_libarchive-win.zsh` 的寫法是「只清掉自己的鍵、其餘保留」
+（`grep -vE`），改成相同。同時拿掉 `2>/dev/null || true`。僅影響 Windows。
+
+## 🔴 ZIP 解壓端改為與建立端相同的錯誤處理 / Make ZIP extraction handle errors the way ZIP creation does
+
+**2026-09-27 決定：兩端一致。** 解壓端（`swift_tar_zip_read`）遇到 WARN 或 FAILED 就中止整次
+解壓；建立端自 `5af2a12` 起是 FATAL 才中止、FAILED 報告並略過該項、WARN 報告後繼續。解壓端
+改為相同規則，並補一條測試：一個寫不進去的成員之後的成員仍要解出。`5af2a12` 當時刻意沒動
+解壓端，原因未記錄。
+
+## 🔴 tar 路徑的 mtime 精度跟隨 bsdtar / Store mtime precision the way bsdtar does
+
+**2026-09-27 決定：跟隨 bsdtar。** swift_tar 的 tar 路徑只存整秒 mtime；macOS 27.2 上系統
+bsdtar 會寫子秒精度的 pax `mtime=`，所以對 swift_tar 的封存執行 bsdtar `-u`，同一秒內改過的
+檔案會被重新加入。
+
+**實作前要先確認範圍**：bsdtar 只在「本來就要寫 pax 標頭」時才順帶寫子秒 mtime——macOS 27.0
+沒有延伸屬性時量到 0 筆 `mtime=` 記錄，27.2 上因為每個檔案都有延伸屬性才每個都有。所以
+「跟隨 bsdtar」有兩種讀法：只在已有 pax 標頭時加上子秒；或每個有子秒的檔案都寫 pax 標頭。
+後者才能解決上述 `-u` 現象，但每個成員約多 1 KB。
+
+## 已決定、不改程式的行為 / Decided: keep the current behaviour
+
+- **swift_tar 的 `-t` 會列出 `._` AppleDouble 成員**，bsdtar 的 `-t` 會把它們收起來。
+  **2026-09-27 決定：跟隨 GNU tar**，而 GNU tar 同樣會列出，所以維持現狀。
+- **`./` 前綴對舊封存的 `-u`**：舊版建立、存為 `a.txt` 的成員，會以 `./a.txt` 再加入一次。
+  這是 `ad285c3` 的設計後果。**2026-09-27 決定：跟隨 bsdtar**，bsdtar 亦同，所以維持現狀。
 
 ## `the reference tar's -u over this archive adds nothing` 在 macOS 上必然失敗，且與 swift_tar 無關 ▸ ✅ 已修正 2026-09-21，改為與對照組比對 / Fixed by comparing against a control
 

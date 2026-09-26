@@ -46,6 +46,17 @@
 > 那說的是 `grep -n '^## .*🔴' todo/todo.md` 沒有回報，而不是宣稱這棵樹是乾淨的：上方
 > 四個缺陷中有三個，是在查別的東西時撞見的。
 >
+> **Eleven items opened on 2026-09-27 by a whole-tree code review.** Two write outside
+> `-C` with exit 0, two crash on crafted input, two silently do the wrong thing, four are
+> scripts the same session wrote, and one is a Poly1305 reduction that never runs. Each was
+> reproduced or read against the source before being recorded; see the review section
+> below. Run `grep -n '^## .*🔴' todo/todo.md` for the current list.
+>
+> **2026-09-27：全樹程式碼審查開啟 11 項。** 兩項以 rc=0 寫到 `-C` 之外、兩項對構造的
+> 輸入崩潰、兩項靜默給出錯誤結果、四項是同一 session 寫的腳本、一項是從不執行的 Poly1305
+> 約簡。每一項記錄前都已重現或對照過原始碼，見下方審查一節。現況以
+> `grep -n '^## .*🔴' todo/todo.md` 為準。
+>
 > **Opened 2026-09-20, closed 2026-09-21: a check that could not pass on macOS.** The
 > `./` entry's new `the reference tar's -u over this archive adds nothing` asserted a
 > property of the reference tar, not of the archive handed to it — macOS ships bsdtar
@@ -139,6 +150,107 @@ file has to exist for that reference to mean anything.
 
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
+
+## 2026-09-27 全樹程式碼審查 / Whole-tree code review
+
+範圍：21 個檔案、約 11,400 行（Swift、C bridge、三平台建置腳本、驗證工具）。審查由
+子代理完成，**每一項都已由主 session 另行查證**：第 1–6 項在 macOS 上以構造的封存重現，
+第 7–10 項逐行對照原始碼。沒有一項是誤報，審查當時也沒有一項已記在本檔。第 1 項的
+「變體 B」是查證過程中另外找到的，審查沒有列出。
+
+**第 7–10 項出自同一個 session 在 2026-09-06〜09-20 寫的程式碼**，第 9、10 項直接違反
+CLAUDE.md 的「`2>/dev/null` 不要用來藏建置訊息」與「`|| true` 不要用來蓋掉非零退出」。
+
+以下只在 macOS 上驗證過。
+
+## 🔴 硬連結的目標可穿過 symlink，在 `-C` 之外建立連結並覆寫內容 / A hardlink target can go through a symlink and write outside `-C`
+
+`swift_tar.swift` 解出端 typeflag `1` 分支。linkname 只經過 `safeRelativePath`，從未經過
+`passesThroughSymlink`。
+
+**變體 A**（審查列出）：`L -> ../escape`、硬連結 `H` 指向 `L/victim`、一般檔 `H`。
+`link("out/L/victim","out/H")` 穿過 symlink，接著一般檔以 O_TRUNC 開啟 `out/H`，
+**`escape/victim` 被覆寫，rc=0**。GNU tar 1.35 與 bsdtar 3.5.3 都擋下。
+
+**變體 B**（查證時另外找到）：`L -> ../escape/victim`、硬連結 `H -> L`。macOS 的 `link()`
+**會跟隨 symlink**，於是 `out/H` 與 `escape/victim` 成為同一個 inode（連結數 2）。
+**不需要後續的寫入成員**：使用者日後編輯 `out/H` 就會改到目的地之外的檔案。只檢查目標的
+祖先目錄擋不住它——symlink 是目標本身，不是祖先。
+
+## 🔴 在不分大小寫的卷宗上，大小寫不同的 symlink 可繞過已驗證目錄快取 / A differently-cased symlink bypasses the verified-directory cache
+
+`clearedDirs` 以確切拼法為鍵，建立 symlink 時只移除 symlink 自己那個拼法。封存依序含
+`a/x`（快取 `out/a`）、`A -> ../escape`、`a/pwned`（命中快取、略過檢查）：**`escape/pwned`
+被建立、`out/a/x` 被刪除，rc=0**。
+
+影響 macOS 預設 APFS 與 Windows NTFS；區分大小寫的 ext4 不受影響。
+
+## 🔴 pax 記錄長度欄位過小時崩潰 / A too-small pax record length traps
+
+`swift_tar.swift` 的 pax 解析只檢查 `pos+len <= endIndex`，沒檢查 `len` 至少要涵蓋長度欄位
+本身與空白。把合法 pax 封存的 `30 mtime=` 改成 `1  mtime=`：**`-t` 與 `-x` 都 rc=133
+（SIGTRAP）**，沒有錯誤訊息。系統 bsdtar 對同一檔回報「Ignoring malformed pax extended
+attribute」並以 rc=1 結束。同一段解析在 `scanTarEntries`（`-r`/`-u`）與 `runDelete` 各有
+一份，三處都要修，最好合成一個函式。
+
+## 🔴 RGB1 寬高相乘溢位崩潰 / RGB1 dimension multiply traps
+
+`rgb1.swift` 的 `payloadByteCount`：`pixels * UInt64(bytesPerPixel)` 未檢查溢位，下一行的
+`guard bytes <= Int.max` 根本跑不到。寬高 `0xFFFFFFFF`：**`--rgb1-info` rc=133**；對照組
+（2×2）正確回報 payload 大小不符並以 rc=1 結束。改用 `multipliedReportingOverflow`。
+
+## 🔴 `--exclude` 與 `-h` 在 `--zip` 下靜默失效 / `--exclude` and `-h` are silently ignored under `--zip`
+
+兩者只由 `TarWriter` 讀取；ZIP 後端完全不看，且固定使用 `set_symlink_physical`。
+`-c --zip --exclude '*.log' src`：rc=0，**封存內仍有 `src/a.log`**；同一指令走 tar 路徑
+正確排除。另外 `--exclude` 在 `-x`/`-t` 被忽略，`-r`/`-u` 建構 `TarWriter` 時沒傳 dereference。
+修法二擇一：在 ZIP 路徑實作，或以錯誤拒絕這些組合——後者至少不再給錯誤的結果。
+
+## 🔴 `--` 之後的運算元仍被當成旗標偵測 / Operands after `--` are still scanned for flags
+
+模式與旗標以 `args.contains(...)` 掃描整個 `args`。`-cf y.tar -- -u` 回報「specify exactly one
+of…」且 rc=1；**`-cf v.tar -- -v n.txt` 靜默開啟 verbose**（印出 `a -v`、`a n.txt`）。bsdtar
+兩者皆正常。旗標偵測應只看 `--` 之前。
+
+## 🔴 `compile_tar-linux.zsh` 仍在 libarchive 建置之前發戳記 / The Linux build still stamps before building libarchive
+
+`f4386b7` 只修了 `compile_tar.zsh`。Linux 腳本第 174 行呼叫 `generate_version.zsh`，第 183
+行才（在 `LIBARCHIVE_STATIC=1` 時）執行 `build_libarchive.zsh`。libarchive 升版後兩個執行檔
+的 `--version` 相同——與 2026-09-20 那次事故同形，只是換了平台。
+
+## 🔴 `extract_shapes.zsh` 把執行失敗記成「很快」/ `extract_shapes.zsh` records a failed run as a fast one
+
+`ms()` 以 `>/dev/null 2>&1` 丟掉被量測指令的退出碼。swift_tar 若崩潰或 rc=1 立即結束，
+那一輪只有幾毫秒，比值顯示「swift_tar 較快」，`--record` 還會寫進 csv2。**2026-09-25 那三列
+正是經由這個 `ms()` 記錄的**；同一執行檔的測試全過，所以那三列可信度高，但那是推論，工具
+本身證明不了。另外 `BIN` 以「先找到哪個」挑選，`record_release.zsh` 早已因同一問題改為依
+`$PLAT` 選擇。
+
+## 🔴 `sync_all.zsh` 吞掉 fetch 失敗，並依過期的 ref 回報「已是 tip」/ `sync_all.zsh` swallows fetch failures
+
+第 107 行 `git -C $m fetch --quiet origin 2>/dev/null || true`。斷線或認證失敗時，每個
+submodule 都依本地舊的 remote ref 顯示「✓ 已是 tip」，畫面上沒有任何失敗跡象。
+
+## 🔴 `build_libarchive.zsh` 靜默 patch 還原失敗 / `build_libarchive.zsh` hides a failed patch revert
+
+第 50 行 EXIT trap 以 `>/dev/null 2>&1 || true` 包住 `apply_patches.zsh --revert`。還原失敗時
+建置仍回報成功，submodule 留在髒狀態，之後 `sync_all.zsh --update libarchive` 永遠印「跳過」
+——正是第 39–43 行註解說要防的那件事，而且沒有任何輸出指出原因。
+
+## 🔴 Poly1305 的最終約簡從不發生 / Poly1305's final reduction never happens
+
+`crypto.swift` `finish()`：`g[4]` 先被遮成 26 bits 才減去 `1 << 26`，結果永遠為負，`mask`
+永遠選 `h`，故 h ≥ p 時從不約簡。已讀碼確認。觸發機率約 2⁻¹²⁸，實務上碰不到，但這是加密
+原語偏離 RFC 8439。修法是一行；測試應補 RFC 8439 附錄 A.3 的邊界向量。
+
+## 低優先、不列為未處理項的觀察 / Lower-priority observations, not tracked as open
+
+- **`build_zlib-win.zsh`**：以白名單保留 `version-win.txt` 的鍵，其他建置腳本日後新增的鍵會被
+  靜默丟棄。僅影響 Windows。
+- **ZIP 解壓遇到 WARN/FAILED 即中止整次解壓**（`libarchive_zip_bridge.c`）。`5af2a12` 修建立端時
+  刻意沒動解壓端；這次應重新決定兩端是否一致。
+- **`./` 前綴對舊封存的 `-u`**：舊版建立、存為 `a.txt` 的成員，會以 `./a.txt` 再加入一次。這是
+  `ad285c3` 的設計後果，bsdtar 亦同，**不是缺陷**。
 
 ## `the reference tar's -u over this archive adds nothing` 在 macOS 上必然失敗，且與 swift_tar 無關 ▸ ✅ 已修正 2026-09-21，改為與對照組比對 / Fixed by comparing against a control
 

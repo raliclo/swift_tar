@@ -46,6 +46,18 @@
 > 那說的是 `grep -n '^## .*🔴' todo/todo.md` 沒有回報，而不是宣稱這棵樹是乾淨的：上方
 > 四個缺陷中有三個，是在查別的東西時撞見的。
 >
+> **Three items open, end of 2026-09-27.** Of the twelve opened that day (eleven from the
+> review, one for the macOS 27.2 test failures), ten are closed, each with a test shown to
+> fail against the unfixed binary. Still open: the pax record length (not attempted in
+> that session), `-x`/`-t` ignoring `--exclude` (split off while fixing the ZIP side), and
+> `-c --zip` changing source directory mtimes (found while fixing the 27.2 tests). macOS
+> test_blind_findings reads 172/0.
+>
+> **2026-09-27 結束時：3 項未處理。** 當日開啟的 12 項（審查 11 項，加上 macOS 27.2 的測試
+> 失敗 1 項）已結案 10 項，每一項都附有對修正前執行檔會失敗的測試。仍未處理：pax 記錄長度
+> （該 session 未處理）、`-x`／`-t` 忽略 `--exclude`（修 ZIP 端時另立）、`-c --zip` 改動來源
+> 目錄 mtime（修 27.2 測試時發現）。macOS 上 test_blind_findings 為 172/0。
+>
 > **Eleven items opened on 2026-09-27 by a whole-tree code review.** Two write outside
 > `-C` with exit 0, two crash on crafted input, two silently do the wrong thing, four are
 > scripts the same session wrote, and one is a Poly1305 reduction that never runs. Each was
@@ -316,7 +328,18 @@ poly1305-donna 相同。
 永遠選 `h`，故 h ≥ p 時從不約簡。已讀碼確認。觸發機率約 2⁻¹²⁸，實務上碰不到，但這是加密
 原語偏離 RFC 8439。修法是一行；測試應補 RFC 8439 附錄 A.3 的邊界向量。
 
-## 🔴 macOS 27.2 之後 `./` 前綴區塊有 2 條 `-u` 測試失敗 / Two `-u` checks fail after macOS 27.2
+## macOS 27.2 之後 `./` 前綴區塊有 2 條 `-u` 測試失敗 ▸ ✅ 已修正 2026-09-27（測試端）/ Two `-u` checks fail after macOS 27.2
+
+**修正（只改測試）**：測資先以 `touch -t` 設成整秒 mtime，讓兩種封存存的 mtime 精度一致，
+`-u` 就只看得到名稱拼法；第一條的兩邊都改用參照 tar 列表，因為它會把 `._` 成員收起來。
+「移除該延伸屬性」走不通：`xattr -c` 以 0 結束而屬性仍在，它受系統保護。
+
+另外在 `-u` 檢查前重新設定一次整秒 mtime，因為同一區上方的 `-c --zip` 會把來源目錄的
+mtime 改成「現在」——那是查證時發現的另一個既有缺陷，見下一項。
+
+**反向對照**：取出這一區的實際文字，以 `ad285c3~1` 重建的執行檔執行，兩條跨工具的 `-u`
+檢查都失敗；目前版本 6 條全過。整套 `test_blind_findings` 在 macOS 27.2 上回到 172/0。
+
 
 **不是 swift_tar 的改動造成的**：以 HEAD 版本的測試檔對同一執行檔執行，結果為
 `PASS: 158  FAIL: 2`，失敗的正是這兩條。
@@ -334,12 +357,32 @@ AppleDouble 成員：
 第二條量到的是真實差異（bsdtar 能分辨兩者），但它已不是該區塊要抓的 `./` 前綴缺陷。修法
 要在測試端決定：讓測資在建立後移除該延伸屬性，或讓比較不受 `._` 成員與 mtime 精度影響。
 
+## 🔴 `-c --zip` 會改動它所讀取的來源目錄的 mtime / `-c --zip` changes the mtime of the source directories it reads
+
+2026-09-27 修上一項時發現。來源目錄先設成 2026-01-01，執行 `swift_tar -c --zip -f z.zip -C src .`
+之後，`src/` 與 `src/sub/` 的 mtime 都變成「現在」；檔案本身的 mtime 不變。**建立封存不應
+修改來源樹。**
+
+- **既有缺陷**：以本日修正 `--exclude` 之前的原始碼建出的執行檔，結果相同。
+- tar 路徑不會，同一套 libarchive 的 `bsdtar --format zip` 也不會，所以問題在 swift_tar 的
+  ZIP 後端。
+- bridge 裡沒有任何碰時間戳或 read_disk 行為旗標的呼叫。成因推測在 libarchive read_disk 的
+  預設行為與 bsdtar 所設定的旗標之間的差異，**尚未查證**。
+- 後果之一：`./` 區塊的 `-u` 檢查原本會因它而重新加入目錄。那裡現在以重設 mtime 隔開，
+  但缺陷本身仍在。
+
 ## 低優先、不列為未處理項的觀察 / Lower-priority observations, not tracked as open
 
 - **`build_zlib-win.zsh`**：以白名單保留 `version-win.txt` 的鍵，其他建置腳本日後新增的鍵會被
   靜默丟棄。僅影響 Windows。
 - **ZIP 解壓遇到 WARN/FAILED 即中止整次解壓**（`libarchive_zip_bridge.c`）。`5af2a12` 修建立端時
   刻意沒動解壓端；這次應重新決定兩端是否一致。
+- **swift_tar 的 `-t` 會列出 `._` AppleDouble 成員**，bsdtar 的 `-t` 會把它們收起來。在 macOS
+  27.2 上系統 bsdtar 替每個檔案都寫 `._` 成員，差異因而常見。GNU tar 同樣會列出它們，所以
+  這比較像是呈現方式的選擇，不一定是缺陷（2026-09-27）。
+- **swift_tar 的 tar 路徑只存整秒 mtime**。系統 bsdtar 在 macOS 27.2 上會寫子秒精度的 pax
+  `mtime=`，所以對 swift_tar 建立的封存執行 bsdtar `-u`，同一秒內修改過的檔案會被重新加入
+  （2026-09-27）。
 - **`./` 前綴對舊封存的 `-u`**：舊版建立、存為 `a.txt` 的成員，會以 `./a.txt` 再加入一次。這是
   `ad285c3` 的設計後果，bsdtar 亦同，**不是缺陷**。
 

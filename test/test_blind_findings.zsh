@@ -1749,6 +1749,22 @@ DS="$TMP/dotslash"
 mkdir -p "$DS/src/sub"
 printf 'a\n' > "$DS/src/a.txt"
 printf 'b\n' > "$DS/src/sub/b.txt"
+# Whole-second mtimes, so the -u checks below see only the name spelling. macOS 27.2
+# stamps every new file with a `com.apple.provenance` xattr, which makes the system
+# bsdtar write pax records -- including a sub-second `mtime=` -- and `._` members. Its
+# own archive then carried .325339628 while swift_tar's carried whole seconds, and -u
+# re-added swift_tar's files for that reason alone: two checks here failed on a system
+# update, with swift_tar unchanged (HEAD's test file failed identically). The xattr
+# cannot be removed -- `xattr -c` exits 0 and leaves it there -- so the fixture is made
+# precision-neutral instead. Measured both ways on 2026-09-27: a binary rebuilt from
+# ad285c3~1 still fails both -u checks, and the current one passes them.
+# 設為整秒 mtime，使下方的 -u 檢查只看得到名稱拼法。macOS 27.2 會替每個新建檔案加上
+# `com.apple.provenance` 延伸屬性，使系統 bsdtar 寫出 pax 記錄（含子秒精度的 `mtime=`）與
+# `._` 成員。於是它自己的封存帶有 .325339628，swift_tar 的只有整秒，-u 僅僅因此就重新加入
+# swift_tar 的檔案：這裡有兩條檢查因一次系統更新而失敗，swift_tar 本身沒有變（HEAD 版本的
+# 測試檔也同樣失敗）。該屬性移不掉——`xattr -c` 以 0 結束而屬性仍在——所以改讓測資與精度
+# 無關。2026-09-27 雙向實測：以 ad285c3~1 重建的執行檔兩條 -u 檢查仍然失敗，目前版本則通過。
+touch -t 202601011200.00 "$DS/src/a.txt" "$DS/src/sub/b.txt" "$DS/src/sub" "$DS/src"
 
 ( cd "$DS" && "$ST" -c -f sw.tar -C src . ) >/dev/null 2>&1
 ( cd "$DS" && "$SYS_TAR" -c -f ref.tar -C src . ) >/dev/null 2>&1
@@ -1767,9 +1783,28 @@ eq "an explicit operand carries no prefix" "a.txt" \
 # The archives are unchanged on disk, so -u must add nothing -- each tool over the
 # other's archive, then each over its own.
 # 磁碟上的檔案未變動，故 -u 不得加入任何東西——先以各自更新對方的封存，再更新自己的。
+# Re-applied, because the `-c --zip` step above changes src/ and src/sub/'s mtime to
+# "now" -- a separate, pre-existing defect recorded in todo (the ZIP backend modifies
+# the directories it reads; the tar path and bsdtar --format zip do not). Left in, it
+# makes every -u below re-add the directories for a reason unrelated to this block.
+# 重新設定一次，因為上方的 `-c --zip` 會把 src/ 與 src/sub/ 的 mtime 改成「現在」——那是
+# 另一個既有缺陷，已記於 todo（ZIP 後端會改動它讀取的目錄；tar 路徑與 bsdtar --format zip
+# 不會）。若不處理，下方每一個 -u 都會因與本區塊無關的原因重新加入目錄。
+touch -t 202601011200.00 "$DS/src/sub" "$DS/src"
+
+# Listed with the reference tar on both sides, not swift_tar on one. ref.tar may hold
+# `._` AppleDouble members (see the mtime note above); bsdtar's -t folds them away and
+# swift_tar's -t shows them, so comparing one lister's output with the other's reported
+# a difference that had nothing to do with -u. One lister on both sides measures only
+# what -u added. An empty archive cannot slip through: the spelling check above would
+# already have failed.
+# 兩邊都用參照 tar 列表，而不是一邊用 swift_tar。ref.tar 可能含有 `._` AppleDouble 成員
+# （見上方 mtime 的說明）；bsdtar 的 -t 會把它們收起來，swift_tar 的 -t 會列出，於是拿兩種
+# 列表工具的輸出互比，會回報一個與 -u 無關的差異。兩邊用同一個列表工具，量到的就只有 -u
+# 加入的東西。空的封存也混不過去：上方的拼法檢查會先失敗。
 ( cd "$DS" && "$ST" -u -f ref.tar -C src . ) >/dev/null 2>&1
 eq "-u over the reference tar's archive adds nothing" "$ref_list" \
-   "$("$ST" -t -f "$DS/ref.tar" | tr -d '\r' | sort | tr '\n' ' ')"
+   "$("$SYS_TAR" -t -f "$DS/ref.tar" | tr -d '\r' | sort | tr '\n' ' ')"
 cp "$DS/sw.tar" "$DS/sw_self.tar"
 ( cd "$DS" && "$ST" -u -f sw_self.tar -C src . ) >/dev/null 2>&1
 eq "-u over this tool's own archive adds nothing" "$sw_list" \

@@ -46,6 +46,18 @@
 > 那說的是 `grep -n '^## .*🔴' todo/todo.md` 沒有回報，而不是宣稱這棵樹是乾淨的：上方
 > 四個缺陷中有三個，是在查別的東西時撞見的。
 >
+> **One item open, end of 2026-09-27: verification on Windows and WSL.** Every other item
+> opened that day is closed, each with a test shown to fail against the unfixed binary --
+> fourteen in all, including two defects found while fixing others (the ZIP backend
+> changing source directory mtimes, and an integer overflow beside the pax length check).
+> All of it was measured on macOS only; the remaining item lists what each platform must
+> rerun. macOS test_blind_findings reads 184/0.
+>
+> **2026-09-27 結束時：1 項未處理——在 Windows 與 WSL 上驗證。** 當日開啟的其他項目全部
+> 結案，每一項都附有對修正前執行檔會失敗的測試——共 14 項，其中兩個是在修別的項目時發現的
+> （ZIP 後端改動來源目錄 mtime，以及 pax 長度檢查旁的整數溢位）。這些全部只在 macOS 量過；
+> 剩下的那一項列出了每個平台要重跑的內容。macOS 上 test_blind_findings 為 184/0。
+>
 > **Seven items open, 2026-09-27 (updated).** The three below, plus four added after the
 > user's decisions that day: verify every fix on Windows and WSL (all were measured on macOS
 > only), make build_zlib-win.zsh and ZIP extraction consistent with their counterparts, and
@@ -430,6 +442,15 @@ mtime 的繞道已拿掉，該區照樣通過，成為第二個證人。整套 1
   Windows 建立的封存仍只存整秒。確認該平台上 bsdtar `-u` 的行為，再決定是否要讓 `winStat`
   帶出 100 ns 精度。WSL 上確認 `touch -d` 與新測試通過。
 - **其餘平台無關的修正**（`--` 參數、Poly1305、RGB1 溢位、`sync_all.zsh`）：跑完整套件確認。
+- **三支 Windows 建置腳本**（`b5a92bd`）：改寫 `version-win.txt` 的區塊只以取出的文字測過，
+  要實際建置一次，確認 `version-win.txt` 的鍵都保留。
+- **ZIP 讀取 bridge 介面再次改變**（`d0f06ab`，新增排除回呼）與 **ZIP 解壓的錯誤處理**
+  （`0cecf8d`）：Windows 必須重建；`test_exclude.zsh` 的讀取端 72 條、`test_blind_findings.zsh`
+  的 ZIP 略過測試（需要 bsdtar，Windows 有）都要在該平台跑過。
+- **pax 長度守門**（`3edc60d`）：測資以 `dd` 改寫位元組，確認 WSL 與 Windows 的 `dd`、`grep -abo`
+  行為相同。
+- **`MAC_COPYFILE`**（`3c6ff6c`）：只影響 macOS 建置，但 `archive_read_disk_set_behavior(disk, 0)`
+  在所有平台都會執行，確認 Windows 與 Linux 的 ZIP 建立不受影響。
 
 ## `build_zlib-win.zsh` 改為與其他建置腳本相同的寫法 ▸ ✅ 已修正 2026-09-27（未在 Windows 執行）/ Make `build_zlib-win.zsh` rewrite version-win.txt like the other builders
 

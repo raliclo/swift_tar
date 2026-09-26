@@ -50,16 +50,30 @@ zlib_commit=$(git -C zlib rev-parse HEAD)
 # These builders only ever run on Windows, so the target file is fixed rather
 # than detected. / 這些建置腳本僅在 Windows 上執行，故目標檔案直接寫死而非偵測。
 version_file="version-win.txt"
-swift_tar_version=$(sed -n 's/^swift_tar_version=//p' "$version_file" 2>/dev/null | sed -n '1p')
+# Keep every other line and refresh only the zlib_* keys, the same way
+# build_zstd-win.zsh and build_libarchive-win.zsh do. This used to rebuild the file
+# from a whitelist -- swift_tar_version plus `(zstd|libarchive)_*` -- so any key another
+# builder added later was dropped without a word (2026-09-27 review; decided that day
+# that all builders follow one pattern).
+#
+# grep exits 1 when it prints nothing, which here means the file held only zlib keys;
+# that one status is tolerated. A missing file is refused first, so a real grep error
+# (2) still fails the build instead of producing a truncated record.
+#
+# 保留其他所有行，只更新 zlib_* 鍵，與 build_zstd-win.zsh、build_libarchive-win.zsh 的
+# 作法相同。這裡原本是以白名單重建整個檔案——swift_tar_version 加上 `(zstd|libarchive)_*`
+# ——所以其他建置腳本日後新增的鍵都會被無聲丟棄（2026-09-27 審查；當日決定所有建置腳本
+# 採同一種寫法）。
+#
+# grep 沒有輸出時以 1 結束，在此即代表檔案裡只有 zlib 鍵；僅容忍該狀態。檔案不存在會先被
+# 拒絕，所以真正的 grep 錯誤（2）仍會讓建置失敗，而不是產生一份被截斷的紀錄。
+[ -f "$version_file" ] || { echo "[FAIL] $version_file missing / 找不到 $version_file" >&2; exit 1; }
 tmp_version="$version_file.tmp"
 {
-    [ -n "$swift_tar_version" ] && echo "swift_tar_version=$swift_tar_version"
+    grep -vE '^zlib_(version|commit|linkage)=' "$version_file" || [ $? -eq 1 ]
     echo "zlib_version=$zlib_version"
     echo "zlib_commit=$zlib_commit"
     echo "zlib_linkage=static"
-    # Preserve dependency provenance written by the other backend builders.
-    # 保留其他後端建置腳本寫入的相依套件 provenance。
-    grep -E '^(zstd|libarchive)_(version|commit|linkage)=' "$version_file" 2>/dev/null || true
 } > "$tmp_version"
 mv "$tmp_version" "$version_file"
 

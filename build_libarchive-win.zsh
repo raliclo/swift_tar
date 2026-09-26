@@ -78,9 +78,14 @@ fi
 libarchive_version=$(git -C libarchive describe --tags --always)
 libarchive_commit=$(git -C libarchive rev-parse HEAD)
 version_file="version-win.txt"
+# grep's status 1 (nothing printed) is the only one tolerated; see build_zlib-win.zsh.
+# Was `2>/dev/null || true`, which also swallowed a real error (2026-09-27).
+# 僅容忍 grep 的狀態 1（沒有輸出），理由見 build_zlib-win.zsh。原本是
+# `2>/dev/null || true`，連真正的錯誤也一併吞掉（2026-09-27）。
+[ -f "$version_file" ] || { echo "[FAIL] $version_file missing / 找不到 $version_file" >&2; exit 1; }
 tmp_version="$version_file.tmp"
 {
-    grep -vE '^libarchive_(version|commit|linkage)=' "$version_file" 2>/dev/null || true
+    grep -vE '^libarchive_(version|commit|linkage)=' "$version_file" || [ $? -eq 1 ]
     echo "libarchive_version=$libarchive_version"
     echo "libarchive_commit=$libarchive_commit"
     echo "libarchive_linkage=static"

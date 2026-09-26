@@ -402,7 +402,16 @@ AppleDouble 成員：
   帶出 100 ns 精度。WSL 上確認 `touch -d` 與新測試通過。
 - **其餘平台無關的修正**（`--` 參數、Poly1305、RGB1 溢位、`sync_all.zsh`）：跑完整套件確認。
 
-## 🔴 `build_zlib-win.zsh` 改為與其他建置腳本相同的寫法 / Make `build_zlib-win.zsh` rewrite version-win.txt like the other builders
+## `build_zlib-win.zsh` 改為與其他建置腳本相同的寫法 ▸ ✅ 已修正 2026-09-27（未在 Windows 執行）/ Make `build_zlib-win.zsh` rewrite version-win.txt like the other builders
+
+**修正**：三支 Windows 建置腳本統一為同一種寫法——只清掉自己的鍵、其餘保留，先確認檔案
+存在，並以 `|| [ $? -eq 1 ]` 取代 `2>/dev/null || true`（只容忍「沒有輸出」，真正的錯誤仍會
+失敗）。zstd 與 libarchive 兩支原本就是「只清自己的鍵」，這次只換掉那個吞錯誤的寫法。
+
+**測試**：三支腳本都無法在 macOS 上整支執行，所以取出各自改寫版本檔的**實際文字**，以一份
+含有 `future_key=keep-me` 的樣本檔執行。三支新版都保留該鍵與 `swift_tar_version`、只更新
+自己的鍵；**HEAD 的舊版 zlib 區塊丟掉了 `future_key`**；檔案不存在時以 rc=1 失敗。要在
+Windows 上實際建置一次，已列入驗證清單。
 
 **2026-09-27 決定：與其他建置腳本一致。** 它以白名單保留 `version-win.txt` 的鍵
 （`grep -E '^(zstd|libarchive)_...'`），其他建置腳本日後新增的鍵會被靜默丟棄。

@@ -210,6 +210,27 @@ else
   print -- "  skip 只有一個參照實作，分歧項無從比對 / only one reference; divergence untested"
 fi
 
+# ZIP 後端必須與 tar 路徑排除完全相同的成員。2026-09-27 之前 ZIP 後端根本不看 --exclude：
+# `-c --zip --exclude '*.log' src` 以 0 結束，而 src/a.log 仍在封存內。現在兩者呼叫同一個
+# 比對器，這裡釘住的是「同一個樣式在兩個後端意義相同」——tar 路徑本身已由上方對照參照實作
+# 釘住，所以只需要比兩者，不必再比一次參照。
+# The ZIP backend must drop exactly the members the tar path drops. Until 2026-09-27 it never
+# looked at --exclude: `-c --zip --exclude '*.log' src` exited 0 with src/a.log inside. Both
+# now call one matcher, and this pins that a pattern means the same thing on both backends;
+# the tar path is already pinned to the references above, so comparing the two is enough.
+zip_members() {  # <樣式>
+  local pat=$1 out
+  rm -f "$work/a.zip"
+  ( cd "$work" && "$ST" -c --zip --exclude "$pat" -f a.zip src ) >/dev/null 2>&1
+  out=$( "$ST" -t -f "$work/a.zip" 2>/dev/null )
+  print -- "${out}" | sed 's|/$||' | sort | tr '\n' ' '
+}
+print -- ""
+print -- "ZIP 後端與 tar 路徑一致 / the ZIP backend matches the tar path:"
+for pat in $AGREED $DIVERGENT; do
+  check "$(members "$ST" "$pat")" "$(zip_members "$pat")" "'$pat' --zip 與 tar 路徑一致 / --zip matches the tar path"
+done
+
 print -- ""
 print -- "其他 / other:"
 
@@ -253,6 +274,25 @@ else
   print -- "  FAIL 被排除的目錄仍被走進去 / an excluded directory was still descended into"
   print -- "       rc=$x_rc"
   sed 's/^/       /' "$work/x.out"
+  (( failures += 1 ))
+fi
+
+# 同一件事，走 ZIP 後端。C 端的走訪在 descend 之前就詢問比對器，故讀不到的子樹同樣會被
+# 繞開；若改成「先走訪再過濾」，上方 ZIP 的列表比對仍會通過，而本項會失敗。
+# The same through the ZIP backend. The C walk asks the matcher before it descends, so an
+# unreadable subtree is stepped around there too; walking first and filtering afterwards
+# would pass the ZIP listing checks above and fail this one.
+chmod 000 "$work/src/nogo"
+rm -f "$work/x.zip"
+( cd "$work" && "$ST" -c --zip --exclude 'nogo' -f x.zip src ) >"$work/xz.out" 2>&1
+xz_rc=$?
+chmod 755 "$work/src/nogo"
+if (( xz_rc == 0 )) && ! "$ST" -t -f "$work/x.zip" 2>/dev/null | grep -q 'nogo'; then
+  print -- "  ok   --zip：被排除的目錄不會被走進去 / --zip: an excluded directory is not descended into"
+else
+  print -- "  FAIL --zip：被排除的目錄仍被走進去 / --zip: an excluded directory was still descended into"
+  print -- "       rc=$xz_rc"
+  sed 's/^/       /' "$work/xz.out"
   (( failures += 1 ))
 fi
 

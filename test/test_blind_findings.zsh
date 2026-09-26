@@ -1961,6 +1961,46 @@ case "$(uname -s)" in
     fi ;;
 esac
 
+# ---- -h/--dereference on every create path ----
+# Before 2026-09-27 nothing in the tree tested that -h follows a link at all -- the one
+# dereference check (test_same_permissions) asserts only that -p does NOT turn it on. And
+# two of the three paths ignored it: the ZIP backend always walked physically, and -r/-u
+# built their TarWriter without passing the flag. Each case reads what lands on disk after
+# extraction; a listing cannot tell a link from a file here (see test_same_permissions).
+# The `|| true` on each command is deliberate: the assertion is about the extracted
+# result, not the exit status, and under `set -e` a failure would end the suite here.
+#
+# 2026-09-27 之前，整棵樹沒有任何測試驗證 -h 真的會跟隨連結——唯一的 dereference 檢查
+# （test_same_permissions）只斷言 -p「不會」順帶開啟它。而三條路徑中有兩條忽略它：ZIP 後端
+# 一律以 physical 走訪，-r/-u 建構 TarWriter 時沒有傳這個旗標。每一項都看解出後落在磁碟上
+# 的東西；在這裡列表分不出連結與檔案（見 test_same_permissions）。每個指令後的 `|| true` 是
+# 刻意的：斷言看的是解出的結果而非離開碼，而在 `set -e` 之下一次失敗會讓整個套件停在這裡。
+DR="$TMP/deref"; rm -rf "$DR"; mkdir -p "$DR/t"
+print -r -- TARGET > "$DR/target.txt"
+ln -s ../target.txt "$DR/t/link.txt" 2>/dev/null || true
+if [[ -L "$DR/t/link.txt" ]]; then
+  deref_kind() {  # <archive> -> link | file:<content> | absent
+    rm -rf "$DR/out"; mkdir -p "$DR/out"
+    "$ST" -x -f "$1" -C "$DR/out" >/dev/null 2>&1 || true
+    local p="$DR/out/t/link.txt"
+    if [[ -L $p ]]; then print -r -- link
+    elif [[ -f $p ]]; then print -r -- "file:$(cat "$p")"
+    else print -r -- absent; fi
+  }
+  ( cd "$DR" && "$ST" -c -h -f h.tar t ) >/dev/null 2>&1 || true
+  eq "-h: tar stores what a symlink points to" "file:TARGET" "$(deref_kind "$DR/h.tar")"
+  ( cd "$DR" && "$ST" -c --zip -h -f h.zip t ) >/dev/null 2>&1 || true
+  eq "-h: --zip stores what a symlink points to" "file:TARGET" "$(deref_kind "$DR/h.zip")"
+  ( cd "$DR" && "$ST" -c --zip -f p.zip t ) >/dev/null 2>&1 || true
+  eq "--zip without -h still stores the link itself" "link" "$(deref_kind "$DR/p.zip")"
+  print -r -- seed > "$DR/seed.txt"
+  ( cd "$DR" && "$ST" -c -f r.tar seed.txt ) >/dev/null 2>&1 || true
+  ( cd "$DR" && "$ST" -r -h -f r.tar t ) >/dev/null 2>&1 || true
+  eq "-h: -r stores what a symlink points to" "file:TARGET" "$(deref_kind "$DR/r.tar")"
+else
+  echo "SKIP: -h/--dereference (no real symlink here)"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

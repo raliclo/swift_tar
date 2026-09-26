@@ -184,6 +184,8 @@ static int add_path(struct archive *writer,
                     const char *path,
                     file_id archive_id,
                     int verbose,
+                    int follow_symlinks,
+                    int (*is_excluded)(const char *path, int is_directory),
                     char *error_buffer,
                     size_t error_capacity) {
     struct archive *disk = archive_read_disk_new();
@@ -195,7 +197,12 @@ static int add_path(struct archive *writer,
         set_error(error_buffer, error_capacity, "archive_read_disk_new failed");
         return -1;
     }
-    archive_read_disk_set_symlink_physical(disk);
+    /* -h/--dereference. This used to be physical unconditionally, so `-c --zip -h` stored
+     * links as links while the tar path stored what they point to (2026-09-27 review).
+     * -h/--dereference。原本一律 physical，於是 `-c --zip -h` 存的是連結本身，而 tar 路徑
+     * 存的是它所指向的內容（2026-09-27 審查）。 */
+    if (follow_symlinks) archive_read_disk_set_symlink_logical(disk);
+    else archive_read_disk_set_symlink_physical(disk);
     archive_read_disk_set_standard_lookup(disk);
 
     status = archive_read_disk_open(disk, path);
@@ -236,6 +243,22 @@ static int add_path(struct archive *writer,
             if (same_file(entry_id, archive_id)) {
                 fprintf(stderr, "swift_tar: %s: Can't add archive to itself\n",
                         archive_entry_pathname(entry));
+                archive_entry_free(entry);
+                entry = NULL;
+                continue;
+            }
+        }
+
+        /* --exclude, asked of the tar path's own matcher before descend, so an excluded
+         * directory is never walked -- the same order TarWriter.add uses. Until 2026-09-27
+         * this backend never consulted --exclude at all.
+         * --exclude，於 descend 之前詢問 tar 路徑自己的比對器，故被排除的目錄不會被走進去
+         * ——與 TarWriter.add 的順序相同。2026-09-27 之前本後端完全不看 --exclude。 */
+        if (is_excluded != NULL) {
+            const char *name = archive_entry_pathname_utf8(entry);
+            if (name == NULL) name = archive_entry_pathname(entry);
+            if (name != NULL && is_excluded(name, archive_entry_filetype(entry) == AE_IFDIR)) {
+                if (verbose) fprintf(stderr, "skipping %s / 略過 %s\n", name, name);
                 archive_entry_free(entry);
                 entry = NULL;
                 continue;
@@ -353,6 +376,8 @@ int swift_tar_zip_create(const char *archive_path,
                          size_t path_count,
                          int force_zip64,
                          int verbose,
+                         int follow_symlinks,
+                         int (*is_excluded)(const char *path, int is_directory),
                          char *error_buffer,
                          size_t error_capacity) {
     adopt_environment_charset();
@@ -479,7 +504,8 @@ int swift_tar_zip_create(const char *archive_path,
     }
 
     for (index = 0; index < path_count; ++index) {
-        if (add_path(writer, paths[index], archive_id, verbose, error_buffer, error_capacity) != 0) {
+        if (add_path(writer, paths[index], archive_id, verbose, follow_symlinks, is_excluded,
+                     error_buffer, error_capacity) != 0) {
             goto cleanup;
         }
     }

@@ -215,12 +215,31 @@ attribute」並以 rc=1 結束。同一段解析在 `scanTarEntries`（`-r`/`-u`
 `guard bytes <= Int.max` 根本跑不到。寬高 `0xFFFFFFFF`：**`--rgb1-info` rc=133**；對照組
 （2×2）正確回報 payload 大小不符並以 rc=1 結束。改用 `multipliedReportingOverflow`。
 
-## 🔴 `--exclude` 與 `-h` 在 `--zip` 下靜默失效 / `--exclude` and `-h` are silently ignored under `--zip`
+## `--exclude` 與 `-h` 在 `--zip` 下靜默失效 ▸ ✅ 已修正 2026-09-27（建立端；`-x`／`-t` 另立一項）/ `--exclude` and `-h` are silently ignored under `--zip`
+
+**修正**：C bridge 新增兩個參數——是否跟隨 symlink，以及「是否排除」的回呼。回呼呼叫的是
+tar 路徑**同一個**比對器（`TarWriter.isExcluded` 改為 static，搭配同一個 `archiveName` 正規化，
+目錄也同樣多試一次 `name + "/"`），所以同一個樣式在兩個後端意義相同，沒有第二份會分歧的
+實作。走訪在 descend 之前詢問，被排除的目錄不會被走進去。`-h` 在 ZIP 改用
+`archive_read_disk_set_symlink_logical`；`-r`／`-u` 建構 `TarWriter` 時補傳 `dereference`。
+
+**測試**：`test_exclude.zsh` 對 24 個樣式逐一斷言 `--zip` 與 tar 路徑排除相同的成員，外加一條
+「被排除的目錄不會被走進去」。`test_blind_findings.zsh` 新增 4 條 `-h`——在此之前，整棵樹
+**沒有任何測試**驗證 `-h` 真的會跟隨連結。反向對照：以修正前原始碼建出的執行檔，
+`test_exclude` 有 17 條 ZIP 對照失敗，`-h` 的 `--zip` 與 `-r` 兩條失敗；修正後全部通過。
+Windows 的 bridge 同步改了介面，但未在該平台建置或驗證。
 
 兩者只由 `TarWriter` 讀取；ZIP 後端完全不看，且固定使用 `set_symlink_physical`。
 `-c --zip --exclude '*.log' src`：rc=0，**封存內仍有 `src/a.log`**；同一指令走 tar 路徑
 正確排除。另外 `--exclude` 在 `-x`/`-t` 被忽略，`-r`/`-u` 建構 `TarWriter` 時沒傳 dereference。
 修法二擇一：在 ZIP 路徑實作，或以錯誤拒絕這些組合——後者至少不再給錯誤的結果。
+
+## 🔴 `-x` 與 `-t` 靜默忽略 `--exclude` / `-x` and `-t` silently ignore `--exclude`
+
+原屬上一項，2026-09-27 修建立端時查證並另立。以系統 bsdtar 建立含 `src/keep.txt` 與
+`src/a.log` 的封存：`swift_tar -x --exclude '*.log'` 解出了 `a.log`，`-t --exclude '*.log'` 也
+列出它，兩者都以 0 結束；bsdtar 兩者都排除 `a.log`。修法應在解出與列表的成員迴圈裡呼叫
+同一個 `TarWriter.isExcluded`，並補上與 bsdtar 對照的測試。
 
 ## 🔴 `--` 之後的運算元仍被當成旗標偵測 / Operands after `--` are still scanned for flags
 

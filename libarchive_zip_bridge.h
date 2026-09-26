@@ -13,6 +13,8 @@ int swift_tar_zip_create(const char *archive_path,
                          size_t path_count,
                          int force_zip64,
                          int verbose,
+                         int follow_symlinks,
+                         int (*is_excluded)(const char *path, int is_directory),
                          char *error_buffer,
                          size_t error_capacity);
 

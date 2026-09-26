@@ -131,9 +131,32 @@ private func cSwiftTarZipCreate(
     _ pathCount: Int,
     _ forceZip64: Int32,
     _ verbose: Int32,
+    _ followSymlinks: Int32,
+    _ isExcluded: (@convention(c) (UnsafePointer<CChar>?, Int32) -> Int32)?,
     _ errorBuffer: UnsafeMutablePointer<CChar>,
     _ errorCapacity: Int
 ) -> Int32
+
+/// The ZIP backend's `--exclude` test, called by the C walk before an entry is written
+/// or descended into. It is the tar path's own matcher with the tar path's own name
+/// normalisation, including the extra `name + "/"` try for a directory, so a pattern
+/// means the same thing whichever backend is chosen.
+///
+/// Until 2026-09-27 the ZIP backend never looked at `--exclude` or `-h`: `-c --zip
+/// --exclude '*.log' src` exited 0 with `src/a.log` inside, while the same command
+/// through tar left it out -- an exclusion that silently covers nothing.
+///
+/// ZIP 後端的 `--exclude` 判斷，由 C 端的走訪在寫入或走進一個項目之前呼叫。它就是 tar
+/// 路徑自己的比對器，搭配 tar 路徑自己的名稱正規化，包括對目錄多試一次 `name + "/"`，
+/// 因此不論選哪個後端，同一個樣式的意義都相同。
+///
+/// 在 2026-09-27 之前 ZIP 後端完全不看 `--exclude` 與 `-h`：`-c --zip --exclude '*.log'
+/// src` 以 0 結束而 `src/a.log` 仍在封存內，同一指令走 tar 路徑則正確排除——一條靜默地
+/// 什麼都不涵蓋的排除規則。
+private func zipEntryIsExcluded(_ path: String, isDirectory: Bool) -> Bool {
+    let name = TarWriter.archiveName(path)
+    return TarWriter.isExcluded(name) || (isDirectory && TarWriter.isExcluded(name + "/"))
+}
 
 @_silgen_name("swift_tar_zip_read")
 private func cSwiftTarZipRead(
@@ -177,7 +200,7 @@ private func isZipMagic(_ archivePath: String) -> Bool {
 }
 
 private func runZipCreate(archivePath: String, files: [String], changeDir: String,
-                          forceZip64: Bool, verbose: Bool) throws {
+                          forceZip64: Bool, verbose: Bool, dereference: Bool) throws {
     guard !files.isEmpty else {
         throw TarError.io("no files to archive / 未指定要打包的檔案")
     }
@@ -226,6 +249,12 @@ private func runZipCreate(archivePath: String, files: [String], changeDir: Strin
                 return nullable.withUnsafeBufferPointer { paths in
                     cSwiftTarZipCreate(archive, directory, paths.baseAddress!, paths.count,
                                        forceZip64 ? 1 : 0, verbose ? 1 : 0,
+                                       dereference ? 1 : 0,
+                                       { path, isDirectory in
+                                           guard let path else { return 0 }
+                                           return zipEntryIsExcluded(String(cString: path),
+                                                                     isDirectory: isDirectory != 0) ? 1 : 0
+                                       },
                                        &error, error.count)
                 }
             }
@@ -3052,7 +3081,7 @@ final class TarWriter {
     /// 所有人都不一致。
     ///
     /// 只影響 "./"。明確指定的運算元（`-C src a.txt`）本來就與兩個參照實作一致，現在依然。
-    private static func archiveName(_ path: String) -> String {
+    fileprivate static func archiveName(_ path: String) -> String {
         var p = path.replacingOccurrences(of: "\\", with: "/")
         if p.count >= 2, p[p.startIndex].isLetter, p[p.index(after: p.startIndex)] == ":" {
             p.removeFirst(2)
@@ -3133,7 +3162,14 @@ final class TarWriter {
     /// `--exclude='./sub/*'` 都會排除它們。若不這麼做，`sub/*` 會在 archiveName 開始保留
     /// 該前綴的當下失效——而一條靜默地什麼都不涵蓋的排除規則，正是「本應留在封存外的檔案
     /// 被收了進去」的那種形狀。
-    private func isExcluded(_ name: String) -> Bool {
+    ///
+    /// Static, and fileprivate rather than private, so the ZIP backend's walk can ask this
+    /// same function (see zipEntryIsExcluded). It never used instance state; there is one
+    /// matcher for both backends, not a second one to drift from it.
+    /// 設為 static 且 fileprivate（而非 private），使 ZIP 後端的走訪能呼叫同一個函式（見
+    /// zipEntryIsExcluded）。它本來就不使用實例狀態；兩個後端共用一個比對器，而不是另寫
+    /// 一個日後與它分歧的版本。
+    fileprivate static func isExcluded(_ name: String) -> Bool {
         let patterns = tarExcludePatterns
         guard !patterns.isEmpty else { return false }
         func withoutDotSlash(_ s: String) -> String {
@@ -3185,7 +3221,7 @@ final class TarWriter {
     /// Correctness is pinned by test/test_exclude.zsh, which was itself aligned
     /// to bsdtar by measurement -- so a divergence between Windows and the rest
     /// is caught there rather than promised here.
-    private func globNoFlags(_ pattern: String, _ name: String) -> Bool {
+    private static func globNoFlags(_ pattern: String, _ name: String) -> Bool {
 #if os(Windows)
         let p = Array(pattern), s = Array(name)
         var pi = 0, si = 0, starP = -1, starS = 0
@@ -3266,7 +3302,7 @@ final class TarWriter {
         // to step around an unreadable subtree rather than merely omit its listing.
         // 於 stat 之前檢查，故被排除的項目不付出任何代價，被排除的目錄也不會被走進去
         // ——那正是 `--exclude` 得以繞開讀不到的子樹、而非僅僅略去其列表的原因。
-        if isExcluded(name) {
+        if Self.isExcluded(name) {
             if verbose { eprint("skipping \(name) / 略過 \(name)") }
             return
         }
@@ -3277,7 +3313,7 @@ final class TarWriter {
         // has its `*` match the empty string and drops `src/sub/` itself along with the
         // subtree. This adds that spelling once the entry is known to be a directory --
         // measured against bsdtar, where it is the one shape of six that reveals the gap.
-        let excludedAsDirectory = { [self] in isExcluded(name + "/") }
+        let excludedAsDirectory = { Self.isExcluded(name + "/") }
 #if os(Windows)
         guard let st = winStat(path) else {
             throw TarError.io("cannot stat '\(path)' / 無法讀取 '\(path)' 的檔案資訊")
@@ -5997,7 +6033,7 @@ struct SwiftTarMain {
                     }
                     try runZipCreate(archivePath: archivePath, files: files,
                                      changeDir: destDir, forceZip64: forceZip64,
-                                     verbose: verbose)
+                                     verbose: verbose, dereference: tarDereference)
                 } else {
                     try runCreate(archivePath: archivePath, files: files, codec: codec,
                                   changeDir: destDir, inflight: inflightN, verbose: verbose)
@@ -6326,9 +6362,14 @@ struct SwiftTarMain {
         }
 
         let sink = ParallelChunkSink(codec: .none, output: output, inflight: inflight)
+        // dereference passed here too: -r and -u used to ignore -h, since only the create
+        // path handed it to TarWriter (2026-09-27 review).
+        // 這裡也要傳 dereference：原本只有建立路徑把它交給 TarWriter，於是 -r 與 -u 會忽略
+        // -h（2026-09-27 審查）。
         let writer = TarWriter(sink: sink, verbose: verbose,
                                updateBaseline: update ? baseline : nil,
-                               archivePath: archiveAbsolute)
+                               archivePath: archiveAbsolute,
+                               dereference: tarDereference)
         for f in files {
             try writer.add(path: f)
         }

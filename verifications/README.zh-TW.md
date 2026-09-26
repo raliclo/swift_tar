@@ -558,3 +558,37 @@ swift_tar 現在三種形狀都是較快的一方——這延伸了上方那一�
 0.17 秒的目標無效（試過四種做法，最多只取到 52 個樣本）；以及參照 tar 必須以「問它是
 什麼」來挑選——Linux VM 的 `/usr/bin/tar` **就是 swift_tar**，依檔名挑選會讓它與自己
 比較，並回報一個完美的 1.00×。
+
+## chunk 大小：4／8／16 MiB 各付出什麼（2026-09-27）
+
+`chunk_size_tradeoff.zsh` → `chunk_size_tradeoff.txt`
+
+`TAR_CHUNK_SIZE`（`swift_tar.swift`，`1 << 22` = 4 MiB）是編譯期常數：`ParallelChunkSink`
+雖然收 `chunkSize:`，但兩個呼叫端都不傳值、建置腳本也不覆寫，沒有任何旗標碰得到它。
+所以腳本**重建**：把原始碼複製到暫存目錄，只替換那一行常數（逐支確認替換成功），以
+`compile_tar.zsh` 的 swiftc 參數與既有的 `build/` 產物建出每一支變體。不動工作樹、不呼叫
+`generate_version.zsh`（它會寫 `version-mac.txt`）、不覆蓋已安裝的執行檔。`--source REV`
+從 git 版本建置，別的 session 的未提交改動因此不會混進變體。
+
+與現值相同的那一支用與其他變體完全相同的方式建置，三者之間唯一的差異就是那個常數；另外也
+量已安裝的執行檔，檢查這個建置方式等同正式建置。
+
+| chunk | ZSTD 大小 | ZSTD 解壓 | TGZ |
+| --- | ---: | ---: | --- |
+| **4 MiB** | 382.6 MiB | 1157 MB/s | 速度和大小都跟 chunk 無關 |
+| 8 MiB | **−2.6%** | −3.6% | |
+| 16 MiB | **−4.0%** | −5.1% | |
+
+claw-code，swift_tar `f6ba52c`，5 輪交錯取最小值，輸出在 RAM disk，解壓以 `--cat` 量。
+
+**大小的差異是確定的，速度的差異不是。** 壓縮後大小與負載無關，兩次執行在輸出的精度（0.1 MiB）
+內相同。速度則
+否：與 4 MiB 同值的對照組在這次執行裡自己就偏離最多 5.8%；同一天較早一次未存檔的執行量到
+16 MiB 解壓 −10%，這次是 −5.1%——沒有重現，不採用。兩次唯一一致的是方向：chunk 越大，
+ZSTD 解壓與無壓縮 tar 越慢。
+
+**維持 4 MiB。** 放大 chunk 只換到 ≤4% 的 ZSTD 大小，速度沒有變好。TGZ 完全不受影響——gzip
+的視窗只有 32 KiB，chunk 碰不到它。
+
+`zstd_decode_gap.zsh --mode chunk` 問的是另一件事（固定 chunk 大小、以 `--zstd-level` 改變
+frame 內容），兩者不可互相引用。

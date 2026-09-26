@@ -1,0 +1,45 @@
+==============================================================
+ TAR_CHUNK_SIZE 取捨 / chunk size trade-off
+==============================================================
+  日期 / date     : 2026-09-27 05:39:23
+  機器 / machine  : Mac16,10  27.2 (26B5091g)
+  原始碼 / source : f6ba52c   未提交改動 / dirty: no
+  語料 / corpus   : /Users/raliclo/proj/lzfse2/claw-code  (1351 MiB)
+  輪數 / reps     : 5（逐輪交錯、取最小值）
+  負載 / load     : 3.50 4.72 6.36（開始）
+
+  建置 / built  4 MiB   swift_tar chunk-4MiB   診斷 0 行
+  建置 / built  8 MiB   swift_tar chunk-8MiB   診斷 0 行
+  建置 / built  16 MiB   swift_tar chunk-16MiB   診斷 0 行
+  對照 / control  /opt/homebrew/bin/swift_tar   swift_tar 20260920-170352
+
+  第 1／5 輪完成 / round done
+  第 2／5 輪完成 / round done
+  第 3／5 輪完成 / round done
+  第 4／5 輪完成 / round done
+  第 5／5 輪完成 / round done
+
+--- MB/s（= 1351 MiB ÷ 最小秒數）/ MB/s from minimum seconds ---
+  chunk       tgz_enc   tgz_dec   zst_enc   zst_dec   tar_enc     tgz_MiB     zst_MiB
+  4 MiB           277       799       454      1157      2896       468.6       382.6
+  8 MiB           273       799       443      1115      2797       468.5       372.5
+  16 MiB          269       814       427      1098      2670       468.5       367.1
+  control         268       803       435      1138      2728       468.6       382.6
+
+--- 相對 4 MiB / relative to 4 MiB（速度為 MB/s 的變化，大小為檔案大小的變化）---
+  chunk       tgz_enc   tgz_dec   zst_enc   zst_dec   tar_enc    tgz_size    zst_size
+  4 MiB         +0.0%     +0.0%     +0.0%     +0.0%     +0.0%       +0.0%       +0.0%
+  8 MiB         -1.5%     -0.0%     -2.5%     -3.6%     -3.4%       -0.0%       -2.6%
+  16 MiB        -2.9%     +1.9%     -6.1%     -5.1%     -7.8%       -0.0%       -4.0%
+  control       -3.3%     +0.5%     -4.2%     -1.6%     -5.8%       +0.0%       +0.0%
+
+--- 最小秒數 / minimum seconds ---
+  4: tgz_enc=4.878 tgz_dec=1.691 zst_enc=2.973 zst_dec=1.168 tar_enc=0.466
+  8: tgz_enc=4.952 tgz_dec=1.691 zst_enc=3.050 zst_dec=1.212 tar_enc=0.483
+  16: tgz_enc=5.022 tgz_dec=1.659 zst_enc=3.167 zst_dec=1.230 tar_enc=0.506
+  control: tgz_enc=5.046 tgz_dec=1.682 zst_enc=3.104 zst_dec=1.187 tar_enc=0.495
+
+  負載 / load     : 18.41 11.48 8.76（結束）
+  判讀：對照組應與 4 MiB 每項吻合在數個百分點內；不吻合代表建置方式本身有差。
+  Reading: the control must match 4 MiB within a few percent, or the build differs.
+  4% 以內的差距不作為結論。 / Differences under 4% are not findings.

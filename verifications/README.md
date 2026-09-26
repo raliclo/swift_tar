@@ -619,3 +619,46 @@ here: sampling profilers do not work against a 0.17 s target (four approaches
 tried, at most 52 samples), and the reference tar must be chosen by asking it
 what it is — `/usr/bin/tar` in the Linux VM *is* swift_tar, so choosing by
 filename compares it with itself and reports a flawless 1.00×.
+
+## Chunk size: what 4 / 8 / 16 MiB trade (2026-09-27)
+
+`chunk_size_tradeoff.zsh` → `chunk_size_tradeoff.txt`
+
+`TAR_CHUNK_SIZE` (`swift_tar.swift`, `1 << 22` = 4 MiB) is a compile-time constant:
+`ParallelChunkSink` accepts `chunkSize:`, but neither call site passes it and no
+build script overrides it, so no flag reaches it. The script therefore
+**rebuilds**: it copies the sources to a temp directory, replaces only that one
+constant (checking each replacement took), and builds each variant with
+`compile_tar.zsh`'s swiftc arguments against the existing `build/` artefacts.
+It does not touch the work tree, does not call `generate_version.zsh` (which
+writes `version-mac.txt`), and does not replace the installed binary.
+`--source REV` builds from a git revision, so another session's uncommitted
+changes cannot leak into the variants.
+
+The variant equal to the shipped value is built exactly like the others, so the
+constant is the only difference between them; the installed binary is measured
+too, as a check that this build method matches production.
+
+| chunk | ZSTD size | ZSTD decode | TGZ |
+| --- | ---: | ---: | --- |
+| **4 MiB** | 382.6 MiB | 1157 MB/s | speed and size unaffected by chunk size |
+| 8 MiB | **−2.6%** | −3.6% | |
+| 16 MiB | **−4.0%** | −5.1% | |
+
+claw-code, swift_tar `f6ba52c`, 5 interleaved rounds, minimum taken, output on a
+RAM disk, decode via `--cat`.
+
+**Size differences are deterministic; speed differences are not.** Compressed
+size does not depend on load and repeated across two runs to the printed
+0.1 MiB. Speed did
+not: the control, identical in value to 4 MiB, itself deviated by up to 5.8% in
+this run, and an earlier unsaved run's −10% decode at 16 MiB came out at −5.1%
+here — not reproduced, so not used. The only consistent speed signal is the
+direction: larger chunks, slower ZSTD decode and plain tar.
+
+**Keep 4 MiB.** A larger chunk buys at most 4% of ZSTD size and no speed. TGZ
+is untouched either way — gzip's window is 32 KiB, so the chunk never reaches it.
+
+`zstd_decode_gap.zsh --mode chunk` answers a different question — frame count
+at a fixed chunk size, varied through `--zstd-level` — and the two must not be
+cited for each other.

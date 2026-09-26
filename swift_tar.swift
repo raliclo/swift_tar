@@ -5438,16 +5438,19 @@ struct SwiftTarMain {
         // -test must be caught before combined-short-flag expansion below,
         // which would otherwise split it into -t -e -s -t (length 5, starts
         // with "-", not "--").
-        if CommandLine.arguments.contains("-test") {
-            runSelfTest(debug: CommandLine.arguments.contains("-debug"))
+        // Only the part before a bare "--" can hold options; see `args` below.
+        // 只有裸 "--" 之前的部分可能是選項；見下方的 `args`。
+        let rawOptions = CommandLine.arguments.prefix(while: { $0 != "--" })
+        if rawOptions.contains("-test") {
+            runSelfTest(debug: rawOptions.contains("-debug"))
         }
-        if CommandLine.arguments.contains("--version") {
+        if rawOptions.contains("--version") {
             print("swift_tar \(swiftTarBuildVersion)")
             exit(0)
         }
         // Hand-rolled crypto must be checkable against the specs' own vectors.
         // 自行實作的密碼學必須能對規範自帶向量驗證。
-        if CommandLine.arguments.contains("--crypto-selftest") {
+        if rawOptions.contains("--crypto-selftest") {
             exit(cryptoSelfTest() ? 0 : 1)
         }
         // 展開 combined short flags，相容標準 tar 用法的兩種形式：
@@ -5456,7 +5459,7 @@ struct SwiftTarMain {
         // Expand combined short flags for standard tar compatibility:
         //   dash form: -czf → -c -z -f
         //   traditional POSIX form (first operand, all letters, no dash): czf → -c -z -f
-        let args: [String] = {
+        let allArgs: [String] = {
             var out: [String] = [CommandLine.arguments[0]]
             // Everything after a bare "--" is an operand, so cluster expansion has
             // to stop there too, not just the option check further down. A file
@@ -5513,9 +5516,24 @@ struct SwiftTarMain {
             }
             return out
         }()
-        if args.contains("--help") || args.count < 2 {
+        // Options are read from the part before a bare "--" only. The cluster expansion
+        // above and the operand loop below already stopped at "--", but every flag test in
+        // between was `args.contains(...)` over the whole list, so an operand after it still
+        // counted: `-cf y.tar -- -u` failed with "specify exactly one of -c, -x ...", and
+        // `-cf v.tar -- -v n.txt` silently turned on verbose (2026-09-27 review). Truncating
+        // `args` here fixes all ~45 tests at once instead of editing each. `allArgs` keeps the
+        // operands after "--" for the two places that collect operands.
+        //
+        // 選項只從裸 "--" 之前的部分讀取。上方的叢集展開與下方的運算元迴圈原本就停在 "--"，
+        // 但兩者之間的每一個旗標判斷都是對整個清單做 `args.contains(...)`，於是 "--" 之後的
+        // 運算元仍被計入：`-cf y.tar -- -u` 以「specify exactly one of -c, -x ...」失敗，而
+        // `-cf v.tar -- -v n.txt` 靜默開啟了 verbose（2026-09-27 審查）。在此截斷 `args`，一次
+        // 修好約 45 處判斷，而不是逐一改寫。`allArgs` 保留 "--" 之後的運算元，供兩個收集
+        // 運算元的地方使用。
+        let args: [String] = allArgs.firstIndex(of: "--").map { Array(allArgs[..<$0]) } ?? allArgs
+        if args.contains("--help") || allArgs.count < 2 {
             printTarUsage()
-            exit(args.count < 2 ? 1 : 0)
+            exit(allArgs.count < 2 ? 1 : 0)
         }
 
         // Validated here, before any command branch, not after them. The RGB1
@@ -5618,7 +5636,7 @@ struct SwiftTarMain {
         // 有，而 swift_tar 回答的是「unknown option --」。開頭是減號並非罕見檔名——
         // 瀏覽器、解壓工具與報表產生器都會產出這種名稱。
         var endOfOptions = false
-        for a in args {
+        for a in allArgs {
             if skipNext { skipNext = false; continue }
             if endOfOptions { files.append(a); continue }
             if a == "--" { endOfOptions = true; continue }
@@ -5691,9 +5709,11 @@ struct SwiftTarMain {
                         timezoneOffsetMinutes = RGB1Image.taiwanTimezoneOffsetMinutes
                     }
 
-                    let inputPath = args.last { candidate in
+                    // allArgs, not args: the input file is an operand and may follow "--".
+                    // 用 allArgs 而非 args：輸入檔是運算元，可能位於 "--" 之後。
+                    let inputPath = allArgs.last { candidate in
                         !candidate.hasPrefix("-")
-                        && candidate != args[0]
+                        && candidate != allArgs[0]
                         && candidate != rgb1Path
                         && candidate != widthRaw
                         && candidate != heightRaw

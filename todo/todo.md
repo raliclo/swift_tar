@@ -241,7 +241,17 @@ Windows 的 bridge 同步改了介面，但未在該平台建置或驗證。
 列出它，兩者都以 0 結束；bsdtar 兩者都排除 `a.log`。修法應在解出與列表的成員迴圈裡呼叫
 同一個 `TarWriter.isExcluded`，並補上與 bsdtar 對照的測試。
 
-## 🔴 `--` 之後的運算元仍被當成旗標偵測 / Operands after `--` are still scanned for flags
+## `--` 之後的運算元仍被當成旗標偵測 ▸ ✅ 已修正 2026-09-27 / Operands after `--` are still scanned for flags
+
+**修正**：展開後的完整清單改名為 `allArgs`，`args` 只取裸 `--` 之前的部分，約 45 處
+`args.contains(...)` 因此一次修好，不必逐一改寫；只有兩個收集運算元的地方（運算元迴圈、
+RGB1 打包的輸入檔）讀 `allArgs`。檔頭直接查原始參數的 `--version`、`-test`、
+`--crypto-selftest` 也改為只看 `--` 之前。查證時多發現一個症狀：`-- --version` 會直接印出
+版本號就結束，連封存都沒建立。
+
+**測試**：`test_blind_findings.zsh` 新增 5 條，運算元分別恰好等於 `-u`、`-v`、`--version`、
+`-z`——既有的 `-report.csv` 測試抓不到這個缺陷，因為沒有旗標叫那個名字。5 條對修正前全部
+失敗，修正後全部通過；其餘套件不受影響。
 
 模式與旗標以 `args.contains(...)` 掃描整個 `args`。`-cf y.tar -- -u` 回報「specify exactly one
 of…」且 rc=1；**`-cf v.tar -- -v n.txt` 靜默開啟 verbose**（印出 `a -v`、`a n.txt`）。bsdtar

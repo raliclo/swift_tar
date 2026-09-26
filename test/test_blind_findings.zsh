@@ -750,6 +750,29 @@ fi
 rc=0; "$ST" -c -f "$TMP/dot.tar" -C "$DASH" ./-report.csv >/dev/null 2>&1 || rc=$?
 eq "./-name still archives a dash-leading name" "0" "$rc"
 
+# An operand after "--" that is spelled exactly like a flag. `-report.csv` above cannot
+# catch this: no flag is named that. The cluster expansion and the operand loop both
+# stopped at "--", but every flag test between them scanned the whole list, so
+# `-- -u` failed with "specify exactly one of -c, -x ...", `-- -v` silently turned on
+# verbose, and `-- -z` would have gzipped the archive (2026-09-27 review).
+# "--" 之後、拼法恰好等於某個旗標的運算元。上面的 `-report.csv` 抓不到這種情況：沒有
+# 旗標叫那個名字。叢集展開與運算元迴圈原本都停在 "--"，但兩者之間的每個旗標判斷都掃描
+# 整個清單，於是 `-- -u` 以「specify exactly one of -c, -x ...」失敗，`-- -v` 靜默開啟
+# verbose，`-- -z` 則會把封存變成 gzip（2026-09-27 審查）。
+FL="$TMP/flagnames"; rm -rf "$FL"; mkdir -p "$FL"
+for n in -u -v -z --version; do printf '%s\n' "$n" > "$FL/$n"; done
+rc=0; "$ST" -c -f "$TMP/fl_u.tar" -C "$FL" -- -u >/dev/null 2>&1 || rc=$?
+eq "-- -u: a file named like a mode flag is archived, not read as one (rc)" "0" "$rc"
+eq "-- -u: the archive holds that file" "-u" \
+   "$("$ST" -t -f "$TMP/fl_u.tar" 2>/dev/null | tr -d '\r')"
+fl_out=$("$ST" -c -f "$TMP/fl_v.tar" -C "$FL" -- -v --version 2>&1)
+eq "-- -v: a file named -v does not turn on verbose" "" "$fl_out"
+eq "-- --version: archived rather than printing the version" "2" \
+   "$("$ST" -t -f "$TMP/fl_v.tar" 2>/dev/null | wc -l | tr -d ' ')"
+"$ST" -c -f "$TMP/fl_z.tar" -C "$FL" -- -z >/dev/null 2>&1 || true   # asserted below via the bytes
+eq "-- -z: a file named -z does not select gzip" "no" \
+   "$( [ "$(od -An -tx1 -N2 "$TMP/fl_z.tar" 2>/dev/null | tr -d ' \n')" = "1f8b" ] && echo yes || echo no )"
+
 # ---- DOS reserved device names as member names ----
 # Extracting an archive that holds a member called `nul` wrote six of seven files
 # on Windows, dropped that one into the null device, and exited 0 with no message.

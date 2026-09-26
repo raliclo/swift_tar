@@ -217,7 +217,15 @@ symlink 與硬連結時都會呼叫 `forget`。`test_blind_findings.zsh` 新增�
 
 影響 macOS 預設 APFS 與 Windows NTFS；區分大小寫的 ext4 不受影響。
 
-## 🔴 pax 記錄長度欄位過小時崩潰 / A too-small pax record length traps
+## pax 記錄長度欄位過小時崩潰 ▸ ✅ 已修正 2026-09-27 / A too-small pax record length traps
+
+**修正**：三處 pax 解析（解出／列表、`scanTarEntries`、`runDelete`）的守門統一為
+`len > 0, len <= endIndex - pos, pos + len >= sp + 2`。後者保證記錄至少越過空白到結尾換行；
+前者取代 `pos + len <= endIndex`，因為那個加法在長度極大時本身就會溢位——查證時一併發現。
+
+**測試**：`test_blind_findings.zsh` 以參照 tar 寫出的 pax 封存，把第一筆記錄的長度欄位改成
+「1」加空白，斷言 `-t`、`-x`、`-u`、`--delete` 都沒有被訊號終止，且 `-t` 仍列出成員。修正前
+四條路徑都以 rc=133 結束（`-u`、`--delete` 以 HEAD 原始碼另建執行檔驗證），修正後 184/0。
 
 `swift_tar.swift` 的 pax 解析只檢查 `pos+len <= endIndex`，沒檢查 `len` 至少要涵蓋長度欄位
 本身與空白。把合法 pax 封存的 `30 mtime=` 改成 `1  mtime=`：**`-t` 與 `-x` 都 rc=133

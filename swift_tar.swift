@@ -4059,9 +4059,20 @@ final class TarReader {
                 let records = data.prefix(Int(size))
                 var pos = records.startIndex
                 while pos < records.endIndex {
+                    // `len` counts the whole record, so it must at least reach past the
+                    // space to a trailing "\n": pos + len >= sp + 2. Without that check a
+                    // too-small length made the slice below upside down and trapped; and
+                    // `len <= endIndex - pos` replaces `pos + len <= endIndex`, which could
+                    // itself overflow for a huge length. Same guard at the two other pax
+                    // parsers (scanTarEntries, runDelete). (2026-09-27 review.)
+                    // `len` 是整筆記錄的長度，所以至少要越過空白到結尾的 "\n"：
+                    // pos + len >= sp + 2。少了這個檢查，過小的長度會讓下方的切片上下顛倒而
+                    // trap；另外以 `len <= endIndex - pos` 取代 `pos + len <= endIndex`，後者
+                    // 在長度極大時本身就會溢位。另外兩處 pax 解析（scanTarEntries、runDelete）
+                    // 採同一個守門。（2026-09-27 審查）
                     guard let sp = records[pos...].firstIndex(of: UInt8(ascii: " ")),
                           let len = Int(String(decoding: records[pos..<sp], as: UTF8.self)),
-                          len > 0, pos + len <= records.endIndex else { break }
+                          len > 0, len <= records.endIndex - pos, pos + len >= sp + 2 else { break }
                     let rec = records[sp + 1..<pos + len - 1]   // strip trailing "\n"
                     if let eq = rec.firstIndex(of: UInt8(ascii: "=")) {
                         let key = String(decoding: rec[rec.startIndex..<eq], as: UTF8.self)
@@ -6363,7 +6374,7 @@ struct SwiftTarMain {
                         while pos < data.endIndex {
                             guard let sp = data[pos...].firstIndex(of: UInt8(ascii: " ")),
                                   let len = Int(String(decoding: data[pos..<sp], as: UTF8.self)),
-                                  len > 0, pos + len <= data.endIndex else { break }
+                                  len > 0, len <= data.endIndex - pos, pos + len >= sp + 2 else { break }
                             let rec = data[sp + 1..<pos + len - 1]   // strip trailing "\n"
                             if let eq = rec.firstIndex(of: UInt8(ascii: "=")) {
                                 let key = String(decoding: rec[rec.startIndex..<eq], as: UTF8.self)
@@ -6559,7 +6570,7 @@ struct SwiftTarMain {
                     while pos < records.endIndex {
                         guard let sp = records[pos...].firstIndex(of: UInt8(ascii: " ")),
                               let len = Int(String(decoding: records[pos..<sp], as: UTF8.self)),
-                              len > 0, pos + len <= records.endIndex else { break }
+                              len > 0, len <= records.endIndex - pos, pos + len >= sp + 2 else { break }
                         let kv = records[(sp + 1)..<(pos + len)]
                         if let eq = kv.firstIndex(of: UInt8(ascii: "=")) {
                             let key = String(decoding: kv[kv.startIndex..<eq], as: UTF8.self)

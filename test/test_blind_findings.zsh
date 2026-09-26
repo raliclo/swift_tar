@@ -2090,6 +2090,40 @@ else
   echo "SKIP: ZIP extraction skip test (no bsdtar here to build the fixture)"
 fi
 
+# ---- a pax record whose length field is too small does not crash ----
+# A length smaller than its own digits plus the space made the record slice upside down,
+# and -t / -x ended with SIGTRAP (rc=133) and no message; the system bsdtar reports the
+# record as malformed and carries on. The same parse exists in scanTarEntries (-r/-u) and
+# runDelete and got the same guard. The fixture is a pax archive from the reference tar
+# with its first record's length field replaced by "1" and spaces. (2026-09-27 review.)
+# 長度小於自身位數加空白時，記錄的切片會上下顛倒，-t／-x 以 SIGTRAP（rc=133）結束且沒有
+# 訊息；系統 bsdtar 則回報該記錄格式錯誤並繼續。同樣的解析也在 scanTarEntries（-r/-u）與
+# runDelete，已加上同一個守門。測資是參照 tar 寫出的 pax 封存，把第一筆記錄的長度欄位改成
+# "1" 加空白。（2026-09-27 審查）
+PX="$TMP/paxlen"; rm -rf "$PX"; mkdir -p "$PX/src"; print -r -- n > "$PX/src/n.txt"
+( cd "$PX" && COPYFILE_DISABLE=1 "$SYS_TAR" --format pax -cf pax.tar -C src n.txt ) >/dev/null 2>&1 || true
+px_hit=$(grep -abo '[0-9][0-9]* [A-Za-z.]*=' "$PX/pax.tar" 2>/dev/null | head -1 || true)
+if [ -n "$px_hit" ]; then
+  px_off=${px_hit%%:*}; px_digits=${${px_hit#*:}%% *}
+  printf '1%*s' $(( ${#px_digits} - 1 )) '' | dd of="$PX/pax.tar" bs=1 seek="$px_off" conv=notrunc 2>/dev/null
+  px_rc=0; px_list=$("$ST" -t -f "$PX/pax.tar" 2>/dev/null) || px_rc=$?
+  eq "a too-small pax record length: -t is not killed by a signal" "yes" "$( (( px_rc < 128 )) && echo yes || echo "no (rc=$px_rc)" )"
+  eq "a too-small pax record length: the member is still listed" "n.txt" "$(print -r -- "$px_list" | tr -d '\r')"
+  px_rc=0; mkdir -p "$PX/out"; "$ST" -x -f "$PX/pax.tar" -C "$PX/out" >/dev/null 2>&1 || px_rc=$?
+  eq "a too-small pax record length: -x is not killed by a signal" "yes" "$( (( px_rc < 128 )) && echo yes || echo "no (rc=$px_rc)" )"
+  # The other two parsers: -u reads the archive through scanTarEntries, --delete through
+  # runDelete. Each on its own copy, since both rewrite the file.
+  # 另外兩處解析：-u 經由 scanTarEntries 讀取封存，--delete 經由 runDelete。各用一份副本，
+  # 因為兩者都會改寫檔案。
+  cp "$PX/pax.tar" "$PX/u.tar"; cp "$PX/pax.tar" "$PX/d.tar"
+  px_rc=0; ( cd "$PX" && "$ST" -u -f u.tar -C src n.txt ) >/dev/null 2>&1 || px_rc=$?
+  eq "a too-small pax record length: -u is not killed by a signal" "yes" "$( (( px_rc < 128 )) && echo yes || echo "no (rc=$px_rc)" )"
+  px_rc=0; "$ST" --delete -f "$PX/d.tar" n.txt >/dev/null 2>&1 || px_rc=$?
+  eq "a too-small pax record length: --delete is not killed by a signal" "yes" "$( (( px_rc < 128 )) && echo yes || echo "no (rc=$px_rc)" )"
+else
+  echo "SKIP: pax record length test (the reference tar wrote no pax record to alter)"
+fi
+
 # ---- -c --zip leaves the source tree's timestamps alone ----
 # Creating a ZIP changed the mtime of every directory it walked to "now". Found
 # 2026-09-27 while fixing the `./` block's -u checks, which it made re-add directories.

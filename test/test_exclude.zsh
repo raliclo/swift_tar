@@ -231,6 +231,41 @@ for pat in $AGREED $DIVERGENT; do
   check "$(members "$ST" "$pat")" "$(zip_members "$pat")" "'$pat' --zip 與 tar 路徑一致 / --zip matches the tar path"
 done
 
+# 讀取端（-t、-x）。2026-09-27 之前讀取端完全不看 --exclude：`-x --exclude '*.log'` 解出
+# a.log 並以 0 結束，而 bsdtar 會排除它。這裡對同一個完整封存，逐一比較 swift_tar 與參照
+# tar 在每個樣式下列出與解出的內容，並比較 tar 與 ZIP 兩個讀取後端。分歧樣式只對 bsdtar
+# 比，理由同上方建立端。
+# The read side (-t, -x). Until 2026-09-27 reading ignored --exclude: `-x --exclude '*.log'`
+# extracted a.log and exited 0, while bsdtar left it out. On one full archive, each pattern's
+# listing and extraction are compared with the reference tar's, and the tar and ZIP read
+# backends with each other. Divergent shapes are compared with bsdtar only, as above.
+full_tar="$work/full.tar"; full_zip="$work/full.zip"
+rm -f "$full_tar" "$full_zip"
+( cd "$work" && "$ST" -c -f full.tar src && "$ST" -c --zip -f full.zip src ) >/dev/null 2>&1
+read_list() {  # <tar> <樣式> [archive]
+  local t=$1 pat=$2 a=${3:-$full_tar} out
+  if [[ $t == "$ST" ]]; then out=$( "$ST" -t --exclude "$pat" -f "$a" 2>/dev/null )
+  else out=$( $t tf "$a" --exclude "$pat" 2>/dev/null ); fi
+  print -- "${out}" | sed 's|/$||' | sort | tr '\n' ' '
+}
+extract_list() {  # <tar> <樣式> [archive]
+  local t=$1 pat=$2 a=${3:-$full_tar}
+  rm -rf "$work/xo"; mkdir -p "$work/xo"
+  if [[ $t == "$ST" ]]; then "$ST" -x --exclude "$pat" -f "$a" -C "$work/xo" >/dev/null 2>&1
+  else $t xf "$a" --exclude "$pat" -C "$work/xo" >/dev/null 2>&1; fi
+  ( cd "$work/xo" && find . -mindepth 1 | sed 's|^\./||' | sort | tr '\n' ' ' )
+}
+RREF=${BSD:-$GNU}
+READ_PATS=($AGREED)
+[[ -n $BSD ]] && READ_PATS+=($DIVERGENT)
+print -- ""
+print -- "讀取端與參照 tar 一致 / the read side matches the reference tar:"
+for pat in $READ_PATS; do
+  check "$(read_list $RREF "$pat")"    "$(read_list "$ST" "$pat")"    "-t '$pat' 與參照一致 / -t matches the reference"
+  check "$(extract_list $RREF "$pat")" "$(extract_list "$ST" "$pat")" "-x '$pat' 與參照一致 / -x matches the reference"
+  check "$(read_list "$ST" "$pat")" "$(read_list "$ST" "$pat" "$full_zip")" "-t '$pat' ZIP 與 tar 讀取一致 / ZIP read matches tar read"
+done
+
 print -- ""
 print -- "其他 / other:"
 

@@ -593,6 +593,7 @@ int swift_tar_zip_read(const char *archive_path,
                        int to_stdout,
                        int verbose,
                        int restore_mtime,
+                       int (*is_excluded)(const char *path, int is_directory),
                        char *error_buffer,
                        size_t error_capacity) {
     adopt_environment_charset();
@@ -702,6 +703,18 @@ int swift_tar_zip_read(const char *archive_path,
         if (status < ARCHIVE_OK) {
             fprintf(stderr, "swift_tar: %s: %s\n", path != NULL ? path : "",
                     archive_error_string(reader));
+        }
+        /* --exclude on reading, the same Swift function the tar reader calls
+         * (TarReader.memberIsExcluded), so -t and -x mean the same on both backends. The
+         * next archive_read_next_header skips the unread data.
+         * 讀取端的 --exclude，呼叫與 tar 讀取端相同的 Swift 函式（TarReader.memberIsExcluded），
+         * 使 -t 與 -x 在兩個後端意義相同。下一次 archive_read_next_header 會略過未讀的資料。 */
+        if (is_excluded != NULL) {
+            const char *name = archive_entry_pathname_utf8(entry);
+            if (name == NULL) name = path;
+            if (name != NULL && is_excluded(name, archive_entry_filetype(entry) == AE_IFDIR)) {
+                continue;
+            }
         }
         if (!extract) {
             printf("%s\n", path != NULL ? path : "");

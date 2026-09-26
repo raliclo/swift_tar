@@ -166,6 +166,7 @@ private func cSwiftTarZipRead(
     _ toStdout: Int32,
     _ verbose: Int32,
     _ restoreMtime: Int32,
+    _ isExcluded: (@convention(c) (UnsafePointer<CChar>?, Int32) -> Int32)?,
     _ errorBuffer: UnsafeMutablePointer<CChar>,
     _ errorCapacity: Int
 ) -> Int32
@@ -295,7 +296,13 @@ private func runZipRead(archivePath: String, extract: Bool, destDir: String,
         destDir.withCString { directory in
             cSwiftTarZipRead(archive, directory, extract ? 1 : 0, toStdout ? 1 : 0,
                              verbose ? 1 : 0,
-                             restoreMtime ? 1 : 0, &error, error.count)
+                             restoreMtime ? 1 : 0,
+                             { path, isDirectory in
+                                 guard let path else { return 0 }
+                                 return TarReader.memberIsExcluded(String(cString: path),
+                                                                   isDirectory: isDirectory != 0) ? 1 : 0
+                             },
+                             &error, error.count)
         }
     }
     guard status == 0 else {
@@ -3673,6 +3680,38 @@ final class TarReader {
     ///                      ".."；結果落在 -C 目錄之上兩層
     ///   C:\Windows\...     完全不含 "/"，整段原樣通過，Windows 層隨後採納了磁碟機代號
     ///   /tmp/x.txt         開頭的 "/" 雖被去除，結果仍解析到目的地之外
+    /// `--exclude` on reading (-x, -t), for the tar and ZIP backends alike.
+    ///
+    /// Matched against the name as stored, before --strip-components, which is where
+    /// bsdtar matches it. The create side never descends into an excluded directory, so
+    /// nothing under one reaches an archive; on reading every member arrives on its own,
+    /// so each leading directory of the name is asked too -- otherwise `--exclude src/sub`
+    /// would drop the directory entry and still extract `src/sub/b.txt`. Until 2026-09-27
+    /// reading ignored `--exclude` entirely: `-x --exclude '*.log'` extracted `a.log` and
+    /// exited 0, while bsdtar left it out.
+    ///
+    /// 讀取端（-x、-t）的 `--exclude`，tar 與 ZIP 後端共用。
+    ///
+    /// 以封存中儲存的名稱比對，在 --strip-components 之前，那也是 bsdtar 比對的位置。建立端
+    /// 從不走進被排除的目錄，所以其下的東西不會進入封存；讀取時每個成員各自出現，所以名稱的
+    /// 每一層上層目錄也要問一次——否則 `--exclude src/sub` 只會丟掉目錄項目，仍然解出
+    /// `src/sub/b.txt`。2026-09-27 之前讀取端完全不看 `--exclude`：`-x --exclude '*.log'`
+    /// 解出了 `a.log` 並以 0 結束，而 bsdtar 會排除它。
+    fileprivate static func memberIsExcluded(_ name: String, isDirectory: Bool) -> Bool {
+        guard !tarExcludePatterns.isEmpty else { return false }
+        var base = name
+        while base.count > 1, base.hasSuffix("/") { base.removeLast() }
+        if TarWriter.isExcluded(base) || (isDirectory && TarWriter.isExcluded(base + "/")) {
+            return true
+        }
+        var prefix = ""
+        for comp in base.split(separator: "/").dropLast() {
+            prefix += prefix.isEmpty ? String(comp) : "/" + comp
+            if TarWriter.isExcluded(prefix) || TarWriter.isExcluded(prefix + "/") { return true }
+        }
+        return false
+    }
+
     private static func safeRelativePath(_ name: String) -> String? {
         var p = name.replacingOccurrences(of: "\\", with: "/")
         // Drive-relative and drive-absolute forms both start "X:"; drop it.
@@ -4096,6 +4135,12 @@ final class TarReader {
             if let l = gnuLongLink { linkname = l; gnuLongLink = nil }
 
             let isDir = typeflag == UInt8(ascii: "5") || name.hasSuffix("/")
+            // --exclude, for listing and extraction alike; see memberIsExcluded.
+            // --exclude，列表與解出皆適用；見 memberIsExcluded。
+            if TarReader.memberIsExcluded(name, isDirectory: isDir) {
+                if !isDir { try skipData(size) }
+                continue
+            }
             guard options.extract else {
                 print(name)
                 if typeflag == UInt8(ascii: "0") || typeflag == 0 || typeflag == UInt8(ascii: "7") {

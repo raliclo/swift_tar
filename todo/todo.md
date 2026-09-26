@@ -255,7 +255,15 @@ Windows 的 bridge 同步改了介面，但未在該平台建置或驗證。
 正確排除。另外 `--exclude` 在 `-x`/`-t` 被忽略，`-r`/`-u` 建構 `TarWriter` 時沒傳 dereference。
 修法二擇一：在 ZIP 路徑實作，或以錯誤拒絕這些組合——後者至少不再給錯誤的結果。
 
-## 🔴 `-x` 與 `-t` 靜默忽略 `--exclude` / `-x` and `-t` silently ignore `--exclude`
+## `-x` 與 `-t` 靜默忽略 `--exclude` ▸ ✅ 已修正 2026-09-27 / `-x` and `-t` silently ignore `--exclude`
+
+**修正**：新增 `TarReader.memberIsExcluded`，tar 讀取迴圈與 ZIP 讀取 bridge（以回呼）共用。
+比對發生在 `--strip-components` 之前，與 bsdtar 相同；因為讀取時每個成員各自出現，名稱的
+每一層上層目錄也會被檢查，使「排除目錄就排除其內容」與建立端（根本不走進去）一致。
+
+**測試**：`test_exclude.zsh` 對同一個完整封存，24 個樣式逐一比較 swift_tar 與 bsdtar 的 `-t`、
+`-x` 結果，另比較 ZIP 與 tar 兩個讀取後端，共 72 條。修正前 32 條失敗，修正後全過。手動另驗
+`--strip-components 1` 搭配三個樣式，結果與 bsdtar 一致。
 
 原屬上一項，2026-09-27 修建立端時查證並另立。以系統 bsdtar 建立含 `src/keep.txt` 與
 `src/a.log` 的封存：`swift_tar -x --exclude '*.log'` 解出了 `a.log`，`-t --exclude '*.log'` 也

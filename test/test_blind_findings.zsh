@@ -2205,34 +2205,41 @@ touch -d "$ns_t" "$NS/src/small.txt" "$NS/src/big.bin" "$NS/src/d/inner.txt" "$N
 touch -d "$ns_t" "$NS/src/d" || true
 ( cd "$NS" && "$ST" -c -f ns.tar -C src . ) >/dev/null 2>&1 || true
 "$ST" -x -f "$NS/ns.tar" -C "$NS/out" >/dev/null 2>&1 || true
-same_instant() {  # <path> -> same | differs | absent
-  [ -e "$1" ] || { print -r -- absent; return; }
-  if [[ $1 -nt $NS/ref || $NS/ref -nt $1 ]]; then print -r -- differs; else print -r -- same; fi
-}
-eq "sub-second mtime restored: small file (write pool)" "same" "$(same_instant "$NS/out/small.txt")"
-eq "sub-second mtime restored: file over the pool limit (inline)" "same" "$(same_instant "$NS/out/big.bin")"
-eq "sub-second mtime restored: directory" "same" "$(same_instant "$NS/out/d")"
-if [ -p "$NS/src/fifo" ]; then
-  eq "sub-second mtime restored: FIFO" "same" "$(same_instant "$NS/out/fifo")"
-fi
-if [ -L "$NS/src/link" ]; then
-  # GNU stat first: BSD stat has no -c and fails, and then answers the second form.
-  # `command stat`, not `stat`: this file loads zsh/stat earlier (`zmodload zsh/stat`),
-  # after which `stat` is zsh's builtin, which understands neither form and printed
-  # nothing. Both sides were then "", equal, and this check passed against a binary that
-  # restored .000000000 -- caught because it passed before the fix as well as after. An
-  # empty source value now fails instead of comparing.
-  # 先試 GNU stat：BSD stat 沒有 -c 會失敗，改由第二種寫法回答。用 `command stat` 而非
-  # `stat`：本檔稍早載入了 zsh/stat（`zmodload zsh/stat`），之後 `stat` 就是 zsh 的內建指令，
-  # 兩種寫法它都不認得，什麼也不印。於是兩邊都是 ""、相等，這條檢查對一個只還原到
-  # .000000000 的執行檔也通過了——之所以被發現，是因為它在修正前後都通過。現在來源值為空時
-  # 直接判為失敗，不再拿來比較。
-  link_ns() { command stat -c %.9Y "$1" 2>/dev/null || command stat -f %Fm "$1"; }
-  src_ns=$(link_ns "$NS/src/link"); out_ns=$(link_ns "$NS/out/link")
-  if [[ -z $src_ns ]]; then
-    bad "sub-second mtime restored: symlink (could not read the source link's time)"
-  else
-    eq "sub-second mtime restored: symlink (the link itself)" "$src_ns" "$out_ns"
+# Times are read with zsh's own zstat, one syntax on every platform, rather than the
+# external stat whose options differ between GNU and BSD. `zstat -L` reads the entry
+# itself, so a symlink reports its own time, not its target's; `%s.%N` is seconds and
+# nine digits of nanoseconds. Each extracted entry is compared with the reference file
+# touched to the same instant, so a failure prints both values.
+#
+# An earlier version of this block called the external stat through GNU/BSD fallbacks.
+# This file loads zsh/stat further up, which makes a bare `stat` the zsh builtin; it
+# understood neither external form, printed nothing, and the symlink check compared "" with
+# "" and passed against a binary that restored .000000000 -- caught because it passed before
+# the fix as well as after. An empty reference value still fails outright here, so that
+# shape cannot come back.
+#
+# 時間以 zsh 自己的 zstat 讀取，每個平台同一套語法，而不是選項在 GNU 與 BSD 之間不同的外部
+# stat。`zstat -L` 讀項目本身，所以 symlink 回報的是它自己的時間而非目標的；`%s.%N` 是秒數
+# 加九位奈秒。每個解出的項目都與設成同一時刻的參考檔比較，失敗時會印出兩邊的值。
+#
+# 本區較早的版本以 GNU／BSD 兩種寫法呼叫外部 stat。本檔稍早已載入 zsh/stat，使得單獨寫
+# `stat` 時呼叫的是 zsh 內建版本；它兩種外部寫法都不認得、什麼也不印，於是 symlink 那條
+# 比較的是 "" 與 ""，對一個只還原到 .000000000 的執行檔也通過了——之所以被發現，是因為它在
+# 修正前後都通過。這裡參考值為空時仍直接判為失敗，那種形狀不會再出現。
+zmodload zsh/stat
+ns_of() { zstat -L -F '%s.%N' +mtime "$1" 2>/dev/null || print -r -- absent; }
+ns_ref=$(ns_of "$NS/ref")
+if [[ $ns_ref != <->.<-> ]]; then
+  bad "sub-second mtime restored: could not read the reference time (got '$ns_ref')"
+else
+  eq "sub-second mtime restored: small file (write pool)" "$ns_ref" "$(ns_of "$NS/out/small.txt")"
+  eq "sub-second mtime restored: file over the pool limit (inline)" "$ns_ref" "$(ns_of "$NS/out/big.bin")"
+  eq "sub-second mtime restored: directory" "$ns_ref" "$(ns_of "$NS/out/d")"
+  if [ -p "$NS/src/fifo" ]; then
+    eq "sub-second mtime restored: FIFO" "$ns_ref" "$(ns_of "$NS/out/fifo")"
+  fi
+  if [ -L "$NS/src/link" ]; then
+    eq "sub-second mtime restored: symlink (the link itself)" "$ns_ref" "$(ns_of "$NS/out/link")"
   fi
 fi
 

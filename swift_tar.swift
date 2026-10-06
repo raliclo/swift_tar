@@ -2184,6 +2184,31 @@ private func winStat(_ path: String) -> WinStat? {
                    volumeSerial: volumeSerial, fileIndex: fileIndex)
 }
 
+/// stat()-equivalent for -h: follow the link chain to what it finally names, at most 40
+/// hops (Linux's MAXSYMLINKS), and stat that. nil for a broken link or a chain too long.
+/// A relative destination is relative to the link's own directory, as on POSIX.
+/// 等同 stat()，供 -h 使用：沿連結鏈走到最終指向的對象再取其資訊，最多 40 層（同 Linux 的
+/// MAXSYMLINKS）。斷鏈或鏈過長時回傳 nil。相對的目的地以連結自身所在目錄為基準，同 POSIX。
+private func winStatFollowing(_ path: String) -> WinStat? {
+    var p = path
+    for _ in 0..<40 {
+        guard let st = winStat(p) else { return nil }
+        if !st.isSymlink { return st }
+        guard let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: p) else { return nil }
+        let u = Array(dest.utf8)
+        let absolute = dest.hasPrefix("/") || dest.hasPrefix("\\")
+            || (u.count >= 2 && u[1] == UInt8(ascii: ":"))
+        if absolute {
+            p = dest
+        } else if let cut = p.lastIndex(where: { $0 == "/" || $0 == "\\" }) {
+            p = String(p[...cut]) + dest
+        } else {
+            p = dest
+        }
+    }
+    return nil
+}
+
 /// Best-effort symlink creation; Windows requires admin rights or Developer
 /// Mode for FileManager.createSymbolicLink to succeed. On failure this only
 /// warns and skips the entry, per project decision — archive extraction
@@ -3571,9 +3596,34 @@ final class TarWriter {
         // measured against bsdtar, where it is the one shape of six that reveals the gap.
         let excludedAsDirectory = { Self.isExcluded(name + "/") }
 #if os(Windows)
-        guard let st = winStat(path) else {
+        guard var st = winStat(path) else {
             throw TarError.io("cannot stat '\(path)' / 無法讀取 '\(path)' 的檔案資訊")
         }
+        // -h：與 POSIX 分支相同——跟隨後連結即被當成其目標，下方各分支不需改動。直到
+        // 2026-10-07 此分支完全不看 dereference，Windows 上的 -h 一律存成連結。
+        // -h: as in the POSIX branch, a followed link is then just its target and the
+        // branches below need no change. Until 2026-10-07 this branch never looked at
+        // dereference, so -h on Windows always stored the link itself.
+        if dereference, st.isSymlink {
+            guard let target = winStatFollowing(path) else {
+                eprint("swift_tar: skipping '\(name)': --dereference cannot follow it / 略過 '\(name)'：--dereference 無法跟隨")
+                return
+            }
+            st = target
+        }
+        // 迴圈偵測：同 POSIX 分支，只看目前遞迴堆疊上的祖先。
+        // Cycle detection: as in the POSIX branch, ancestors on the current stack only.
+        var pushedDirID: String? = nil
+        if dereference, st.isDir {
+            let id = "\(st.volumeSerial)/\(st.fileIndex)"
+            if walkedDirs.contains(id) {
+                eprint("swift_tar: skipping '\(name)': --dereference would loop here / 略過 '\(name)'：--dereference 於此形成迴圈")
+                return
+            }
+            walkedDirs.insert(id)
+            pushedDirID = id
+        }
+        defer { if let id = pushedDirID { walkedDirs.remove(id) } }
         if let ai = archiveIdentity, ai == "\(st.volumeSerial)/\(st.fileIndex)" {
             eprint("swift_tar: skipping '\(name)': it is the archive being written / 略過 '\(name)'：它就是正在寫出的封存")
             return
@@ -3590,7 +3640,14 @@ final class TarWriter {
 
         if st.isSymlink {
             if verbose { eprint("a \(name)") }
-            let dest = (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) ?? ""
+            // tar 的 linkname 以 `/` 分隔；Windows 回傳的目的地用 `\`，原樣存入會使 Unix 上
+            // 解出的連結指向一個名字裡帶反斜線的檔案。只在此分支轉換：POSIX 上 `\` 是合法
+            // 的檔名字元。
+            // A tar linkname is `/`-separated; Windows reports `\`, which stored verbatim
+            // makes the link extracted on Unix name a file with backslashes in it. Converted
+            // only here: on POSIX `\` is a legal filename character.
+            let dest = ((try? FileManager.default.destinationOfSymbolicLink(atPath: path)) ?? "")
+                .replacingOccurrences(of: "\\", with: "/")
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
                                  size: 0, mtime: mtime, typeflag: UInt8(ascii: "2"), linkname: dest)
             return

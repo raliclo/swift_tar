@@ -421,6 +421,55 @@ mtime 的繞道已拿掉，該區照樣通過，成為第二個證人。整套 1
 - 後果之一：`./` 區塊的 `-u` 檢查原本會因它而重新加入目錄。那裡現在以重設 mtime 隔開，
   但缺陷本身仍在。
 
+## zstd 解碼改為多核心，依序寫出 ▸ ✅ 已實作 2026-10-07，以 `--zstd-parallel` 選項提供 / Decode zstd frames on several cores, write them in order
+
+2026-10-07 由 multissh session 提出，本 session 查證後使用者決定實作。**依使用者指示做成選項**：
+`--zstd` 維持原本的單執行緒串流解碼；`--zstd-parallel` 在建立時等同 `--zstd`（寫出逐位元組
+相同的封存），讀取時改用多核心解碼，同時處理的 frame 數依 `-n`。
+
+**實作**：`zstdDecodeStreamParallel` 在一條執行緒上讀取輸入、以 `ZSTD_findFrameCompressedSize`
+切出完整 frame 交給工作執行緒、依序號寫出；處理中的 frame 最多 `inflight` 個。frame 有 content
+size 時以 `ZSTD_decompress` 一次解完（上限 256 MiB，超過或沒有大小時改為只對該 frame 串流解碼）。
+緩衝 64 MiB 仍切不出完整 frame、或輸入在不成 frame 的位元組上結束時，其餘交給原本的
+`zstdDecodeStream`，所以截斷與損毀的判定與以往相同。某個 frame 失敗後，之後的 frame 只等待、
+不寫出。結果直接寫出，沒有原本每塊多一次的複製。
+
+**測試**：新增 `test/test_zstd_parallel.zsh`，25 條，全部拿新解碼器與 `--zstd` 或原始位元組比較。
+以兩個突變版本證明測試抓得到錯：退回路徑不解碼（4 條失敗）、相鄰 frame 對調（16 條失敗）。
+
+**效能**（同一個執行檔，交錯 10 輪、取最小值、RAM disk，claw-code 1351 MiB，負載約 2）：
+
+| 情境 | `--zstd` | `--zstd-parallel` |
+|---|---|---|
+| `--cat` | 1.12 s，1265 MB/s，1.02 核心 | 0.42 s，3373 MB/s，3.52 核心 |
+| `-x` | 1.49 s，951 MB/s，1.32 核心 | 0.79 s，1793 MB/s，2.92 核心 |
+| 管線輸入 `-x -f -` | 1.56 s，908 MB/s | 0.87 s，1628 MB/s |
+
+user 時間略增（`--cat` 0.79 → 1.00 s），是每個 frame 各自建立解碼 context 的成本。僅在 macOS
+量測；Windows 與 Linux 已列入驗證清單。
+
+**原始描述**——**現象**：`zstdDecodeStream` 只用一個 `ZSTD_DStream` 依序解碼。在本機 RAM disk 上，claw-code
+（1351 MiB）只解碼（`--cat`）時平均用 0.97–1.04 個核心、約 1.2 GB/s；完整 `-x --zstd` 約
+860–900 MB/s、1.3 個核心。multissh 在 M4 上量到解壓不論寫到磁碟或 RAM 都約 800 MB/s，在
+Thunderbolt 上 `--zstd` 停在 740–860 MB/s，而不帶 codec 的可到約 1 GB/s。每塊輸出還會先以
+`Data(bytes:count:)` 複製一次再寫入，輸入端也把每塊轉成 `[UInt8]` 複製一次。
+
+**做法**：swift_tar 寫出時每 4 MiB 一個獨立的 frame。以 `ZSTD_findFrameCompressedSize` 從輸入
+切出完整的 frame，同時解碼數個、依原順序寫出，並限制同時在處理中的數量以控制記憶體。
+**並非每個 .zst 都是 swift_tar 寫的**：zstd CLI 產生的通常是單一大 frame，緩衝區內切不出
+完整 frame 時要退回目前的串流解碼。
+
+**完成條件**：swift_tar 寫的多 frame 封存、zstd CLI 的單一 frame、多個串接的 frame、沒有
+content size 的 frame、截斷或損毀的輸入，都要有測試；效能依本樹規則以交錯執行、10 輪、
+RAM disk 量測，並記下 user／sys 時間。
+
+## 🔴 swift_tar 寫出的 zstd frame 不帶 checksum（待決定）/ zstd frames are written without a checksum (decision pending)
+
+實作 `--zstd-parallel` 時發現。`ZSTD_compress` 預設不寫 content checksum，所以 frame 內部被改壞
+時，zstd 偵測不到：在 frame 中段覆寫 64 位元組，`--zstd` 與 `--zstd-parallel` 都以 0 結束並解出
+不同的內容（隨機資料以原始區塊儲存，任何位元組都「合法」）。這是既有行為，不是本次造成的。
+開啟 checksum 每個 frame 多 4 位元組，解碼時多一次 XXH64 驗證；是否開啟待使用者決定。
+
 ## 🔴 在 Windows 與 WSL 上驗證 2026-09-27 的所有修正 / Verify every 2026-09-27 fix on Windows and WSL
 
 2026-09-27 的修正**全部只在 macOS 驗證過**。以下每一項都要在 Windows（原生，bsdtar 3.8.8）
@@ -442,6 +491,8 @@ mtime 的繞道已拿掉，該區照樣通過，成為第二個證人。整套 1
   Windows 建立的封存仍只存整秒；解壓端的 `winWriteFile`／`winSetLinkMtime` 也只還原整秒。確認
   該平台上 bsdtar `-u` 的行為，再決定是否讓 Windows 分支帶出並還原 100 ns 精度。WSL 上確認
   `touch -d`、`touch -h -d` 與兩組子秒測試通過（建立端 3 條、解壓端 5 條）。
+- **`--zstd-parallel`**（2026-10-07）：在兩個平台跑 `test/test_zstd_parallel.zsh`，並以同樣的方法
+  （交錯 10 輪、RAM disk）量測；multissh 在 Windows 上的實際用途是 `-x --zstd -f -`。
 - **其餘平台無關的修正**（`--` 參數、Poly1305、RGB1 溢位、`sync_all.zsh`）：跑完整套件確認。
 - **三支 Windows 建置腳本**（`b5a92bd`）：改寫 `version-win.txt` 的區塊只以取出的文字測過，
   要實際建置一次，確認 `version-win.txt` 的鍵都保留。

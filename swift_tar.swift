@@ -500,6 +500,16 @@ private func ZSTD_freeDStream(_ zds: OpaquePointer?) -> Int
 private func ZSTD_decompressStream(_ zds: OpaquePointer?,
                                    _ output: UnsafeMutableRawPointer,
                                    _ input: UnsafeMutableRawPointer) -> Int
+// For --zstd-parallel: find where one complete frame ends, how large it decodes to, and
+// decode it in one call. / 供 --zstd-parallel 使用：找出一個完整 frame 的結尾、它解開後的
+// 大小，並一次解完。
+@_silgen_name("ZSTD_findFrameCompressedSize")
+private func ZSTD_findFrameCompressedSize(_ src: UnsafeRawPointer?, _ srcSize: Int) -> Int
+@_silgen_name("ZSTD_getFrameContentSize")
+private func ZSTD_getFrameContentSize(_ src: UnsafeRawPointer?, _ srcSize: Int) -> UInt64
+@_silgen_name("ZSTD_decompress")
+private func ZSTD_decompress(_ dst: UnsafeMutableRawPointer?, _ dstCap: Int,
+                             _ src: UnsafeRawPointer?, _ srcSize: Int) -> Int
 
 #if !os(Windows)
 
@@ -896,6 +906,17 @@ var tarRestorePermissions: Bool {
     set { tarRestorePermissionsBox.withLock { $0 = newValue } }
 }
 
+// --zstd-parallel: decode zstd frames on several cores. Opt-in, so plain --zstd keeps the
+// single-threaded stream decoder it has always had. Held like the other settings: written
+// while parsing, read on the decode thread.
+// --zstd-parallel：以多核心解碼 zstd frame。需明確指定，所以單純的 --zstd 維持一向的單執行緒
+// 串流解碼。持有方式與其他設定相同：解析參數時寫入，解碼執行緒上讀取。
+let tarZstdParallelBox = Mutex<Bool>(false)
+var tarZstdParallel: Bool {
+    get { tarZstdParallelBox.withLock { $0 } }
+    set { tarZstdParallelBox.withLock { $0 = newValue } }
+}
+
 func zstdCompressFrame(_ input: Data, level: Int32 = zstdCompressionLevel) -> Data? {
     let bound = ZSTD_compressBound(input.count)
     var out = Data(count: bound)
@@ -1244,6 +1265,190 @@ func zstdDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
         if !ok { return false }
     }
     return lastRet == 0   // 0 ⟺ frame boundary at EOF / EOF 落在 frame 邊界
+}
+
+/// Decode one complete zstd frame. Returns nil on any error.
+///
+/// One call when the frame header states its decoded size (swift_tar's per-chunk frames
+/// do, through ZSTD_compress); a stream decode of this frame alone when it does not. A
+/// size over `oneShotLimit` is also streamed rather than allocated up front, so a header
+/// claiming gigabytes cannot make a worker allocate them before any byte is checked.
+///
+/// 解開一個完整的 zstd frame，任何錯誤都回傳 nil。frame 標頭載明解開後的大小時一次解完
+/// （swift_tar 逐塊寫出的 frame 經由 ZSTD_compress，都有載明）；沒有載明時，只對這一個 frame
+/// 做串流解碼。大小超過 `oneShotLimit` 時也改走串流而不預先配置，以免一個宣稱數 GB 的標頭在
+/// 任何位元組被檢查之前就讓工作執行緒配置那麼多記憶體。
+private func zstdDecodeOneFrame(_ frame: Data) -> Data? {
+    let oneShotLimit: UInt64 = 256 << 20
+    let contentSizeUnknown = UInt64.max, contentSizeError = UInt64.max - 1
+    let size = frame.withUnsafeBytes { ZSTD_getFrameContentSize($0.baseAddress, $0.count) }
+    if size == contentSizeError { return nil }
+    if size != contentSizeUnknown && size <= oneShotLimit {
+        var out = Data(count: Int(size))
+        let got = out.withUnsafeMutableBytes { o in
+            frame.withUnsafeBytes { i in ZSTD_decompress(o.baseAddress, o.count, i.baseAddress, i.count) }
+        }
+        guard ZSTD_isError(got) == 0, got == Int(size) else { return nil }
+        return out
+    }
+    guard let zds = ZSTD_createDStream() else { return nil }
+    defer { _ = ZSTD_freeDStream(zds) }
+    var out = Data()
+    var tmp = [UInt8](repeating: 0, count: DECODE_CHUNK)
+    let ok: Bool = frame.withUnsafeBytes { ib in
+        var inB = ZSTDInBuffer(src: ib.baseAddress, size: ib.count, pos: 0)
+        while true {
+            var produced = 0
+            var ret = 0
+            tmp.withUnsafeMutableBufferPointer { ob in
+                var outB = ZSTDOutBuffer(dst: UnsafeMutableRawPointer(ob.baseAddress), size: ob.count, pos: 0)
+                ret = withUnsafeMutablePointer(to: &outB) { op in
+                    withUnsafeMutablePointer(to: &inB) { ip in ZSTD_decompressStream(zds, op, ip) }
+                }
+                produced = outB.pos
+            }
+            if ZSTD_isError(ret) != 0 { return false }
+            if produced > 0 { out.append(contentsOf: tmp[0..<produced]) }
+            if ret == 0 { return true }                                  // frame complete
+            if produced == 0 && inB.pos == inB.size { return false }     // input ran out mid-frame
+        }
+    }
+    return ok ? out : nil
+}
+
+/// zstd decode on several cores, for --zstd-parallel. Same contract as zstdDecodeStream:
+/// `prefix` is what the sniffer already read, the output is written in order, and the
+/// result is false on any decode error or a truncated input.
+///
+/// Why: zstdDecodeStream runs one ZSTD_DStream on one thread, and decoding is what limits
+/// extraction -- measured 2026-10-07 on claw-code (1351 MiB) on a RAM disk: `--cat` used
+/// 0.97-1.04 cores at about 1.2 GB/s, and multissh measured `-x --zstd` at ~800 MB/s on an
+/// M4 whether it wrote to disk or to RAM. swift_tar writes one independent frame per 4 MiB
+/// chunk, so frames can be decoded side by side.
+///
+/// How: this thread reads the input, cuts complete frames with ZSTD_findFrameCompressedSize,
+/// hands each to a worker, and writes the results back in their original order. At most
+/// `inflight` frames are between being cut and being written, which bounds memory; with
+/// `-n 1` this is one frame at a time. Reading and writing stay on this one thread, so
+/// order needs no coordination beyond a semaphore per frame.
+///
+/// Not every .zst comes from swift_tar. The zstd CLI usually writes a single frame, which
+/// cannot be split: once `maxBuffered` bytes are held without a complete frame, or the input
+/// ends on bytes that are not one, the rest is handed to zstdDecodeStream. That also makes
+/// the stream decoder the judge of a truncated or corrupt tail, so errors read exactly as
+/// they did before. Results are written straight from the decoded Data -- the stream path's
+/// per-block copy into a fresh Data is gone here.
+///
+/// --zstd-parallel 使用的多核心 zstd 解碼。契約與 zstdDecodeStream 相同：`prefix` 是嗅探時
+/// 已讀取的部分，輸出依序寫出，任何解碼錯誤或輸入截斷都回傳 false。
+///
+/// 為什麼：zstdDecodeStream 在一條執行緒上用一個 ZSTD_DStream，而解碼正是解壓的瓶頸——
+/// 2026-10-07 在 RAM disk 上以 claw-code（1351 MiB）量測：`--cat` 用 0.97–1.04 個核心、約
+/// 1.2 GB/s；multissh 在 M4 上量到 `-x --zstd` 不論寫到磁碟或 RAM 都約 800 MB/s。swift_tar
+/// 每 4 MiB 寫一個獨立的 frame，所以 frame 可以並排解碼。
+///
+/// 怎麼做：本執行緒讀取輸入，以 ZSTD_findFrameCompressedSize 切出完整的 frame 交給工作
+/// 執行緒，再依原順序寫出結果。從切出到寫出之間最多 `inflight` 個 frame，以此限制記憶體；
+/// `-n 1` 時一次一個。讀與寫都在本執行緒，所以順序只需要每個 frame 一個 semaphore。
+///
+/// 並非每個 .zst 都是 swift_tar 寫的。zstd CLI 通常只寫一個 frame，切不開：緩衝了
+/// `maxBuffered` 位元組仍沒有完整 frame，或輸入在不成 frame 的位元組上結束時，其餘部分交給
+/// zstdDecodeStream。這也讓串流解碼器成為截斷或損毀尾段的判定者，錯誤的呈現與以往完全相同。
+/// 結果直接從解出的 Data 寫出——串流路徑上每塊再複製進新 Data 的那一步，這裡沒有。
+func zstdDecodeStreamParallel(input: FileHandle, prefix: Data, output: FileHandle,
+                              inflight: Int) -> Bool {
+    final class Decoded: Sendable { let m = Mutex<[Int: Data]>([:]) }
+    let maxBuffered = 64 << 20
+    let window = max(1, inflight)
+    let decoded = Decoded()
+    let workers = DispatchQueue(label: "swift_tar.zstd.decode", attributes: .concurrent)
+    var done: [Int: DispatchSemaphore] = [:]
+    var nextCut = 0, nextWrite = 0
+    var buffer = Data()
+    buffer.append(prefix)                  // index from 0 whatever `prefix` was sliced from
+    var start = 0                          // bytes of `buffer` already cut into frames
+    var atEOF = false
+    var handOff = false                    // the rest goes to the stream decoder
+
+    // Write frame `nextWrite` if it is decoded (or wait for it when `wait`). nil means
+    // "not ready yet"; false means it failed to decode or to write.
+    // 若 frame `nextWrite` 已解完就寫出（`wait` 為真時等它）。nil 表示尚未完成；false 表示
+    // 解碼或寫出失敗。
+    func writeNext(wait: Bool) -> Bool? {
+        guard let sem = done[nextWrite] else { return nil }
+        if wait { sem.wait() } else if sem.wait(timeout: .now()) != .success { return nil }
+        done[nextWrite] = nil
+        let seq = nextWrite
+        nextWrite += 1
+        guard let data = decoded.m.withLock({ $0.removeValue(forKey: seq) }) else { return false }
+        if data.isEmpty { return true }
+        return (try? output.write(contentsOf: data)) != nil
+    }
+
+    var ok = true
+    loop: while true {
+        while let w = writeNext(wait: false) { if !w { ok = false; break loop } }
+        if nextCut - nextWrite >= window {
+            if writeNext(wait: true) != true { ok = false; break loop }
+            continue
+        }
+        let avail = buffer.count - start
+        if avail > 0 {
+            let n = buffer.withUnsafeBytes { p in
+                ZSTD_findFrameCompressedSize(p.baseAddress.map { $0 + start }, avail)
+            }
+            if ZSTD_isError(n) == 0 && n > 0 {
+                let frame = buffer.subdata(in: start..<(start + n))
+                start += n
+                let seq = nextCut
+                nextCut += 1
+                let sem = DispatchSemaphore(value: 0)
+                done[seq] = sem
+                workers.async {
+                    if let out = zstdDecodeOneFrame(frame) {
+                        decoded.m.withLock { $0[seq] = out }
+                    }
+                    sem.signal()
+                }
+                continue
+            }
+        }
+        if atEOF {
+            if avail > 0 { handOff = true }
+            break loop
+        }
+        if avail >= maxBuffered { handOff = true; break loop }
+        if start > 0 { buffer.removeSubrange(0..<start); start = 0 }
+        if let part = try? input.read(upToCount: DECODE_CHUNK), !part.isEmpty {
+            buffer.append(part)
+        } else {
+            atEOF = true
+        }
+    }
+    // Everything already cut is accounted for before anything else happens, so no worker
+    // is still running when this returns. Until the first failure each frame is written in
+    // order; after it, frames are only waited for and dropped -- nothing past a bad frame
+    // reaches the output, which is where the stream decoder stops as well.
+    // 已切出的一律先處理完再做其他事，確保返回時沒有工作執行緒仍在跑。第一次失敗之前依序
+    // 寫出；之後只等待並丟棄——壞掉的 frame 之後不會有任何東西寫出，與串流解碼器停下的
+    // 位置相同。
+    while nextWrite < nextCut {
+        if ok {
+            if writeNext(wait: true) != true { ok = false }
+        } else {
+            let seq = nextWrite
+            done[seq]?.wait()
+            done[seq] = nil
+            _ = decoded.m.withLock { $0.removeValue(forKey: seq) }
+            nextWrite += 1
+        }
+    }
+    guard ok else { return false }
+    if handOff {
+        return zstdDecodeStream(input: input, prefix: buffer.subdata(in: start..<buffer.count),
+                                output: output)
+    }
+    return true
 }
 
 /// Sequential decode of concatenated LZ4 frames. / 循序解串接 LZ4 frame。
@@ -1634,7 +1839,14 @@ func resolveFilterChain(input: FileHandle, prefix: Data, filePath: String?,
         case .lzmaAlone:   ok = lzmaDecodeStream(kind: .alone, input: input, prefix: capturedHead, output: w)
         case .lzip:        ok = lzmaDecodeStream(kind: .lzip, input: input, prefix: capturedHead, output: w)
         case .lz4:         ok = lz4DecodeStream(input: input, prefix: capturedHead, output: w)
-        case .zstd:        ok = zstdDecodeStream(input: input, prefix: capturedHead, output: w)
+        case .zstd:
+            // --zstd-parallel opts in to the multi-core decoder; plain --zstd, or no flag at
+            // all, keeps the single-threaded stream decoder. / --zstd-parallel 才啟用多核心
+            // 解碼；單純的 --zstd 或不帶旗標時，維持單執行緒串流解碼。
+            ok = tarZstdParallel
+                ? zstdDecodeStreamParallel(input: input, prefix: capturedHead, output: w,
+                                           inflight: inflight)
+                : zstdDecodeStream(input: input, prefix: capturedHead, output: w)
         case .compressLZW: ok = lzwDecodeStream(input: input, prefix: capturedHead, output: w)
         case .uu:          ok = uuDecodeStream(input: input, prefix: capturedHead, output: w)
         case .rpm:         ok = rpmUnwrapStream(input: input, prefix: capturedHead, output: w)
@@ -4840,6 +5052,8 @@ private func printTarUsage() {
       --lzip           : lzip CLI, one lzip stream per chunk
                          每分塊一個 lzip 串流（需 lzip CLI）
       --zstd           : libzstd, one frame per chunk / 每分塊一個 zstd frame
+      --zstd-parallel  : as --zstd; when reading, decode frames on several cores (-n)
+                         同 --zstd；讀取時以多核心解碼各 frame（數量依 -n）
       --zstd-level <N> : zstd level, 1 to ZSTD_maxCLevel; default 9
                          zstd 等級，1 至 ZSTD_maxCLevel；預設 9
       --lz4            : liblz4 standard frames / 標準 LZ4 frame
@@ -5697,7 +5911,7 @@ struct SwiftTarMain {
             "--strip-components", "--zstd-level", "--exclude",
             "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
             // codecs / 壓縮引擎
-            "--gzip", "-z", "--bzip2", "-j", "--xz", "-J", "--lzip", "--zstd",
+            "--gzip", "-z", "--bzip2", "-j", "--xz", "-J", "--lzip", "--zstd", "--zstd-parallel",
             "--lz4", "--zip", "--zip64",
             // RGB1 fields / RGB1 欄位
             "--width", "--height", "--lat", "--lng", "--height-m", "--title",
@@ -5931,7 +6145,15 @@ struct SwiftTarMain {
         if args.contains("--bzip2") || args.contains("-j") { codec = .bzip2; codecCount += 1 }
         if args.contains("--xz") || args.contains("-J")    { codec = .xz;    codecCount += 1 }
         if args.contains("--lzip")           { codec = .lzip;                  codecCount += 1 }
-        if args.contains("--zstd")           { codec = .zstd;                  codecCount += 1 }
+        // --zstd-parallel selects the same codec as --zstd, and writes the same archive: the
+        // create side already compresses one frame per chunk in parallel. It differs only on
+        // reading, where it turns on the multi-core decoder. Both together count once.
+        // --zstd-parallel 選擇與 --zstd 相同的 codec，寫出的封存也相同：建立端本來就逐塊平行
+        // 壓縮成各自的 frame。差別只在讀取時會啟用多核心解碼。兩者同時給定只算一次。
+        if args.contains("--zstd") || args.contains("--zstd-parallel") {
+            codec = .zstd; codecCount += 1
+        }
+        tarZstdParallel = args.contains("--zstd-parallel")
         if args.contains(where: { $0 == "--zstd-level" || $0.hasPrefix("--zstd-level=") }) {
             guard let raw = optValue("--zstd-level"), let lv = Int32(raw) else {
                 FileHandle.standardError.write(Data("swift_tar: --zstd-level needs a number / --zstd-level 需要一個數字\n".utf8))
@@ -5956,7 +6178,11 @@ struct SwiftTarMain {
             eprint("Error: -r/-u work on uncompressed tar only; drop the codec flag. / 錯誤：-r/-u 僅支援未壓縮 tar，請移除引擎旗標。")
             exit(1)
         }
-        if codecCount > 0 && !doCreate && !doAppend && !doUpdate {
+        // Not for --zstd-parallel: on reading it does something -- it picks the multi-core
+        // decoder -- so telling the user it only affects -c would be false.
+        // --zstd-parallel 不適用：它在讀取時確實有作用——選擇多核心解碼——所以說它只影響 -c
+        // 並不正確。
+        if codecCount > 0 && !doCreate && !doAppend && !doUpdate && !tarZstdParallel {
             eprint("Note: codec flags only affect -c; reading auto-detects. / 提示：引擎旗標僅影響 -c，讀取自動偵測。")
         }
         if forceZip64 && !doCreate {

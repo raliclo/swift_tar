@@ -481,7 +481,7 @@ RAM disk 量測，並記下 user／sys 時間。
 不同的內容（隨機資料以原始區塊儲存，任何位元組都「合法」）。這是既有行為，不是本次造成的。
 開啟 checksum 每個 frame 多 4 位元組，解碼時多一次 XXH64 驗證；是否開啟待使用者決定。
 
-## 🔴 在 Windows 與 WSL 上驗證 2026-09-27 的所有修正 / Verify every 2026-09-27 fix on Windows and WSL
+## 在 Windows 與 WSL 上驗證 2026-09-27 的所有修正 ▸ ✅ 已完成 2026-10-07（由 Windows 端 session 執行）/ Verify every 2026-09-27 fix on Windows and WSL
 
 2026-09-27 的修正**全部只在 macOS 驗證過**。以下每一項都要在 Windows（原生，bsdtar 3.8.8）
 與 WSL（Linux）上重建並重跑，結果記進 `release_matrix.csv2`：
@@ -615,6 +615,41 @@ test_blind_findings 與 macOS 的 189 差在略過項：Windows 略過 FIFO 與 
 6. ⚪ Linux 靜態建置的 `version-linux.txt` 未寫 `libarchive_linkage=static`（見「重建」）。
 
 1–3 是程式缺陷，依請求**未在本次修改**，留待與驗證分開提交。
+
+**2026-10-07 整理**：上述 1、2、3、4、6 各自另立為下方的未處理項，以便 `grep -n '^## .*🔴'`
+找得到；本節保留為驗證紀錄。5 是 Windows 內建 bsdtar 的缺陷，不在本樹，只記錄、不另立。
+1、2、6 已由 macOS 端 session 從程式碼確認成因。
+
+## 🔴 Windows：tar 路徑忽略 `-h` / Windows: the tar path ignores `-h`
+
+Windows 驗證（2026-10-07）的第 1 項。`TarWriter.add` 的 Windows 分支以 `winStat`（lstat 的等價物）
+取得資訊，遇到 `isSymlink` 就寫 symlink 標頭，**整個分支從未查看 `dereference`**——macOS 端已讀碼
+確認。POSIX 分支是 `dereference ? stat : lstat`。`--zip -h` 在 Windows 上正確，因為它走 bridge。
+
+## 🔴 Windows：symlink 目標以反斜線存入封存 / Windows: symlink targets are stored with backslashes
+
+Windows 驗證的第 2 項。同一處的 `destinationOfSymbolicLink` 回傳 `..\target.txt`，未轉成 `/` 就寫入
+標頭（macOS 端已讀碼確認）。在 Linux／macOS 解出會是斷掉的連結。
+
+## 🔴 Windows：ZIP 解壓時，檔案成員被無聲換成目錄 / Windows: ZIP extraction silently replaces a file with a directory
+
+Windows 驗證的第 3 項。fixture 依序含 `a`（檔案）、`a/b`、`c`：macOS 保留檔案 `a`、略過 `a/b` 並報在
+stderr；Windows 上 `a` 變成目錄、`a/b` 寫入、檔案 `a` 的內容消失，rc=0、stderr 空白。成因推測在
+libarchive 的 Windows 寫入端（`archive_write_disk_windows.c`）處理「上層路徑是檔案」的方式與 POSIX
+不同，**尚未查證**，需要 Windows 機器。
+
+## 🔴 測試缺口：ZIP 略過測試在 Windows 上找不到 bsdtar / Test gap: the ZIP skip test finds no bsdtar on Windows
+
+Windows 驗證的第 4 項。測試只嘗試 `$SYS_TAR`（MSYS 下為 GNU tar）與 PATH 上的 `bsdtar`，從不嘗試
+`/c/Windows/System32/tar.exe`，所以上一項一直被略過、從未在 Windows 上被測過。
+
+## 🔴 Linux 靜態建置不記錄 `libarchive_linkage=static` / The Linux static build drops `libarchive_linkage=static`
+
+Windows 驗證的第 6 項。`compile_tar-linux.zsh` 的記錄步驟先以 `grep -vE` 清掉
+`libarchive_(so_version|path|linkage)`，再以 `record_linked libarchive 'libarchive\.so'` 寫回——靜態
+建置找不到 `.so`，什麼都沒寫回，於是 `build_libarchive.zsh` 寫入的 `libarchive_linkage=static` 消失。
+macOS 端已讀碼確認。與 2026-09-17 在 `compile_tar.zsh` 修掉的是同一種形狀（過濾器刪掉了自己無法
+重寫的鍵），Linux 腳本當時沒有跟著改。
 
 ## `build_zlib-win.zsh` 改為與其他建置腳本相同的寫法 ▸ ✅ 已修正 2026-09-27（未在 Windows 執行）/ Make `build_zlib-win.zsh` rewrite version-win.txt like the other builders
 

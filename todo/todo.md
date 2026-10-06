@@ -448,6 +448,17 @@ size 時以 `ZSTD_decompress` 一次解完（上限 256 MiB，超過或沒有大
 user 時間略增（`--cat` 0.79 → 1.00 s），是每個 frame 各自建立解碼 context 的成本。僅在 macOS
 量測；Windows 與 Linux 已列入驗證清單。
 
+**實地使用（multissh 回報，2026-10-07，本 session 未重現）**：swift_tar `42897ed` 建於 M4 與 M6。
+multiscp 與 multisshd 解壓時改帶 `--zstd-parallel`，**只在 macOS、只對他們自己建置的 swift_tar**；
+Windows 與 Linux 在本樹驗證前維持 `--zstd`。傳輸中取樣命令列，確認兩個方向的解壓端都帶著該旗標。
+
+- 走 Thunderbolt 的 zstd 傳輸：740–860 MB/s → **1.07–1.23 GB/s**。
+- 單機逐輪交錯：只解碼 M4 1.07 → 2.44 GB/s、M6 1.37 → 3.30 GB/s；`-x` 寫到磁碟 M4 0.80 →
+  0.9–1.27 GB/s（對方判斷瓶頸已轉到磁碟）、M6 1.08 → 1.96 GB/s。
+- multiscp DOE：預設 codec，N = 2／4／8／16，32/32 經 manifest 驗證；每一格都比單執行緒 zstd 快
+  28–57%，16 格全部比 `--none`（不壓縮）快。
+- 他們的提交 `35a08e3`（含把 gitlink 移到 `42897ed`）與 `1ae9a45`，在其使用者確認前只在 M4 本地。
+
 **原始描述**——**現象**：`zstdDecodeStream` 只用一個 `ZSTD_DStream` 依序解碼。在本機 RAM disk 上，claw-code
 （1351 MiB）只解碼（`--cat`）時平均用 0.97–1.04 個核心、約 1.2 GB/s；完整 `-x --zstd` 約
 860–900 MB/s、1.3 個核心。multissh 在 M4 上量到解壓不論寫到磁碟或 RAM 都約 800 MB/s，在

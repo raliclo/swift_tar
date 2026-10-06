@@ -515,6 +515,107 @@ RAM disk 量測，並記下 user／sys 時間。
 - **`MAC_COPYFILE`**（`3c6ff6c`）：只影響 macOS 建置，但 `archive_read_disk_set_behavior(disk, 0)`
   在所有平台都會執行，確認 Windows 與 Linux 的 ZIP 建立不受影響。
 
+### 驗證結果 2026-10-07（master `15d1543`）/ Results, 2026-10-07
+
+Windows 11（MINGW64_NT-10.0-26200，Swift 6.3.3，參照 tar：GNU tar 1.35 與 System32 bsdtar 3.8.8）
+與 WSL2（Ubuntu，Linux 6.18.33.2，Swift 6.3.3，GNU tar 1.35，**無 bsdtar**）。由 lzfse2 的
+Windows session 執行，swift-tar-9d 請求。
+
+**重建 / Rebuild — 通過**
+
+- Windows：`build_zlib-win` → `build_zstd-win` → `build_libarchive-win` → `compile_tar-win`，四步 rc=0。
+  `version-win.txt` 前後 diff 只有 `swift_tar_version` 與 libarchive 兩鍵（`ddf8247` → `abaa707d`），
+  其餘 7 鍵原樣保留——三支 build 腳本的新寫法首次在 Windows 實跑即正確。建後 libarchive 工作樹
+  0 變更（patch 已還原）；ZIP bridge 有重新編譯。log 中的「failed」皆為 CMake 功能探測。
+- WSL：`LIBARCHIVE_STATIC=1 compile_tar-linux.zsh` rc=0，`--version` 換成新戳記，
+  `version-linux.txt` 記下 `abaa707d`。`generate_version.zsh` 移到 `build_libarchive.zsh` 之後的
+  順序首次在 Linux 實跑，正確。小落差：Windows 記有 `libarchive_linkage=static`，Linux 靜態建置
+  只刪掉三個 dynamic 鍵，**沒有寫入 `libarchive_linkage=static`**。
+
+**測試 / Suites**（macOS 基準見請求；`rc` 為套件離開碼）
+
+| 套件 | Windows | WSL |
+|---|---|---|
+| test_blind_findings | **176/7**（5 條已知子秒 + 2 條 `-h`，見下）| 183/0 |
+| test_exclude | 通過 | 通過 |
+| test_zstd_parallel | 25/0 | 25/0 |
+| test_encrypt | 84/0（layered xz 略過：Windows 已知慢）| 85/0 |
+| test_rgb1 | 36/0 | 36/0 |
+| test_swift_tar_rgb1 | 20/0（codec 表略過：無取樣語料）| 20/0（同）|
+| test_no_lzfse | 14/0 | 14/0 |
+| test_append_update | 11/0 | 11/0 |
+| test_strip_components | 7/0 | 7/0 |
+| test_same_permissions | 略過（無 POSIX mode）| 通過 |
+| test_touch_alias | 通過 | 通過 |
+| verifications/rgb1/test_sampler_args | 9/0 | 9/0 |
+
+test_blind_findings 與 macOS 的 189 差在略過項：Windows 略過 FIFO 與 ZIP 略過測試；WSL 略過
+`.Z` 讀取（無 LZW 產生器）與 ZIP 略過測試（無 bsdtar）。
+
+**點名項目 / Named checks**
+
+- 大小寫不同的 symlink、硬連結指向 symlink 不共用外部 inode、pax 長度守門 5 條：**兩平台皆通過**。
+- `./` 區塊的 `-u`：GNU tar 1.35 在兩平台的全套中通過；bsdtar 3.8.8 以該區塊單獨重跑（Windows）
+  **6/0**。無法以整套跑的原因見下方「外部缺陷」。
+- 子秒 mtime：WSL 建立端 3 條、解壓端 5 條（含 FIFO）**全過**。Windows 建立端 1 條、解壓端 4 條
+  失敗，皆為已知的整秒限制，**非回歸**：
+  ```
+  FAIL: sub-second mtime: stored as a pax record with nine digits of nanoseconds (want '1', got '0')
+  FAIL: sub-second mtime restored: small file (write pool) (want '1767240000.123456700', got '1767240000.000000000')
+  （inline、directory、symlink 三條同形）
+  ```
+- pax 測試的工具：Windows `dd` 為 GNU coreutils 8.32、`grep` 3.0；**WSL 的 `dd` 是 uutils coreutils
+  0.8.0**（Rust 版，非 GNU）、`grep` 3.12。兩邊 pax 測試皆通過，故這些用法行為一致，但記下此差異。
+- `extract_shapes.zsh`：`PLAT=win`，選到 `release/swift_tar.exe`。
+
+**`--zstd-parallel` 量測**（同一執行檔、交錯 10 輪、取最小值、claw-code 1351 MiB；腳本與逐輪
+原始數字未入版，方法同上方 macOS 那張表）
+
+| 情境 | WSL（`/dev/shm` RAM disk）| Windows（**實體磁碟，無 RAM disk 工具**）|
+|---|---|---|
+| `--cat` | 2.548 → 1.350 s（1.89×）| 3.038 → 1.558 s（1.95×）|
+| `-x` | 4.075 → 2.457 s（1.66×）| 10.662 → 8.363 s（1.27×）|
+| 管線 `-x -f -` | 4.062 → 2.515 s（1.62×）| 10.717 → 8.424 s（1.27×）|
+
+逐輪散布：WSL 15–34%，Windows 6–13%；各情境兩模式的差距皆大於散布。Windows 的 `-x` 只有 1.27×，
+因為成本大半在 NTFS 建檔，解碼加速只縮短剩下那段。multissh 在 Windows 的實際用途（管線那列）
+正確且較快，可以換用。
+
+**紀錄 / Records**：`record_release.zsh --record` 兩平台皆已追加。兩列標 `dirty`，因為記錄當下
+`version-*.txt` 是重建後尚未提交的狀態。Windows 執行檔戳記為 `20261007-031658` 而非建置時的
+`030641`：`test_no_lzfse.zsh` 結尾的 `restore_full_build` 重建了它（同來源、同為完整版）。
+
+### 本次驗證發現的缺陷 / Defects found by this verification
+
+1. 🔴 **Windows：tar 路徑忽略 `-h`。** `-c -h` 產生的封存與不加 `-h` 完全相同，symlink 仍存為
+   symlink；同一份 fixture 的 `--zip -h` 則正確跟隨。成因在 `swift_tar.swift` 約 3573–3593 行的
+   Windows 分支：`winStat` 是 lstat 等價物，遇到 `isSymlink` 就寫 symlink 標頭，**從未查看
+   `dereference`**；POSIX 分支（約 3677 行）是 `dereference ? stat : lstat`。
+   ```
+   FAIL: -h: tar stores what a symlink points to (want 'file:TARGET', got 'link')
+   FAIL: -h: -r stores what a symlink points to (want 'file:TARGET', got 'link')
+   $ bsdtar -tvf h.tar → lrw-r--r-- … t/link.txt -> ..\\target.txt   （與不加 -h 相同）
+   ```
+2. 🔴 **Windows：symlink 目標以反斜線存入封存。** 同上第 3593 行附近，`destinationOfSymbolicLink`
+   回傳 `..\target.txt`，未轉成 `/` 就寫入。在 Linux／macOS 解出會是斷掉的連結。不在原清單上。
+3. 🔴 **Windows：ZIP 解壓時，檔案成員被無聲地換成目錄，資料遺失。** ZIP 略過測試的 fixture
+   （`a` 檔案、`a/b`、`c`）以 System32 bsdtar 製作後手動執行：
+   ```
+   預期（macOS）: a = 檔案「A」；a/b 略過並報於 stderr；rc=0
+   Windows 實際 : a = 目錄，a/b = 「B」，檔案 a 的內容「A」消失；rc=0；stderr 空白
+   ```
+   測試的前兩條（`c` 有解出、rc=0）會通過，只有「被略過的成員有報在 stderr」那條失敗——而它從未在
+   Windows 跑過，原因是下一項。
+4. 🟡 **測試缺口：ZIP 略過測試在 Windows 上找不到 bsdtar。** 它只嘗試 `$SYS_TAR`（MSYS 下為 GNU tar）
+   與 PATH 上的 `bsdtar`，從不嘗試 `/c/Windows/System32/tar.exe`。上一項因此一直被略過。
+5. ⚪ **外部缺陷：Windows 內建 bsdtar 3.8.8 處理結尾斜線的參數會讀到亂碼。** 從 cmd.exe 直接
+   呼叫（排除 MSYS 參數改寫）`tar.exe -cf o.tar tree/` 仍失敗，錯誤訊息中的目錄名是一團夾雜 PATH
+   片段的亂碼；`tree`、`./tree` 正常。因此 `SYS_TAR=System32\tar.exe` 無法跑整套
+   test_blind_findings（第 139 行刻意用 `tree/` 測結尾斜線），bsdtar 3.8.8 的 `./` 對照只能單獨跑。
+6. ⚪ Linux 靜態建置的 `version-linux.txt` 未寫 `libarchive_linkage=static`（見「重建」）。
+
+1–3 是程式缺陷，依請求**未在本次修改**，留待與驗證分開提交。
+
 ## `build_zlib-win.zsh` 改為與其他建置腳本相同的寫法 ▸ ✅ 已修正 2026-09-27（未在 Windows 執行）/ Make `build_zlib-win.zsh` rewrite version-win.txt like the other builders
 
 **修正**：三支 Windows 建置腳本統一為同一種寫法——只清掉自己的鍵、其餘保留，先確認檔案

@@ -1,4 +1,6 @@
-swift_tar_version=20260819-211139
+swift_tar_version=20261007-033307
+libarchive_version=v3.7.5-1889-gabaa707d
+libarchive_commit=abaa707d92fce052f386b6cc2c8d0593ce61e639
 zlib_so_version=1
 zlib_path=/usr/lib/libz.so.1
 zlib_linkage=dynamic
@@ -14,6 +16,3 @@ xz_linkage=dynamic
 zstd_so_version=1
 zstd_path=/usr/lib/libzstd.so.1
 zstd_linkage=dynamic
-libarchive_so_version=13
-libarchive_path=/usr/lib/libarchive.so.13
-libarchive_linkage=dynamic

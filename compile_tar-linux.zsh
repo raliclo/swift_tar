@@ -300,18 +300,43 @@ record_linked() {        # key  soname-prefix
 # taking the exit code with it.
 # provenance 是關於本次建置的紀錄，而非建置的一部分。即使寫不出來，建置本身仍然有效，
 # 故此處回報後繼續，而不是把結束碼一併帶走。
+#
+# libarchive is read back here only when it is linked shared. With LIBARCHIVE_STATIC=1,
+# build_libarchive.zsh has already written libarchive_version/commit/linkage=static from
+# the submodule; this block used to strip libarchive_linkage and then find no libarchive.so
+# to read back, so the static build's record lost the key that says it is static (Windows/
+# WSL verification, 2026-10-07). The same shape compile_tar.zsh had until 2026-09-17: a
+# filter deleting a key it has no way to rewrite. A shared build strips libarchive_version/
+# commit as well, since they describe a submodule that is then not what was linked.
+#
+# grep's status 1 (nothing printed) is tolerated; any other failure goes to the caller,
+# which reports it -- no longer `2>/dev/null || true`.
+#
+# 只有在 libarchive 以共享庫連結時，才在這裡讀回它。LIBARCHIVE_STATIC=1 時，
+# build_libarchive.zsh 已依 submodule 寫入 libarchive_version／commit／linkage=static；本段原本會
+# 刪掉 libarchive_linkage，接著找不到 libarchive.so 可讀回，於是靜態建置的紀錄失去了「它是靜態」
+# 這個鍵（Windows／WSL 驗證，2026-10-07）。compile_tar.zsh 在 2026-09-17 之前也是同樣的形狀：
+# 過濾器刪掉了自己無法重寫的鍵。共享庫建置則一併清掉 libarchive_version／commit，因為它們描述的
+# submodule 此時並不是實際連結的東西。
+#
+# 容忍 grep 的狀態 1（沒有輸出）；其他失敗交給呼叫端回報——不再是 `2>/dev/null || true`。
 record_provenance() {
     local version_file="version-$(swift_tar_platform).txt"
     local tmp_version="$version_file.tmp"
+    local strip='^(zlib|bzip2|lz4|xz|zstd)_(so_version|path|linkage)='
+    if [[ "${LIBARCHIVE_STATIC:-0}" == 1 ]]; then
+        strip+='|^libarchive_(so_version|path)='
+    else
+        strip+='|^libarchive_(so_version|path|linkage|version|commit)='
+    fi
     {
-        grep -vE '^(zlib|bzip2|lz4|xz|zstd|libarchive)_(so_version|path|linkage)=' \
-            "$version_file" 2>/dev/null || true
+        grep -vE "$strip" "$version_file" || [ $? -eq 1 ]
         record_linked zlib       'libz\.so'
         record_linked bzip2      'libbz2\.so'
         record_linked lz4        'liblz4\.so'
         record_linked xz         'liblzma\.so'
         record_linked zstd       'libzstd\.so'
-        record_linked libarchive 'libarchive\.so'
+        [[ "${LIBARCHIVE_STATIC:-0}" == 1 ]] || record_linked libarchive 'libarchive\.so'
     } > "$tmp_version"
     mv "$tmp_version" "$version_file"
     log_msg "Recorded linked libraries in $version_file / 已將連結的函式庫記入 $version_file"

@@ -643,7 +643,16 @@ libarchive 的 Windows 寫入端（`archive_write_disk_windows.c`）處理「上
 Windows 驗證的第 4 項。測試只嘗試 `$SYS_TAR`（MSYS 下為 GNU tar）與 PATH 上的 `bsdtar`，從不嘗試
 `/c/Windows/System32/tar.exe`，所以上一項一直被略過、從未在 Windows 上被測過。
 
-## 🔴 Linux 靜態建置不記錄 `libarchive_linkage=static` / The Linux static build drops `libarchive_linkage=static`
+## Linux 靜態建置不記錄 `libarchive_linkage=static` ▸ ✅ 已修正 2026-10-07（未在 Linux 整支執行）/ The Linux static build drops `libarchive_linkage=static`
+
+**修正**：`record_provenance` 在 `LIBARCHIVE_STATIC=1` 時不清掉、也不重讀 libarchive 的鍵，保留
+`build_libarchive.zsh` 寫入的 `version`／`commit`／`linkage=static`；共享庫建置則一併清掉
+`libarchive_version`／`commit`，因為它們描述的 submodule 此時不是實際連結的東西。該行的
+`2>/dev/null || true` 改為只容忍 grep 的狀態 1。
+
+**測試**：取出 `record_linked` 與 `record_provenance` 的實際文字，以替身函式在 macOS 上執行：新版靜態
+保留三個鍵；新版動態清掉它們；**HEAD 舊版靜態丟掉了 `linkage`**，重現缺陷。尚未在 Linux 上整支
+執行，下次 WSL 重建時確認。
 
 Windows 驗證的第 6 項。`compile_tar-linux.zsh` 的記錄步驟先以 `grep -vE` 清掉
 `libarchive_(so_version|path|linkage)`，再以 `record_linked libarchive 'libarchive\.so'` 寫回——靜態

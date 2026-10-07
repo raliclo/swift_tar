@@ -905,7 +905,7 @@ RAM disk，384 MiB 隨機資料命名為 `.mp4`，管線 `-x`，交錯 10 輪取
 Resolved by not compressing: `-c --skip-compressed` writes one already-compressed file
 (by suffix) as a plain tar. 2369 MB/s through a pipe against 1342-1491 for zstd.
 
-## 🔴 `compile_tar.zsh` 每次建置都悄悄覆蓋 `/opt/homebrew/bin/swift_tar` / `compile_tar.zsh` silently overwrites `/opt/homebrew/bin/swift_tar` on every build
+## `compile_tar.zsh` 每次建置都悄悄覆蓋 `/opt/homebrew/bin/swift_tar` ▸ ✅ 已修正 2026-10-08（`8d5c0fb`）/ `compile_tar.zsh` silently overwrites `/opt/homebrew/bin/swift_tar` on every build
 
 2026-10-07 M6-Multissh 在暫存 clone 用 `compile_tar.zsh` 建置分支 `multissh-perf` 來量測，腳本最後一步
 （`compile_tar.zsh:184–186`）把結果複製到 M6 的 `/opt/homebrew/bin/swift_tar`，原本的那一份沒有備份。
@@ -917,6 +917,19 @@ Resolved by not compressing: `-c --skip-compressed` writes one already-compresse
 Every `compile_tar.zsh` build copies the result over `/opt/homebrew/bin/swift_tar`; on
 2026-10-07 that replaced the M6's PATH binary during a measurement build, with no backup.
 Recorded at the user's decision; the fix is to be decided.
+
+**修正（2026-10-08，使用者決定）**：`compile_tar.zsh` 預設只建置到 `release/`，結束時印出帶原參數的
+安裝指令；加 `--install`（或 `-install`）才複製到 PATH。依使用者指示，其他呼叫端維持原本行為、自行
+帶上 `--install`：`build.zsh`（macOS）、`compile_no_lzfse.zsh`、`test_no_lzfse.zsh` 的完整版建置，以及
+lzfse2 的 `run_round.command`（lzfse2 `d566228`）；`tgz_inflight_rss.zsh` 的建置說明也改為 `--install`。
+實測：不加旗標建置公開版時 PATH 雜湊不變；`compile_no_lzfse.zsh` 與 `build.zsh` 照舊安裝；
+`test_no_lzfse` 結束後 PATH 為完整版。
+
+同一次提交另修正 `44c0e4b` 的回歸：`--skip-compressed` 的後綴清單把 `.lzfse.bvx3`、`.lzfse.other3`
+等字串編進公開版，`test_no_lzfse` 因此失敗 2 項；這些後綴改為只在完整版加入。
+
+Fixed: building no longer installs unless `--install` is given; every existing caller
+passes it, so their behaviour is unchanged.
 
 ## 🔴 分支項：`-c` 平行讀檔，封存位元組不變 / Branch item: read files in parallel in `-c`, byte-identical output
 

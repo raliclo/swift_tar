@@ -230,7 +230,12 @@ STAMP=$(sed -n 's/^swift_tar_version=//p' "$VERSION_FILE" 2>/dev/null | sed -n '
 # stale cell with `csv2 -update r:5 <new-hash>`; never touch the sha256.
 COMMIT=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || print -r -- "(not-a-checkout)")
 if git -C "$ROOT" rev-parse HEAD >/dev/null 2>&1; then
-  if [[ -n $(git -C "$ROOT" status --porcelain --untracked-files=no) ]]; then
+  # 排除本表自身：它不是建置的輸入。2026-10-07 同一輪記錄 Windows 與 Linux 時，先記的那一列
+  # 尚未提交，於是後記的 Linux 執行檔被標成 dirty，即使它建自乾淨的樹。
+  # The matrix itself is excluded: it is not a build input. On 2026-10-07, recording
+  # Windows then Linux in one round marked the Linux binary dirty because the Windows row
+  # was not yet committed, though that binary was built from a clean tree.
+  if [[ -n $(git -C "$ROOT" status --porcelain --untracked-files=no -- . ':(exclude)verifications/release_matrix.csv2') ]]; then
     TREE="dirty"
   else
     TREE="clean"

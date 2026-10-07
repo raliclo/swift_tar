@@ -626,10 +626,19 @@ Windows 驗證（2026-10-07）的第 1 項。`TarWriter.add` 的 Windows 分支�
 取得資訊，遇到 `isSymlink` 就寫 symlink 標頭，**整個分支從未查看 `dereference`**——macOS 端已讀碼
 確認。POSIX 分支是 `dereference ? stat : lstat`。`--zip -h` 在 Windows 上正確，因為它走 bridge。
 
+**修正已寫（`66679fd`），未在 Windows 建置**，故仍標 🔴：新增 `winStatFollowing`（最多 40 層、斷鏈則
+回報並略過）與同 POSIX 的祖先迴圈偵測。待 Windows 端建置並跑 `test_blind_findings.zsh` 後結案。
+The fix is written (`66679fd`) but unbuilt on Windows, so this stays open until the
+Windows session builds it and runs `test_blind_findings.zsh`.
+
 ## 🔴 Windows：symlink 目標以反斜線存入封存 / Windows: symlink targets are stored with backslashes
 
 Windows 驗證的第 2 項。同一處的 `destinationOfSymbolicLink` 回傳 `..\target.txt`，未轉成 `/` 就寫入
 標頭（macOS 端已讀碼確認）。在 Linux／macOS 解出會是斷掉的連結。
+
+**修正已寫（`66679fd`），未在 Windows 建置**，故仍標 🔴：只在 Windows 分支把 `\` 轉為 `/`（POSIX 上
+`\` 是合法檔名字元）。
+The fix is written (`66679fd`), Windows branch only; open until built and tested there.
 
 ## 🔴 Windows：ZIP 解壓時，檔案成員被無聲換成目錄 / Windows: ZIP extraction silently replaces a file with a directory
 
@@ -642,6 +651,24 @@ libarchive 的 Windows 寫入端（`archive_write_disk_windows.c`）處理「上
 
 Windows 驗證的第 4 項。測試只嘗試 `$SYS_TAR`（MSYS 下為 GNU tar）與 PATH 上的 `bsdtar`，從不嘗試
 `/c/Windows/System32/tar.exe`，所以上一項一直被略過、從未在 Windows 上被測過。
+
+## 🔴 stderr 寫入失敗時 `eprint` 以 SIGABRT 終止，真正的錯誤訊息遺失 / `eprint` aborts when stderr cannot be written, losing the real error
+
+2026-10-07 量測校驗碼成本時發現。RAM disk 被寫滿，而 stderr 正好重導到同一個卷宗上的檔案：
+`-c --xz` 以 **rc=134** 結束。當機報告的堆疊為 `eprint(_:)` → `-[NSConcreteFileHandle writeData:]`
+→ `objc_exception_throw` → `abort`。`eprint` 用的是舊的 `FileHandle.write(_:)`，寫入失敗時拋出
+Objective-C 例外，Swift 無法攔截。結果是原本要回報的錯誤（推測為封存寫入的 ENOSPC）一個字也沒
+印出來，只剩一個看似當機的退出碼。資料路徑全部用可拋錯的 `write(contentsOf:)`，不受影響；同樣
+使用舊 API 的還有 14 處 `FileHandle.standardError.write(Data(...))`。觸發條件窄（stderr 寫不進去：
+滿的卷宗、已關閉的管線），但後果是把可診斷的失敗變成不可診斷的當機。尚未修正、尚無測試。
+
+Found on 2026-10-07 while measuring the checksum cost. The RAM disk filled while
+stderr was redirected onto it, and `-c --xz` ended with rc=134. The crash report
+shows `eprint` -> `writeData:` -> `objc_exception_throw` -> `abort`: the legacy
+`FileHandle.write(_:)` raises an Objective-C exception on failure, which Swift
+cannot catch, so the error being reported was never printed. Data paths use the
+throwing `write(contentsOf:)` and are unaffected; 14 other stderr writes use the
+legacy call. Not yet fixed or tested.
 
 ## Linux 靜態建置不記錄 `libarchive_linkage=static` ▸ ✅ 已修正 2026-10-07（未在 Linux 整支執行）/ The Linux static build drops `libarchive_linkage=static`
 

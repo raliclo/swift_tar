@@ -26,6 +26,10 @@
 set -euo pipefail
 
 script_path="${0:A}"
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  sed -n '2,25p' "$script_path" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
 HERE="${script_path:h}"
 ROOT="${HERE:h}"
 if [ -z "${ST:-}" ]; then

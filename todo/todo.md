@@ -844,7 +844,8 @@ The fifth, slow `--zstd-parallel` on incompressible data, is being fixed on mast
 the user's direct instruction.
 
 **第五項的進度（分支 `multissh-perf`，`41c282e`）**：使用者後來決定一律在 `multissh-perf` 分支上工作，
-所以這項改動也在分支上，未進 master。基準重測（M4，RAM disk，master 對分支交錯 10 輪取最小 real；
+所以這項改動也在分支上；同日依使用者決定以 fast-forward merge 進 master（M6 的 PATH 上已是這一版，
+其使用者希望它成為主線）。基準重測（M4，RAM disk，master 對分支交錯 10 輪取最小 real；
 負載 2.6–3.5；開始前已比對四種組合的輸出雜湊相同）：
 
 | 情境 | master | multissh-perf |
@@ -864,6 +865,19 @@ Progress on the fifth item, on branch `multissh-perf` (`41c282e`): `--cat` is 1.
 faster across the board, and the parallel decoder no longer loses to the single-threaded
 one under `--cat`. Still open: under `-x` from a pipe it does (1627 vs 2334 MB/s), because
 `TarReader.readExactly` still allocates per member. That is next.
+
+## 🔴 `compile_tar.zsh` 每次建置都悄悄覆蓋 `/opt/homebrew/bin/swift_tar` / `compile_tar.zsh` silently overwrites `/opt/homebrew/bin/swift_tar` on every build
+
+2026-10-07 M6-Multissh 在暫存 clone 用 `compile_tar.zsh` 建置分支 `multissh-perf` 來量測，腳本最後一步
+（`compile_tar.zsh:184–186`）把結果複製到 M6 的 `/opt/homebrew/bin/swift_tar`，原本的那一份沒有備份。
+它不知道建置腳本會安裝——訊息只有建置輸出最後一行 `Installed to ...`。本 session 當天的每一次建置也都
+替換了 M4 PATH 上的 swift_tar，包括 `test_no_lzfse.zsh` 執行期間短暫存在的公開版。建置與安裝是兩件事：
+一個「建來量測」的建置不應改變系統上其他工具呼叫到的執行檔。使用者決定（2026-10-07）：先記錄，修法
+另行決定（例如改為需要 `--install` 才安裝；要先查有沒有其他腳本依賴自動安裝）。
+
+Every `compile_tar.zsh` build copies the result over `/opt/homebrew/bin/swift_tar`; on
+2026-10-07 that replaced the M6's PATH binary during a measurement build, with no backup.
+Recorded at the user's decision; the fix is to be decided.
 
 ## 🔴 分支項：`-c` 平行讀檔，封存位元組不變 / Branch item: read files in parallel in `-c`, byte-identical output
 

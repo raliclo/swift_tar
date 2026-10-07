@@ -53,7 +53,7 @@
 #   swift_tar/verifications/tgz_inflight_rss.zsh <path-to-corpus>
 #
 # Requires / 需求：swift_tar 已編譯至 /opt/homebrew/bin/swift_tar
-#   （執行 swift_tar/compile_tar.zsh）。
+#   （執行 swift_tar/compile_tar.zsh --install）。
 # =====================================================================
 set -euo pipefail
 
@@ -75,7 +75,7 @@ OUTPUT_TXT="${0:A:h}/tgz_inflight_rss_output.txt"
 exec > >(tee "$OUTPUT_TXT")
 
 if [[ ! -x "$SWIFT_TAR_BIN" ]]; then
-    echo "[Error] swift_tar not found at $SWIFT_TAR_BIN — run swift_tar/compile_tar.zsh first." >&2
+    echo "[Error] swift_tar not found at $SWIFT_TAR_BIN — run swift_tar/compile_tar.zsh --install first." >&2
     exit 1
 fi
 if [[ ! -e "$CORPUS" ]]; then

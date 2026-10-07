@@ -31,4 +31,8 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
 fi
 
 cd "$(dirname "$0")"
-exec ./compile_tar.zsh --no-lzfse "$@"
+# --install keeps this wrapper's behaviour: compile_tar.zsh stopped installing by default
+# on 2026-10-07, and this script has always put its build on PATH.
+# --install 維持本包裝的行為：compile_tar.zsh 自 2026-10-07 起預設不再安裝，而本腳本一向會把
+# 建置結果放到 PATH 上。
+exec ./compile_tar.zsh --no-lzfse --install "$@"

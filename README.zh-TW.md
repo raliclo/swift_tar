@@ -43,6 +43,12 @@ Linux 用 `compile_tar-linux.zsh`、Windows 用 `compile_tar-win.bat`——故�
 三者皆可用。`./build.zsh --platform` 只印出偵測到的平台名稱而不建置。直接呼叫各平台
 腳本仍然可行。
 
+在 macOS 上，**單獨執行 `compile_tar.zsh` 只會建置**：結果留在 `release/swift_tar`，建置結束時印出
+安裝用的指令。加上 `--install`（或 `-install`）才會另外複製到 `/opt/homebrew/bin/swift_tar`。
+`build.zsh` 與 `compile_no_lzfse.zsh` 會自行帶上 `--install`，所以它們照舊會安裝。2026-10-07 之前，
+每次執行 `compile_tar.zsh` 都會安裝，一次只為量測分支而做的建置，就換掉了另一台機器 PATH 上的
+`swift_tar`。
+
 ### Linux
 
 `compile_tar-linux.zsh` 需要 Swift 工具鏈與各 codec 的 header 與共享函式庫。兩者皆以
@@ -493,7 +499,7 @@ tar 壓縮引擎皆輸出可串接串流，故 `gunzip`、`bunzip2`、`xz`、`lz
 | 類別 | 後綴 |
 |------|------|
 | 壓縮串流與封存——`~/.zshrc` 的 `extract()` 所辨識的格式，再加上幾個同類格式 | `.zip` `.zipx` `.gz` `.tgz` `.bz2` `.tbz2` `.tbz` `.xz` `.txz` `.7z` `.rar` `.zst` `.tzst` `.lz4` `.lz4a` `.lz` `.tlz` `.lzma` `.z`（`.Z`）`.br` `.cab` |
-| 本專案的 LZFSE 輸出 | `.lzfse` `.lzfse.bvx3` `.lzfse.bvx3.lazy2` `.lzfse.bvx3.optimal` `.lzfse.other3` `.lzfse.other3.optimal3` `.lzfse.apple` |
+| 本專案的 LZFSE 輸出（`.bvx3` 與 `.other3` 系列只在完整版：公開版不帶任何私有引擎的名稱） | `.lzfse` `.lzfse.apple`；完整版另有 `.lzfse.bvx3` `.lzfse.bvx3.lazy2` `.lzfse.bvx3.optimal` `.lzfse.other3` `.lzfse.other3.optimal3` |
 | 內部為 ZIP 或壓縮容器的套件與文件 | `.jar` `.war` `.apk` `.aab` `.ipa` `.xip` `.whl` `.nupkg` `.epub` `.docx` `.xlsx` `.pptx` `.odt` `.ods` `.odp` `.dmg` `.pkg` |
 | 影片——MPEG-4 與其他高壓縮率格式（常見容器內的 H.264、HEVC、VP9、AV1） | `.mp4` `.m4v` `.mov` `.mkv` `.webm` `.avi` `.wmv` `.flv` `.mpg` `.mpeg` `.m2v` `.m2ts` `.mts` `.3gp` `.hevc` `.h264` `.h265` |
 | 音訊 | `.mp3` `.aac` `.m4a` `.ogg` `.oga` `.opus` `.flac` `.wma` |

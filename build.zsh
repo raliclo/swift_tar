@@ -44,7 +44,10 @@ echo "[Info] version file / 版本檔: version-$platform.txt"
 
 case "$platform" in
     mac)
-        exec ./compile_tar.zsh "$@"
+        # --install keeps this entry point's behaviour: compile_tar.zsh stopped installing
+        # by default on 2026-10-07. / --install 維持本入口的行為：compile_tar.zsh 自
+        # 2026-10-07 起預設不再安裝。
+        exec ./compile_tar.zsh --install "$@"
         ;;
     linux)
         exec ./compile_tar-linux.zsh "$@"

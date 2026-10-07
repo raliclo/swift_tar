@@ -48,6 +48,13 @@ installed. `zlib` and `libbz2` still come from the SDK, dynamically.
 `./build.zsh --platform` prints the detected name without building. Calling the
 platform script directly still works.
 
+On macOS, **`compile_tar.zsh` on its own only builds**: the result stays in
+`release/swift_tar`, and the build ends by printing the command that installs it.
+Pass `--install` (or `-install`) to also copy it to `/opt/homebrew/bin/swift_tar`.
+`build.zsh` and `compile_no_lzfse.zsh` pass `--install` themselves, so they install as
+they always did. Until 2026-10-07 every `compile_tar.zsh` run installed, and a build
+made only to measure a branch replaced the `swift_tar` on another machine's PATH.
+
 ### Linux
 
 `compile_tar-linux.zsh` needs a Swift toolchain and the codec headers and shared
@@ -554,7 +561,7 @@ are not inspected. The list lives in `alreadyCompressedSuffixes` in `swift_tar.s
 | Group | Suffixes |
 |-------|----------|
 | Compressed streams and archives — the formats `extract()` in `~/.zshrc` recognises, plus a few relatives | `.zip` `.zipx` `.gz` `.tgz` `.bz2` `.tbz2` `.tbz` `.xz` `.txz` `.7z` `.rar` `.zst` `.tzst` `.lz4` `.lz4a` `.lz` `.tlz` `.lzma` `.z` (`.Z`) `.br` `.cab` |
-| LZFSE outputs of this project | `.lzfse` `.lzfse.bvx3` `.lzfse.bvx3.lazy2` `.lzfse.bvx3.optimal` `.lzfse.other3` `.lzfse.other3.optimal3` `.lzfse.apple` |
+| LZFSE outputs of this project (the `.bvx3` and `.other3` names in the full build only: the public build carries none of the private engine's names) | `.lzfse` `.lzfse.apple`; full build also `.lzfse.bvx3` `.lzfse.bvx3.lazy2` `.lzfse.bvx3.optimal` `.lzfse.other3` `.lzfse.other3.optimal3` |
 | Packages and documents that are ZIP or compressed containers inside | `.jar` `.war` `.apk` `.aab` `.ipa` `.xip` `.whl` `.nupkg` `.epub` `.docx` `.xlsx` `.pptx` `.odt` `.ods` `.odp` `.dmg` `.pkg` |
 | Video — MPEG-4 and other high-ratio codecs (H.264, HEVC, VP9, AV1 in their usual containers) | `.mp4` `.m4v` `.mov` `.mkv` `.webm` `.avi` `.wmv` `.flv` `.mpg` `.mpeg` `.m2v` `.m2ts` `.mts` `.3gp` `.hevc` `.h264` `.h265` |
 | Audio | `.mp3` `.aac` `.m4a` `.ogg` `.oga` `.opus` `.flac` `.wma` |

@@ -162,7 +162,11 @@ bad() { echo "FAIL: $1"; fail=$((fail+1)); }
 BIN=release/swift_tar
 case "$(uname -s)" in
     Darwin)
-        build_full=(./compile_tar.zsh)
+        # --install keeps what this test always did: compile_tar.zsh stopped installing by
+        # default on 2026-10-07 (compile_no_lzfse.zsh passes it on its own).
+        # --install 維持本測試一向的行為：compile_tar.zsh 自 2026-10-07 起預設不再安裝
+        # （compile_no_lzfse.zsh 自己會帶上）。
+        build_full=(./compile_tar.zsh --install)
         build_public=(./compile_no_lzfse.zsh)
         ;;
     Linux)

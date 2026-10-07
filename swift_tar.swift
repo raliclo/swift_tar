@@ -729,13 +729,26 @@ private func winRunDecompress(exe: String, args: [String], input: FileHandle,
 /// 為什麼：再壓縮一次毫無收益——zstd 會把它們的區塊原樣存放——而在接收端解碼純屬成本。
 /// 2026-10-07 於 M4 實測：512 MiB 隨機資料經管線解出，`--zstd` 為 2147 MB/s、
 /// `--zstd-parallel` 為 1732 MB/s，而未壓縮的 tar 只受管線本身限制。
-let alreadyCompressedSuffixes: [String] = [
+let alreadyCompressedSuffixes: [String] = {
+    var list = commonCompressedSuffixes
+#if !EXCLUDE_LZFSE
+    // Only in the full build: the public one must not carry the private engine's names,
+    // which test_no_lzfse.zsh checks with `strings`. They were in the shared list at
+    // first, and that check failed on bvx3 and other3.
+    // 僅在完整版：公開版不得帶有私有引擎的名稱，test_no_lzfse.zsh 以 `strings` 檢查。它們
+    // 起初放在共用清單中，那項檢查因 bvx3 與 other3 而失敗。
+    list += [".lzfse.bvx3", ".lzfse.bvx3.lazy2", ".lzfse.bvx3.optimal",
+             ".lzfse.other3", ".lzfse.other3.optimal3"]
+#endif
+    return list
+}()
+
+private let commonCompressedSuffixes: [String] = [
     // Compressed streams and archives (the formats ~/.zshrc's extract() recognises).
     // 壓縮串流與封存（~/.zshrc 的 extract() 所辨識的格式）。
     ".zip", ".zipx", ".gz", ".tgz", ".bz2", ".tbz2", ".tbz", ".xz", ".txz", ".7z", ".rar",
     ".zst", ".tzst", ".lz4", ".lz4a", ".lz", ".tlz", ".lzma", ".z", ".br", ".cab",
-    ".lzfse", ".lzfse.bvx3", ".lzfse.bvx3.lazy2", ".lzfse.bvx3.optimal",
-    ".lzfse.other3", ".lzfse.other3.optimal3", ".lzfse.apple",
+    ".lzfse", ".lzfse.apple",
     // Packages and documents that are zip or compressed containers inside.
     // 內部為 zip 或壓縮容器的套件與文件。
     ".jar", ".war", ".apk", ".aab", ".ipa", ".xip", ".whl", ".nupkg", ".epub",

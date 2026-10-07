@@ -23,8 +23,14 @@
 # Output / 輸出：release/swift_tar
 #
 # Usage / 用法:
-#   ./compile_tar.zsh [--no-lzfse]   build; --no-lzfse omits the private engine
-#                                    建置；--no-lzfse 不含私有引擎
+#   ./compile_tar.zsh [--no-lzfse] [--install]
+#                      build; --no-lzfse omits the private engine; --install
+#                      (or -install) also copies the result to
+#                      /opt/homebrew/bin/swift_tar. Without it nothing outside
+#                      release/ changes, and the build ends by saying how to install.
+#                      建置；--no-lzfse 不含私有引擎；--install（或 -install）另外把
+#                      結果複製到 /opt/homebrew/bin/swift_tar。未加時不改動 release/
+#                      以外的任何東西，建置結束時提示如何安裝。
 #   ./compile_tar.zsh --help         print this synopsis and exit, building nothing
 #                                    印出本說明後結束，不進行任何建置
 # =====================================================================
@@ -32,7 +38,7 @@ set -e
 
 script_path="${0:A}"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-    sed -n '3,29p' "$script_path" | sed 's/^# \{0,1\}//'
+    sed -n '3,35p' "$script_path" | sed 's/^# \{0,1\}//'
     exit 0
 fi
 
@@ -48,9 +54,11 @@ cd "$(dirname "$0")"
 # （other3/bvx3/bvx2）；標準外部 codec（gzip/bzip2/xz/zstd/lz4）與純 tar 仍保留。
 SWIFT_DEFINES=""
 EXCLUDE_LZFSE=0
+INSTALL=0
 for arg in "$@"; do
     case "$arg" in
         --no-lzfse) EXCLUDE_LZFSE=1; SWIFT_DEFINES="-DEXCLUDE_LZFSE" ;;
+        --install|-install) INSTALL=1 ;;
     esac
 done
 if [[ "$EXCLUDE_LZFSE" == 1 ]]; then
@@ -181,6 +189,23 @@ tmp_version="$version_file.tmp"
 mv "$tmp_version" "$version_file"
 echo "Recorded linked libraries in $version_file / 已將連結的函式庫記入 $version_file"
 
-mkdir -p /opt/homebrew/bin
-cp ./release/swift_tar /opt/homebrew/bin/swift_tar
-echo "Installed to /opt/homebrew/bin/swift_tar / 已安裝至 /opt/homebrew/bin/swift_tar"
+# Installing is opt-in. Until 2026-10-07 every build copied itself over the PATH binary,
+# announced only by this script's last line: a build made to measure a branch replaced
+# the M6's /opt/homebrew/bin/swift_tar with no backup, and every build in this tree --
+# including the public one test_no_lzfse.zsh makes on the way -- changed what other
+# tools on the machine ran. Building and installing are two decisions.
+# 安裝需明確指定。2026-10-07 之前，每次建置都把自己複製到 PATH 上的執行檔，唯一的告知是本
+# 腳本的最後一行：一次為了量測分支而做的建置，就這樣換掉了 M6 的 /opt/homebrew/bin/swift_tar
+# 且沒有備份；本樹的每一次建置——包括 test_no_lzfse.zsh 中途建出的公開版——都改變了這台機器上
+# 其他工具實際執行的東西。建置與安裝是兩個決定。
+if [[ "$INSTALL" == 1 ]]; then
+    mkdir -p /opt/homebrew/bin
+    cp ./release/swift_tar /opt/homebrew/bin/swift_tar
+    echo "Installed to /opt/homebrew/bin/swift_tar / 已安裝至 /opt/homebrew/bin/swift_tar"
+else
+    # The original arguments go into the suggestion, so a public (--no-lzfse) build is not
+    # told to rerun as a full one. / 建議的指令帶上原本的參數，公開版（--no-lzfse）才不會被
+    # 提示改建成完整版。
+    rerun="$0${*:+ $*} --install"
+    echo "Not installed. To install to /opt/homebrew/bin/swift_tar, run: $rerun / 未安裝。如要安裝到 /opt/homebrew/bin/swift_tar，請執行：$rerun"
+fi

@@ -2054,6 +2054,20 @@ if [[ -L "$DR/t/link.txt" ]]; then
   ( cd "$DR" && "$ST" -c -f r.tar seed.txt ) >/dev/null 2>&1 || true
   ( cd "$DR" && "$ST" -r -h -f r.tar t ) >/dev/null 2>&1 || true
   eq "-h: -r stores what a symlink points to" "file:TARGET" "$(deref_kind "$DR/r.tar")"
+  # 連結目標以 `/` 存入。Windows 的 destinationOfSymbolicLink 傳回 `..\target.txt`，2026-10-07
+  # 之前原樣寫入，在 Linux／macOS 解出成斷掉的連結。在其他平台這條本來就會通過，只有 Windows
+  # 驗得到。直接看封存位元組，因為 -t 不顯示目標，而解出後的連結在 Windows 上兩種寫法都能讀。
+  # The target is stored with `/`. On Windows destinationOfSymbolicLink returns
+  # `..\target.txt`, written verbatim until 2026-10-07 and broken once extracted on Linux or
+  # macOS. Only Windows can fail this. Checked in the archive bytes: -t does not show
+  # targets, and on Windows an extracted link resolves either way.
+  ( cd "$DR" && "$ST" -c -f plain.tar t ) >/dev/null 2>&1 || true
+  # `|| true`：grep -c 零相符時印 0 並以 1 結束，在 pipefail 之下會讓管線失敗；此處要的正是那個 0。
+  # grep -c prints 0 and exits 1 on no match, which fails the pipeline under pipefail; the 0 is the answer.
+  eq "a stored symlink target uses '/', not '\\'" "0" \
+     "$(tr -d '\0' < "$DR/plain.tar" | grep -c -F '..\' || true)"
+  eq "the stored symlink target is the POSIX spelling" "1" \
+     "$(tr -d '\0' < "$DR/plain.tar" | grep -c -F '../target.txt' || true)"
 else
   echo "SKIP: -h/--dereference (no real symlink here)"
 fi
@@ -2071,8 +2085,14 @@ fi
 # ARCHIVE_FAILED 的項目並繼續，bsdtar 解壓時也是如此；2026-09-27 決定兩端一致。測資需要一個
 # 同時含有檔案與「以它為上層」之路徑的 ZIP，只有 bsdtar 做得出來（--format zip 加上多個
 # -C），所以會找一個自稱 bsdtar 的工具，沒有時以原因略過本區。
+# Windows 內建的 bsdtar 在 System32，不在 MSYS 的 PATH 上（那裡的 tar 是 GNU tar）。2026-10-07
+# 之前候選只有前兩個，於是本區在 Windows 上一直以「no bsdtar here」略過——而正是在 Windows 上，
+# 擋路的檔案會被無聲換成目錄、內容遺失。
+# Windows ships bsdtar in System32, off MSYS's PATH (where `tar` is GNU tar). Until
+# 2026-10-07 only the first two candidates were tried, so this block was always skipped
+# on Windows -- the one platform where the blocking file was silently replaced.
 ZBSD=""
-for cand in "$SYS_TAR" bsdtar; do
+for cand in "$SYS_TAR" bsdtar /c/Windows/System32/tar.exe; do
   if command -v "$cand" >/dev/null 2>&1 && "$cand" --version 2>&1 | grep -q bsdtar; then ZBSD=$cand; break; fi
 done
 if [ -n "$ZBSD" ]; then
@@ -2081,6 +2101,13 @@ if [ -n "$ZBSD" ]; then
   ( cd "$ZF" && COPYFILE_DISABLE=1 "$ZBSD" --format zip -cf z.zip -C d1 a -C ../d2 a/b -C ../d1 c ) >/dev/null 2>&1 || true
   zf_rc=0; "$ST" -x -f "$ZF/z.zip" -C "$ZF/out" >"$ZF/x.out" 2>&1 || zf_rc=$?
   eq "ZIP extraction: the member after an unwritable one still lands" "C" "$(cat "$ZF/out/c" 2>/dev/null)"
+  # 資料本身：擋住 a/b 的檔案 a 必須原樣留下。2026-10-07 在 Windows 上它被換成目錄、內容
+  # 遺失，而其他三條斷言只看 c、離開碼與 stderr，沒有一條會直接指出資料不見了。
+  # The data itself: the file `a` that blocks `a/b` must survive unchanged. On Windows on
+  # 2026-10-07 it became a directory and its content was lost, and none of the other three
+  # checks looks at it directly.
+  eq "ZIP extraction: the earlier file in the way is not replaced" "A" \
+     "$( [ -f "$ZF/out/a" ] && cat "$ZF/out/a" 2>/dev/null || print -r -- '(not a file)' )"
   eq "ZIP extraction: a skipped member does not fail the run, as on the create side" "0" "$zf_rc"
   case $(cat "$ZF/x.out") in
     *"a/b"*) ok "ZIP extraction: the skipped member is named on stderr" ;;
@@ -2089,6 +2116,45 @@ if [ -n "$ZBSD" ]; then
 else
   echo "SKIP: ZIP extraction skip test (no bsdtar here to build the fixture)"
 fi
+
+# ---- ZIP extraction: a file already on disk where a directory is needed ----
+# 上一區擋路的檔案是同一個封存稍早寫出的；這一區是解出前就在磁碟上的。POSIX 上 libarchive
+# 兩者都拒絕（逐層 lstat 得到 ENOTDIR），Windows 上 2026-10-07 之前兩者都被無聲換成目錄。
+# 2026-10-07 決定 ZIP 路徑在各平台一致：拒絕，不取代。注意這與 swift_tar 自己的 tar 解出器
+# 不同——後者會把既有的擋路檔案換成目錄（見「a file where a directory is wanted」那幾條）。
+# 測資由 swift_tar 自己做出，不需要 bsdtar，所以每個平台都會跑。
+# The previous block's blocker was written earlier by the same archive; this one was on
+# disk before the run. POSIX libarchive refuses both (lstat gives ENOTDIR); on Windows both
+# were silently replaced until 2026-10-07. Decided then: the ZIP path refuses on every
+# platform. Unlike swift_tar's own tar extractor, which replaces a pre-existing blocker.
+# The fixture is made by swift_tar itself, so this runs everywhere.
+#
+# 只有「位於檔案之下」的成員會被拒絕。若封存帶有目錄項目 `a/`，那一項就是 `a` 本身，
+# libarchive 的預設覆寫會把檔案換成目錄（bsdtar 與 tar 解出器亦同）。所以測資刻意以
+# `a/b` 這個檔案操作元建立，不帶 `a/` 項目；第二組則帶 `a/`，確認 Windows 沒有擋過頭——
+# 第一版修正就連 `a/` 項目也拒絕了，與其他平台不一致。2026-10-07 於 WSL 實測兩種情形。
+# Only a member *below* a file is refused. A directory entry `a/` is `a` itself, and
+# libarchive's default overwrite replaces the file with a directory (as bsdtar and the
+# tar extractor do). So the first fixture is built from the file operand `a/b`, with no
+# `a/` entry; the second carries `a/`, checking Windows does not over-refuse -- the first
+# version of the fix refused that entry as well. Both measured on WSL on 2026-10-07.
+ZE="$TMP/zipexisting"; rm -rf "$ZE"; mkdir -p "$ZE/src/a" "$ZE/out" "$ZE/out2"
+print -r -- B > "$ZE/src/a/b"
+( cd "$ZE/src" && "$ST" -c --zip -f "$ZE/nodir.zip" a/b ) >/dev/null 2>&1 || true
+( cd "$ZE/src" && "$ST" -c --zip -f "$ZE/withdir.zip" a ) >/dev/null 2>&1 || true
+print -r -- KEEP > "$ZE/out/a"
+ze_rc=0; "$ST" -x -f "$ZE/nodir.zip" -C "$ZE/out" >"$ZE/x.out" 2>&1 || ze_rc=$?
+eq "ZIP extraction: a file already on disk in the way is not replaced" "KEEP" \
+   "$( [ -f "$ZE/out/a" ] && cat "$ZE/out/a" 2>/dev/null || print -r -- '(not a file)' )"
+eq "ZIP extraction: a pre-existing blocker does not fail the run" "0" "$ze_rc"
+case $(cat "$ZE/x.out") in
+  *"a/b"*) ok "ZIP extraction: the member blocked by a pre-existing file is named on stderr" ;;
+  *) bad "ZIP extraction: the member blocked by a pre-existing file is named on stderr" ;;
+esac
+print -r -- OLD > "$ZE/out2/a"
+"$ST" -x -f "$ZE/withdir.zip" -C "$ZE/out2" >/dev/null 2>&1 || true
+eq "ZIP extraction: an explicit 'a/' entry replaces a file 'a', as on every platform" "B" \
+   "$(cat "$ZE/out2/a/b" 2>/dev/null)"
 
 # ---- a pax record whose length field is too small does not crash ----
 # A length smaller than its own digits plus the space made the record slice upside down,

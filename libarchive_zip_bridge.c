@@ -587,6 +587,63 @@ static int copy_archive_data_to_stdout(struct archive *reader,
     return 0;
 }
 
+#ifdef _WIN32
+/* Windows only: is some ancestor of `path` an existing non-directory? If so, copy it into
+ * `out` and return 1.
+ *
+ * On POSIX libarchive refuses `a/b` when `a` is a file: check_symlinks lstat()s each
+ * component, gets ENOTDIR, and reports "Could not stat a/b". On Windows the same walk
+ * gets ERROR_PATH_NOT_FOUND, which archive_windows.c maps to ENOENT -- read as "the
+ * parent does not exist yet" -- so it proceeds to create_dir(), which unlinks the file to
+ * make room. Measured 2026-10-07: a ZIP holding `a` (file), `a/b` and `c` extracted on
+ * Windows to a directory `a` holding `b`, the file's content gone, exit 0, nothing on
+ * stderr. This restores the POSIX outcome, including for a file that was on disk before
+ * the run (decided 2026-10-07: the ZIP path matches the ZIP path on other platforms,
+ * where refusing loses nothing and replacing does).
+ *
+ * 僅 Windows：`path` 的某個上層是否為既有的非目錄？是則複製到 `out` 並回傳 1。
+ * POSIX 上 libarchive 拒絕 `a` 為檔案時的 `a/b`：check_symlinks 逐層 lstat()，得到
+ * ENOTDIR，回報「Could not stat a/b」。Windows 上同一次走訪得到 ERROR_PATH_NOT_FOUND，
+ * 被 archive_windows.c 對應成 ENOENT——被當成「上層還不存在」——於是進到 create_dir()，
+ * 把檔案刪掉騰出位置。2026-10-07 實測：含 `a`（檔案）、`a/b`、`c` 的 ZIP 在 Windows 解出
+ * 後 `a` 成了目錄、內含 `b`，檔案內容消失，以 0 結束且 stderr 無訊息。這裡恢復 POSIX 的
+ * 結果，解出前就在磁碟上的檔案亦同（2026-10-07 決定：ZIP 路徑與其他平台的 ZIP 路徑一致——
+ * 拒絕不會遺失資料，取代會）。 */
+static int blocking_ancestor(const wchar_t *path, wchar_t *out, size_t out_count) {
+    size_t len = wcslen(path);
+    /* Only true ancestors count: a directory entry `a/` is `a` itself, not something
+     * below it. On POSIX that entry replaces an existing file `a` -- libarchive's default
+     * overwrite, as bsdtar and the tar extractor also do -- and only an entry *below* a
+     * file (`a/b` with no `a/` entry) is refused. Measured on WSL 2026-10-07: a ZIP of
+     * `a/` and `a/b` replaced `a`; one holding only `a/b` reported "Could not stat a/b"
+     * and kept it. Without trimming, Windows refused the `a/` entry too.
+     * 只算真正的上層：目錄項目 `a/` 就是 `a` 本身，不在它之下。POSIX 上該項目會取代既有的
+     * 檔案 `a`——libarchive 的預設覆寫，bsdtar 與 tar 解出器亦同——只有位於檔案*之下*的
+     * 項目（沒有 `a/` 項目時的 `a/b`）才會被拒絕。2026-10-07 於 WSL 實測：含 `a/` 與 `a/b`
+     * 的 ZIP 取代了 `a`；只含 `a/b` 的回報「Could not stat a/b」並保留 `a`。若不去掉結尾
+     * 分隔符，Windows 連 `a/` 項目也會拒絕。 */
+    while (len > 0 && (path[len - 1] == L'/' || path[len - 1] == L'\\')) len--;
+    if (len == 0 || len >= out_count) return 0;
+    /* memcpy, not wmemcpy: the UCRT defines wmemcpy inline in <wchar.h> with no exported
+     * symbol, so a call without that header fails to link (LNK2019, measured).
+     * 用 memcpy 而非 wmemcpy：UCRT 把 wmemcpy 以 inline 定義在 <wchar.h>，沒有匯出符號，
+     * 未引入該標頭時呼叫會連結失敗（LNK2019，實測）。 */
+    memcpy(out, path, len * sizeof *out);
+    out[len] = L'\0';   /* len may stop short of the original terminator / len 可能已去掉結尾分隔符 */
+    for (size_t i = 1; i < len; i++) {
+        if (out[i] != L'/' && out[i] != L'\\') continue;
+        wchar_t sep = out[i];
+        out[i] = L'\0';
+        DWORD attrs = GetFileAttributesW(out);
+        if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+            return 1;
+        }
+        out[i] = sep;
+    }
+    return 0;
+}
+#endif
+
 int swift_tar_zip_read(const char *archive_path,
                        const char *destination_dir,
                        int extract,
@@ -732,6 +789,20 @@ int swift_tar_zip_read(const char *archive_path,
                 archive_read_data_skip(reader);
             }
         } else if (extract) {
+#ifdef _WIN32
+            {
+                /* Wide path: the narrow one goes through the ANSI code page and would
+                 * mangle a non-ASCII name. / 用寬字元路徑：窄字元會經 ANSI 字碼頁而弄壞非 ASCII 名稱。 */
+                const wchar_t *wpath = archive_entry_pathname_w(entry);
+                wchar_t blocker[MAX_PATH * 4];
+                if (wpath != NULL && blocking_ancestor(wpath, blocker, sizeof blocker / sizeof blocker[0])) {
+                    fprintf(stderr, "swift_tar: %s: Can't create directory '%ls': a file is in the way\n",
+                            path != NULL ? path : "", blocker);
+                    archive_read_data_skip(reader);
+                    continue;
+                }
+            }
+#endif
             status = archive_write_header(disk, entry);
             if (status == ARCHIVE_FATAL) {
                 set_archive_error(error_buffer, error_capacity, "archive_write_header", disk);

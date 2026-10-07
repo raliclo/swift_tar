@@ -646,7 +646,7 @@ test_blind_findings 與 macOS 的 189 差在略過項：Windows 略過 FIFO 與 
 找得到；本節保留為驗證紀錄。5 是 Windows 內建 bsdtar 的缺陷，不在本樹，只記錄、不另立。
 1、2、6 已由 macOS 端 session 從程式碼確認成因。
 
-## 🔴 Windows：tar 路徑忽略 `-h` / Windows: the tar path ignores `-h`
+## Windows：tar 路徑忽略 `-h` ▸ ✅ 已於 Windows 驗證 2026-10-07 / Windows: the tar path ignores `-h`
 
 Windows 驗證（2026-10-07）的第 1 項。`TarWriter.add` 的 Windows 分支以 `winStat`（lstat 的等價物）
 取得資訊，遇到 `isSymlink` 就寫 symlink 標頭，**整個分支從未查看 `dereference`**——macOS 端已讀碼
@@ -657,7 +657,18 @@ Windows 驗證（2026-10-07）的第 1 項。`TarWriter.add` 的 Windows 分支�
 The fix is written (`66679fd`) but unbuilt on Windows, so this stays open until the
 Windows session builds it and runs `test_blind_findings.zsh`.
 
-## 🔴 Windows：symlink 目標以反斜線存入封存 / Windows: symlink targets are stored with backslashes
+**Windows 驗證（2026-10-07，lzfse2 的 Windows session）**：`66679fd` 在 Windows 建置成功，
+`test_blind_findings` 的 `-h: tar stores what a symlink points to` 與 `-h: -r stores …` 兩條通過
+（修正前的執行檔兩條皆失敗）。該套件只測指向**檔案**的連結，所以另以手動測試補上目錄與迴圈：
+`src/dirlink -> real` 與 `src/real/up -> ..`，`-c -h` 的結果是 `dirlink/` 被展開、`real/` 與
+`dirlink/` 皆未被誤判為迴圈、兩條 `up` 各回報一次「would loop here」並略過、rc=0。迴圈偵測沒有排除
+`fileIndex` 為 0 的情形，但實測 Windows 上目錄的 `fileIndex` 取得到，所以不會把所有目錄當成同一個。
+Built and tested on Windows: both `-h` checks pass (both failed before). The suite covers
+file links only, so a manual check added a directory link and a cycle: the directory
+link is expanded, neither directory is mistaken for a loop, both `up` links are reported
+and skipped, rc=0.
+
+## Windows：symlink 目標以反斜線存入封存 ▸ ✅ 已於 Windows 驗證 2026-10-07 / Windows: symlink targets are stored with backslashes
 
 Windows 驗證的第 2 項。同一處的 `destinationOfSymbolicLink` 回傳 `..\target.txt`，未轉成 `/` 就寫入
 標頭（macOS 端已讀碼確認）。在 Linux／macOS 解出會是斷掉的連結。
@@ -666,17 +677,68 @@ Windows 驗證的第 2 項。同一處的 `destinationOfSymbolicLink` 回傳 `..
 `\` 是合法檔名字元）。
 The fix is written (`66679fd`), Windows branch only; open until built and tested there.
 
-## 🔴 Windows：ZIP 解壓時，檔案成員被無聲換成目錄 / Windows: ZIP extraction silently replaces a file with a directory
+**Windows 驗證（2026-10-07）**：新增兩條斷言直接檢查封存位元組（`-t` 不顯示連結目標）——
+`a stored symlink target uses '/', not '\'` 與 `the stored symlink target is the POSIX spelling`。
+修正前的執行檔兩條皆失敗（存的是 `..\target.txt`），`66679fd` 後皆通過；WSL 上亦通過。另確認只改
+寫入端是安全的：System32 bsdtar 對同一連結存的也是 `../target.txt`，而 swift_tar 在 Windows 解出
+正斜線的連結後，MSYS 與 cmd 的 `type` 都讀得到。
+Two new checks read the archive bytes; both failed before and pass after, on Windows and
+WSL. Changing only the writer is safe: System32 bsdtar stores `../target.txt` for the same
+link, and a forward-slash link extracted on Windows resolves under MSYS and cmd alike.
+
+## Windows：ZIP 解壓時，檔案成員被無聲換成目錄 ▸ ✅ 已修正 2026-10-07 / Windows: ZIP extraction silently replaces a file with a directory
 
 Windows 驗證的第 3 項。fixture 依序含 `a`（檔案）、`a/b`、`c`：macOS 保留檔案 `a`、略過 `a/b` 並報在
 stderr；Windows 上 `a` 變成目錄、`a/b` 寫入、檔案 `a` 的內容消失，rc=0、stderr 空白。成因推測在
 libarchive 的 Windows 寫入端（`archive_write_disk_windows.c`）處理「上層路徑是檔案」的方式與 POSIX
 不同，**尚未查證**，需要 Windows 機器。
 
-## 🔴 測試缺口：ZIP 略過測試在 Windows 上找不到 bsdtar / Test gap: the ZIP skip test finds no bsdtar on Windows
+**成因（已查證）**：兩個平台的 `create_dir()` 都會 unlink 擋路的檔案，差別在更早的 symlink 檢查。
+POSIX 的 `check_symlinks_fsobj` 逐層 lstat，在 `a/b` 得到 ENOTDIR，回報「Could not stat a/b」而拒絕；
+Windows 版同一次走訪得到 ERROR_PATH_NOT_FOUND，被 `archive_windows.c` 對應成 ENOENT，當成「上層還不
+存在」放行，於是進到 `create_dir()` 把 `a` 刪掉（macOS 端讀碼補充）。兩邊的 extract_flags 相同，都沒有
+`ARCHIVE_EXTRACT_UNLINK`。
+Both platforms' `create_dir()` unlinks the blocker; the difference is the earlier symlink
+check. POSIX lstat()s down to `a/b`, gets ENOTDIR and refuses. Windows gets
+ERROR_PATH_NOT_FOUND, mapped to ENOENT ("parent does not exist yet"), and proceeds.
+
+**修正**：`libarchive_zip_bridge.c` 在 `_WIN32` 下，寫入每個成員前檢查其**真正的上層**（先去掉結尾
+分隔符）在磁碟上是否為非目錄；是則回報
+`swift_tar: a/b: Can't create directory 'a': a file is in the way` 並略過。用寬字元路徑
+（`archive_entry_pathname_w` 與 `GetFileAttributesW`），窄字元會經 ANSI 字碼頁弄壞非 ASCII 名稱。
+POSIX 不受影響。
+
+**2026-10-07 使用者決定：ZIP 路徑在各平台一致。** 第一版只擋「本次稍早寫出的」檔案，理由是 swift_tar
+自己的 tar 解出器會取代既有的擋路檔案（`a file where a directory is wanted does not fail the run`、
+`the blocking file becomes a directory` 兩條，**只測 tar 路徑**）。但其他平台的 ZIP 路徑連解出前就存在
+的檔案也會拒絕，所以改為看磁碟本身——拒絕不會遺失資料，取代會。
+
+**查證這個決定時修正了一個錯誤前提**：「POSIX 的 ZIP 會拒絕既有擋路檔案」只在封存**沒有目錄項目 `a/`**
+時成立。WSL 實測：只含 `a/b` 的 ZIP 回報「Could not stat a/b」並保留 `a`；含 `a/` 與 `a/b` 的則把 `a`
+換成目錄——`a/` 就是 `a` 本身，libarchive 的預設覆寫照常取代它，與 bsdtar 及 tar 解出器相同。第二版
+修正因此只看真正的上層；第一版連 `a/` 項目也拒絕，反而與其他平台不一致。
+Decided: the ZIP path matches the ZIP path elsewhere. Checking that decision corrected a
+premise: POSIX refuses a pre-existing blocker only when the archive has no `a/` entry; an
+explicit `a/` entry is `a` itself and replaces it, as bsdtar and the tar extractor do.
+Hence only true ancestors are checked.
+
+**測試**（`test_blind_findings.zsh`）：新增一區，測資由 swift_tar 自己做出、不需 bsdtar，每個平台都跑：
+解出前放一個檔案 `a`，以只含 `a/b` 的 ZIP 解出——`a` 保留、rc=0、`a/b` 報在 stderr；另以含 `a/` 的 ZIP
+確認 `a` 被取代（防止 Windows 擋過頭）。負控制：只擋「本次寫出」的第一版在「既有檔案」兩條失敗；修正前
+的執行檔在稍早寫出那組失敗。結果：Windows 188/5（5 條為已知子秒）、WSL 189/0，兩平台這 4 條皆通過。
+`/W4` 編譯 bridge 修改前後警告相同（8 條既有）；建置本身用 `cl` 預設的 `/W1`，看不到那一級。
+`test_exclude.zsh`（ZIP 讀取端 72 條）亦通過。
+
+## 測試缺口：ZIP 略過測試在 Windows 上找不到 bsdtar ▸ ✅ 已修正 2026-10-07 / Test gap: the ZIP skip test finds no bsdtar on Windows
 
 Windows 驗證的第 4 項。測試只嘗試 `$SYS_TAR`（MSYS 下為 GNU tar）與 PATH 上的 `bsdtar`，從不嘗試
 `/c/Windows/System32/tar.exe`，所以上一項一直被略過、從未在 Windows 上被測過。
+
+**修正**：候選加入 `/c/Windows/System32/tar.exe`；該區現在於 Windows 執行而非略過。並新增一條直接檢查
+資料的斷言 `the earlier file in the way is not replaced`——原有三條只看 `c`、離開碼與 stderr，沒有一條
+直接指出資料不見了。WSL 上沒有 bsdtar，此區仍略過；不依賴 bsdtar 的「既有擋路檔案」那一區見上一項。
+System32 tar is now a candidate, so the block runs on Windows; a new check looks at the
+blocking file's content directly. WSL has no bsdtar and still skips it.
 
 ## 🔴 stderr 寫入失敗時 `eprint` 以 SIGABRT 終止，真正的錯誤訊息遺失 / `eprint` aborts when stderr cannot be written, losing the real error
 
@@ -724,6 +786,10 @@ legacy call ("14" was a miscount). See the partial fix above.
 **測試**：取出 `record_linked` 與 `record_provenance` 的實際文字，以替身函式在 macOS 上執行：新版靜態
 保留三個鍵；新版動態清掉它們；**HEAD 舊版靜態丟掉了 `linkage`**，重現缺陷。尚未在 Linux 上整支
 執行，下次 WSL 重建時確認。
+
+**WSL 確認（2026-10-07）**：`LIBARCHIVE_STATIC=1 compile_tar-linux.zsh` 整支執行，rc=0，
+`version-linux.txt` 含 `libarchive_linkage=static`。
+Confirmed on WSL: a full static build now writes `libarchive_linkage=static`.
 
 Windows 驗證的第 6 項。`compile_tar-linux.zsh` 的記錄步驟先以 `grep -vE` 清掉
 `libarchive_(so_version|path|linkage)`，再以 `record_linked libarchive 'libarchive\.so'` 寫回——靜態

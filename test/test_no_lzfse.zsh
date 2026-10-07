@@ -218,6 +218,17 @@ FULL="$TMP/full"; PUB="$TMP/public"
 if "$PUB" --help | grep -qiE 'lzfse|bvx3|other3'; then bad "public help leaks LZFSE/bvx3/other3"
 else ok "public help lists no LZFSE codec"; fi
 
+# 2b) An error reported with stderr closed must not abort. eprint used write(_:), which
+#     raises an uncatchable Objective-C exception when the write fails, so `2>&-` turned a
+#     missing archive into SIGABRT (rc=134). This build's eprint is swift_tar's own; the
+#     full build's comes from lzfse2 (see test_stderr_closed.zsh).
+# 2b) stderr 已關閉時回報錯誤不得 abort。eprint 原本用 write(_:)，寫入失敗時拋出攔不住的
+#     Objective-C 例外，於是 `2>&-` 讓「封存不存在」變成 SIGABRT（rc=134）。本版本的 eprint
+#     是 swift_tar 自己的；完整版的來自 lzfse2（見 test_stderr_closed.zsh）。
+rc=0; "$PUB" -x -f "$TMP/does-not-exist.tar" 2>&- || rc=$?
+if [ "$rc" -ne 0 ] && [ "$rc" -lt 128 ]; then ok "public build: an error with stderr closed exits $rc, not a signal"
+else bad "public build: an error with stderr closed exits $rc"; fi
+
 # A compressible payload large enough to force a real bvx3 block (small inputs
 # fall back to LZVN). / 夠大的可壓縮內容以觸發真正的 bvx3 區塊（小輸入會退回 LZVN）。
 seq 1 500 > "$TMP/f.txt"

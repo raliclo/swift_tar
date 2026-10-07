@@ -328,8 +328,13 @@ let TAR_CHUNK_SIZE = 1 << 22
 // The LZFSE library also provides eprint(); supply a local one when it is not
 // compiled in (--no-lzfse). / LZFSE library 也提供 eprint()，未編入（--no-lzfse）
 // 時在此提供本地版本。
+// write(contentsOf:) rather than write(_:): the latter raises an Objective-C exception
+// when the write fails (stderr on a full volume, a closed pipe), which Swift cannot catch,
+// so the process aborts and the message it was about to give is lost.
+// 用 write(contentsOf:) 而非 write(_:)：後者寫入失敗時（stderr 在滿的卷宗上、管線已關閉）
+// 會拋出 Swift 攔不住的 Objective-C 例外，行程因此 abort，原本要印的訊息也一併遺失。
 func eprint(_ message: String) {
-    FileHandle.standardError.write(Data((message + "\n").utf8))
+    try? FileHandle.standardError.write(contentsOf: Data((message + "\n").utf8))
 }
 #endif
 
@@ -6280,12 +6285,12 @@ struct SwiftTarMain {
         tarWriteChecksum = !(args.contains("--no-checksum") || args.contains("-no-checksum"))
         if args.contains(where: { $0 == "--zstd-level" || $0.hasPrefix("--zstd-level=") }) {
             guard let raw = optValue("--zstd-level"), let lv = Int32(raw) else {
-                FileHandle.standardError.write(Data("swift_tar: --zstd-level needs a number / --zstd-level 需要一個數字\n".utf8))
+                try? FileHandle.standardError.write(contentsOf: Data("swift_tar: --zstd-level needs a number / --zstd-level 需要一個數字\n".utf8))
                 exit(1)
             }
             let maxLv = ZSTD_maxCLevel()
             guard lv >= 1 && lv <= maxLv else {
-                FileHandle.standardError.write(Data("swift_tar: --zstd-level must be 1...\(maxLv) / --zstd-level 必須介於 1 至 \(maxLv)\n".utf8))
+                try? FileHandle.standardError.write(contentsOf: Data("swift_tar: --zstd-level must be 1...\(maxLv) / --zstd-level 必須介於 1 至 \(maxLv)\n".utf8))
                 exit(1)
             }
             zstdCompressionLevel = lv

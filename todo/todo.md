@@ -474,12 +474,38 @@ Thunderbolt 上 `--zstd` 停在 740–860 MB/s，而不帶 codec 的可到約 1 
 content size 的 frame、截斷或損毀的輸入，都要有測試；效能依本樹規則以交錯執行、10 輪、
 RAM disk 量測，並記下 user／sys 時間。
 
-## 🔴 swift_tar 寫出的 zstd frame 不帶 checksum（待決定）/ zstd frames are written without a checksum (decision pending)
+## swift_tar 寫出的 zstd frame 不帶 checksum ▸ ✅ 已實作 2026-10-07（`afa1f32`），預設開啟、`--no-checksum` 關閉 / zstd frames were written without a checksum: now on by default, `--no-checksum` turns it off
 
 實作 `--zstd-parallel` 時發現。`ZSTD_compress` 預設不寫 content checksum，所以 frame 內部被改壞
 時，zstd 偵測不到：在 frame 中段覆寫 64 位元組，`--zstd` 與 `--zstd-parallel` 都以 0 結束並解出
 不同的內容（隨機資料以原始區塊儲存，任何位元組都「合法」）。這是既有行為，不是本次造成的。
 開啟 checksum 每個 frame 多 4 位元組，解碼時多一次 XXH64 驗證；是否開啟待使用者決定。
+
+**決定與實作（2026-10-07）**：使用者指示「對所有演算法做成旗標，預設開啟，`--no-checksum` 關閉」。
+zstd 改用 `ZSTD_compress2` 加 `ZSTD_c_checksumFlag`；lz4 傳入 `contentChecksumFlag=1`；xz 原本就是
+CRC64，關閉時改為 `LZMA_CHECK_NONE`；Windows 的 lz4／xz CLI 於關閉時加 `--no-frame-crc`／
+`--check=none`（**未在 Windows 驗證**，已交給 Windows session）。gzip、bzip2、lzip、ZIP 一律帶 CRC，
+旗標對它們無作用。`test/test_checksum.zsh` 33 項，對舊 binary 失敗 24 項。
+
+**成本**（macOS M4，claw-code 1351 MiB，RAM disk，交錯 10 輪取最小 real；結束時負載升到 12–18，
+有其他工作並行）：
+
+| 情境 | 開 | 關 | 差 |
+|---|---|---|---|
+| `-c --zstd` | 2.66 s | 2.65 s | 無 |
+| `--cat` zstd | 1.21 s | 1.16 s | +4% |
+| `-c --lz4` | 0.46 s | 0.45 s | 無 |
+| `--cat` lz4 | 0.98 s（user 0.55） | 0.75 s（user 0.32） | +31% |
+| `-c --xz` | 28.34 s | 28.25 s | 無 |
+| `--cat` xz | 11.59 s | 10.48 s | +11% |
+
+壓縮端看不出差別。解碼端以 lz4 最明顯：lz4 解碼本身極快，單執行緒的 XXH32 就佔了可見的比例。
+封存大小每個 frame／串流多 4 bytes（zstd、lz4 各 +1344 bytes，336 個分塊），xz 多 8 bytes（CRC64）。
+需要 lz4 解碼最高速度時，可用 `--no-checksum` 寫出封存。
+
+Implemented as the user directed: a flag for every algorithm, on by default. Compression
+cost is not measurable; decoding costs +4% (zstd), +31% (lz4) and +11% (xz) on the table
+above. Use `--no-checksum` where lz4 decode speed matters more than detection.
 
 ## 在 Windows 與 WSL 上驗證 2026-09-27 的所有修正 ▸ ✅ 已完成 2026-10-07（由 Windows 端 session 執行）/ Verify every 2026-09-27 fix on Windows and WSL
 
@@ -659,16 +685,34 @@ Windows 驗證的第 4 項。測試只嘗試 `$SYS_TAR`（MSYS 下為 GNU tar）
 → `objc_exception_throw` → `abort`。`eprint` 用的是舊的 `FileHandle.write(_:)`，寫入失敗時拋出
 Objective-C 例外，Swift 無法攔截。結果是原本要回報的錯誤（推測為封存寫入的 ENOSPC）一個字也沒
 印出來，只剩一個看似當機的退出碼。資料路徑全部用可拋錯的 `write(contentsOf:)`，不受影響；同樣
-使用舊 API 的還有 14 處 `FileHandle.standardError.write(Data(...))`。觸發條件窄（stderr 寫不進去：
-滿的卷宗、已關閉的管線），但後果是把可診斷的失敗變成不可診斷的當機。尚未修正、尚無測試。
+使用舊 API 的還有 2 處 `FileHandle.standardError.write(Data(...))`（先前寫「14 處」是誤計，
+把 `sink.write` 等可拋錯的呼叫也算進去了）。
+
+**觸發條件並不窄**（原文寫「窄」，已更正）：只要 `2>&-` 關掉 stderr，任何錯誤都會觸發。舊 binary
+實測 `swift_tar -x -f /nonexistent.tar 2>&-` 得 rc=134。
+
+**部分修正（2026-10-07）**：swift_tar.swift 自己的 3 處（`--no-lzfse` 版的 `eprint`、`--zstd-level`
+的兩則訊息）已改用 `write(contentsOf:)`。`test/test_stderr_closed.zsh` 釘住 `--zstd-level` 這條路徑
+（舊 binary rc=134、新版 rc=1），`test_no_lzfse.zsh` 第 2b 項釘住公開版的 `eprint`。
+
+**仍標 🔴 的原因**：完整版的 `eprint` 定義在 lzfse2 submodule 的 `lzfse-cli.swift:3861`。使用者決定
+（2026-10-07）**在 lzfse2 上游修正**，swift_tar 不移動 pin，所以要等使用者決定移動 pin 時才會生效。
+在那之前 `test_stderr_closed.zsh` 以 KNOWN 回報該項（rc=134），不計入失敗；上游修正進來後，它會
+印出 NOTE，屆時把它改成正式檢查並結案本項。
+
+Partially fixed: swift_tar's own three writes now use `write(contentsOf:)`, pinned by
+`test_stderr_closed.zsh` and `test_no_lzfse.zsh` 2b. The full build's `eprint` lives in
+the lzfse2 submodule; the user decided it is fixed upstream and the pin is not moved, so
+this stays open until the pin carries that fix. Correction: the trigger is not narrow --
+`2>&-` plus any error is enough.
 
 Found on 2026-10-07 while measuring the checksum cost. The RAM disk filled while
 stderr was redirected onto it, and `-c --xz` ended with rc=134. The crash report
 shows `eprint` -> `writeData:` -> `objc_exception_throw` -> `abort`: the legacy
 `FileHandle.write(_:)` raises an Objective-C exception on failure, which Swift
 cannot catch, so the error being reported was never printed. Data paths use the
-throwing `write(contentsOf:)` and are unaffected; 14 other stderr writes use the
-legacy call. Not yet fixed or tested.
+throwing `write(contentsOf:)` and are unaffected; two other stderr writes used the
+legacy call ("14" was a miscount). See the partial fix above.
 
 ## Linux 靜態建置不記錄 `libarchive_linkage=static` ▸ ✅ 已修正 2026-10-07（未在 Linux 整支執行）/ The Linux static build drops `libarchive_linkage=static`
 

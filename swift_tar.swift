@@ -541,9 +541,13 @@ private func ZSTD_decompressStream(_ zds: OpaquePointer?,
 private func ZSTD_findFrameCompressedSize(_ src: UnsafeRawPointer?, _ srcSize: Int) -> Int
 @_silgen_name("ZSTD_getFrameContentSize")
 private func ZSTD_getFrameContentSize(_ src: UnsafeRawPointer?, _ srcSize: Int) -> UInt64
-@_silgen_name("ZSTD_decompress")
-private func ZSTD_decompress(_ dst: UnsafeMutableRawPointer?, _ dstCap: Int,
-                             _ src: UnsafeRawPointer?, _ srcSize: Int) -> Int
+@_silgen_name("ZSTD_createDCtx")
+private func ZSTD_createDCtx() -> OpaquePointer?
+@_silgen_name("ZSTD_freeDCtx")
+private func ZSTD_freeDCtx(_ dctx: OpaquePointer?) -> Int
+@_silgen_name("ZSTD_decompressDCtx")
+private func ZSTD_decompressDCtx(_ dctx: OpaquePointer?, _ dst: UnsafeMutableRawPointer?, _ dstCap: Int,
+                                 _ src: UnsafeRawPointer?, _ srcSize: Int) -> Int
 
 #if !os(Windows)
 
@@ -1296,40 +1300,81 @@ func lzmaDecodeStream(kind: LZMAKind, input: FileHandle, prefix: Data, output: F
 #endif
 }
 
-/// zstd streaming decode (handles back-to-back frames).
-/// zstd 串流解碼（自動處理背靠背 frame）。
+/// Read up to `count` bytes into memory the caller owns and reuses. 0 at end of input, nil
+/// on a read error.
+///
+/// Why not FileHandle.read(upToCount:): it returns a fresh Data every call, and on macOS a
+/// multi-MiB allocation is fresh VM, so every page of every chunk is faulted in once. On
+/// incompressible input, where decoding is little more than a copy, that was most of the
+/// time -- measured 2026-10-07 on 1 GiB of random data: `--cat --zstd` took 133k page
+/// reclaims and `--zstd-parallel` 330k, i.e. 2 and 5 times the input, and the parallel
+/// decoder ran slower than the single-threaded one. Windows keeps the FileHandle path.
+///
+/// 讀取至多 `count` 位元組，放進呼叫端持有並重複使用的記憶體。輸入結束時回傳 0，讀取錯誤時
+/// 回傳 nil。
+///
+/// 為什麼不用 FileHandle.read(upToCount:)：它每次都回傳新的 Data，而在 macOS 上數 MiB 的配置
+/// 是全新的 VM，所以每個區塊的每一頁都要 fault 一次。在不可壓縮的輸入上，解碼幾乎只是複製，
+/// 這就成了大部分的時間——2026-10-07 以 1 GiB 隨機資料實測：`--cat --zstd` 有 133k 次 page
+/// reclaim，`--zstd-parallel` 有 330k 次，分別是輸入的 2 倍與 5 倍，而平行解碼器比單執行緒的
+/// 還慢。Windows 維持 FileHandle 的路徑。
+private func readInto(_ fh: FileHandle, _ dst: UnsafeMutableRawPointer, _ count: Int) -> Int? {
+#if os(Windows)
+    guard let part = try? fh.read(upToCount: count), !part.isEmpty else { return 0 }
+    part.copyBytes(to: dst.assumingMemoryBound(to: UInt8.self), count: part.count)
+    return part.count
+#else
+    while true {
+        let n = read(fh.fileDescriptor, dst, count)
+        if n >= 0 { return n }
+        if errno != EINTR { return nil }
+    }
+#endif
+}
+
+/// Write `count` bytes straight from memory the caller keeps, without copying them into a
+/// Data first. / 直接從呼叫端持有的記憶體寫出 `count` 位元組，不先複製進 Data。
+private func writeFrom(_ fh: FileHandle, _ src: UnsafeRawPointer, _ count: Int) -> Bool {
+    let view = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: src), count: count,
+                    deallocator: .none)
+    return (try? fh.write(contentsOf: view)) != nil
+}
+
+/// zstd streaming decode (handles back-to-back frames). Both buffers are allocated once
+/// and reused; see readInto for why.
+/// zstd 串流解碼（自動處理背靠背 frame）。兩個緩衝區只配置一次並重複使用，原因見 readInto。
 func zstdDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bool {
     guard let zds = ZSTD_createDStream() else { return false }
     defer { _ = ZSTD_freeDStream(zds) }
-    var outBuf = [UInt8](repeating: 0, count: DECODE_CHUNK)
+    let inBuf = UnsafeMutableRawPointer.allocate(byteCount: DECODE_CHUNK, alignment: 64)
+    let outBuf = UnsafeMutableRawPointer.allocate(byteCount: DECODE_CHUNK, alignment: 64)
+    defer { inBuf.deallocate(); outBuf.deallocate() }
     var lastRet = 0
-    let reader = ByteReader(input, prefix: prefix)
-    while let chunk = reader.readSome(DECODE_CHUNK).map({ [UInt8]($0) }) {
-        let ok: Bool = chunk.withUnsafeBufferPointer { ib in
-            var inB = ZSTDInBuffer(src: UnsafeRawPointer(ib.baseAddress), size: ib.count, pos: 0)
-            while inB.pos < inB.size {
-                var produced = 0
-                var ret = 0
-                outBuf.withUnsafeMutableBufferPointer { ob in
-                    var outB = ZSTDOutBuffer(dst: UnsafeMutableRawPointer(ob.baseAddress),
-                                             size: ob.count, pos: 0)
-                    ret = withUnsafeMutablePointer(to: &outB) { op in
-                        withUnsafeMutablePointer(to: &inB) { ip in
-                            ZSTD_decompressStream(zds, op, ip)
-                        }
-                    }
-                    produced = outB.pos
-                }
-                if ZSTD_isError(ret) != 0 { return false }
-                lastRet = ret
-                if produced > 0 {
-                    if (try? output.write(contentsOf: Data(bytes: outBuf, count: produced))) == nil { return false }
-                }
-                if produced == 0 && inB.pos == inB.size { break }
-            }
-            return true
+    // Keep calling while input remains or the last call filled the output buffer: in the
+    // second case zstd may still hold decoded bytes it could not hand over.
+    // 只要還有輸入、或上一次呼叫把輸出緩衝填滿，就繼續呼叫：後者表示 zstd 可能還留著解出
+    // 卻來不及交出的位元組。
+    func feed(_ src: UnsafeRawPointer?, _ count: Int) -> Bool {
+        var inB = ZSTDInBuffer(src: src, size: count, pos: 0)
+        var full = false
+        while inB.pos < inB.size || full {
+            var outB = ZSTDOutBuffer(dst: outBuf, size: DECODE_CHUNK, pos: 0)
+            let ret = ZSTD_decompressStream(zds, &outB, &inB)
+            if ZSTD_isError(ret) != 0 { return false }
+            lastRet = ret
+            if outB.pos > 0 && !writeFrom(output, outBuf, outB.pos) { return false }
+            full = outB.pos == outB.size
+            if outB.pos == 0 && inB.pos == inB.size { break }
         }
-        if !ok { return false }
+        return true
+    }
+    if !prefix.isEmpty {
+        guard prefix.withUnsafeBytes({ feed($0.baseAddress, $0.count) }) else { return false }
+    }
+    while true {
+        guard let n = readInto(input, inBuf, DECODE_CHUNK) else { return false }
+        if n == 0 { break }
+        guard feed(inBuf, n) else { return false }
     }
     return lastRet == 0   // 0 ⟺ frame boundary at EOF / EOF 落在 frame 邊界
 }
@@ -1345,42 +1390,71 @@ func zstdDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
 /// （swift_tar 逐塊寫出的 frame 經由 ZSTD_compress，都有載明）；沒有載明時，只對這一個 frame
 /// 做串流解碼。大小超過 `oneShotLimit` 時也改走串流而不預先配置，以免一個宣稱數 GB 的標頭在
 /// 任何位元組被檢查之前就讓工作執行緒配置那麼多記憶體。
-private func zstdDecodeOneFrame(_ frame: Data) -> Data? {
+///
+/// The frame is `slot.input[0..<inputCount]` and the result goes to
+/// `slot.output[0..<outputCount]`. Both arrays, and the decoding context, belong to the
+/// slot and are reused frame after frame, so a steady stream allocates nothing:
+/// ZSTD_decompress, used before, also created and freed a context on every call.
+/// frame 位於 `slot.input[0..<inputCount]`，結果寫入 `slot.output[0..<outputCount]`。兩個
+/// 陣列與解碼 context 都屬於槽位，一個 frame 接一個重複使用，所以穩定的串流不再配置任何
+/// 記憶體——先前使用的 ZSTD_decompress 每次呼叫也都會建立並釋放一個 context。
+private func zstdDecodeFrame(_ slot: inout ZstdSlot) -> Bool {
     let oneShotLimit: UInt64 = 256 << 20
     let contentSizeUnknown = UInt64.max, contentSizeError = UInt64.max - 1
-    let size = frame.withUnsafeBytes { ZSTD_getFrameContentSize($0.baseAddress, $0.count) }
-    if size == contentSizeError { return nil }
+    let n = slot.inputCount
+    let size = slot.input.withUnsafeBytes { ZSTD_getFrameContentSize($0.baseAddress, n) }
+    if size == contentSizeError { return false }
     if size != contentSizeUnknown && size <= oneShotLimit {
-        var out = Data(count: Int(size))
-        let got = out.withUnsafeMutableBytes { o in
-            frame.withUnsafeBytes { i in ZSTD_decompress(o.baseAddress, o.count, i.baseAddress, i.count) }
-        }
-        guard ZSTD_isError(got) == 0, got == Int(size) else { return nil }
-        return out
-    }
-    guard let zds = ZSTD_createDStream() else { return nil }
-    defer { _ = ZSTD_freeDStream(zds) }
-    var out = Data()
-    var tmp = [UInt8](repeating: 0, count: DECODE_CHUNK)
-    let ok: Bool = frame.withUnsafeBytes { ib in
-        var inB = ZSTDInBuffer(src: ib.baseAddress, size: ib.count, pos: 0)
-        while true {
-            var produced = 0
-            var ret = 0
-            tmp.withUnsafeMutableBufferPointer { ob in
-                var outB = ZSTDOutBuffer(dst: UnsafeMutableRawPointer(ob.baseAddress), size: ob.count, pos: 0)
-                ret = withUnsafeMutablePointer(to: &outB) { op in
-                    withUnsafeMutablePointer(to: &inB) { ip in ZSTD_decompressStream(zds, op, ip) }
-                }
-                produced = outB.pos
+        if slot.dctx == nil { slot.dctx = ZSTD_createDCtx() }
+        guard let dctx = slot.dctx else { return false }
+        let want = Int(size)
+        if slot.output.count < want { slot.output = [UInt8](repeating: 0, count: want) }
+        let got = slot.output.withUnsafeMutableBytes { o in
+            slot.input.withUnsafeBytes { i in
+                ZSTD_decompressDCtx(dctx, o.baseAddress, want, i.baseAddress, n)
             }
-            if ZSTD_isError(ret) != 0 { return false }
-            if produced > 0 { out.append(contentsOf: tmp[0..<produced]) }
-            if ret == 0 { return true }                                  // frame complete
-            if produced == 0 && inB.pos == inB.size { return false }     // input ran out mid-frame
         }
+        guard ZSTD_isError(got) == 0, got == want else { return false }
+        slot.outputCount = want
+        return true
     }
-    return ok ? out : nil
+    guard let zds = ZSTD_createDStream() else { return false }
+    defer { _ = ZSTD_freeDStream(zds) }
+    if slot.output.count < DECODE_CHUNK { slot.output = [UInt8](repeating: 0, count: DECODE_CHUNK) }
+    var inPos = 0, produced = 0
+    while true {
+        if produced == slot.output.count {
+            slot.output += [UInt8](repeating: 0, count: slot.output.count)
+        }
+        let cap = slot.output.count
+        var ret = 0, newPos = inPos, newProduced = produced
+        slot.output.withUnsafeMutableBytes { o in
+            slot.input.withUnsafeBytes { i in
+                var inB = ZSTDInBuffer(src: i.baseAddress, size: n, pos: inPos)
+                var outB = ZSTDOutBuffer(dst: o.baseAddress, size: cap, pos: produced)
+                ret = ZSTD_decompressStream(zds, &outB, &inB)
+                newPos = inB.pos
+                newProduced = outB.pos
+            }
+        }
+        if ZSTD_isError(ret) != 0 { return false }
+        let progressed = newPos != inPos || newProduced != produced
+        inPos = newPos
+        produced = newProduced
+        if ret == 0 { slot.outputCount = produced; return true }   // frame complete
+        if !progressed { return false }                              // input ran out mid-frame
+    }
+}
+
+/// One in-flight frame's buffers and decoding context; see zstdDecodeFrame.
+/// 一個進行中 frame 的緩衝區與解碼 context；見 zstdDecodeFrame。
+private struct ZstdSlot {
+    var input: [UInt8] = []
+    var inputCount = 0
+    var output: [UInt8] = []
+    var outputCount = 0
+    var ok = false
+    var dctx: OpaquePointer? = nil
 }
 
 /// zstd decode on several cores, for --zstd-parallel. Same contract as zstdDecodeStream:
@@ -1403,8 +1477,14 @@ private func zstdDecodeOneFrame(_ frame: Data) -> Data? {
 /// cannot be split: once `maxBuffered` bytes are held without a complete frame, or the input
 /// ends on bytes that are not one, the rest is handed to zstdDecodeStream. That also makes
 /// the stream decoder the judge of a truncated or corrupt tail, so errors read exactly as
-/// they did before. Results are written straight from the decoded Data -- the stream path's
-/// per-block copy into a fresh Data is gone here.
+/// they did before.
+///
+/// Memory: each of the `window` slots owns an input array, an output array and a ZSTD_DCtx,
+/// reused for frame seq, seq + window, ...; input is read into one staging buffer that is
+/// also reused. Until 2026-10-07 every frame got a fresh copy of its input, a fresh
+/// zero-filled output and (inside ZSTD_decompress) a fresh context, and the staging Data
+/// was shifted with removeSubrange -- on incompressible data that made this decoder slower
+/// than the single-threaded one, almost all of it in sys time (see readInto).
 ///
 /// --zstd-parallel 使用的多核心 zstd 解碼。契約與 zstdDecodeStream 相同：`prefix` 是嗅探時
 /// 已讀取的部分，輸出依序寫出，任何解碼錯誤或輸入截斷都回傳 false。
@@ -1421,19 +1501,37 @@ private func zstdDecodeOneFrame(_ frame: Data) -> Data? {
 /// 並非每個 .zst 都是 swift_tar 寫的。zstd CLI 通常只寫一個 frame，切不開：緩衝了
 /// `maxBuffered` 位元組仍沒有完整 frame，或輸入在不成 frame 的位元組上結束時，其餘部分交給
 /// zstdDecodeStream。這也讓串流解碼器成為截斷或損毀尾段的判定者，錯誤的呈現與以往完全相同。
-/// 結果直接從解出的 Data 寫出——串流路徑上每塊再複製進新 Data 的那一步，這裡沒有。
+///
+/// 記憶體：`window` 個槽位各自持有一個輸入陣列、一個輸出陣列與一個 ZSTD_DCtx，供 frame
+/// seq、seq + window……重複使用；輸入讀進同一個暫存緩衝區，也重複使用。在 2026-10-07 之前，
+/// 每個 frame 都配一份新的輸入副本、一份新的填零輸出，以及（在 ZSTD_decompress 內）一個新的
+/// context，暫存的 Data 還以 removeSubrange 搬移——在不可壓縮的資料上，這讓本解碼器比單執行緒
+/// 的還慢，而時間幾乎都在 sys（見 readInto）。
 func zstdDecodeStreamParallel(input: FileHandle, prefix: Data, output: FileHandle,
                               inflight: Int) -> Bool {
-    final class Decoded: Sendable { let m = Mutex<[Int: Data]>([:]) }
+    // A slot is touched by one thread at a time -- this one while cutting into it and
+    // writing from it, its worker in between, handed over by the frame's semaphore -- so
+    // the Mutex is never contended. It is there because it makes the hand-over checkable
+    // by the compiler rather than asserted by an annotation.
+    // 槽位同一時間只被一條執行緒使用——切入與寫出時是本執行緒，其間是它的工作執行緒，以該
+    // frame 的 semaphore 交接——所以 Mutex 從不發生競爭。用它是為了讓這個交接由編譯器檢查，
+    // 而不是靠標註宣稱。
+    final class Slot: Sendable { let m = Mutex(ZstdSlot()) }
     let maxBuffered = 64 << 20
     let window = max(1, inflight)
-    let decoded = Decoded()
+    let slots = (0..<window).map { _ in Slot() }
+    defer { for slot in slots { slot.m.withLock { _ = ZSTD_freeDCtx($0.dctx); $0.dctx = nil } } }
     let workers = DispatchQueue(label: "swift_tar.zstd.decode", attributes: .concurrent)
     var done: [Int: DispatchSemaphore] = [:]
     var nextCut = 0, nextWrite = 0
-    var buffer = Data()
-    buffer.append(prefix)                  // index from 0 whatever `prefix` was sliced from
-    var start = 0                          // bytes of `buffer` already cut into frames
+    guard prefix.count <= maxBuffered else {
+        return zstdDecodeStream(input: input, prefix: prefix, output: output)
+    }
+    let staging = UnsafeMutableRawPointer.allocate(byteCount: maxBuffered, alignment: 64)
+    defer { staging.deallocate() }
+    prefix.withUnsafeBytes { if let p = $0.baseAddress { staging.copyMemory(from: p, byteCount: $0.count) } }
+    var filled = prefix.count              // bytes of `staging` holding input
+    var start = 0                          // bytes of `staging` already cut into frames
     var atEOF = false
     var handOff = false                    // the rest goes to the stream decoder
 
@@ -1445,11 +1543,14 @@ func zstdDecodeStreamParallel(input: FileHandle, prefix: Data, output: FileHandl
         guard let sem = done[nextWrite] else { return nil }
         if wait { sem.wait() } else if sem.wait(timeout: .now()) != .success { return nil }
         done[nextWrite] = nil
-        let seq = nextWrite
+        let slot = slots[nextWrite % window]
         nextWrite += 1
-        guard let data = decoded.m.withLock({ $0.removeValue(forKey: seq) }) else { return false }
-        if data.isEmpty { return true }
-        return (try? output.write(contentsOf: data)) != nil
+        return slot.m.withLock { s in
+            guard s.ok else { return false }
+            let count = s.outputCount
+            if count == 0 { return true }
+            return s.output.withUnsafeBytes { writeFrom(output, $0.baseAddress!, count) }
+        }
     }
 
     var ok = true
@@ -1459,22 +1560,27 @@ func zstdDecodeStreamParallel(input: FileHandle, prefix: Data, output: FileHandl
             if writeNext(wait: true) != true { ok = false; break loop }
             continue
         }
-        let avail = buffer.count - start
+        let avail = filled - start
         if avail > 0 {
-            let n = buffer.withUnsafeBytes { p in
-                ZSTD_findFrameCompressedSize(p.baseAddress.map { $0 + start }, avail)
-            }
+            let n = ZSTD_findFrameCompressedSize(staging + start, avail)
             if ZSTD_isError(n) == 0 && n > 0 {
-                let frame = buffer.subdata(in: start..<(start + n))
-                start += n
                 let seq = nextCut
                 nextCut += 1
+                // The window check above means frame seq - window has been written, so its
+                // slot is free. / 上方的視窗檢查保證 frame seq - window 已寫出，其槽位可用。
+                let slot = slots[seq % window]
+                let src = UnsafeRawPointer(staging + start)
+                slot.m.withLock { s in
+                    if s.input.count < n { s.input = [UInt8](repeating: 0, count: n) }
+                    s.input.withUnsafeMutableBytes { $0.baseAddress!.copyMemory(from: src, byteCount: n) }
+                    s.inputCount = n
+                    s.ok = false
+                }
+                start += n
                 let sem = DispatchSemaphore(value: 0)
                 done[seq] = sem
                 workers.async {
-                    if let out = zstdDecodeOneFrame(frame) {
-                        decoded.m.withLock { $0[seq] = out }
-                    }
+                    slot.m.withLock { s in s.ok = zstdDecodeFrame(&s) }
                     sem.signal()
                 }
                 continue
@@ -1485,12 +1591,16 @@ func zstdDecodeStreamParallel(input: FileHandle, prefix: Data, output: FileHandl
             break loop
         }
         if avail >= maxBuffered { handOff = true; break loop }
-        if start > 0 { buffer.removeSubrange(0..<start); start = 0 }
-        if let part = try? input.read(upToCount: DECODE_CHUNK), !part.isEmpty {
-            buffer.append(part)
-        } else {
-            atEOF = true
+        if start > 0 {
+            if avail > 0 { memmove(staging, staging + start, avail) }
+            filled = avail
+            start = 0
         }
+        guard let got = readInto(input, staging + filled, min(maxBuffered - filled, DECODE_CHUNK)) else {
+            ok = false
+            break loop
+        }
+        if got == 0 { atEOF = true } else { filled += got }
     }
     // Everything already cut is accounted for before anything else happens, so no worker
     // is still running when this returns. Until the first failure each frame is written in
@@ -1506,13 +1616,12 @@ func zstdDecodeStreamParallel(input: FileHandle, prefix: Data, output: FileHandl
             let seq = nextWrite
             done[seq]?.wait()
             done[seq] = nil
-            _ = decoded.m.withLock { $0.removeValue(forKey: seq) }
             nextWrite += 1
         }
     }
     guard ok else { return false }
     if handOff {
-        return zstdDecodeStream(input: input, prefix: buffer.subdata(in: start..<buffer.count),
+        return zstdDecodeStream(input: input, prefix: Data(bytes: staging + start, count: filled - start),
                                 output: output)
     }
     return true
@@ -7190,8 +7299,18 @@ struct SwiftTarMain {
         }
         let out = FileHandle.standardOutput
         if !stream.prefix.isEmpty { try out.write(contentsOf: stream.prefix) }
-        while let part = try? stream.handle.read(upToCount: DECODE_CHUNK), !part.isEmpty {
-            try out.write(contentsOf: part)
+        // One reused buffer, as in the decoders (see readInto). This loop used to take a fresh
+        // Data per read with no pool to drain it, so `--cat` held the whole output in memory
+        // -- 1.1 GB resident for 1 GiB -- and faulted in every page of it, codec or not.
+        // 與解碼器相同，使用一個重複使用的緩衝區（見 readInto）。這個迴圈原本每次讀取都拿到新的
+        // Data，又沒有 pool 排空，所以 `--cat` 把整個輸出留在記憶體裡——1 GiB 常駐 1.1 GB——
+        // 且每一頁都要 fault 一次，有沒有 codec 都一樣。
+        let buf = UnsafeMutableRawPointer.allocate(byteCount: DECODE_CHUNK, alignment: 64)
+        defer { buf.deallocate() }
+        while let n = readInto(stream.handle, buf, DECODE_CHUNK), n > 0 {
+            guard writeFrom(out, buf, n) else {
+                throw TarError.io("cannot write the output / 無法寫出輸出")
+            }
         }
         group.wait()
         guard result.ok else {

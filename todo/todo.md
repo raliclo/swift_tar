@@ -825,6 +825,57 @@ before, `--cat -n 1 -f -` exited 0 with 4 MiB of duplicated output and the file 
 rejected the valid stream; `test_lzfse_cross_group.zsh` is 8/0 now and fails those two
 checks against the previous pin.
 
+## M6-Multissh 的請求（2026-10-07）：另開分支實作 / Requests from M6-Multissh, to be done on a separate branch
+
+multissh（M6 session）為了提高傳輸速率，對 swift_tar 提出四項請求。使用者決定（2026-10-07）：**列為
+todo，在獨立分支上嘗試**，不直接進 master。各項另立下方的 🔴 條目，以便 `grep -n '^## .*🔴'` 看得到。
+
+同一批還有第五項「不可壓縮資料上 `--zstd-parallel` 比 `--zstd` 慢」：那一項是使用者直接指示處理的，
+正在 master 上進行（重用緩衝區、`--cat` 不再把整個輸出留在記憶體），不在分支項之列。
+
+multissh 這邊的背景數字（M6，swift_tar 20260920-170352，multissh 樹 653 MB／8679 個檔案，暖快取，
+交錯 5 輪取最小，**M6 回報、本 session 未重現**）：OS 管線本身 8.9 GB/s；`swift_tar -c`（無 codec）
+寫到 /dev/null 1454 MB/s，user 0.14 + sys 0.30 ≈ real 0.449，即單一核心；`-c --zstd --zstd-level 3`
+1342 MB/s；`swift_tar -c tree | cat` 1125–1186 MB/s，即 multissh 端到端約 1.2 GB/s 的上限。設計文件
+在 multissh 樹的 `plan_sharded_transfer.md`。完成後回報 commit hash 給 M6-Multissh 即可。
+
+Four requests from multissh, to be tried on a separate branch as the user decided.
+The fifth, slow `--zstd-parallel` on incompressible data, is being fixed on master at
+the user's direct instruction.
+
+## 🔴 分支項：`-c` 平行讀檔，封存位元組不變 / Branch item: read files in parallel in `-c`, byte-identical output
+
+M6 量到無 codec 的 `-c` 是單核心：逐一走訪、開檔、讀檔（user + sys ≈ real）。請求：同時預讀接下來
+的 N 個檔案，依封存順序寫出，**封存必須逐位元組不變**。驗收：與現行 `-c` 輸出 `cmp` 相同（含 `-u`／
+`-r`、`--exclude`、`-h`、硬連結去重）；記憶體上限可控；在 RAM disk 上交錯 10 輪量測。
+
+M6 measured `-c` without a codec at one core. Prefetch the next N files concurrently and
+emit them in archive order; the archive must stay byte-identical.
+
+## 🔴 分支項：`-c --files-from <file>`（NUL 分隔）/ Branch item: `-c --files-from <file>`, NUL-separated
+
+分片傳輸的前置條件（M6：「分片要等這項，計畫中沒有退路」）。十萬個檔案的分片塞不進 argv，所以從
+檔案讀入成員名稱，以 NUL 分隔；`-` 代表 stdin 為加分項、非必要。要決定與 `--exclude`、`-C`、`--`
+的互動，並比照 GNU tar／bsdtar 的 `-T`／`--null` 行為。
+
+A prerequisite for sharded transfer; member names come from a NUL-separated file.
+
+## 🔴 分支項：`-c --no-recursion` / Branch item: `-c --no-recursion`
+
+分片傳輸的前置條件。列出的目錄只封存目錄項目本身、不含內容。multissh 會把目錄放在獨立分片並最後
+解開，讓 `-p` 的權限與 mtime 在所有檔案之後才套用。比照 GNU tar 的 `--no-recursion`。
+
+A prerequisite for sharded transfer: a listed directory is stored as its own entry only.
+
+## 🔴 分支項：確認多個 `-x -C <同一根目錄>` 同時執行是安全的 / Branch item: confirm concurrent `-x` into one root is safe
+
+多個 `swift_tar -x -C <同一根目錄>` 同時執行，同時建立共同的上層目錄：EEXIST 不可報錯，`--touch` 與
+保留屬性兩種情況都要測。注意 `VerifiedDirectories` 快取與 symlink 防護（e15bd40）在別的行程同時改動
+樹時的行為。先寫並行測試確認現況，有問題再修。
+
+Several `-x -C <same root>` at once must not fail on shared parents (EEXIST), with
+`--touch` and with preserve. Test first, fix if needed.
+
 ## Linux 靜態建置不記錄 `libarchive_linkage=static` ▸ ✅ 已修正 2026-10-07（未在 Linux 整支執行）/ The Linux static build drops `libarchive_linkage=static`
 
 **修正**：`record_provenance` 在 `LIBARCHIVE_STATIC=1` 時不清掉、也不重讀 libarchive 的鍵，保留

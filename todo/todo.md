@@ -843,6 +843,28 @@ Four requests from multissh, to be tried on a separate branch as the user decide
 The fifth, slow `--zstd-parallel` on incompressible data, is being fixed on master at
 the user's direct instruction.
 
+**第五項的進度（分支 `multissh-perf`，`41c282e`）**：使用者後來決定一律在 `multissh-perf` 分支上工作，
+所以這項改動也在分支上，未進 master。基準重測（M4，RAM disk，master 對分支交錯 10 輪取最小 real；
+負載 2.6–3.5；開始前已比對四種組合的輸出雜湊相同）：
+
+| 情境 | master | multissh-perf |
+|---|---|---|
+| 隨機 512 MiB `--cat --zstd` | 2334 MB/s（sys 0.16） | 4474 MB/s（sys 0.08） |
+| 隨機 512 MiB `--cat --zstd-parallel` | 1988 MB/s（sys 0.29） | 4130 MB/s（sys 0.11） |
+| claw-code `--cat --zstd` | 1161 MB/s | 1389 MB/s |
+| claw-code `--cat --zstd-parallel` | 3373 MB/s | 4427 MB/s |
+| 隨機 `cat \| -x --zstd` | 1377 MB/s | 2334 MB/s |
+| 隨機 `cat \| -x --zstd-parallel` | 1220 MB/s | 1627 MB/s |
+
+**仍未解決**：`-x` 管線上 `--zstd-parallel` 仍比 `--zstd` 慢（1627 對 2334 MB/s，sys 0.37 s）。`-x` 不經過
+`--cat` 的輸出迴圈，`TarReader.readExactly` 每讀一個檔案仍配置新的 `Data`。這是 multiscp 接收端剩下的
+主要瓶頸，下一步處理。claw-code 的 `-x` 因 RAM disk 容量不足，本輪沒有量。
+
+Progress on the fifth item, on branch `multissh-perf` (`41c282e`): `--cat` is 1.2-2.1x
+faster across the board, and the parallel decoder no longer loses to the single-threaded
+one under `--cat`. Still open: under `-x` from a pipe it does (1627 vs 2334 MB/s), because
+`TarReader.readExactly` still allocates per member. That is next.
+
 ## 🔴 分支項：`-c` 平行讀檔，封存位元組不變 / Branch item: read files in parallel in `-c`, byte-identical output
 
 M6 量到無 codec 的 `-c` 是單核心：逐一走訪、開檔、讀檔（user + sys ≈ real）。請求：同時預讀接下來

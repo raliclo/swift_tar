@@ -850,7 +850,14 @@ if [ -f "$RAW" ]; then
     zsh "$RAW" "$TMP/trav.tar" "$member" 'traversal payload' >/dev/null 2>&1
     rm -rf "$TRAV/a"; mkdir -p "$TRAV/a/b"
     rm -f "$outside"
-    ( cd "$TRAV/a/b" && "$ST" -x -f "$TMP/trav.tar" ) >/dev/null 2>&1
+    # `|| true` on purpose: the member is refused, and since --strict became the default
+    # (2026-10-08) that makes -x exit 1. This check is about what lands on disk; the exit
+    # status of a skip is test_strict.zsh's to check. The same applies to the two
+    # traversal extractions below.
+    # 刻意使用 `|| true`：該成員會被拒絕，而自 --strict 成為預設（2026-10-08）起，這會使 -x 以 1
+    # 結束。本項檢查的是磁碟上落了什麼；略過時的退出碼由 test_strict.zsh 檢查。下方兩處路徑穿越的
+    # 解出亦同。
+    ( cd "$TRAV/a/b" && "$ST" -x -f "$TMP/trav.tar" ) >/dev/null 2>&1 || true
     # Nothing may appear above the extraction directory, nor at an absolute path.
     # 解出目錄之上不得出現任何東西，絕對路徑處亦然。
     local above
@@ -887,7 +894,7 @@ if [ -f "$RAW" ]; then
   zsh "$RAW" "$TMP/portal.tar" link portal '../../..' file 'portal/pwned.txt' 'PWNED' >/dev/null 2>&1
   rm -rf "$TRAV/p"; mkdir -p "$TRAV/p/a/b"
   rm -f "$TRAV/p/pwned.txt" "$TRAV/pwned.txt" "$TMP/pwned.txt"
-  ( cd "$TRAV/p/a/b" && "$ST" -x -f "$TMP/portal.tar" ) >/dev/null 2>&1
+  ( cd "$TRAV/p/a/b" && "$ST" -x -f "$TMP/portal.tar" ) >/dev/null 2>&1 || true  # refused member; see check_traversal / 被拒絕的成員；見 check_traversal
   if [ ! -e "$TRAV/p/pwned.txt" ] && [ ! -e "$TRAV/pwned.txt" ] && [ ! -e "$TMP/pwned.txt" ]; then
     ok "traversal blocked: write through a planted symlink"
   else
@@ -937,7 +944,7 @@ if [ -f "$RAW" ]; then
   # 相關的那個案例反而是沉默的那個。此處斷言訊息本身，而非僅斷言檔案不存在。
   zsh "$RAW" "$TMP/hard.tar" hard stolen.txt '../../../secret_outside.txt' >/dev/null 2>&1
   rm -rf "$TRAV/h"; mkdir -p "$TRAV/h/a/b"
-  hard_out=$( cd "$TRAV/h/a/b" && "$ST" -x -f "$TMP/hard.tar" 2>&1 )
+  hard_out=$( cd "$TRAV/h/a/b" && "$ST" -x -f "$TMP/hard.tar" 2>&1 ) || true  # refused member; see check_traversal / 被拒絕的成員；見 check_traversal
   case $hard_out in
     *"skipping hardlink"*) ok "an unsafe hardlink target is reported, not dropped in silence" ;;
     *) bad "an unsafe hardlink target is reported, not dropped in silence" ;;
@@ -1051,7 +1058,7 @@ if [ -f "$RAW" ]; then
     fi
     rm -rf "$TRAV/o"; mkdir -p "$TRAV/o/a/b"
     rm -f "$TRAV/o/pwned_ovr.txt" "$TRAV/pwned_ovr.txt" "$TMP/pwned_ovr.txt"
-    ( cd "$TRAV/o/a/b" && "$ST" -x -f "$TMP/ovr.tar" ) >/dev/null 2>&1
+    ( cd "$TRAV/o/a/b" && "$ST" -x -f "$TMP/ovr.tar" ) >/dev/null 2>&1 || true  # refused member; see check_traversal / 被拒絕的成員；見 check_traversal
     if [ ! -e "$TRAV/o/pwned_ovr.txt" ] && [ ! -e "$TRAV/pwned_ovr.txt" ] && [ ! -e "$TMP/pwned_ovr.txt" ]; then
       ok "traversal blocked: portal via $mech override"
     else
@@ -1663,7 +1670,14 @@ fi
 if [ -f "$RAW" ]; then
   zsh "$RAW" "$TMP/rawfifo.tar" fifo pipe '' file beside.txt 'hello' 2>/dev/null
   mkdir -p "$TMP/rawout"
-  out=$("$ST" -x -f "$TMP/rawfifo.tar" -C "$TMP/rawout" 2>&1); rc=$?
+  # --no-strict: Windows skips the FIFO, and under the strict default (2026-10-08) that
+  # exits 1 -- test_strict.zsh checks that. What this block checks is that the run
+  # completes and the member beside it lands. `|| rc=$?`, not `; rc=$?`, which set -e
+  # never let reach a non-zero status.
+  # --no-strict：Windows 會略過 FIFO，在嚴格預設（2026-10-08）下會以 1 結束——那由
+  # test_strict.zsh 檢查。本區檢查的是整次執行跑完、旁邊的成員落地。用 `|| rc=$?` 而非
+  # `; rc=$?`：後者在 set -e 下根本拿不到非 0 的狀態。
+  rc=0; out=$("$ST" -x --no-strict -f "$TMP/rawfifo.tar" -C "$TMP/rawout" 2>&1) || rc=$?
   eq "a typeflag '6' entry does not fail the run" "0" "$rc"
   eq "the member beside a FIFO entry still extracts" \
      "hello" "$(cat "$TMP/rawout/beside.txt" 2>/dev/null)"
@@ -2096,7 +2110,7 @@ for cand in "$SYS_TAR" bsdtar /c/Windows/System32/tar.exe; do
   if command -v "$cand" >/dev/null 2>&1 && "$cand" --version 2>&1 | grep -q bsdtar; then ZBSD=$cand; break; fi
 done
 if [ -n "$ZBSD" ]; then
-  ZF="$TMP/zipfail"; rm -rf "$ZF"; mkdir -p "$ZF/d1" "$ZF/d2/a" "$ZF/out"
+  ZF="$TMP/zipfail"; rm -rf "$ZF"; mkdir -p "$ZF/d1" "$ZF/d2/a" "$ZF/out" "$ZF/out2"
   print -r -- A > "$ZF/d1/a"; print -r -- C > "$ZF/d1/c"; print -r -- B > "$ZF/d2/a/b"
   ( cd "$ZF" && COPYFILE_DISABLE=1 "$ZBSD" --format zip -cf z.zip -C d1 a -C ../d2 a/b -C ../d1 c ) >/dev/null 2>&1 || true
   zf_rc=0; "$ST" -x -f "$ZF/z.zip" -C "$ZF/out" >"$ZF/x.out" 2>&1 || zf_rc=$?
@@ -2108,7 +2122,14 @@ if [ -n "$ZBSD" ]; then
   # checks looks at it directly.
   eq "ZIP extraction: the earlier file in the way is not replaced" "A" \
      "$( [ -f "$ZF/out/a" ] && cat "$ZF/out/a" 2>/dev/null || print -r -- '(not a file)' )"
-  eq "ZIP extraction: a skipped member does not fail the run, as on the create side" "0" "$zf_rc"
+  # The policy changed on 2026-10-08: a skipped member makes -x exit non-zero by default
+  # (--strict), and --no-strict keeps the earlier exit 0. The skip itself, and every other
+  # member landing, are unchanged -- the checks around this one still hold.
+  # 政策於 2026-10-08 改變：略過成員時 -x 預設以非 0 結束（--strict），--no-strict 維持原本的 0。
+  # 略過本身、以及其他成員照常落地都沒有變——前後各項檢查依然成立。
+  eq "ZIP extraction: a skipped member fails the run under the strict default" "1" "$zf_rc"
+  zf_rc2=0; "$ST" -x --no-strict -f "$ZF/z.zip" -C "$ZF/out2" >/dev/null 2>&1 || zf_rc2=$?
+  eq "ZIP extraction: with --no-strict a skipped member does not fail the run" "0" "$zf_rc2"
   case $(cat "$ZF/x.out") in
     *"a/b"*) ok "ZIP extraction: the skipped member is named on stderr" ;;
     *) bad "ZIP extraction: the skipped member is named on stderr" ;;
@@ -2146,7 +2167,8 @@ print -r -- KEEP > "$ZE/out/a"
 ze_rc=0; "$ST" -x -f "$ZE/nodir.zip" -C "$ZE/out" >"$ZE/x.out" 2>&1 || ze_rc=$?
 eq "ZIP extraction: a file already on disk in the way is not replaced" "KEEP" \
    "$( [ -f "$ZE/out/a" ] && cat "$ZE/out/a" 2>/dev/null || print -r -- '(not a file)' )"
-eq "ZIP extraction: a pre-existing blocker does not fail the run" "0" "$ze_rc"
+# Strict by default since 2026-10-08; see the block above. / 自 2026-10-08 起預設嚴格；見上一區。
+eq "ZIP extraction: a pre-existing blocker fails the run under the strict default" "1" "$ze_rc"
 case $(cat "$ZE/x.out") in
   *"a/b"*) ok "ZIP extraction: the member blocked by a pre-existing file is named on stderr" ;;
   *) bad "ZIP extraction: the member blocked by a pre-existing file is named on stderr" ;;

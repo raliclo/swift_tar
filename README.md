@@ -622,6 +622,7 @@ would not predict.
 | `--zstd-level <N>` | (`--zstd` only) Compression level, `1`…`22`, default `9`. Out of range or non-numeric exits **2**. Silently ignored if `--zstd` is not also given — see below |
 | `--no-checksum`, `-no-checksum` | (`-c` with `--zstd`, `--lz4` or `--xz`) Omit content checksums. **They are written by default**: the low 32 bits of XXH64 per zstd frame, XXH32 per lz4 frame, CRC64 per xz stream, so a damaged chunk fails to decode instead of decoding to wrong bytes. gzip, bzip2, lzip and ZIP always carry a CRC, so the flag changes nothing there. Archives written before 2026-10-07 have no zstd or lz4 checksum. |
 | `--skip-compressed` | (`-c` with a stream codec) One regular file with an already-compressed suffix is written as a plain tar instead. Off by default; see [Already-compressed suffixes](#already-compressed-suffixes---skip-compressed) for the list and the reasons |
+| `--strict`, `--no-strict` | (`-x`) **Strict is the default:** a skipped member makes `-x` exit non-zero after every other member has been extracted; `--exclude` matches do not count. `--no-strict` exits `0` after skips, the behaviour before 2026-10-08. `--strict` is accepted for callers that want to say so. See [Exit status](#exit-status) |
 | `-n <N>`    | In-flight parallel chunks (default: one per core, capped at 4 × cores) |
 | `-v`        | Name each member as it is processed, on stderr, and print the detected filter chain. **It does not produce a long listing** — there are no sizes, modes or timestamps, and `-t -v` prints the same names as `-t` plus one filter-chain line. If you arrived from `tar -tvf` expecting a table, this is not it. |
 | `-m`, `--touch` | (`-x` only) Do **not** restore the archived mtime; extracted files get the current time. `-m` is the GNU tar spelling and is accepted as an exact alias |
@@ -806,6 +807,7 @@ Measured behaviour on failure:
 | create, bad path among good ones | a valid archive holding the entries processed before it |
 | create, bad path first | the archive file, empty (0 bytes) |
 | extract, archive truncated mid-stream | the entries already extracted, complete; the member the cut fell inside is not created at all, so no half-written file is left |
+| extract, a member skipped (unsafe path, write or create failure, …) | every other member, complete; the run reports the count and exits non-zero only at the end (see `--strict` below) |
 | create or extract rejected before any work (unknown option, missing archive, wrong key) | nothing |
 
 `-f` is opened once the run is under way, so **a failed create destroys whatever
@@ -828,6 +830,14 @@ Two cases deserve their own line because a script will otherwise get them wrong:
   you need to know.
 - **`-x` with `-C` pointing at a missing directory exits `0`** and creates the
   directory. See the `-C` table above.
+- **`-x` exits non-zero when it skipped a member (`--strict`, the default since
+  2026-10-08).** A member refused for an unsafe path (absolute, `..`, through a
+  symlink), one that could not be written or created, and one whose type cannot exist
+  on this platform all count; a member left out by `--exclude` does not, since you
+  asked for it. Every other member is still extracted — the count is reported at the
+  end. `--no-strict` restores the earlier behaviour of exiting `0` after a skip. Before
+  this, a transfer whose extraction skipped files looked successful to any caller that
+  read only the exit status.
 
 ## Layout
 

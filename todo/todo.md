@@ -955,6 +955,27 @@ A prerequisite for sharded transfer; member names come from a NUL-separated file
 
 A prerequisite for sharded transfer: a listed directory is stored as its own entry only.
 
+## `-x --strict`：略過成員時以非 0 結束 ▸ ✅ 已實作 2026-10-08 / `-x --strict`: a skipped member makes -x exit non-zero
+
+M6-Multissh 的請求：multissh 只看退出碼判斷傳輸成敗，而略過成員時退出碼一直是 0，所以解出時略過
+了檔案的傳輸也會回報完成。使用者決定：**預設開啟**，`--no-strict` 回到舊行為；**因不安全路徑而被拒絕
+的成員也算**；`--exclude` 排除的不算。
+
+- tar 讀取端：9 處略過改為 `skipMember`（計數並印出），Windows 的 symlink／硬連結建立失敗亦計入；
+  在其餘成員與目錄時間都完成後才擲出錯誤，所以只改變退出碼，不改變寫出的內容。
+- ZIP 讀取端（`libarchive_zip_bridge.c`）：新增 `strict` 參數，三處略過計數，結尾同樣回報。
+- `test/test_strict.zsh` 28 項：不安全路徑、穿過 symlink、無法建立上層目錄、ZIP 被檔案擋住，各自
+  搭配預設與 `--no-strict`；`--exclude` 與無略過的封存須以 0 結束。實作前的 binary 失敗 16 項。
+- `test_blind_findings` 中依賴舊政策的 2 項改為檢查新行為，另 4 處預期會略過的 `-x` 呼叫補上註明理由
+  的 `|| true`。
+- `--help` 新增「預設開啟的行為與關閉方式」一段（M6 轉達的使用者要求）；README 中英文的〈離開碼〉
+  與選項表已更新。
+
+全套 17 個測試套件通過（含 `test_no_lzfse`），建置零診斷。
+
+Done: strict by default, `--no-strict` to opt out; unsafe paths count, `--exclude` does
+not. The exit status changes only after every other member has landed.
+
 ## 分支項：確認多個 `-x -C <同一根目錄>` 同時執行是安全的 ▸ ✅ 已確認 2026-10-08，現行程式碼不需修改 / Branch item: confirm concurrent `-x` into one root is safe
 
 多個 `swift_tar -x -C <同一根目錄>` 同時執行，同時建立共同的上層目錄：EEXIST 不可報錯，`--touch` 與

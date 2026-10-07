@@ -650,6 +650,7 @@ int swift_tar_zip_read(const char *archive_path,
                        int to_stdout,
                        int verbose,
                        int restore_mtime,
+                       int strict,
                        int (*is_excluded)(const char *path, int is_directory),
                        char *error_buffer,
                        size_t error_capacity) {
@@ -660,6 +661,10 @@ int swift_tar_zip_read(const char *archive_path,
     char *original_dir = NULL;
     int result = -1;
     int status;
+    /* Members skipped while extracting, for --strict: reported at the end, after every
+     * other member is written. --exclude matches are not counted.
+     * 解出時略過的成員數，供 --strict 使用：在其他成員都寫完後才回報。--exclude 命中者不計。 */
+    long skipped = 0;
     int extract_flags = ARCHIVE_EXTRACT_PERM |
                         ARCHIVE_EXTRACT_SECURE_SYMLINKS |
                         ARCHIVE_EXTRACT_SECURE_NODOTDOT |
@@ -755,6 +760,7 @@ int swift_tar_zip_read(const char *archive_path,
              * 下一次 archive_read_next_header 會自動略過尚未讀取的資料。 */
             fprintf(stderr, "swift_tar: %s: %s\n", path != NULL ? path : "",
                     archive_error_string(reader));
+            if (extract) skipped++;
             continue;
         }
         if (status < ARCHIVE_OK) {
@@ -799,6 +805,7 @@ int swift_tar_zip_read(const char *archive_path,
                     fprintf(stderr, "swift_tar: %s: Can't create directory '%ls': a file is in the way\n",
                             path != NULL ? path : "", blocker);
                     archive_read_data_skip(reader);
+                    skipped++;
                     continue;
                 }
             }
@@ -811,6 +818,7 @@ int swift_tar_zip_read(const char *archive_path,
             if (status == ARCHIVE_FAILED || status == ARCHIVE_RETRY) {
                 fprintf(stderr, "swift_tar: %s: %s\n", path != NULL ? path : "",
                         archive_error_string(disk));
+                skipped++;
                 continue;
             }
             if (status < ARCHIVE_OK) {
@@ -836,6 +844,14 @@ int swift_tar_zip_read(const char *archive_path,
     if (to_stdout && fflush(stdout) != 0) {
         if (error_buffer != NULL && error_capacity > 0) {
             snprintf(error_buffer, error_capacity, "flush stdout: %s", strerror(errno));
+        }
+        goto cleanup;
+    }
+    if (strict && skipped > 0) {
+        if (error_buffer != NULL && error_capacity > 0) {
+            snprintf(error_buffer, error_capacity,
+                     "%ld member(s) skipped; pass --no-strict to exit 0 anyway / "
+                     "略過了 %ld 個成員；如仍要以 0 結束請加 --no-strict", skipped, skipped);
         }
         goto cleanup;
     }

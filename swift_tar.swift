@@ -166,6 +166,7 @@ private func cSwiftTarZipRead(
     _ toStdout: Int32,
     _ verbose: Int32,
     _ restoreMtime: Int32,
+    _ strict: Int32,
     _ isExcluded: (@convention(c) (UnsafePointer<CChar>?, Int32) -> Int32)?,
     _ errorBuffer: UnsafeMutablePointer<CChar>,
     _ errorCapacity: Int
@@ -297,6 +298,7 @@ private func runZipRead(archivePath: String, extract: Bool, destDir: String,
             cSwiftTarZipRead(archive, directory, extract ? 1 : 0, toStdout ? 1 : 0,
                              verbose ? 1 : 0,
                              restoreMtime ? 1 : 0,
+                             tarStrict ? 1 : 0,
                              { path, isDirectory in
                                  guard let path else { return 0 }
                                  return TarReader.memberIsExcluded(String(cString: path),
@@ -1024,6 +1026,22 @@ let tarWriteChecksumBox = Mutex<Bool>(true)
 var tarWriteChecksum: Bool {
     get { tarWriteChecksumBox.withLock { $0 } }
     set { tarWriteChecksumBox.withLock { $0 = newValue } }
+}
+
+// -x exits non-zero when it skipped a member; --no-strict restores exit 0. Strict by default
+// since 2026-10-08 (the user's decision): until then a skipped member left the status at 0,
+// so multissh, which judges a transfer by the status alone, reported files that never
+// landed as transferred. A member left out by --exclude is not a skip -- the caller asked
+// for it -- and a member refused for an unsafe path is one: from the receiving end it is
+// data that did not arrive. Held like the other settings.
+// -x 略過成員時以非 0 結束；--no-strict 回到以 0 結束。自 2026-10-08 起預設嚴格（使用者決定）：
+// 在此之前略過成員時退出碼維持 0，所以只看退出碼判斷傳輸的 multissh，會把沒有落地的檔案回報為
+// 已傳輸。--exclude 排除的成員不算略過——那是呼叫端要求的；因不安全路徑而被拒絕的成員算——從
+// 接收端看，那就是沒送到的資料。持有方式與其他設定相同。
+let tarStrictBox = Mutex<Bool>(true)
+var tarStrict: Bool {
+    get { tarStrictBox.withLock { $0 } }
+    set { tarStrictBox.withLock { $0 = newValue } }
 }
 
 func zstdCompressFrame(_ input: Data, level: Int32 = zstdCompressionLevel) -> Data? {
@@ -2446,11 +2464,15 @@ private func winStatFollowing(_ path: String) -> WinStat? {
 /// 盡力嘗試建立 symlink；FileManager.createSymbolicLink 在 Windows 上需要系統
 /// 管理員權限或開發者模式才會成功。失敗時僅警告並略過該項目，不中止整個
 /// 解壓——避免因環境缺乏 symlink 權限而讓整個 extract 失敗。
-private func winCreateSymlink(dest: String, target: String) {
+/// Returns false when the link was skipped, so --strict can count it.
+/// 連結被略過時回傳 false，供 --strict 計數。
+private func winCreateSymlink(dest: String, target: String) -> Bool {
     do {
         try FileManager.default.createSymbolicLink(atPath: dest, withDestinationPath: target)
+        return true
     } catch {
         eprint("swift_tar: warning: failed to create symlink '\(dest)' -> '\(target)' (needs admin rights or Developer Mode), skipping / 警告：無法建立符號連結 '\(dest)' -> '\(target)'（需要系統管理員權限或開發者模式），已略過")
+        return false
     }
 }
 
@@ -2523,13 +2545,16 @@ private func winSetLinkMtime(_ path: String, _ mtime: UInt64) {
 /// 實測）；失敗時警告並略過，政策同 winCreateSymlink。不用
 /// FileManager.linkItem：實測在 Windows 上會靜默建立 symlink 而非真正的硬連
 /// 結，會破壞 tar 硬連結去重的語意。
-private func winCreateHardlink(dest: String, target: String) {
+///
+/// Returns false when the link was skipped, so --strict can count it.
+/// 連結被略過時回傳 false，供 --strict 計數。
+private func winCreateHardlink(dest: String, target: String) -> Bool {
     guard let fsutil = resolveExecutable("fsutil") ?? {
         let sysPath = "\(ProcessInfo.processInfo.environment["SystemRoot"] ?? "C:\\Windows")\\System32\\fsutil.exe"
         return FileManager.default.isExecutableFile(atPath: sysPath) ? sysPath : nil
     }() else {
         eprint("swift_tar: warning: fsutil not found, cannot create hardlink '\(dest)' -> '\(target)', skipping / 警告：找不到 fsutil，無法建立硬連結 '\(dest)' -> '\(target)'，已略過")
-        return
+        return false
     }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: fsutil)
@@ -2538,12 +2563,14 @@ private func winCreateHardlink(dest: String, target: String) {
     process.standardError = FileHandle.nullDevice
     guard (try? process.run()) != nil else {
         eprint("swift_tar: warning: failed to launch fsutil for hardlink '\(dest)' -> '\(target)', skipping / 警告：無法啟動 fsutil 建立硬連結 '\(dest)' -> '\(target)'，已略過")
-        return
+        return false
     }
     process.waitUntilExit()
     if process.terminationStatus != 0 {
         eprint("swift_tar: warning: failed to create hardlink '\(dest)' -> '\(target)', skipping / 警告：無法建立硬連結 '\(dest)' -> '\(target)'，已略過")
+        return false
     }
+    return true
 }
 
 /// Cached process cwd for building absolute paths in the ucrt backend
@@ -4169,6 +4196,17 @@ final class TarReader {
         return out
     }
 
+    /// Members this extraction skipped, for --strict (see tarStrict). A member left out by
+    /// --exclude is not counted. / 本次解出略過的成員數，供 --strict 使用（見 tarStrict）。
+    /// --exclude 排除的成員不計入。
+    private var skippedMembers = 0
+
+    /// Report a skipped member and count it. / 回報一個被略過的成員並計數。
+    private func skipMember(_ message: String) {
+        eprint(message)
+        skippedMembers += 1
+    }
+
     /// Reused by copyExactly; allocated on first use. / 供 copyExactly 重複使用，首次使用時配置。
     private var copyBuffer: UnsafeMutableRawPointer? = nil
     deinit { copyBuffer?.deallocate() }
@@ -4767,7 +4805,7 @@ final class TarReader {
             // 警告：把尋常的 `./` 項目稱為「不安全」，等於在幾乎每個封存上都掛一則
             // 安全性質的訊息，而那正是人們學會忽略真警告的方式。
             guard let safeRel = TarReader.safeRelativePath(name) else {
-                eprint("swift_tar: skipping unsafe path '\(name)' / 略過不安全路徑 '\(name)'")
+                skipMember("swift_tar: skipping unsafe path '\(name)' / 略過不安全路徑 '\(name)'")
                 if !isDir { try skipData(size) }
                 continue
             }
@@ -4792,7 +4830,7 @@ final class TarReader {
             // passesThroughSymlink。
             if TarReader.passesThroughSymlink(dest: dest, below: options.destDir,
                                               cleared: &clearedDirs) {
-                eprint("swift_tar: skipping '\(rel)': path passes through a symlink / 略過 '\(rel)'：路徑穿過 symlink")
+                skipMember("swift_tar: skipping '\(rel)': path passes through a symlink / 略過 '\(rel)'：路徑穿過 symlink")
                 if !isDir { try skipData(size) }
                 continue
             }
@@ -4864,7 +4902,7 @@ final class TarReader {
                 // 理應照常落地。POSIX 端原本完全忽略該失敗（`try?`），因此真正的原因
                 // 從未被回報，而該成員稍後才以 ENOENT 死去。
                 guard ensureDirectory(parent, below: options.destDir) else {
-                    eprint("swift_tar: skipping '\(rel)': cannot make '\(parent)' a directory / 略過 '\(rel)'：無法使 '\(parent)' 成為目錄")
+                    skipMember("swift_tar: skipping '\(rel)': cannot make '\(parent)' a directory / 略過 '\(rel)'：無法使 '\(parent)' 成為目錄")
                     if !isDir { try skipData(size) }
                     continue
                 }
@@ -4873,7 +4911,7 @@ final class TarReader {
             switch typeflag {
             case UInt8(ascii: "5"):
                 guard ensureDirectory(dest, below: options.destDir) else {
-                    eprint("swift_tar: skipping directory '\(rel)': cannot create it / 略過目錄 '\(rel)'：無法建立")
+                    skipMember("swift_tar: skipping directory '\(rel)': cannot create it / 略過目錄 '\(rel)'：無法建立")
                     continue
                 }
 #if !os(Windows)
@@ -4891,7 +4929,7 @@ final class TarReader {
                 if submitted.contains(dest) { pool?.drain() }
                 try? fm.removeItem(atPath: dest)
 #if os(Windows)
-                winCreateSymlink(dest: dest, target: linkname)
+                if !winCreateSymlink(dest: dest, target: linkname) { skippedMembers += 1 }
 #else
                 if symlink(linkname, dest) != 0 {
                     throw TarError.io("symlink failed for '\(dest)' / 建立符號連結失敗")
@@ -4993,7 +5031,7 @@ final class TarReader {
                 // Windows 完全沒有 FIFO，故此處回報後略過而非失敗：含有 FIFO 的封存
                 // 是再尋常不過的封存，其餘部分都能正確解出。離開碼刻意不變，與一向
                 // 略過未支援型別的作法一致。
-                eprint("swift_tar: skipping FIFO '\(rel)': Windows has no FIFOs / 略過 FIFO '\(rel)'：Windows 沒有 FIFO")
+                skipMember("swift_tar: skipping FIFO '\(rel)': Windows has no FIFOs / 略過 FIFO '\(rel)'：Windows 沒有 FIFO")
 #else
                 // Same queue hazard as the symlink case: a pool write to this
                 // name must land first, or the worker recreates a regular file
@@ -5013,7 +5051,7 @@ final class TarReader {
                     // DrvFs、FAT 與 exFAT 都沒有——而解出到那些地方是尋常操作。為單一
                     // 不支援的項目中止整次執行，等於重建 1eb21d4 修掉的那個失敗：一個
                     // 寫不進去的成員讓其後每一個都停在舊內容。
-                    eprint("swift_tar: cannot create FIFO '\(rel)' (errno \(errno)) / 無法建立 FIFO '\(rel)'")
+                    skipMember("swift_tar: cannot create FIFO '\(rel)' (errno \(errno)) / 無法建立 FIFO '\(rel)'")
                     continue
                 }
                 // mkfifo's mode argument is masked by umask, exactly as open's
@@ -5044,7 +5082,7 @@ final class TarReader {
                 guard let safeLink = TarReader.safeRelativePath(linkname),
                       let strippedLink = TarReader.stripComponents(safeLink, count: options.stripComponents),
                       !strippedLink.isEmpty else {
-                    eprint("swift_tar: skipping hardlink '\(rel)': unsafe target '\(linkname)' / 略過硬連結 '\(rel)'：目標不安全 '\(linkname)'")
+                    skipMember("swift_tar: skipping hardlink '\(rel)': unsafe target '\(linkname)' / 略過硬連結 '\(rel)'：目標不安全 '\(linkname)'")
                     continue
                 }
                 let target = options.destDir.isEmpty ? strippedLink : options.destDir + "/" + strippedLink
@@ -5058,7 +5096,7 @@ final class TarReader {
                 // 套用與成員自身路徑相同的守門。GNU tar 1.35 與 bsdtar 3.5.3 都拒絕。
                 if TarReader.passesThroughSymlink(dest: target, below: options.destDir,
                                                   cleared: &clearedDirs) {
-                    eprint("swift_tar: skipping hardlink '\(rel)': target '\(linkname)' passes through a symlink / 略過硬連結 '\(rel)'：目標 '\(linkname)' 穿過 symlink")
+                    skipMember("swift_tar: skipping hardlink '\(rel)': target '\(linkname)' passes through a symlink / 略過硬連結 '\(rel)'：目標 '\(linkname)' 穿過 symlink")
                     continue
                 }
                 // The link target may still be queued in the pool -- barrier
@@ -5072,7 +5110,7 @@ final class TarReader {
                 // `dest` 此時可能是 symlink：見下方 linkat。
                 clearedDirs.forget(dest)
 #if os(Windows)
-                winCreateHardlink(dest: dest, target: target)
+                if !winCreateHardlink(dest: dest, target: target) { skippedMembers += 1 }
 #else
                 // linkat with no AT_SYMLINK_FOLLOW, not link(). When the target is
                 // itself a symlink, macOS's link() follows it and Linux's does not;
@@ -5210,7 +5248,7 @@ final class TarReader {
                 }
 #endif
             default:
-                eprint("swift_tar: skipping type '\(Character(UnicodeScalar(typeflag)))' entry '\(name)' / 略過未支援型別")
+                skipMember("swift_tar: skipping type '\(Character(UnicodeScalar(typeflag)))' entry '\(name)' / 略過未支援型別")
                 try skipData(size)
             }
         }
@@ -5283,6 +5321,15 @@ final class TarReader {
                 posixSetTimes(d.path, d.mtime, d.nanos)
 #endif
             }
+        }
+
+        // --strict (the default): report skipped members at the very end, after everything
+        // else has landed and every directory time is set, so strict changes the exit status
+        // and nothing about what gets written.
+        // --strict（預設）：在最後才回報略過的成員——其他一切都已落地、目錄時間也都設好之後——
+        // 所以嚴格模式只改變退出碼，不改變寫出的內容。
+        if tarStrict && skippedMembers > 0 {
+            throw TarError.io("\(skippedMembers) member(s) skipped; pass --no-strict to exit 0 anyway / 略過了 \(skippedMembers) 個成員；如仍要以 0 結束請加 --no-strict")
         }
     }
 }
@@ -5383,6 +5430,11 @@ private func printTarUsage() {
                          gzip/bzip2/lzip/ZIP always carry a CRC
                          zstd/lz4/xz：不寫入內容校驗碼（預設寫入）；
                          gzip/bzip2/lzip/ZIP 一律帶 CRC
+      --no-strict      : -x exits 0 even when it skipped members (strict is the
+                         default: a skipped member makes -x exit non-zero;
+                         --exclude is not a skip)
+                         -x 略過成員時仍以 0 結束（預設為嚴格：略過成員則以非 0
+                         結束；--exclude 不算略過）
       --skip-compressed: -c with a codec and one already-compressed file (by
                          suffix; see README) writes it without the codec
                          -c 搭配 codec 且只有一個已壓縮檔案（依後綴，見 README）
@@ -5510,6 +5562,27 @@ private func printTarUsage() {
       -debug          : With -test, print which standard-tar candidates were
                         found/skipped while searching / 搭配 -test 使用，印出
                         搜尋標準 tar 過程中找到／略過的候選項目
+
+    On by default, and how to turn each off / 預設開啟的行為與關閉方式:
+      - -c with zstd/lz4/xz writes content checksums      -> --no-checksum
+        -c 搭配 zstd/lz4/xz 時寫入內容校驗碼                 -> --no-checksum
+      - -x exits non-zero after skipping a member         -> --no-strict
+        (--exclude matches are not skips)
+        -x 略過成員時以非 0 結束（--exclude 命中者不算略過）  -> --no-strict
+      - -x restores archived modification times           -> -m / --touch
+        -x 還原封存中的修改時間                              -> -m / --touch
+      - -x restores permission bits exactly, no umask     -> --no-same-permissions
+        -x 原樣還原權限位元、不套用 umask                    -> --no-same-permissions
+      - zstd compresses at level 9                        -> --zstd-level <N>
+        zstd 以等級 9 壓縮                                   -> --zstd-level <N>
+      - ZIP64 records are written when an entry needs them; cannot be turned
+        off (--zip64 writes them always)
+        需要時寫入 ZIP64 記錄；無法關閉（--zip64 則一律寫入）
+      - -x refuses absolute paths, ".." and paths through a symlink; cannot be
+        turned off
+        -x 拒絕絕對路徑、".." 與穿過 symlink 的路徑；無法關閉
+    Off by default / 預設關閉: --skip-compressed, -h/--dereference,
+      --zstd-parallel, --force, -i/--ignore-zeros, --strip-components
 
     Notes / 注意:
       - Tar-filter model: 4MiB chunks compressed concurrently, written in order.
@@ -6238,7 +6311,7 @@ struct SwiftTarMain {
             "-o", "--no-same-owner", "--force",
             "-p", "--same-permissions", "--no-same-permissions",
             "--dereference", "--help", "--exclude", "--no-checksum", "-no-checksum",
-            "--skip-compressed",
+            "--skip-compressed", "--strict", "--no-strict",
             "--strip-components", "--zstd-level", "--exclude",
             "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
             // codecs / 壓縮引擎
@@ -6486,6 +6559,11 @@ struct SwiftTarMain {
         }
         tarZstdParallel = args.contains("--zstd-parallel")
         tarWriteChecksum = !(args.contains("--no-checksum") || args.contains("-no-checksum"))
+        // --strict is the default and accepted for callers that want to say so (multissh
+        // passes it explicitly); --no-strict wins if both are given.
+        // --strict 是預設值，接受它是為了讓想明說的呼叫端可以帶上（multissh 會明確傳入）；
+        // 兩者同時給定時以 --no-strict 為準。
+        tarStrict = !args.contains("--no-strict")
         if args.contains(where: { $0 == "--zstd-level" || $0.hasPrefix("--zstd-level=") }) {
             guard let raw = optValue("--zstd-level"), let lv = Int32(raw) else {
                 try? FileHandle.standardError.write(contentsOf: Data("swift_tar: --zstd-level needs a number / --zstd-level 需要一個數字\n".utf8))

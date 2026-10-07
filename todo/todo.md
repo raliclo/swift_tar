@@ -776,6 +776,29 @@ cannot catch, so the error being reported was never printed. Data paths use the
 throwing `write(contentsOf:)` and are unaffected; two other stderr writes used the
 legacy call ("14" was a miscount). See the partial fix above.
 
+**上游已修（2026-10-07）**：lzfse2 `3a7e782`（origin/main）。`eprint` 與輸出端 6 處舊 write 都改為
+寫入失敗時回 rc=1；`decodeStreamToHandle`／`decodeStreamFromFile` 的簽章未變，swift_tar.swift 第
+1925、1981 行不必改，但 `decodeStreamFromFile` 在寫入失敗時一律回 `.error`，所以 swift_tar 可能在
+那之後多印一行失敗訊息。lzfse2-f8 回報其 `helper/test_write_failure.zsh` 16/16，舊 binary 失敗 9 項。
+**swift_tar 的 pin 仍未移動**；移動時請重建，並把 `test_stderr_closed.zsh` 的 KNOWN 改為正式檢查。
+
+Fixed upstream in lzfse2 `3a7e782`; signatures unchanged. The pin has not moved: when it
+does, rebuild and turn the KNOWN check in `test_stderr_closed.zsh` into a counted one.
+
+## 🔴 LZFSE 平行解碼中途失敗時重複輸出（lzfse2 的缺陷，經 pin 影響 swift_tar）/ LZFSE parallel decode writes duplicate output after a mid-stream failure
+
+2026-10-07 由 lzfse2-f8 發現，本 session 讀 pin 版本確認，**尚未重現**。`LZFSEv1.decodeStreamToHandle`
+（pin 版 `lzfse2/lzfse-cli.swift` 3113 行起）逐批平行解碼、每批解完即寫出；若後面某一批失敗，失敗
+分支改以循序方式**從頭**重解整份，並把全部結果再寫一次。前面已寫出的批次因此重複出現在輸出中。
+swift_tar 在 LZFSE 的 stdin 與 fallback 路徑呼叫它（`swift_tar.swift:1981`），所以 `--cat` 會產出重複
+的 tar 資料，`-x` 讀到的 tar 串流也會錯位。只有「平行失敗而循序成功」時才會觸發，實際觸發條件尚未
+找出。修正屬於 lzfse2；swift_tar 端待 pin 移動後加測試。
+
+Found by lzfse2-f8, confirmed by reading the pinned source, not yet reproduced: after
+some batches are written, a failed parallel batch makes the function decode the whole
+input sequentially and write all of it again, duplicating the earlier batches. swift_tar
+reaches it on the LZFSE stdin/fallback path. The fix belongs in lzfse2.
+
 ## Linux 靜態建置不記錄 `libarchive_linkage=static` ▸ ✅ 已修正 2026-10-07（未在 Linux 整支執行）/ The Linux static build drops `libarchive_linkage=static`
 
 **修正**：`record_provenance` 在 `LIBARCHIVE_STATIC=1` 時不清掉、也不重讀 libarchive 的鍵，保留

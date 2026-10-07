@@ -740,7 +740,7 @@ Windows 驗證的第 4 項。測試只嘗試 `$SYS_TAR`（MSYS 下為 GNU tar）
 System32 tar is now a candidate, so the block runs on Windows; a new check looks at the
 blocking file's content directly. WSL has no bsdtar and still skips it.
 
-## 🔴 stderr 寫入失敗時 `eprint` 以 SIGABRT 終止，真正的錯誤訊息遺失 / `eprint` aborts when stderr cannot be written, losing the real error
+## stderr 寫入失敗時 `eprint` 以 SIGABRT 終止，真正的錯誤訊息遺失 ▸ ✅ 已修正 2026-10-07（pin 移至 lzfse2 `6e01a03`）/ `eprint` aborts when stderr cannot be written, losing the real error
 
 2026-10-07 量測校驗碼成本時發現。RAM disk 被寫滿，而 stderr 正好重導到同一個卷宗上的檔案：
 `-c --xz` 以 **rc=134** 結束。當機報告的堆疊為 `eprint(_:)` → `-[NSConcreteFileHandle writeData:]`
@@ -785,7 +785,20 @@ legacy call ("14" was a miscount). See the partial fix above.
 Fixed upstream in lzfse2 `3a7e782`; signatures unchanged. The pin has not moved: when it
 does, rebuild and turn the KNOWN check in `test_stderr_closed.zsh` into a counted one.
 
-## 🔴 LZFSE 平行解碼中途失敗時重複輸出（lzfse2 的缺陷，經 pin 影響 swift_tar）/ LZFSE parallel decode writes duplicate output after a mid-stream failure
+**結案（2026-10-07）**：使用者指示「Fix and move pin」，lzfse2 pin 由 `06efe6c` 移至 `6e01a03`
+（含 `3a7e782`）。`test_stderr_closed.zsh` 的 KNOWN 已改為正式檢查：新版 2/0，舊 binary 兩項皆以
+rc=134 失敗。**三個平台都受影響，死法不同**（Windows session 實測 2026-10-07）：macOS rc=134
+（Objective-C 例外 → abort），Windows 與 WSL rc=132（swift-corelibs-foundation 的 runtime trap →
+SIGILL／STATUS_ILLEGAL_INSTRUCTION），後兩者連 `swift-backtrace` 都無法產出報告。測試的判定
+（非零且小於 128）對三者都正確。MSYS 下的 `2>&-` 交給原生 exe 的是真正關閉的 handle
+（`ERROR_INVALID_HANDLE`），所以這個測試在 Windows 上確實有測到；`cmd.exe` 不支援 `2>&-`。
+新 pin 在 Windows／WSL 的驗證已交給 Windows session。
+
+Closed: the pin moved to lzfse2 `6e01a03`, and the KNOWN check is now counted (2/0; the
+old binary fails both with rc=134). All three platforms were affected: macOS 134, Windows
+and WSL 132 (SIGILL). `2>&-` under MSYS really closes the handle for a native exe.
+
+## LZFSE 平行解碼中途失敗時重複輸出（lzfse2 的缺陷，經 pin 影響 swift_tar）▸ ✅ 已修正 2026-10-07（pin 移至 lzfse2 `6e01a03`）/ LZFSE parallel decode writes duplicate output after a mid-stream failure
 
 2026-10-07 由 lzfse2-f8 發現，本 session 讀 pin 版本確認，**尚未重現**。`LZFSEv1.decodeStreamToHandle`
 （pin 版 `lzfse2/lzfse-cli.swift` 3113 行起）逐批平行解碼、每批解完即寫出；若後面某一批失敗，失敗
@@ -798,6 +811,19 @@ Found by lzfse2-f8, confirmed by reading the pinned source, not yet reproduced: 
 some batches are written, a failed parallel batch makes the function decode the whole
 input sequentially and write all of it again, duplicating the earlier batches. swift_tar
 reaches it on the LZFSE stdin/fallback path. The fix belongs in lzfse2.
+
+**結案（2026-10-07）**：lzfse2 `6e01a03` 記錄已寫出的位元組數，失敗時循序解整份、只寫出尚未寫出
+的尾段；檔案路徑（`decodeStreamFromFile`）原本在已寫出後失敗時回 `.error`，把有效串流判為損毀，
+也一併修正。現用的編碼器都不會自然產生觸發輸入，所以 `test/test_lzfse_cross_group.zsh` 以拼接造出：
+未壓縮區塊（4 MiB − s）加上 swift_tar 自己的 other3 串流（首區塊 s），配合 `-n 1`。**在 swift_tar
+這層重現**：舊 pin（`3a7e782` 建置）`--cat -n 1 -f -` 以 **rc=0** 輸出 11,246,636 bytes（正確為
+7,052,332，多出 4 MiB，靜默損毀）；檔案路徑 rc=1。新 pin 8/0，舊版在這兩項失敗。公開版沒有
+other3，測試會略過；這次在 macOS 上沒有走到略過的那條路徑。
+
+Closed by lzfse2 `6e01a03`. Reproduced at the swift_tar level with a spliced stream:
+before, `--cat -n 1 -f -` exited 0 with 4 MiB of duplicated output and the file path
+rejected the valid stream; `test_lzfse_cross_group.zsh` is 8/0 now and fails those two
+checks against the previous pin.
 
 ## Linux 靜態建置不記錄 `libarchive_linkage=static` ▸ ✅ 已修正 2026-10-07（未在 Linux 整支執行）/ The Linux static build drops `libarchive_linkage=static`
 

@@ -206,19 +206,40 @@ eq "bytes between frames: --zstd-parallel fails too" "yes" "$( [ $rc_p -ne 0 ] &
 eq "bytes between frames: --zstd-parallel does not hang" "yes" "$( not_hung $rc_p && echo yes || echo "no (rc=$rc_p)" )"
 same_bytes "bytes between frames: nothing past the bad bytes is written" "$TMP/own.tar" "$TMP/gap.par"
 
-# Damage zstd cannot detect: 64 bytes overwritten inside a frame. swift_tar writes its
-# frames without a content checksum, so random data stored raw decodes "successfully" to
-# different bytes -- measured 2026-10-07: the stream decoder exits 0 here too. The property
-# is therefore agreement with the stream decoder, not failure.
-# zstd 偵測不到的損毀：在 frame 內覆寫 64 位元組。swift_tar 寫出的 frame 不帶 content
-# checksum，以原始區塊儲存的隨機資料會「成功」解成不同的位元組——2026-10-07 實測：串流解碼器
-# 在這裡也以 0 結束。所以要求的性質是與串流解碼器一致，而不是失敗。
+# 64 bytes overwritten inside a frame. Frames carry a content checksum by default since
+# 2026-10-07, so both decoders must fail. They do not stop at the same byte: the stream
+# decoder has already written the damaged frame's bytes when the checksum at its end fails,
+# while the parallel decoder writes a frame only once it has decoded and verified the whole
+# of it. What it writes is therefore a prefix of the correct output.
+# 在 frame 內覆寫 64 位元組。自 2026-10-07 起 frame 預設帶內容校驗碼，所以兩個解碼器都必須
+# 失敗。兩者停下的位置不同：串流解碼器在 frame 結尾的校驗失敗時，已寫出了受損 frame 的位元組；
+# 平行解碼器則要整個 frame 解完並驗證後才寫出。因此它寫出的是正確輸出的前綴。
 cp "$TMP/own.tar.zst" "$TMP/corrupt.zst"
 head -c 64 /dev/urandom | dd of="$TMP/corrupt.zst" bs=1 seek="$(( size / 2 ))" conv=notrunc 2>/dev/null
 rc_s=0; cat_with --zstd          "$TMP/corrupt.zst" "$TMP/corrupt.stream" || rc_s=$?
 rc_p=0; cat_with --zstd-parallel "$TMP/corrupt.zst" "$TMP/corrupt.par"    || rc_p=$?
-eq "corrupt inside a frame: same status as the stream decoder" "$rc_s" "$rc_p"
-same_bytes "corrupt inside a frame: same bytes as the stream decoder" "$TMP/corrupt.stream" "$TMP/corrupt.par"
+eq "corrupt inside a frame: the stream decoder fails (reference)" "yes" "$( [ $rc_s -ne 0 ] && echo yes || echo no )"
+eq "corrupt inside a frame: --zstd-parallel fails too" "yes" "$( [ $rc_p -ne 0 ] && echo yes || echo no )"
+if [ -f "$TMP/corrupt.par" ] && is_prefix_of "$TMP/corrupt.par" "$TMP/own.tar"; then
+  ok "corrupt inside a frame: what was written is a prefix of the correct output"
+else
+  bad "corrupt inside a frame: what was written is a prefix of the correct output"
+fi
+
+# The same damage in an archive written with --no-checksum is invisible to zstd: random data
+# stored raw decodes "successfully" to different bytes, and the stream decoder exits 0
+# (measured 2026-10-07). There the property is agreement with the stream decoder.
+# 同樣的損毀若發生在以 --no-checksum 寫出的封存中，zstd 看不見：以原始區塊儲存的隨機資料會
+# 「成功」解成不同的位元組，串流解碼器以 0 結束（2026-10-07 實測）。此時要求的性質是與串流
+# 解碼器一致。
+( cd "$TMP" && "$ST" -c --zstd --no-checksum -f nock.tar.zst src ) >/dev/null 2>&1
+nsize=$(wc -c < "$TMP/nock.tar.zst" | tr -d ' ')
+cp "$TMP/nock.tar.zst" "$TMP/corrupt-nock.zst"
+head -c 64 /dev/urandom | dd of="$TMP/corrupt-nock.zst" bs=1 seek="$(( nsize / 2 ))" conv=notrunc 2>/dev/null
+rc_s=0; cat_with --zstd          "$TMP/corrupt-nock.zst" "$TMP/corrupt-nock.stream" || rc_s=$?
+rc_p=0; cat_with --zstd-parallel "$TMP/corrupt-nock.zst" "$TMP/corrupt-nock.par"    || rc_p=$?
+eq "corrupt, --no-checksum: same status as the stream decoder" "$rc_s" "$rc_p"
+same_bytes "corrupt, --no-checksum: same bytes as the stream decoder" "$TMP/corrupt-nock.stream" "$TMP/corrupt-nock.par"
 
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"

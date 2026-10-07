@@ -517,6 +517,7 @@ swift_tar -c -f first.tar -f second.tar ...      # 寫出 first.tar；second.tar
 | `-C <dir>`  | 建立前切換輸入目錄（須已存在）；讀取時解出至此目錄（不存在則自動建立） |
 | `--strip-components <N>` | （僅 `-x` tar 解出）寫入前移除成員路徑前 N 層；也接受 `--strip-components=N` |
 | `--zstd-level <N>` | （僅 `--zstd`）壓縮等級，`1`…`22`，預設 `9`。超出範圍或非數字時離開碼為 **2**。未同時指定 `--zstd` 則靜默忽略——見下 |
+| `--no-checksum`、`-no-checksum` | （`-c` 搭配 `--zstd`、`--lz4` 或 `--xz`）不寫入內容校驗碼。**預設會寫入**：每個 zstd frame 一個 XXH64 的低 32 位元、每個 lz4 frame 一個 XXH32、每個 xz 串流一個 CRC64，使損壞的分塊解碼失敗，而不是解出錯誤的位元組。gzip、bzip2、lzip 與 ZIP 一律帶 CRC，此旗標對它們沒有影響。2026-10-07 之前寫出的封存不帶 zstd 或 lz4 校驗碼。 |
 | `-n <N>`    | 平行在途分塊數（預設每核一個，上限 4 × 核心數） |
 | `-v`        | 於 stderr 逐一報出處理中的成員，並印出偵測到的 filter 鏈。**它不會產生長格式列表**——沒有大小、權限或時間戳記，而 `-t -v` 印出的名稱與 `-t` 相同，只多一行 filter 鏈。若你是帶著 `tar -tvf` 的表格預期而來，這不是那個東西。 |
 | `-m`、`--touch` | （僅 `-x`）**不**還原封存中的 mtime；解出的檔案取得當下時間。`-m` 是 GNU tar 的寫法，此處作為完全等價的別名接受 |

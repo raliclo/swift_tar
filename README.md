@@ -581,6 +581,7 @@ would not predict.
 | `-C <dir>`  | Change input directory before create (must exist); extract into it when reading (created if missing) |
 | `--strip-components <N>` | (`-x` tar extraction only) Remove N leading path components before writing entries; also accepts `--strip-components=N` |
 | `--zstd-level <N>` | (`--zstd` only) Compression level, `1`…`22`, default `9`. Out of range or non-numeric exits **2**. Silently ignored if `--zstd` is not also given — see below |
+| `--no-checksum`, `-no-checksum` | (`-c` with `--zstd`, `--lz4` or `--xz`) Omit content checksums. **They are written by default**: the low 32 bits of XXH64 per zstd frame, XXH32 per lz4 frame, CRC64 per xz stream, so a damaged chunk fails to decode instead of decoding to wrong bytes. gzip, bzip2, lzip and ZIP always carry a CRC, so the flag changes nothing there. Archives written before 2026-10-07 have no zstd or lz4 checksum. |
 | `-n <N>`    | In-flight parallel chunks (default: one per core, capped at 4 × cores) |
 | `-v`        | Name each member as it is processed, on stderr, and print the detected filter chain. **It does not produce a long listing** — there are no sizes, modes or timestamps, and `-t -v` prints the same names as `-t` plus one filter-chain line. If you arrived from `tar -tvf` expecting a table, this is not it. |
 | `-m`, `--touch` | (`-x` only) Do **not** restore the archived mtime; extracted files get the current time. `-m` is the GNU tar spelling and is accepted as an exact alias |

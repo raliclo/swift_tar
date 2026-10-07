@@ -366,6 +366,26 @@ private func LZ4F_decompress(_ ctx: OpaquePointer?,
 
 private let LZ4F_VERSION: UInt32 = 100
 
+/// LZ4F_preferences_t (lz4frame.h): frameInfo is 7 fields / 32 bytes, then
+/// compressionLevel, autoFlush, favorDecSpeed, reserved[3] -- 56 bytes in all. C enums
+/// are int. Only contentChecksumFlag is set; zero everywhere else is lz4's default.
+/// LZ4F_preferences_t（lz4frame.h）：frameInfo 為 7 個欄位、32 bytes，其後為
+/// compressionLevel、autoFlush、favorDecSpeed、reserved[3]——共 56 bytes。C 的 enum
+/// 為 int。只設定 contentChecksumFlag；其餘為 0，即 lz4 的預設值。
+private struct LZ4FPreferences {
+    var blockSizeID: Int32 = 0
+    var blockMode: Int32 = 0
+    var contentChecksumFlag: Int32 = 0
+    var frameType: Int32 = 0
+    var contentSize: UInt64 = 0
+    var dictID: UInt32 = 0
+    var blockChecksumFlag: Int32 = 0
+    var compressionLevel: Int32 = 0
+    var autoFlush: UInt32 = 0
+    var favorDecSpeed: UInt32 = 0
+    var reserved: (UInt32, UInt32, UInt32) = (0, 0, 0)
+}
+
 // =================================================================
 // MARK: - libbz2 API (silgen; SDK ships libbz2.tbd + bzlib.h)
 // MARK: - libbz2 API（silgen；SDK 內建 libbz2）
@@ -460,6 +480,7 @@ private let LZMA_RUN: Int32 = 0
 private let LZMA_FINISH: Int32 = 3
 private let LZMA_CONCATENATED: UInt32 = 0x08
 private let LZMA_CHECK_CRC64: Int32 = 4
+private let LZMA_CHECK_NONE: Int32 = 0
 
 #endif // !os(Windows)
 
@@ -487,9 +508,17 @@ private struct ZSTDOutBuffer {                // ZSTD_outBuffer
 private func ZSTD_maxCLevel() -> Int32
 @_silgen_name("ZSTD_compressBound")
 private func ZSTD_compressBound(_ srcSize: Int) -> Int
-@_silgen_name("ZSTD_compress")
-private func ZSTD_compress(_ dst: UnsafeMutableRawPointer, _ dstCap: Int,
-                           _ src: UnsafeRawPointer, _ srcSize: Int, _ level: Int32) -> Int
+@_silgen_name("ZSTD_createCCtx")
+private func ZSTD_createCCtx() -> OpaquePointer?
+@_silgen_name("ZSTD_freeCCtx")
+private func ZSTD_freeCCtx(_ cctx: OpaquePointer?) -> Int
+@_silgen_name("ZSTD_CCtx_setParameter")
+private func ZSTD_CCtx_setParameter(_ cctx: OpaquePointer?, _ param: Int32, _ value: Int32) -> Int
+@_silgen_name("ZSTD_compress2")
+private func ZSTD_compress2(_ cctx: OpaquePointer?, _ dst: UnsafeMutableRawPointer, _ dstCap: Int,
+                            _ src: UnsafeRawPointer, _ srcSize: Int) -> Int
+private let ZSTD_c_compressionLevel: Int32 = 100   // zstd.h ZSTD_cParameter
+private let ZSTD_c_checksumFlag: Int32 = 201       // zstd.h ZSTD_cParameter
 @_silgen_name("ZSTD_isError")
 private func ZSTD_isError(_ code: Int) -> UInt32
 @_silgen_name("ZSTD_createDStream")
@@ -782,14 +811,16 @@ func bzip2CompressStream(_ input: Data, blockSize100k: Int32 = 9) -> Data? {
 /// 每分塊一個完整 xz 串流（xz 多串流串接）。
 func xzCompressStream(_ input: Data, preset: UInt32 = 6) -> Data? {
 #if os(Windows)
-    return winRunCompress(exe: "xz", args: ["-\(preset)", "-c"], input: input)
+    let noCheck = tarWriteChecksum ? [] : ["--check=none"]
+    return winRunCompress(exe: "xz", args: ["-\(preset)"] + noCheck + ["-c"], input: input)
 #else
     let bound = lzma_stream_buffer_bound(input.count)
     var out = Data(count: bound)
     var outPos = 0
+    let check = tarWriteChecksum ? LZMA_CHECK_CRC64 : LZMA_CHECK_NONE
     let rc: Int32 = input.withUnsafeBytes { s in
         out.withUnsafeMutableBytes { d in
-            lzma_easy_buffer_encode(preset, LZMA_CHECK_CRC64, nil,
+            lzma_easy_buffer_encode(preset, check, nil,
                                     s.bindMemory(to: UInt8.self).baseAddress!, input.count,
                                     d.bindMemory(to: UInt8.self).baseAddress!, &outPos, bound)
         }
@@ -917,12 +948,35 @@ var tarZstdParallel: Bool {
     set { tarZstdParallelBox.withLock { $0 = newValue } }
 }
 
+// Content checksums in what -c writes, on by default; --no-checksum turns them off. Only
+// zstd, lz4 and xz make them optional: gzip, bzip2, lzip and ZIP always carry a CRC, and
+// plain tar and the LZFSE codecs have nowhere to put one. Until 2026-10-07 zstd and lz4
+// frames were written without one, so a corrupted chunk decoded "successfully" to wrong
+// bytes and exited 0. Held like the other settings: written while parsing, read by the
+// chunk compressors.
+// -c 寫出的內容校驗碼，預設開啟；--no-checksum 關閉。只有 zstd、lz4 與 xz 可選：gzip、
+// bzip2、lzip 與 ZIP 一律帶 CRC，純 tar 與 LZFSE 系列則無處可放。在 2026-10-07 之前，zstd
+// 與 lz4 的 frame 不帶校驗碼，於是損壞的分塊會「成功」解出錯誤的位元組並以 0 結束。持有方式
+// 與其他設定相同：解析參數時寫入，分塊壓縮器讀取。
+let tarWriteChecksumBox = Mutex<Bool>(true)
+var tarWriteChecksum: Bool {
+    get { tarWriteChecksumBox.withLock { $0 } }
+    set { tarWriteChecksumBox.withLock { $0 = newValue } }
+}
+
 func zstdCompressFrame(_ input: Data, level: Int32 = zstdCompressionLevel) -> Data? {
+    // ZSTD_compress has no way to ask for a checksum, hence a context and ZSTD_compress2.
+    // ZSTD_compress 無法要求校驗碼，故改用 context 與 ZSTD_compress2。
+    guard let cctx = ZSTD_createCCtx() else { return nil }
+    defer { _ = ZSTD_freeCCtx(cctx) }
+    guard ZSTD_isError(ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, level)) == 0,
+          ZSTD_isError(ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag,
+                                              tarWriteChecksum ? 1 : 0)) == 0 else { return nil }
     let bound = ZSTD_compressBound(input.count)
     var out = Data(count: bound)
     let n: Int = input.withUnsafeBytes { s in
         out.withUnsafeMutableBytes { d in
-            ZSTD_compress(d.baseAddress!, bound, s.baseAddress!, input.count, level)
+            ZSTD_compress2(cctx, d.baseAddress!, bound, s.baseAddress!, input.count)
         }
     }
     guard ZSTD_isError(n) == 0 else { return nil }
@@ -933,13 +987,21 @@ func zstdCompressFrame(_ input: Data, level: Int32 = zstdCompressionLevel) -> Da
 /// 每分塊一個標準 LZ4 frame（magic 0x184D2204）。
 func lz4CompressFrame(_ input: Data) -> Data? {
 #if os(Windows)
-    return winRunCompress(exe: "lz4", args: ["-9", "-q", "-c", "-"], input: input)
+    // The lz4 CLI writes a content checksum unless told not to.
+    // lz4 CLI 預設寫入內容校驗碼，需明確關閉。
+    let noCrc = tarWriteChecksum ? [] : ["--no-frame-crc"]
+    return winRunCompress(exe: "lz4", args: ["-9", "-q"] + noCrc + ["-c", "-"], input: input)
 #else
-    let bound = LZ4F_compressFrameBound(input.count, nil)
+    var prefs = LZ4FPreferences()
+    prefs.contentChecksumFlag = tarWriteChecksum ? 1 : 0
+    precondition(MemoryLayout<LZ4FPreferences>.size == 56, "LZ4F_preferences_t layout")
+    let bound = withUnsafePointer(to: &prefs) { LZ4F_compressFrameBound(input.count, $0) }
     var out = Data(count: bound)
     let n: Int = input.withUnsafeBytes { src in
         out.withUnsafeMutableBytes { dst in
-            LZ4F_compressFrame(dst.baseAddress!, bound, src.baseAddress!, input.count, nil)
+            withUnsafePointer(to: &prefs) { p in
+                LZ4F_compressFrame(dst.baseAddress!, bound, src.baseAddress!, input.count, p)
+            }
         }
     }
     guard LZ4F_isError(n) == 0 else { return nil }
@@ -5114,6 +5176,10 @@ private func printTarUsage() {
       --zstd-level <N> : zstd level, 1 to ZSTD_maxCLevel; default 9
                          zstd 等級，1 至 ZSTD_maxCLevel；預設 9
       --lz4            : liblz4 standard frames / 標準 LZ4 frame
+      --no-checksum    : zstd/lz4/xz: omit content checksums (on by default);
+                         gzip/bzip2/lzip/ZIP always carry a CRC
+                         zstd/lz4/xz：不寫入內容校驗碼（預設寫入）；
+                         gzip/bzip2/lzip/ZIP 一律帶 CRC
       (none)           : Plain uncompressed tar / 不壓縮的純 tar
 
     Read filters (auto-detected by magic, stackable like libarchive):
@@ -5874,7 +5940,7 @@ struct SwiftTarMain {
                 // 屬於「單字」而非短旗標叢集的單槓旗標必須保持完整：-write_ucrt 與
                 // -write_foundation 含底線，-stream-in 與 -stream-out 含連字號，
                 // 下方規則並未豁免，故在此列名。
-                let singleDashWords: Set<String> = ["-stream-in", "-stream-out"]
+                let singleDashWords: Set<String> = ["-stream-in", "-stream-out", "-no-checksum"]
                 // A negative number is a value, never a cluster of short options.
                 // Without this, --lat -33.8688 expanded to -3 -3 -. -8 -6 -8 -8
                 // and optValue("--lat") read back "-3": the container was written
@@ -5964,7 +6030,7 @@ struct SwiftTarMain {
             "-stream-in", "-stream-out", "-O", "--to-stdout", "-i", "--ignore-zeros",
             "-o", "--no-same-owner", "--force",
             "-p", "--same-permissions", "--no-same-permissions",
-            "--dereference", "--help", "--exclude",
+            "--dereference", "--help", "--exclude", "--no-checksum", "-no-checksum",
             "--strip-components", "--zstd-level", "--exclude",
             "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
             // codecs / 壓縮引擎
@@ -6211,6 +6277,7 @@ struct SwiftTarMain {
             codec = .zstd; codecCount += 1
         }
         tarZstdParallel = args.contains("--zstd-parallel")
+        tarWriteChecksum = !(args.contains("--no-checksum") || args.contains("-no-checksum"))
         if args.contains(where: { $0 == "--zstd-level" || $0.hasPrefix("--zstd-level=") }) {
             guard let raw = optValue("--zstd-level"), let lv = Int32(raw) else {
                 FileHandle.standardError.write(Data("swift_tar: --zstd-level needs a number / --zstd-level 需要一個數字\n".utf8))

@@ -894,6 +894,17 @@ one under `--cat`. Still open: under `-x` from a pipe it does (1627 vs 2334 MB/s
 the per-chunk allocations from the inline path, `-O` and `skipData`; every `-x` case is
 1.2-2.4x base. From a pipe on incompressible data, `--zstd-parallel` still trails `--zstd`.
 
+**不可壓縮資料的處理方式（2026-10-07，使用者決定）**：不再設法讓解碼器變快，而是**根本不壓縮**。
+新增 `-c --skip-compressed`（預設關閉）：搭配串流壓縮引擎、且只有一個一般檔案、檔名後綴屬於已壓縮
+格式時，改寫成純 tar。後綴清單以 `~/.zshrc` 的 `extract()` 所辨識的壓縮格式為基礎，再加上 MPEG-4
+等高壓縮率影片、音訊、影像與內部為 ZIP 的套件，README 另有〈已壓縮的後綴〉一節。讀取端自動偵測，
+接收端不必改。`test/test_skip_compressed.zsh` 12 項，上一版不認得此旗標而失敗 11 項。效益（M4，
+RAM disk，384 MiB 隨機資料命名為 `.mp4`，管線 `-x`，交錯 10 輪取最小）：純 tar 2369 MB/s，zstd 封存
+`-x --zstd` 1342、`-x --zstd-parallel` 1491。由 multiscp 在傳輸時加上此旗標。
+
+Resolved by not compressing: `-c --skip-compressed` writes one already-compressed file
+(by suffix) as a plain tar. 2369 MB/s through a pipe against 1342-1491 for zstd.
+
 ## 🔴 `compile_tar.zsh` 每次建置都悄悄覆蓋 `/opt/homebrew/bin/swift_tar` / `compile_tar.zsh` silently overwrites `/opt/homebrew/bin/swift_tar` on every build
 
 2026-10-07 M6-Multissh 在暫存 clone 用 `compile_tar.zsh` 建置分支 `multissh-perf` 來量測，腳本最後一步

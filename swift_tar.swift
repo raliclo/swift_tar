@@ -714,6 +714,46 @@ private func winRunDecompress(exe: String, args: [String], input: FileHandle,
 // MARK: - Codec selection (write side) / 壓縮引擎選擇（寫入端）
 // =================================================================
 
+/// Name suffixes of files whose contents are already compressed, for --skip-compressed.
+/// Compared lowercased, so `.MP4` matches `.mp4`. The README's "Already-compressed
+/// suffixes" section lists them with the reasons; keep the two in step.
+///
+/// Why: compressing these again gains nothing -- zstd stores their blocks raw -- and
+/// decoding them is pure cost on the receiving side. Measured 2026-10-07 on an M4: 512 MiB
+/// of random data through a pipe extracted at 2147 MB/s with `--zstd` and 1732 MB/s with
+/// `--zstd-parallel`, where an uncompressed tar is limited only by the pipe.
+///
+/// --skip-compressed 使用的「內容已壓縮」檔名後綴。以小寫比較，所以 `.MP4` 也算 `.mp4`。
+/// README 的「已壓縮的後綴」一節列出這些後綴與理由，兩邊要一起維護。
+///
+/// 為什麼：再壓縮一次毫無收益——zstd 會把它們的區塊原樣存放——而在接收端解碼純屬成本。
+/// 2026-10-07 於 M4 實測：512 MiB 隨機資料經管線解出，`--zstd` 為 2147 MB/s、
+/// `--zstd-parallel` 為 1732 MB/s，而未壓縮的 tar 只受管線本身限制。
+let alreadyCompressedSuffixes: [String] = [
+    // Compressed streams and archives (the formats ~/.zshrc's extract() recognises).
+    // 壓縮串流與封存（~/.zshrc 的 extract() 所辨識的格式）。
+    ".zip", ".zipx", ".gz", ".tgz", ".bz2", ".tbz2", ".tbz", ".xz", ".txz", ".7z", ".rar",
+    ".zst", ".tzst", ".lz4", ".lz4a", ".lz", ".tlz", ".lzma", ".z", ".br", ".cab",
+    ".lzfse", ".lzfse.bvx3", ".lzfse.bvx3.lazy2", ".lzfse.bvx3.optimal",
+    ".lzfse.other3", ".lzfse.other3.optimal3", ".lzfse.apple",
+    // Packages and documents that are zip or compressed containers inside.
+    // 內部為 zip 或壓縮容器的套件與文件。
+    ".jar", ".war", ".apk", ".aab", ".ipa", ".xip", ".whl", ".nupkg", ".epub",
+    ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".dmg", ".pkg",
+    // Video: MPEG-4 and other high-ratio codecs. / 影片：MPEG-4 與其他高壓縮率格式。
+    ".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".wmv", ".flv", ".mpg", ".mpeg",
+    ".m2v", ".m2ts", ".mts", ".3gp", ".hevc", ".h264", ".h265",
+    // Audio. / 音訊。
+    ".mp3", ".aac", ".m4a", ".ogg", ".oga", ".opus", ".flac", ".wma",
+    // Images. / 影像。
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".avif", ".jxl",
+]
+
+func hasAlreadyCompressedSuffix(_ name: String) -> Bool {
+    let lower = name.lowercased()
+    return alreadyCompressedSuffixes.contains { lower.hasSuffix($0) }
+}
+
 enum TarCodec {
     case none                       // plain tar / 純 tar
 #if !EXCLUDE_LZFSE
@@ -5330,6 +5370,10 @@ private func printTarUsage() {
                          gzip/bzip2/lzip/ZIP always carry a CRC
                          zstd/lz4/xz：不寫入內容校驗碼（預設寫入）；
                          gzip/bzip2/lzip/ZIP 一律帶 CRC
+      --skip-compressed: -c with a codec and one already-compressed file (by
+                         suffix; see README) writes it without the codec
+                         -c 搭配 codec 且只有一個已壓縮檔案（依後綴，見 README）
+                         時，不套用 codec 直接寫出
       (none)           : Plain uncompressed tar / 不壓縮的純 tar
 
     Read filters (auto-detected by magic, stackable like libarchive):
@@ -6181,6 +6225,7 @@ struct SwiftTarMain {
             "-o", "--no-same-owner", "--force",
             "-p", "--same-permissions", "--no-same-permissions",
             "--dereference", "--help", "--exclude", "--no-checksum", "-no-checksum",
+            "--skip-compressed",
             "--strip-components", "--zstd-level", "--exclude",
             "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
             // codecs / 壓縮引擎
@@ -6458,6 +6503,26 @@ struct SwiftTarMain {
         // 並不正確。
         if codecCount > 0 && !doCreate && !doAppend && !doUpdate && !tarZstdParallel {
             eprint("Note: codec flags only affect -c; reading auto-detects. / 提示：引擎旗標僅影響 -c，讀取自動偵測。")
+        }
+        // --skip-compressed: one regular file whose name says it is already compressed is
+        // written without the codec. Opt-in, so an archive written to disk as out.tar.zst
+        // is never a plain tar unless asked for; the reader auto-detects either way, so the
+        // receiving side needs no change. Only a single file: a tree mixes content, and
+        // deciding per member would mean a different archive format.
+        // --skip-compressed：只有一個一般檔案、且檔名顯示它已壓縮時，不套用 codec 直接寫出。
+        // 需明確指定，所以寫到磁碟的 out.tar.zst 不會在沒被要求時變成純 tar；讀取端兩種都
+        // 自動偵測，接收端不必改。只處理單一檔案：一棵樹內容混雜，逐成員決定就等於另一種
+        // 封存格式。
+        if args.contains("--skip-compressed") && doCreate && codecCount > 0 && files.count == 1 {
+            let name = files[0]
+            let base = optValue("-C") ?? ""
+            let path = base.isEmpty || (name as NSString).isAbsolutePath ? name : base + "/" + name
+            var isDir: ObjCBool = false
+            if hasAlreadyCompressedSuffix(name),
+               FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue {
+                eprint("swift_tar: '\(name)' is already compressed; writing it without a codec (--skip-compressed) / '\(name)' 已是壓縮過的內容，不套用壓縮引擎直接寫出（--skip-compressed）")
+                codec = .none
+            }
         }
         if forceZip64 && !doCreate {
             eprint("Error: --zip64 is a create-only option. / 錯誤：--zip64 僅能用於建立封存。")

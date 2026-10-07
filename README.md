@@ -532,6 +532,38 @@ The tar compression codecs emit concatenatable streams, so `gunzip`, `bunzip2`,
 `xz`, `lzip`, `zstd`, and `lz4` decode those outputs directly. ZIP/ZIP64 is a
 container backend and interoperates with `unzip`, `bsdtar`, and other ZIP tools.
 
+## Already-compressed suffixes (`--skip-compressed`)
+
+`-c --skip-compressed` with a stream codec (`--zstd`, `--gzip`, `--xz`, …) writes
+**one regular file whose name ends in a suffix below** as a plain tar instead, and
+says so on stderr. Anything else is unchanged: two or more operands, a directory, a
+suffix not in the list, or no flag at all keep the codec. `--zip` and `--zip64` are
+containers, not stream codecs, and are not affected. The flag is off by default, so
+`-c --zstd -f out.tar.zst movie.mp4` still writes zstd unless you ask otherwise.
+
+Why: these files are already compressed, so a codec gains nothing — zstd stores
+their blocks raw — while the receiver still pays to decode them. On an M4, 512 MiB of
+random data extracted through a pipe at 2147 MB/s with `--zstd` and 1732 MB/s with
+`--zstd-parallel`; a plain tar is limited only by the pipe. Reading auto-detects, so
+`-x --zstd` on the receiving side still extracts the plain tar.
+
+Matching is by name only, compared lowercased (`.MP4` matches `.mp4`); the contents
+are not inspected. The list lives in `alreadyCompressedSuffixes` in `swift_tar.swift`
+— change both together.
+
+| Group | Suffixes |
+|-------|----------|
+| Compressed streams and archives — the formats `extract()` in `~/.zshrc` recognises, plus a few relatives | `.zip` `.zipx` `.gz` `.tgz` `.bz2` `.tbz2` `.tbz` `.xz` `.txz` `.7z` `.rar` `.zst` `.tzst` `.lz4` `.lz4a` `.lz` `.tlz` `.lzma` `.z` (`.Z`) `.br` `.cab` |
+| LZFSE outputs of this project | `.lzfse` `.lzfse.bvx3` `.lzfse.bvx3.lazy2` `.lzfse.bvx3.optimal` `.lzfse.other3` `.lzfse.other3.optimal3` `.lzfse.apple` |
+| Packages and documents that are ZIP or compressed containers inside | `.jar` `.war` `.apk` `.aab` `.ipa` `.xip` `.whl` `.nupkg` `.epub` `.docx` `.xlsx` `.pptx` `.odt` `.ods` `.odp` `.dmg` `.pkg` |
+| Video — MPEG-4 and other high-ratio codecs (H.264, HEVC, VP9, AV1 in their usual containers) | `.mp4` `.m4v` `.mov` `.mkv` `.webm` `.avi` `.wmv` `.flv` `.mpg` `.mpeg` `.m2v` `.m2ts` `.mts` `.3gp` `.hevc` `.h264` `.h265` |
+| Audio | `.mp3` `.aac` `.m4a` `.ogg` `.oga` `.opus` `.flac` `.wma` |
+| Images | `.jpg` `.jpeg` `.png` `.gif` `.webp` `.heic` `.heif` `.avif` `.jxl` |
+
+Deliberately left out: `.tar` (uncompressed), `.iso` and `.vmdk` (usually raw disk
+images), `.ts` (also TypeScript source), `.pdf` (only partly compressed), `.wav` and
+`.bmp` (uncompressed).
+
 ## Read filters (auto-detected, stackable)
 
 uuencoded files (classic + base64) · files with an RPM wrapper · gzip ·
@@ -582,6 +614,7 @@ would not predict.
 | `--strip-components <N>` | (`-x` tar extraction only) Remove N leading path components before writing entries; also accepts `--strip-components=N` |
 | `--zstd-level <N>` | (`--zstd` only) Compression level, `1`…`22`, default `9`. Out of range or non-numeric exits **2**. Silently ignored if `--zstd` is not also given — see below |
 | `--no-checksum`, `-no-checksum` | (`-c` with `--zstd`, `--lz4` or `--xz`) Omit content checksums. **They are written by default**: the low 32 bits of XXH64 per zstd frame, XXH32 per lz4 frame, CRC64 per xz stream, so a damaged chunk fails to decode instead of decoding to wrong bytes. gzip, bzip2, lzip and ZIP always carry a CRC, so the flag changes nothing there. Archives written before 2026-10-07 have no zstd or lz4 checksum. |
+| `--skip-compressed` | (`-c` with a stream codec) One regular file with an already-compressed suffix is written as a plain tar instead. Off by default; see [Already-compressed suffixes](#already-compressed-suffixes---skip-compressed) for the list and the reasons |
 | `-n <N>`    | In-flight parallel chunks (default: one per core, capped at 4 × cores) |
 | `-v`        | Name each member as it is processed, on stderr, and print the detected filter chain. **It does not produce a long listing** — there are no sizes, modes or timestamps, and `-t -v` prints the same names as `-t` plus one filter-chain line. If you arrived from `tar -tvf` expecting a table, this is not it. |
 | `-m`, `--touch` | (`-x` only) Do **not** restore the archived mtime; extracted files get the current time. `-m` is the GNU tar spelling and is accepted as an exact alias |

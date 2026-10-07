@@ -474,6 +474,34 @@ tar 壓縮引擎皆輸出可串接串流，故 `gunzip`、`bunzip2`、`xz`、`lz
 `zstd` 與 `lz4` 可直接解開。ZIP/ZIP64 是容器後端，可與 `unzip`、`bsdtar`
 及其他 ZIP 工具互通。
 
+## 已壓縮的後綴（`--skip-compressed`）
+
+`-c --skip-compressed` 搭配串流壓縮引擎（`--zstd`、`--gzip`、`--xz`……）時，若只有**一個一般檔案、
+且檔名以下表的後綴結尾**，就改寫成純 tar，並在 stderr 說明。其餘情況一律不變：兩個以上的運算元、
+目錄、不在清單內的後綴，或沒加這個旗標，都照常套用壓縮引擎。`--zip` 與 `--zip64` 是容器而非串流
+壓縮引擎，不受影響。此旗標預設關閉，所以 `-c --zstd -f out.tar.zst movie.mp4` 除非另外指定，仍會
+寫出 zstd。
+
+理由：這些檔案本身已經壓縮過，再套壓縮引擎毫無收益——zstd 會把它們的區塊原樣存放——接收端卻仍要
+付出解碼的成本。在 M4 上，512 MiB 隨機資料經管線解出：`--zstd` 為 2147 MB/s，`--zstd-parallel` 為
+1732 MB/s；純 tar 只受管線本身限制。讀取時會自動偵測格式，所以接收端照舊用 `-x --zstd` 也能解出
+純 tar。
+
+只依檔名判斷，比較時轉為小寫（`.MP4` 也算 `.mp4`），不檢查檔案內容。清單位於 `swift_tar.swift` 的
+`alreadyCompressedSuffixes`，兩邊要一起修改。
+
+| 類別 | 後綴 |
+|------|------|
+| 壓縮串流與封存——`~/.zshrc` 的 `extract()` 所辨識的格式，再加上幾個同類格式 | `.zip` `.zipx` `.gz` `.tgz` `.bz2` `.tbz2` `.tbz` `.xz` `.txz` `.7z` `.rar` `.zst` `.tzst` `.lz4` `.lz4a` `.lz` `.tlz` `.lzma` `.z`（`.Z`）`.br` `.cab` |
+| 本專案的 LZFSE 輸出 | `.lzfse` `.lzfse.bvx3` `.lzfse.bvx3.lazy2` `.lzfse.bvx3.optimal` `.lzfse.other3` `.lzfse.other3.optimal3` `.lzfse.apple` |
+| 內部為 ZIP 或壓縮容器的套件與文件 | `.jar` `.war` `.apk` `.aab` `.ipa` `.xip` `.whl` `.nupkg` `.epub` `.docx` `.xlsx` `.pptx` `.odt` `.ods` `.odp` `.dmg` `.pkg` |
+| 影片——MPEG-4 與其他高壓縮率格式（常見容器內的 H.264、HEVC、VP9、AV1） | `.mp4` `.m4v` `.mov` `.mkv` `.webm` `.avi` `.wmv` `.flv` `.mpg` `.mpeg` `.m2v` `.m2ts` `.mts` `.3gp` `.hevc` `.h264` `.h265` |
+| 音訊 | `.mp3` `.aac` `.m4a` `.ogg` `.oga` `.opus` `.flac` `.wma` |
+| 影像 | `.jpg` `.jpeg` `.png` `.gif` `.webp` `.heic` `.heif` `.avif` `.jxl` |
+
+刻意不列入：`.tar`（未壓縮）、`.iso` 與 `.vmdk`（通常是原始磁碟映像）、`.ts`（也是 TypeScript
+原始碼）、`.pdf`（只有部分壓縮）、`.wav` 與 `.bmp`（未壓縮）。
+
 ## 讀取端 filter（自動偵測、可疊層）
 
 uuencode（傳統與 base64）· 帶 RPM 外包裝的檔案 · gzip · bzip2 ·
@@ -518,6 +546,7 @@ swift_tar -c -f first.tar -f second.tar ...      # 寫出 first.tar；second.tar
 | `--strip-components <N>` | （僅 `-x` tar 解出）寫入前移除成員路徑前 N 層；也接受 `--strip-components=N` |
 | `--zstd-level <N>` | （僅 `--zstd`）壓縮等級，`1`…`22`，預設 `9`。超出範圍或非數字時離開碼為 **2**。未同時指定 `--zstd` 則靜默忽略——見下 |
 | `--no-checksum`、`-no-checksum` | （`-c` 搭配 `--zstd`、`--lz4` 或 `--xz`）不寫入內容校驗碼。**預設會寫入**：每個 zstd frame 一個 XXH64 的低 32 位元、每個 lz4 frame 一個 XXH32、每個 xz 串流一個 CRC64，使損壞的分塊解碼失敗，而不是解出錯誤的位元組。gzip、bzip2、lzip 與 ZIP 一律帶 CRC，此旗標對它們沒有影響。2026-10-07 之前寫出的封存不帶 zstd 或 lz4 校驗碼。 |
+| `--skip-compressed` | （`-c` 搭配串流壓縮引擎）只有一個一般檔案且後綴屬於已壓縮格式時，改寫成純 tar。預設關閉；清單與理由見〈已壓縮的後綴（`--skip-compressed`）〉一節 |
 | `-n <N>`    | 平行在途分塊數（預設每核一個，上限 4 × 核心數） |
 | `-v`        | 於 stderr 逐一報出處理中的成員，並印出偵測到的 filter 鏈。**它不會產生長格式列表**——沒有大小、權限或時間戳記，而 `-t -v` 印出的名稱與 `-t` 相同，只多一行 filter 鏈。若你是帶著 `tar -tvf` 的表格預期而來，這不是那個東西。 |
 | `-m`、`--touch` | （僅 `-x`）**不**還原封存中的 mtime；解出的檔案取得當下時間。`-m` 是 GNU tar 的寫法，此處作為完全等價的別名接受 |

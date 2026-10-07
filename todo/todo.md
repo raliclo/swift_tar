@@ -955,7 +955,7 @@ A prerequisite for sharded transfer; member names come from a NUL-separated file
 
 A prerequisite for sharded transfer: a listed directory is stored as its own entry only.
 
-## 🔴 分支項：確認多個 `-x -C <同一根目錄>` 同時執行是安全的 / Branch item: confirm concurrent `-x` into one root is safe
+## 分支項：確認多個 `-x -C <同一根目錄>` 同時執行是安全的 ▸ ✅ 已確認 2026-10-08，現行程式碼不需修改 / Branch item: confirm concurrent `-x` into one root is safe
 
 多個 `swift_tar -x -C <同一根目錄>` 同時執行，同時建立共同的上層目錄：EEXIST 不可報錯，`--touch` 與
 保留屬性兩種情況都要測。注意 `VerifiedDirectories` 快取與 symlink 防護（e15bd40）在別的行程同時改動
@@ -963,6 +963,23 @@ A prerequisite for sharded transfer: a listed directory is stored as its own ent
 
 Several `-x -C <same root>` at once must not fail on shared parents (EEXIST), with
 `--touch` and with preserve. Test first, fix if needed.
+
+**結果（2026-10-08，使用者指示先做測試）**：新增 `test/test_concurrent_extract.zsh`。一棵 3 層、84 個目錄、
+208 個檔案的樹，依檔案分成 K 片（不含目錄項目，即 multissh 的形狀），K 個 `-x -C <同一根目錄>` 同時
+執行；目錄另成一片（以系統 tar 的 `--no-recursion` 建立，swift_tar 還沒有此旗標）、最後才解。四種情境：
+`--touch`、保留屬性、`-p`、zstd 封存搭配 `--zstd-parallel`。檢查每個程序 rc、stderr、整棵樹的雜湊，
+以及保留模式下檔案與目錄的 mtime、`-p` 下的權限。
+
+- 現行程式碼：預設 8 程序 × 10 輪、加壓 16 程序 × 30 輪，皆 17/0。**不需要修改。**
+- 負控制：突變版把建立目錄改成「檢查不存在 → 等 2 ms → 不帶中間層逐層 mkdir，EEXIST 即失敗」。單一
+  程序時 17/0（證明它只在並行時出錯），8 程序並行時失敗 8 項。第一版突變把絕對路徑的開頭 `/` 弄丟，
+  連單一程序都失敗，那次負控制無效，已修正後重做。
+- **給 multissh 的注意事項**：突變版略過檔案時，每個程序的退出碼**仍然是 0**——那是既定政策（略過成員
+  不改變退出碼）。所以 multissh 不能只看 rc 判斷一片是否完整解出，要看 stderr 或比對清單。
+
+Confirmed safe with the current code (8 processes x 10 rounds and 16 x 30, 17/0). The
+test catches a race-only mutant (17/0 serially, 8 failures concurrently). Note for
+multissh: a skipped member still exits 0, so rc alone does not prove a shard landed.
 
 ## Linux 靜態建置不記錄 `libarchive_linkage=static` ▸ ✅ 已修正 2026-10-07（未在 Linux 整支執行）/ The Linux static build drops `libarchive_linkage=static`
 

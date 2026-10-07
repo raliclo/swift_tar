@@ -866,6 +866,34 @@ faster across the board, and the parallel decoder no longer loses to the single-
 one under `--cat`. Still open: under `-x` from a pipe it does (1627 vs 2334 MB/s), because
 `TarReader.readExactly` still allocates per member. That is next.
 
+**`-x` 的後續（2026-10-07）**：查證時先更正了一個前提：**這台 M4 上管線本身只有約 1.5–2 GB/s**，不論
+寫入端是 `cat` 或 `dd bs=4m`（512 MiB 需 0.26–0.44 s），所以先前「`cat | -x`」的數字大半是管線的上限。
+`readExactly` 的逐塊配置確實存在（512 MiB 的成員 34k–40k 次 page reclaim，`--cat` 只有 763 次）。
+修法：`TarReader.copyExactly` 以一個重用的緩衝區讀進並直接寫出，用於 inline（大檔）路徑、`-O`，以及
+`skipData`（`-t` 與略過成員）；小檔寫入池的路徑不變。截斷封存在 `-x`、`-t`、`-O` 的錯誤與退出碼不變。
+
+三方量測（M4，RAM disk，交錯 10 輪取最小 real；開始前比對三個 binary × 兩種解碼器解出的樹雜湊相同；
+負載 3.8 → 6.4）。base＝改動前的 master，perf1＝`2c0ac9d`，new＝本次：
+
+| 情境 | base | perf1 | new |
+|---|---|---|---|
+| 隨機 512 MiB，檔案 `-x --zstd` | 1732 | 1988 | 3579 MB/s |
+| 隨機 512 MiB，檔案 `-x --zstd-parallel` | 1491 | 1917 | 3579 |
+| 隨機 512 MiB，管線 `-x --zstd` | 1032 | 1579 | 2147 |
+| 隨機 512 MiB，管線 `-x --zstd-parallel` | 926 | 1249 | 1732 |
+| claw-code，檔案 `-x --zstd` | 874 | 920 | 1049 |
+| claw-code，檔案 `-x --zstd-parallel` | 1647 | 1667 | 2146 |
+| claw-code，管線 `-x --zstd` | 770 | 957 | 1073 |
+| claw-code，管線 `-x --zstd-parallel` | 1288 | 1362 | 1647 |
+
+**仍存在**：不可壓縮資料從管線讀入時，`--zstd-parallel` 仍不如 `--zstd`（1732 對 2147 MB/s）。管線
+本身已接近上限，平行解碼器又多一次暫存複製，沒有平行可賺。可壓縮資料上平行版明顯領先（1647 對
+1073）。
+
+`-x` follow-up: the pipe on this M4 itself tops out near 1.5-2 GB/s. `copyExactly` removes
+the per-chunk allocations from the inline path, `-O` and `skipData`; every `-x` case is
+1.2-2.4x base. From a pipe on incompressible data, `--zstd-parallel` still trails `--zstd`.
+
 ## 🔴 `compile_tar.zsh` 每次建置都悄悄覆蓋 `/opt/homebrew/bin/swift_tar` / `compile_tar.zsh` silently overwrites `/opt/homebrew/bin/swift_tar` on every build
 
 2026-10-07 M6-Multissh 在暫存 clone 用 `compile_tar.zsh` 建置分支 `multissh-perf` 來量測，腳本最後一步

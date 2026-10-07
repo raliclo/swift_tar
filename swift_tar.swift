@@ -4116,6 +4116,64 @@ final class TarReader {
         return out
     }
 
+    /// Reused by copyExactly; allocated on first use. / 供 copyExactly 重複使用，首次使用時配置。
+    private var copyBuffer: UnsafeMutableRawPointer? = nil
+    deinit { copyBuffer?.deallocate() }
+
+    /// Copy exactly `n` bytes of member data to `out`: false if the input ends first, a
+    /// thrown error if `out` cannot be written.
+    ///
+    /// For the inline (large file) path. readExactly hands back a fresh Data and builds it
+    /// from another fresh Data per read, so streaming a member 4 MiB at a time allocated and
+    /// faulted in its every page twice over -- measured 2026-10-07 on a 512 MiB member:
+    /// 34k page reclaims for `-x` against 763 for `--cat` on the same archive. Bytes already
+    /// buffered in `pending` go out first, so the stream position is the same either way.
+    ///
+    /// 把成員資料恰好 `n` 位元組複製到 `out`：輸入先結束時回傳 false，`out` 寫不進去時擲出錯誤。
+    ///
+    /// 供 inline（大檔）路徑使用。readExactly 回傳新的 Data，而且每次讀取都再由另一份新的 Data
+    /// 組成，所以以 4 MiB 為單位串流一個成員時，每一頁都被配置並 fault 兩次——2026-10-07 以
+    /// 512 MiB 的成員實測：同一個封存，`-x` 有 34k 次 page reclaim，`--cat` 只有 763 次。已在
+    /// `pending` 中的位元組先寫出，所以兩種方式結束時的串流位置相同。
+    ///
+    /// `out` nil discards the bytes, which is how skipData passes over a member.
+    /// `out` 為 nil 時丟棄這些位元組，skipData 以此略過成員。
+    private func copyExactly(_ n: UInt64, to out: FileHandle?) throws -> Bool {
+        var remaining = n
+        let buffered = pending.count - offset
+        if buffered > 0 && remaining > 0 {
+            let take = Int(min(UInt64(buffered), remaining))
+            let start = offset
+            if let out {
+                let wrote = pending.withUnsafeBytes { writeFrom(out, $0.baseAddress! + start, take) }
+                guard wrote else { throw TarError.io("cannot write extracted data / 無法寫出解出的資料") }
+            }
+            offset += take
+            remaining -= UInt64(take)
+            if offset == pending.count {
+                pending = Data()
+                offset = 0
+            }
+        }
+        if remaining == 0 { return true }
+        let buf: UnsafeMutableRawPointer
+        if let b = copyBuffer {
+            buf = b
+        } else {
+            buf = UnsafeMutableRawPointer.allocate(byteCount: DECODE_CHUNK, alignment: 64)
+            copyBuffer = buf
+        }
+        while remaining > 0 {
+            let want = Int(min(remaining, UInt64(DECODE_CHUNK)))
+            guard let got = readInto(input, buf, want), got > 0 else { return false }
+            if let out, !writeFrom(out, buf, got) {
+                throw TarError.io("cannot write extracted data / 無法寫出解出的資料")
+            }
+            remaining -= UInt64(got)
+        }
+        return true
+    }
+
     /// Reject absolute paths and ".." traversal on extract (libarchive-style hardening).
     /// 解出時拒絕絕對路徑與 ".." 逃逸（仿 libarchive 的防護）。
     /// Reduce an archived member name to a path that cannot escape the
@@ -4447,13 +4505,9 @@ final class TarReader {
         var foldedWritten: [String: String] = [:]
 
         func skipData(_ size: UInt64) throws {
-            var remaining = Int((size + UInt64(TAR_BLOCK) - 1) / UInt64(TAR_BLOCK)) * TAR_BLOCK
-            while remaining > 0 {
-                let n = min(remaining, DECODE_CHUNK)
-                guard readExactly(n) != nil else {
-                    throw TarError.format("truncated archive / 檔案不完整")
-                }
-                remaining -= n
+            let padded = (size + UInt64(TAR_BLOCK) - 1) / UInt64(TAR_BLOCK) * UInt64(TAR_BLOCK)
+            guard try copyExactly(padded, to: nil) else {
+                throw TarError.format("truncated archive / 檔案不完整")
             }
         }
 
@@ -4701,16 +4755,8 @@ final class TarReader {
                 switch typeflag {
                 case UInt8(ascii: "0"), 0, UInt8(ascii: "7"):
                     if isDir { continue }
-                    var remaining = size
-                    while remaining > 0 {
-                        try autoreleasepool {
-                            let want = Int(min(remaining, UInt64(DECODE_CHUNK)))
-                            guard let chunk = readExactly(want) else {
-                                throw TarError.format("truncated file data / 檔案資料不完整")
-                            }
-                            try FileHandle.standardOutput.write(contentsOf: chunk)
-                            remaining -= UInt64(want)
-                        }
+                    guard try copyExactly(size, to: FileHandle.standardOutput) else {
+                        throw TarError.format("truncated file data / 檔案資料不完整")
                     }
                     let rem = Int(size % UInt64(TAR_BLOCK))
                     if rem != 0 { _ = readExactly(TAR_BLOCK - rem) }
@@ -5082,18 +5128,8 @@ final class TarReader {
                     guard let out = handle else {
                         throw TarError.io(createFailureMessage(dest, errnoValue: Int32(errno)))
                     }
-                    var remaining = size
-                    while remaining > 0 {
-                        // autoreleasepool: per-chunk extract writes are autoreleased.
-                        // autoreleasepool：逐塊解壓寫出為 autoreleased。
-                        try autoreleasepool {
-                            let n = Int(min(remaining, UInt64(DECODE_CHUNK)))
-                            guard let part = readExactly(n) else {
-                                throw TarError.format("truncated file data / 檔案資料不完整")
-                            }
-                            try out.write(contentsOf: part)
-                            remaining -= UInt64(n)
-                        }
+                    guard try copyExactly(size, to: out) else {
+                        throw TarError.format("truncated file data / 檔案資料不完整")
                     }
                     try? out.close()
 #if os(Windows)

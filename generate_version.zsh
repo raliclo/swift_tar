@@ -42,6 +42,30 @@ version_file="$SCRIPT_DIR/version-$(swift_tar_platform).txt"
 # ——與本次一併加入的 macOS 動態連結紀錄，下一次編譯就會消失。
 current_rest=$(grep -v '^swift_tar_version=' "$version_file" 2>/dev/null || true)
 
+# lzfse2 是編進執行檔的原始碼依賴，與 vendored codec 同一類，卻原本不在這份來源資訊裡：
+# 2026-10-07 lzfse2 pin 由 06efe6c 移到 6e01a03，換掉了完整版的 LZFSE 解碼與寫入失敗處理，
+# 而 macOS、Windows、WSL 三處的戳記與 version 檔都沒有變，兩個不同的執行檔帶著同一個戳記。
+# 呼叫端以 SWIFT_TAR_LZFSE_SOURCE 傳入這次實際編入的 lzfse-cli.swift 路徑；空值代表公開版。
+# 不由此處自行判斷，因為三個平台決定「是否納入」的方式不同（macOS 的 --no-lzfse、Linux 在
+# 缺少 checkout 時自動排除、Windows 另找 ../lzfse-cli.swift），只有呼叫端知道實際結果。
+# 完整版與公開版因此寫出不同的一行，在兩者之間切換建置會蓋新戳記——那正是兩個不同的執行檔。
+#
+# lzfse2 is compiled into the binary like the vendored codecs, yet was missing from this
+# provenance: on 2026-10-07 its pin moved from 06efe6c to 6e01a03, replacing the full
+# build's LZFSE decode and write-failure handling, and the stamp and version file stayed
+# the same on macOS, Windows and WSL. Callers pass the lzfse-cli.swift they actually
+# compiled in SWIFT_TAR_LZFSE_SOURCE, empty for the public build; only they know, since the
+# three platforms decide inclusion differently. Switching between the two builds therefore
+# mints a new stamp, which is right: they are different binaries.
+lzfse_source=${SWIFT_TAR_LZFSE_SOURCE-}
+if [[ -n $lzfse_source ]]; then
+    lzfse_line="lzfse2_commit=$(git -C "${lzfse_source:h}" rev-parse HEAD 2>/dev/null || print -r -- unknown)"
+else
+    lzfse_line="lzfse2=excluded"
+fi
+current_rest=$(print -r -- "$current_rest" | grep -vE '^lzfse2(_commit)?=' || [ $? -eq 1 ])
+current_rest=${current_rest:+$current_rest$'\n'}$lzfse_line
+
 # 若除了時間戳以外，這份來源資訊與 git 中已記錄的完全相同，就沿用已記錄的時間戳，並把
 # 檔案寫回與 git 相同的內容——不產生新的戳記。
 #

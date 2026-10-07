@@ -127,7 +127,8 @@ zsh ./build_codecs.zsh
 # 會忽略 shebang。以 sh 執行 zsh 腳本，只在它剛好維持 POSIX 的期間內可行——一旦
 # 其中任一支用了 `print`、`(N)` glob qualifier 或 `${0:A:h}`，就會在與該改動
 # 毫無關聯之處失敗。
-zsh ./generate_version.zsh "$TEMP_VERSION"
+# 這次實際編入的 lzfse-cli.swift；公開版為空。/ The lzfse-cli.swift compiled in; empty for the public build.
+SWIFT_TAR_LZFSE_SOURCE=$([[ "$EXCLUDE_LZFSE" != 1 ]] && print -r -- lzfse2/lzfse-cli.swift) zsh ./generate_version.zsh "$TEMP_VERSION"
 
 swiftc -O -swift-version 6 $SWIFT_DEFINES $CLI_SRC "$TEMP_VERSION" swift_tar.swift rgb1.swift crypto.swift \
     build/libarchive_zip_bridge.o build/libarchive-macos/libarchive/libarchive.a \

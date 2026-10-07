@@ -195,7 +195,8 @@ fi
 # 使用 zsh 而非 sh：被呼叫者宣告 `#!/usr/bin/env zsh`，而 `sh script` 會忽略
 # shebang，故只在該腳本剛好維持 POSIX 的期間內可行。上方的 build_libarchive.zsh 亦同。
 log_msg "Generate version constants / 產生版本常數"
-zsh ./generate_version.zsh "$TEMP_VERSION"
+# 這次實際編入的 lzfse-cli.swift；公開版為空。/ The lzfse-cli.swift compiled in; empty for the public build.
+SWIFT_TAR_LZFSE_SOURCE=$([[ -n $TEMP_CLI ]] && print -r -- lzfse2/lzfse-cli.swift) zsh ./generate_version.zsh "$TEMP_VERSION"
 
 ZLIB_MODULEMAP="build/zlib-sysroot.modulemap"
 cat > "$ZLIB_MODULEMAP" <<MODMAP

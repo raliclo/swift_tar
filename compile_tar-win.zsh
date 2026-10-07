@@ -205,7 +205,8 @@ if [[ -n $LZFSE_CLI ]]; then
 else
   SWIFT_DEFINES=(-DEXCLUDE_LZFSE)
 fi
-zsh ./generate_version.zsh "$tmp_version"           || die "build version generation failed"
+# 這次實際編入的 lzfse-cli.swift；公開版為空。/ The lzfse-cli.swift compiled in; empty for the public build.
+SWIFT_TAR_LZFSE_SOURCE=$LZFSE_CLI zsh ./generate_version.zsh "$tmp_version" || die "build version generation failed"
 
 # ---- link / 連結 ----
 # -swift-version 6：compile_tar.zsh 自 2026-08-29 起就有，這裡與 compile_tar-linux.zsh

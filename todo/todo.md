@@ -931,7 +931,7 @@ lzfse2 的 `run_round.command`（lzfse2 `d566228`）；`tgz_inflight_rss.zsh` �
 Fixed: building no longer installs unless `--install` is given; every existing caller
 passes it, so their behaviour is unchanged.
 
-## 🔴 分支項：`-c` 平行讀檔，封存位元組不變 / Branch item: read files in parallel in `-c`, byte-identical output
+## 分支項：`-c` 平行讀檔，封存位元組不變 ▸ ✅ 已實作 2026-10-09 / Branch item: read files in parallel in `-c`, byte-identical output
 
 M6 量到無 codec 的 `-c` 是單核心：逐一走訪、開檔、讀檔（user + sys ≈ real）。請求：同時預讀接下來
 的 N 個檔案，依封存順序寫出，**封存必須逐位元組不變**。驗收：與現行 `-c` 輸出 `cmp` 相同（含 `-u`／
@@ -939,6 +939,39 @@ M6 量到無 codec 的 `-c` 是單核心：逐一走訪、開檔、讀檔（user
 
 M6 measured `-c` without a codec at one core. Prefetch the next N files concurrently and
 emit them in archive order; the archive must stay byte-identical.
+
+**實作（2026-10-09）**：`ReadAhead`。堆疊與走訪同步（進入目錄時推入子項目，`add` 一開始就從頂端
+取走），背景執行緒預讀不超過 1 MiB 的一般檔案；標頭與順序仍由 TarWriter 決定，預讀內容的大小與
+寫入端 stat 不符、或尚未開始讀時，照舊就地讀取。限制：只在堆疊頂端 32 個位置內開始、同時最多 16 個
+讀取、持有加預留共 64 MiB。POSIX 以 `O_NONBLOCK` 開檔並在 fd 上確認是一般檔案，絕不卡在 FIFO。
+
+**第一版幾乎無效，記下原因**：只有「已開始項目數 ≤ 32」一個限制。在 24,131 個小檔的語料上只快 5%
+（451 → 473 MB/s）；取樣顯示主執行緒 358 個樣本中仍有 192 個在同步開檔讀檔——進入子目錄時，父目錄
+後面的檔案與目錄占滿名額，整個子樹期間都放不掉。第二版改為上述的分開限制。
+
+**大小**：不變。claw-code、multissh、小檔語料，無 codec 與 zstd 3，新舊版輸出雜湊全部相同。
+
+**速度**（M4，熱快取，輸出到 /dev/null，舊版 `3f014c1` 對新版交錯 10 輪取最小）：
+
+| 語料 | 模式 | 舊 | 新 | 倍數 |
+|---|---|---|---|---|
+| 小檔語料（multissh 中 ≤1 MiB 的 24,131 個檔案，RAM disk） | 無 codec | 451 MB/s | 797 MB/s | 1.77 |
+| 同上 | zstd 3 | 464 | 797 | 1.72 |
+| multissh（2958 MiB，86% 位元組在 >1 MiB 的大檔） | 無 codec | 2154 | 3231 | 1.50 |
+| 同上 | zstd 3 | 1903 | 2542 | 1.34 |
+| claw-code（1351 MiB） | 無 codec | 4167 | 6439 | 1.55 |
+| 同上 | zstd 3 | 2249 | 2361 | 1.05（壓縮本身是瓶頸） |
+
+峰值 RSS 增加 0–40 MB；sys 時間上升（多個執行緒同時開檔），但實際耗時下降。
+
+**測試**：`test/test_create_readahead.zsh` 16 項——內容逐檔比對（樹中大量檔案同為 4096 位元組，錯配
+不會被大小檢查放過）、FIFO 不卡住（60 秒上限）、兩次輸出相同、zstd、`--exclude`、大量運算元、
+`--update`。負控制：「每個檔案拿到前一個檔案內容」的突變版失敗 4 項；「以阻塞模式開 FIFO」的突變版
+逾時失敗。全套 18 個套件通過。
+
+Done: ReadAhead. Byte-identical output; 1.5-1.8x without a codec, up to 1.34x with zstd 3.
+The first version barely helped because one slot limit let the parent's later files hold
+every slot for a whole subtree; separate in-flight and byte limits fixed it.
 
 ## 🔴 分支項：`-c --files-from <file>`（NUL 分隔）/ Branch item: `-c --files-from <file>`, NUL-separated
 

@@ -3319,6 +3319,177 @@ enum WriteBackend {
 // MARK: - Tar writer (ustar + pax) / Tar 寫入端（ustar + pax）
 // =================================================================
 
+/// Reads the next small files of a `-c` walk in the background, so opening and reading them
+/// overlaps with writing the ones before. M6-Multissh measured `-c` without a codec at one
+/// core -- user + sys equal to wall time -- because the walk opened and read each file in
+/// turn; on a tree of many small files that, not the pipe, set multissh's ceiling.
+///
+/// The archive does not change. TarWriter still decides every header and the order; this only
+/// changes where a regular file's bytes come from. Its stack mirrors the walk: a directory's
+/// children are pushed when the directory is entered, so the top is always the next path
+/// `add` will reach, and `claim` pops it there. Only files up to `fileMax` are read ahead.
+/// Anything not ready, too large, or of a different size from the writer's own stat is read
+/// in place as before.
+///
+/// Reads start only within the top `window` stack positions -- the next paths in walk order
+/// -- and the limits are separate: `maxInFlight` reads at once, and `byteBudget` for bytes
+/// held plus a fileMax reservation per read in flight. The first version had one limit,
+/// `window` started items, and on a 24,131-file tree it barely helped (451 -> 473 MB/s):
+/// entering a directory left the parent's later files holding every slot for the whole
+/// subtree, and directories held slots too, so 192 of 358 main-thread samples were still
+/// in the synchronous open-and-read. At the budget, nothing new starts and the walk reads
+/// in place; it never waits for a read that has not started, so it cannot deadlock.
+///
+/// 在背景讀取 `-c` 走訪中接下來的小檔，使開檔與讀檔和寫出前面的檔案重疊。M6-Multissh 量到
+/// 不帶 codec 的 `-c` 只用一個核心——user + sys 等於實際耗時——因為走訪時逐一開檔、讀檔；在
+/// 大量小檔的樹上，決定 multissh 上限的是它，而不是管線。
+///
+/// 封存內容不變。標頭與順序仍全由 TarWriter 決定，這裡只改變一般檔案的位元組從哪裡來。堆疊
+/// 與走訪同步：進入一個目錄時把它的子項目推入，所以堆疊頂端永遠是 `add` 下一個會到達的路徑，
+/// 由 `claim` 在那裡取出。只預讀不超過 `fileMax` 的檔案。尚未讀好、太大、或大小與寫入端自己
+/// stat 的結果不同者，一律照舊就地讀取。
+///
+/// 只在堆疊頂端 `window` 個位置內開始讀取——也就是走訪順序中接下來的路徑——而且限制分開：
+/// 同時最多 `maxInFlight` 個讀取，以及 `byteBudget`（已持有的位元組，加上每個進行中讀取預留
+/// 的 fileMax）。第一版只有一個限制：已開始的項目數 `window`。在 24,131 個檔案的樹上幾乎沒有
+/// 幫助（451 -> 473 MB/s）：進入一個目錄後，父目錄中後面的檔案在整個子樹期間占住所有名額，
+/// 目錄也占名額，於是主執行緒 358 個樣本中仍有 192 個落在同步的開檔與讀檔。達到預算時不再
+/// 開始新的讀取，走訪就地讀取；它絕不等待尚未開始的讀取，所以不會死結。
+final class ReadAhead: Sendable {
+    static let window = 32
+    static let maxInFlight = 16
+    static let fileMax = 1 << 20
+    static let byteBudget = 64 << 20
+
+    final class Item: Sendable {
+        let path: String
+        fileprivate let ready = DispatchSemaphore(value: 0)
+        // nil until read; .some(nil) when the worker declined it (not a small regular file).
+        // 讀好之前為 nil；worker 放棄時（不是小的一般檔案）為 .some(nil)。
+        fileprivate let data = Mutex<Data??>(nil)
+        init(path: String) { self.path = path }
+    }
+
+    private struct State {
+        var stack: [Item] = []           // top = next path the walk reaches / 頂端＝走訪下一個到達的路徑
+        var started = Set<ObjectIdentifier>()
+        var inFlight = 0
+        var heldBytes = 0                // read, not yet claimed / 已讀取、尚未被取走
+        var held: [ObjectIdentifier: Int] = [:]
+    }
+    private let state = Mutex(State())
+    private let followLinks: Bool
+
+    init(followLinks: Bool) { self.followLinks = followLinks }
+
+    /// Children of the directory just entered, in the order `add` will visit them.
+    /// 剛進入之目錄的子項目，順序與 `add` 走訪的順序相同。
+    func hint(_ paths: [String]) {
+        state.withLock { s in
+            for p in paths.reversed() { s.stack.append(Item(path: p)) }
+        }
+        schedule()
+    }
+
+    /// The prefetched bytes for `path` if `add` is at the top of the stack and the read
+    /// finished with a regular file; nil means read it in place. Waits only for a read that
+    /// has already started.
+    /// 若 `add` 正處於堆疊頂端，且該次讀取以一般檔案完成，回傳 `path` 預讀好的位元組；nil 表示
+    /// 就地讀取。只會等待已經開始的讀取。
+    func claim(_ path: String) -> Data? {
+        let item: Item? = state.withLock { s in
+            guard let top = s.stack.last, top.path == path else { return nil }
+            s.stack.removeLast()
+            guard s.started.remove(ObjectIdentifier(top)) != nil else { return nil }
+            return top
+        }
+        guard let item else {
+            schedule()
+            return nil
+        }
+        item.ready.wait()
+        let bytes = item.data.withLock { $0 } ?? nil
+        state.withLock { s in
+            if let n = s.held.removeValue(forKey: ObjectIdentifier(item)) { s.heldBytes -= n }
+        }
+        schedule()
+        return bytes
+    }
+
+    /// Start reads within the top `window` stack positions, while under maxInFlight and the
+    /// byte budget.
+    /// 在堆疊頂端 `window` 個位置內開始讀取，前提是未超過 maxInFlight 與位元組預算。
+    private func schedule() {
+        let toStart: [Item] = state.withLock { s in
+            var picked: [Item] = []
+            let lowest = max(0, s.stack.count - Self.window)
+            var i = s.stack.count - 1
+            while i >= lowest && s.inFlight < Self.maxInFlight
+                    && s.heldBytes + (s.inFlight + 1) * Self.fileMax <= Self.byteBudget {
+                let item = s.stack[i]
+                if s.started.insert(ObjectIdentifier(item)).inserted {
+                    s.inFlight += 1
+                    picked.append(item)
+                }
+                i -= 1
+            }
+            return picked
+        }
+        for item in toStart {
+            DispatchQueue.global(qos: .userInitiated).async {
+                let bytes = ReadAhead.readSmallRegularFile(item.path, followLinks: self.followLinks)
+                item.data.withLock { $0 = .some(bytes) }
+                // Account before signalling, so the claim that wakes finds the bytes to release.
+                // 先記帳再發出訊號，使被喚醒的 claim 找得到要釋放的位元組。
+                self.state.withLock { s in
+                    s.inFlight -= 1
+                    if let b = bytes {
+                        s.held[ObjectIdentifier(item)] = b.count
+                        s.heldBytes += b.count
+                    }
+                }
+                item.ready.signal()
+                self.schedule()
+            }
+        }
+    }
+
+    /// The whole file if it is a regular file of at most fileMax bytes, else nil. Never
+    /// blocks on a FIFO: POSIX opens non-blocking and checks the type on the open fd.
+    /// 若為不超過 fileMax 位元組的一般檔案則回傳整個檔案，否則 nil。絕不會卡在 FIFO 上：
+    /// POSIX 以非阻塞方式開啟，並在已開啟的 fd 上檢查型別。
+    private static func readSmallRegularFile(_ path: String, followLinks: Bool) -> Data? {
+#if os(Windows)
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              attrs[.type] as? FileAttributeType == .typeRegular,
+              let size = (attrs[.size] as? NSNumber)?.intValue, size <= fileMax,
+              let fh = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? fh.close() }
+        return (try? fh.read(upToCount: fileMax + 1)) ?? Data()
+#else
+        let flags = O_RDONLY | O_NONBLOCK | O_CLOEXEC | (followLinks ? 0 : O_NOFOLLOW)
+        let fd = open(path, flags)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var st = stat()
+        guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG,
+              st.st_size <= off_t(fileMax) else { return nil }
+        let size = Int(st.st_size)
+        var data = Data(count: size)
+        let got = data.withUnsafeMutableBytes { buf -> Int in
+            var total = 0
+            while total < size {
+                let n = read(fd, buf.baseAddress! + total, size - total)
+                if n <= 0 { break }
+                total += n
+            }
+            return total
+        }
+        return got == size ? data : nil
+#endif
+    }
+}
+
 final class TarWriter {
     private let sink: ParallelChunkSink
     private let verbose: Bool
@@ -3369,6 +3540,9 @@ final class TarWriter {
     /// entered. This makes a cycle a reported skip rather than unbounded expansion.
     private var walkedDirs = Set<String>()
 
+    /// See ReadAhead. / 見 ReadAhead。
+    private let readAhead: ReadAhead
+
     init(sink: ParallelChunkSink, verbose: Bool, updateBaseline: [String: UInt64]? = nil,
          archivePath: String? = nil, dereference: Bool = false) {
         self.sink = sink
@@ -3376,6 +3550,47 @@ final class TarWriter {
         self.updateBaseline = updateBaseline
         self.dereference = dereference
         self.archiveIdentity = archivePath.flatMap { TarWriter.fileIdentity($0) }
+        self.readAhead = ReadAhead(followLinks: dereference)
+    }
+
+    /// Add every operand, in order. The operands are handed to ReadAhead first, so a long
+    /// list of files -- a multissh shard -- is read ahead too, not only directory contents.
+    /// 依序加入每個運算元。運算元會先交給 ReadAhead，所以一長串檔案——multissh 的分片——也會
+    /// 被預讀，而不只是目錄內容。
+    func add(paths: [String]) throws {
+        readAhead.hint(paths)
+        for p in paths { try add(path: p) }
+    }
+
+    /// Write a regular file's contents and padding: the prefetched bytes when they match the
+    /// size in the header just written, else read in place as before.
+    /// 寫出一般檔案的內容與補齊：預讀的位元組與剛寫出之標頭中的大小相符時用它，否則照舊就地讀取。
+    private func writeContents(_ path: String, size: UInt64, prefetched: Data?) throws {
+        if let data = prefetched, UInt64(data.count) == size {
+            if size > 0 { try sink.write(data) }
+        } else {
+            guard let fh = FileHandle(forReadingAtPath: path) else {
+                throw TarError.io("cannot open '\(path)' / 無法開啟 '\(path)'")
+            }
+            defer { try? fh.close() }
+            var remaining = size
+            while remaining > 0 {
+                // autoreleasepool: FileHandle.read returns autoreleased buffers;
+                // without draining per chunk, RSS grows to ~corpus size.
+                // autoreleasepool：FileHandle.read 回傳 autoreleased 緩衝區；
+                // 不逐塊排空的話 RSS 會膨脹到接近整個語料大小。
+                try autoreleasepool {
+                    let want = Int(min(remaining, UInt64(TAR_CHUNK_SIZE)))
+                    guard let part = try fh.read(upToCount: want), !part.isEmpty else {
+                        throw TarError.io("short read on '\(path)' / 讀取 '\(path)' 時提前結束")
+                    }
+                    try sink.write(part)
+                    remaining -= UInt64(part.count)
+                }
+            }
+        }
+        let rem = Int(size % UInt64(TAR_BLOCK))
+        if rem != 0 { try sink.write(Data(count: TAR_BLOCK - rem)) }
     }
 
     /// -u gate: true ⟺ an archived copy exists and is at least as new, so this
@@ -3833,6 +4048,11 @@ final class TarWriter {
 #endif
 
     func add(path: String) throws {
+        // First, before any early return: every path ReadAhead was told about must be
+        // claimed here, in walk order, or its stack would fall out of step with the walk.
+        // 最先執行，早於任何提前返回：ReadAhead 得知的每個路徑都必須在此依走訪順序取走，
+        // 否則它的堆疊會與走訪脫節。
+        let prefetched = readAhead.claim(path)
         let name = TarWriter.archiveName(path)
         // Checked before stat, so an excluded entry costs nothing and an excluded
         // directory is never descended into -- which is what makes `--exclude` able
@@ -3939,9 +4159,7 @@ final class TarWriter {
                                      size: 0, mtime: mtime, typeflag: UInt8(ascii: "5"), linkname: "")
             }
             let children = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-            for child in children.sorted() {
-                try add(path: path + "/" + child)
-            }
+            try add(paths: children.sorted().map { path + "/" + $0 })
             return
         }
         // Regular file. Hardlink dedup, same behavior as bsdtar (volume serial
@@ -3960,27 +4178,7 @@ final class TarWriter {
         let size = st.size
         try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
                              size: size, mtime: mtime, typeflag: UInt8(ascii: "0"), linkname: "")
-        guard let fh = FileHandle(forReadingAtPath: path) else {
-            throw TarError.io("cannot open '\(path)' / 無法開啟 '\(path)'")
-        }
-        defer { try? fh.close() }
-        var remaining = size
-        while remaining > 0 {
-            // autoreleasepool: FileHandle.read returns autoreleased buffers;
-            // without draining per chunk, RSS grows to ~corpus size.
-            // autoreleasepool：FileHandle.read 回傳 autoreleased 緩衝區；
-            // 不逐塊排空的話 RSS 會膨脹到接近整個語料大小。
-            try autoreleasepool {
-                let want = Int(min(remaining, UInt64(TAR_CHUNK_SIZE)))
-                guard let part = try fh.read(upToCount: want), !part.isEmpty else {
-                    throw TarError.io("short read on '\(path)' / 讀取 '\(path)' 時提前結束")
-                }
-                try sink.write(part)
-                remaining -= UInt64(part.count)
-            }
-        }
-        let rem = Int(size % UInt64(TAR_BLOCK))
-        if rem != 0 { try sink.write(Data(count: TAR_BLOCK - rem)) }
+        try writeContents(path, size: size, prefetched: prefetched)
 #else
         var st = stat()
         // 跟隨模式用 stat：它解析最後一層，故 S_IFLNK 不會出現，下方的 switch 自然把
@@ -4059,9 +4257,7 @@ final class TarWriter {
                                      typeflag: UInt8(ascii: "5"), linkname: "")
             }
             let children = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-            for child in children.sorted() {
-                try add(path: path + "/" + child)
-            }
+            try add(paths: children.sorted().map { path + "/" + $0 })
         case S_IFLNK:
             if verbose { eprint("a \(name)") }
             let dest = (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) ?? ""
@@ -4084,27 +4280,7 @@ final class TarWriter {
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
                                  size: size, mtime: mtime, mtimeNanos: mtimeNanos,
                                  typeflag: UInt8(ascii: "0"), linkname: "")
-            guard let fh = FileHandle(forReadingAtPath: path) else {
-                throw TarError.io("cannot open '\(path)' / 無法開啟 '\(path)'")
-            }
-            defer { try? fh.close() }
-            var remaining = size
-            while remaining > 0 {
-                // autoreleasepool: FileHandle.read returns autoreleased buffers;
-                // without draining per chunk, RSS grows to ~corpus size.
-                // autoreleasepool：FileHandle.read 回傳 autoreleased 緩衝區；
-                // 不逐塊排空的話 RSS 會膨脹到接近整個語料大小。
-                try autoreleasepool {
-                    let want = Int(min(remaining, UInt64(TAR_CHUNK_SIZE)))
-                    guard let part = try fh.read(upToCount: want), !part.isEmpty else {
-                        throw TarError.io("short read on '\(path)' / 讀取 '\(path)' 時提前結束")
-                    }
-                    try sink.write(part)
-                    remaining -= UInt64(part.count)
-                }
-            }
-            let rem = Int(size % UInt64(TAR_BLOCK))
-            if rem != 0 { try sink.write(Data(count: TAR_BLOCK - rem)) }
+            try writeContents(path, size: size, prefetched: prefetched)
         case S_IFIFO:
             // A FIFO carries no data: size 0, no payload, no block padding --
             // the same shape as the symlink case above. It is stored rather
@@ -6954,9 +7130,7 @@ struct SwiftTarMain {
         let writer = TarWriter(sink: sink, verbose: verbose,
                                archivePath: archiveAbsolute,
                                dereference: tarDereference)
-        for f in files {
-            try writer.add(path: f)
-        }
+        try writer.add(paths: files)
         try writer.finish()
 
         if encryptPipe != nil {
@@ -7168,9 +7342,7 @@ struct SwiftTarMain {
                                updateBaseline: update ? baseline : nil,
                                archivePath: archiveAbsolute,
                                dereference: tarDereference)
-        for f in files {
-            try writer.add(path: f)
-        }
+        try writer.add(paths: files)
         try writer.finish()
     }
 

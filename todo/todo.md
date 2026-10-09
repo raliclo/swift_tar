@@ -931,6 +931,37 @@ lzfse2 的 `run_round.command`（lzfse2 `d566228`）；`tgz_inflight_rss.zsh` �
 Fixed: building no longer installs unless `--install` is given; every existing caller
 passes it, so their behaviour is unchanged.
 
+## ⏸ 暫緩（2026-10-09，使用者決定）：本 session 的改動尚未在 Linux／Windows 建置驗證 / Not yet built or tested on Linux and Windows
+
+2026-10-07〜09 的提交（`5455bec` 到 `ab05de0`）只在 macOS 上建置與測試過。風險最高的兩處：
+- `--strict` 改了 C bridge 的函式簽章（`libarchive_zip_bridge.c/.h` 的 `swift_tar_zip_read`
+  多了 `strict` 參數），Linux 與 Windows 的建置腳本都會編譯它；
+- `ReadAhead`、`--strict` 的 `winCreateSymlink`／`winCreateHardlink` 回傳值，各有只在 Windows
+  編譯的分支，從未編譯過。
+
+另有 `patch/libarchive/0002-zip-store-fifo.patch`：Windows 沒有 FIFO，但寫出端與讀取端的改動
+在所有平台都會編進去。master 在另外兩個平台上可能直接編不過；恢復時先做這一項。
+
+Every commit from 2026-10-07 to 10-09 was built and tested on macOS only. The C bridge
+signature changed and two Windows-only branches have never been compiled. Do this first.
+
+## ⏸ 暫緩（2026-10-09，使用者決定）：重量 M4 的管線上限 / Re-measure the M4's pipe ceiling
+
+M4 上量到管線本身約 1.5–2 GB/s（`cat`／`dd` 經具名管線灌入），M6 在它那台以 `dd bs=4m | cat`
+量到約 11 GB/s。兩邊方法不同；要在機器空閒時以 M6 的方法重量。這決定 M4 上所有「經管線解壓」
+數字該怎麼解讀。
+
+## ⏸ 暫緩（2026-10-09，使用者決定）：`-c` 讀大檔的路徑 / The `-c` large-file read path
+
+`ReadAhead` 只預讀 ≤1 MiB 的檔案，而實際的樹中位元組多半在大檔（multissh 86%、claw-code 71%）。
+大檔路徑仍每 4 MiB 配置一次新的 `Data`（`-x` 端已改為重用緩衝區）。**但尚未證明值得做**：
+無 codec 時 claw-code 已達 6.4 GB/s，遠超過一般管線或網路；帶 zstd 時瓶頸在壓縮（claw-code 只
+快 5%）。恢復時先對大檔為主的樹取樣主執行緒，確認大檔讀取確實是主要成本，再考慮最便宜的修法
+（重用緩衝區，不加平行）；若不是，刪除這一項。
+
+Large files are read in place, 4 MiB at a time, with a fresh Data per chunk. Not shown to
+matter yet; sample first, and drop this item if it is not the main cost.
+
 ## ZIP／ZIP64 往返遺失目錄時間與 FIFO，且輸出不可重現 ▸ ✅ 已修正 2026-10-09 / ZIP round trips lost directory times and FIFOs, and the output was not reproducible
 
 **怎麼發現的**：為確認 `-c` 預讀不改變結果，對 22,979 個檔案的語料做 13 種 codec × 新舊兩版的
@@ -1000,7 +1031,7 @@ Done: ReadAhead. Byte-identical output; 1.5-1.8x without a codec, up to 1.34x wi
 The first version barely helped because one slot limit let the parent's later files hold
 every slot for a whole subtree; separate in-flight and byte limits fixed it.
 
-## 🔴 分支項：`-c --files-from <file>`（NUL 分隔）/ Branch item: `-c --files-from <file>`, NUL-separated
+## ⏸ 暫緩（2026-10-09，使用者決定）：`-c --files-from <file>`（NUL 分隔）/ Branch item: `-c --files-from <file>`, NUL-separated
 
 分片傳輸的前置條件（M6：「分片要等這項，計畫中沒有退路」）。十萬個檔案的分片塞不進 argv，所以從
 檔案讀入成員名稱，以 NUL 分隔；`-` 代表 stdin 為加分項、非必要。要決定與 `--exclude`、`-C`、`--`
@@ -1008,7 +1039,7 @@ every slot for a whole subtree; separate in-flight and byte limits fixed it.
 
 A prerequisite for sharded transfer; member names come from a NUL-separated file.
 
-## 🔴 分支項：`-c --no-recursion` / Branch item: `-c --no-recursion`
+## ⏸ 暫緩（2026-10-09，使用者決定）：`-c --no-recursion` / Branch item: `-c --no-recursion`
 
 分片傳輸的前置條件。列出的目錄只封存目錄項目本身、不含內容。multissh 會把目錄放在獨立分片並最後
 解開，讓 `-p` 的權限與 mtime 在所有檔案之後才套用。比照 GNU tar 的 `--no-recursion`。

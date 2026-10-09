@@ -539,6 +539,15 @@ The tar compression codecs emit concatenatable streams, so `gunzip`, `bunzip2`,
 `xz`, `lzip`, `zstd`, and `lz4` decode those outputs directly. ZIP/ZIP64 is a
 container backend and interoperates with `unzip`, `bsdtar`, and other ZIP tools.
 
+**A FIFO is stored in a ZIP too** (since 2026-10-09; before that it was skipped with
+`zip format cannot archive named pipes`), as a zero-length entry whose Unix mode
+says FIFO. swift_tar extracts it as a FIFO. **Other tools may not:** Info-ZIP
+`unzip` extracts it as an empty regular file, and stock libarchive (`bsdtar`)
+does the same, because it reads every FIFO entry as a regular file — a workaround
+for Info-ZIP recording a pipe it was reading from. The bundled libarchive keeps
+an entry a FIFO only when it carries no data; see
+`patch/libarchive/0002-zip-store-fifo.patch`.
+
 ## Already-compressed suffixes (`--skip-compressed`)
 
 `-c --skip-compressed` with a stream codec (`--zstd`, `--gzip`, `--xz`, …) writes
@@ -766,7 +775,7 @@ corpus spanning three 4 MiB chunks:
 | plain tar and every stream codec (`--zstd`, `--gzip`, `--xz`, `--bzip2`, `--lz4`) | **yes**, across runs |
 | the same, across `-n 1`, `2`, `4`, `8`, `16` | **yes** — parallelism does not change a byte |
 | `--encrypt` | **no, by design** — a fresh nonce each run; the decrypted plaintext is identical |
-| `--zip` | no — the ZIP container records its own timestamps |
+| `--zip`, `--zip64` | **yes**, across runs, since 2026-10-09 — each entry records its mtime only. Before that it also recorded atime and ctime, which reading the tree changes, so no two runs matched |
 
 The `-n` result is the useful one: chunking is deterministic, not merely
 reassembled in the right order, so an archive built with `-n 16` on one machine

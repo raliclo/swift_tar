@@ -283,6 +283,19 @@ static int add_path(struct archive *writer,
         if (archive_read_disk_can_descend(disk)) archive_read_disk_descend(disk);
         if (verbose) fprintf(stderr, "a %s\n", archive_entry_pathname(entry));
 
+        /* mtime only. The ZIP writer puts whatever times the entry carries into the UT
+         * extra field, and archive_read_disk fills in atime and ctime -- both of which
+         * reading the file changes -- so the same tree, archived twice, gave two different
+         * ZIPs (2026-10-09: they differed from byte 59, inside the first entry's UT field).
+         * The tar path never stored either. Dropping them makes ZIP output reproducible.
+         * 只留 mtime。ZIP 寫出端會把項目帶有的時間都寫進 UT 擴充欄位，而 archive_read_disk
+         * 會填入 atime 與 ctime——讀取檔案本身就會改變這兩者——所以同一棵樹封存兩次會得到兩個
+         * 不同的 ZIP（2026-10-09：從第 59 個位元組起不同，就在第一個項目的 UT 欄位裡）。tar 路徑
+         * 從來不存這兩者。拿掉之後 ZIP 輸出可以重現。 */
+        archive_entry_unset_atime(entry);
+        archive_entry_unset_ctime(entry);
+        archive_entry_unset_birthtime(entry);
+
         status = archive_write_header(writer, entry);
         if (status == ARCHIVE_FATAL) {
             set_archive_error(error_buffer, error_capacity, "archive_write_header", writer);
@@ -846,6 +859,28 @@ int swift_tar_zip_read(const char *archive_path,
             snprintf(error_buffer, error_capacity, "flush stdout: %s", strerror(errno));
         }
         goto cleanup;
+    }
+    /* Close the disk writer here, while the working directory is still -C. libarchive
+     * defers directory times (and modes) to close, keyed by the relative path each
+     * directory was written under; cleanup used to chdir back first and only then free the
+     * writer, so every deferred time landed on a path relative to the wrong directory and
+     * failed in silence. Measured 2026-10-09: all 3,442 directories of a ZIP came out with
+     * the extraction time, while bsdtar restored them from the same file. Before the strict
+     * check, so a run that reports skipped members still gets its directory times.
+     * 在工作目錄仍是 -C 時就在此關閉 disk writer。libarchive 把目錄時間（與權限）延到關閉
+     * 時才套用，以各目錄寫出時的相對路徑為鍵；cleanup 原本先 chdir 回去才釋放 writer，於是
+     * 每個延後的時間都落在相對於錯誤目錄的路徑上，靜默失敗。2026-10-09 實測：一個 ZIP 的
+     * 3,442 個目錄全部變成解壓當下的時間，而 bsdtar 從同一個檔案正確還原。放在嚴格檢查之前，
+     * 使回報略過成員的那次執行仍能得到正確的目錄時間。 */
+    if (disk != NULL) {
+        status = archive_write_close(disk);
+        if (status == ARCHIVE_FATAL) {
+            set_archive_error(error_buffer, error_capacity, "archive_write_close", disk);
+            goto cleanup;
+        }
+        if (status < ARCHIVE_OK) {
+            fprintf(stderr, "swift_tar: %s\n", archive_error_string(disk));
+        }
     }
     if (strict && skipped > 0) {
         if (error_buffer != NULL && error_capacity > 0) {

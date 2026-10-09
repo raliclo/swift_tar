@@ -480,6 +480,12 @@ tar 壓縮引擎皆輸出可串接串流，故 `gunzip`、`bunzip2`、`xz`、`lz
 `zstd` 與 `lz4` 可直接解開。ZIP/ZIP64 是容器後端，可與 `unzip`、`bsdtar`
 及其他 ZIP 工具互通。
 
+**FIFO 也會存進 ZIP**（自 2026-10-09 起；在此之前會以 `zip format cannot archive named pipes`
+略過），存成長度 0、Unix 模式標示為 FIFO 的項目。swift_tar 會把它解回 FIFO。**其他工具不一定：**
+Info-ZIP 的 `unzip` 會解成空的一般檔案，原版 libarchive（`bsdtar`）也一樣，因為它把每個 FIFO
+項目都當成一般檔案讀——那是為了 Info-ZIP 會把「正在讀取的管線」記錄成項目型別而做的變通。內附的
+libarchive 只在項目不帶任何資料時才保留為 FIFO；見 `patch/libarchive/0002-zip-store-fifo.patch`。
+
 ## 已壓縮的後綴（`--skip-compressed`）
 
 `-c --skip-compressed` 搭配串流壓縮引擎（`--zstd`、`--gzip`、`--xz`……）時，若只有**一個一般檔案、
@@ -683,7 +689,7 @@ cmp a.tar b.tar     # -> 第 138 個位元組起不同
 | 純 tar 與所有串流 codec（`--zstd`、`--gzip`、`--xz`、`--bzip2`、`--lz4`）| **是**，跨執行成立 |
 | 同上，跨 `-n 1`、`2`、`4`、`8`、`16` | **是**——平行度不會改變任何一個位元組 |
 | `--encrypt` | **否，且是刻意如此**——每次執行使用新的 nonce；解密後的明文相同 |
-| `--zip` | 否——ZIP 容器會記錄自己的時間戳 |
+| `--zip`、`--zip64` | **是**，跨執行成立，自 2026-10-09 起——每個項目只記錄 mtime。在此之前還記錄了 atime 與 ctime，而讀取這棵樹本身就會改變它們，所以任兩次執行都不相同 |
 
 其中 `-n` 那一列才是真正有用的結論：分塊是決定性的，而不只是「碰巧以正確順序重組」，
 因此在一台機器上以 `-n 16` 建立的封存，會與另一台機器上以 `-n 1` 建立的完全相同。加密

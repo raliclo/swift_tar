@@ -158,3 +158,34 @@ describes HFS+ behaviour that APFS does not have. Without it, swift_tar's tar an
 name the same file differently, and the ZIP form is the lossy one once the archive reaches a
 normalisation-sensitive filesystem. Three bridge-level fixes were tried first and none
 worked; the option that would clear the flag is internal to libarchive.
+
+### `libarchive/0002-zip-store-fifo.patch`
+
+**改什麼**:兩處。
+- `archive_write_set_format_zip.c`:型別白名單加入 `AE_IFIFO`。FIFO 不帶資料,所以走與目錄
+  相同的分支——大小 0、STORE、Unix 模式(含型別位元)存在外部屬性中。
+- `archive_read_support_format_zip.c`:原本把**每個** FIFO 項目都轉成一般檔案;改為只在項目
+  帶有資料(串流位元、壓縮後或壓縮前大小非 0)時才轉換,不帶資料的保留為 FIFO。
+
+**為什麼**:使用者要求 ZIP 往返要和 tar 一樣保留 FIFO(2026-10-09)。在此之前 `-c --zip` 遇到
+FIFO 會印出 `zip format cannot archive named pipes` 並略過,仍以 0 結束;同一棵樹以任何 tar
+codec 往返都會保留它。
+
+讀取端的轉換是上游刻意的變通:Info-ZIP 從管線讀取時,會把**管線本身**的 stat 當成項目型別
+記錄下來,而那個項目帶有管線讀到的資料。這份 patch 保留該變通,只排除「不帶任何資料」的
+項目——那不可能是 Info-ZIP 讀管線的結果,**唯一的例外是 Info-ZIP 讀到一條空管線**,那種
+項目現在會解成 FIFO 而非空檔案。已接受此邊界情形。
+
+**相容性**:Info-ZIP `unzip` 與原版 libarchive(實測系統 bsdtar 3.5.3 / libarchive 3.7.4)
+都會把這種項目解成空的一般檔案。只有 swift_tar 解回 FIFO。
+
+**上游修好了要怎麼知道**:同 0001——`apply_patches.zsh` 回報「需要人看」時,先確認上游的
+ZIP 寫出端是否已接受 FIFO、讀取端是否已區分空項目。若兩者皆是,刪掉這份 patch;
+`test/test_zip_fidelity.zsh` 的 FIFO 項目會確認行為仍在。
+
+Lets the ZIP writer store a FIFO as a zero-length entry with its Unix mode, and makes the
+reader keep a FIFO entry a FIFO when it carries no data, instead of turning every FIFO entry
+into a regular file. The upstream conversion works around Info-ZIP recording a pipe it read
+from; such entries carry data and are still converted. The one edge case is an Info-ZIP
+entry from an empty pipe, which now extracts as a FIFO. Info-ZIP `unzip` and stock bsdtar
+extract these entries as empty regular files.

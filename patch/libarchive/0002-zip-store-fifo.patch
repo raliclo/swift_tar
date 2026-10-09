@@ -1,0 +1,41 @@
+diff --git a/libarchive/archive_read_support_format_zip.c b/libarchive/archive_read_support_format_zip.c
+index 6c30b249..f642ff1d 100644
+--- a/libarchive/archive_read_support_format_zip.c
++++ b/libarchive/archive_read_support_format_zip.c
+@@ -1222,8 +1222,14 @@ zip_read_local_file_header(struct archive_read *a, struct archive_entry *entry,
+ 	__archive_read_consume(a, extra_length);
+ 
+ 	/* Work around a bug in Info-Zip: When reading from a pipe, it
+-	 * stats the pipe instead of synthesizing a file entry. */
+-	if ((zip_entry->mode & AE_IFMT) == AE_IFIFO) {
++	 * stats the pipe instead of synthesizing a file entry. Such an
++	 * entry carries the pipe's data; an entry with no data at all is
++	 * a FIFO stored as one (see archive_write_set_format_zip.c) and
++	 * is kept a FIFO. */
++	if ((zip_entry->mode & AE_IFMT) == AE_IFIFO
++	    && ((zip_entry->zip_flags & ZIP_LENGTH_AT_END)
++		|| zip_entry->compressed_size != 0
++		|| zip_entry->uncompressed_size != 0)) {
+ 		zip_entry->mode &= ~ AE_IFMT;
+ 		zip_entry->mode |= AE_IFREG;
+ 	}
+diff --git a/libarchive/archive_write_set_format_zip.c b/libarchive/archive_write_set_format_zip.c
+index b588e915..a9985863 100644
+--- a/libarchive/archive_write_set_format_zip.c
++++ b/libarchive/archive_write_set_format_zip.c
+@@ -797,9 +797,13 @@ archive_write_zip_header(struct archive_write *a, struct archive_entry *entry)
+ 		return ARCHIVE_FAILED;
+ 	}
+ 
+-	/* Ignore types of entries that we don't support. */
++	/* Ignore types of entries that we don't support. A FIFO carries no
++	 * data, so it is stored like a directory: size 0, STORE, and the
++	 * Unix mode (with its type bits) in the external attributes. The
++	 * reader keeps such an entry a FIFO only when it has no data. */
+ 	type = archive_entry_filetype(entry);
+-	if (type != AE_IFREG && type != AE_IFDIR && type != AE_IFLNK) {
++	if (type != AE_IFREG && type != AE_IFDIR && type != AE_IFLNK
++	    && type != AE_IFIFO) {
+ 		__archive_write_entry_filetype_unsupported(
+ 		    &a->archive, entry, "zip");
+ 		return ARCHIVE_FAILED;

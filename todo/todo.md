@@ -931,6 +931,33 @@ lzfse2 的 `run_round.command`（lzfse2 `d566228`）；`tgz_inflight_rss.zsh` �
 Fixed: building no longer installs unless `--install` is given; every existing caller
 passes it, so their behaviour is unchanged.
 
+## ZIP／ZIP64 往返遺失目錄時間與 FIFO，且輸出不可重現 ▸ ✅ 已修正 2026-10-09 / ZIP round trips lost directory times and FIFOs, and the output was not reproducible
+
+**怎麼發現的**：為確認 `-c` 預讀不改變結果，對 22,979 個檔案的語料做 13 種 codec × 新舊兩版的
+往返驗證。11 種 tar codec 全部通過（`--cat` 等於未壓縮 tar、解出的樹等於來源、新舊版封存相同）；
+ZIP 與 ZIP64 在新舊兩版都不通過，與預讀無關。檔案內容、權限、mtime 與 symlink 都正確，問題有三：
+
+1. **目錄時間沒有還原**（3,442 個目錄全部變成解壓當下的時間）。建立端沒有問題（`unzip -Zv` 看得到
+   目錄的原始時間，bsdtar 解同一個檔案也正確還原）。成因在 bridge 的解出端：libarchive 把目錄時間
+   延到 `archive_write_close` 時才依「寫出時的相對路徑」套用，而 cleanup 先 `chdir` 回原目錄才
+   `archive_write_free`，於是每個延後的時間都落在錯誤的路徑上、靜默失敗。修法：在仍位於 `-C` 時
+   先 `archive_write_close`，放在 `--strict` 檢查之前。
+2. **FIFO 沒有被收進 ZIP**：寫出端拒收（`zip format cannot archive named pipes`，仍以 0 結束），
+   讀取端又會把 FIFO 項目轉成一般檔案。使用者決定修改內附 libarchive：
+   `patch/libarchive/0002-zip-store-fifo.patch`（寫出端接受 FIFO；讀取端只在項目不帶資料時保留為
+   FIFO）。Info-ZIP `unzip` 與系統 bsdtar 會解成空的一般檔案，已記入 README。
+3. **輸出不可重現**：同一版本跑兩次就不同，從第 59 個位元組起——ZIP 的 UT 擴充欄位記錄了 atime
+   與 ctime，讀取這棵樹本身就會改變它們。使用者決定只記 mtime：bridge 在寫出標頭前
+   `archive_entry_unset_atime／ctime／birthtime`。README〈可重現的輸出〉的 ZIP 一列改為「是」。
+
+修正後同一語料：ZIP、ZIP64 解出的樹與來源完全相同（含目錄時間與 FIFO），兩次建立逐位元組相同。
+`test/test_zip_fidelity.zsh` 20 項；修正前的版本失敗 14 項（可重現的兩項起初沒抓到：測試在 APFS
+上只靠再讀一次改變 atime，而 APFS 不會每次讀取都更新 atime，改為明確設定 atime 後才抓到）。
+
+Fixed: directory times (close the disk writer while still in -C), FIFOs (patch 0002), and
+reproducibility (mtime only). The same tree now round-trips exactly through --zip and
+--zip64, and archiving it twice gives identical bytes.
+
 ## 分支項：`-c` 平行讀檔，封存位元組不變 ▸ ✅ 已實作 2026-10-09 / Branch item: read files in parallel in `-c`, byte-identical output
 
 M6 量到無 codec 的 `-c` 是單核心：逐一走訪、開檔、讀檔（user + sys ≈ real）。請求：同時預讀接下來

@@ -36,7 +36,8 @@ git submodule update --init   # lzfse2 + libarchive + zlib + xz + lz4 + zstd
 
 不需要任何 Homebrew 套件。`liblzma`、`liblz4` 與 `libzstd` 由 `build_codecs.zsh`
 以固定版本的 submodule 建出並靜態連結，因此執行檔內的版本是一項被 commit 過的事實，
-而非 `brew upgrade` 最後裝上的那一份。`zlib` 與 `libbz2` 仍取自 SDK，動態連結。
+而非 `brew upgrade` 最後裝上的那一份。`zlib` 亦由固定版本的 submodule 靜態建置，
+版本與 commit 記錄於 `version-mac.txt`；只有 `libbz2` 仍取自 SDK，動態連結。
 
 `build.zsh` 以 `uname` 偵測平台並執行該平台的建置——macOS 用 `compile_tar.zsh`、
 Linux 用 `compile_tar-linux.zsh`、Windows 用 `compile_tar-win.bat`——故同一道指令在

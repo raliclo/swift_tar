@@ -50,6 +50,26 @@ build applies first: there is no window where an incremental compile silently us
 sources. Verified: after a full build the submodule shows zero changes and the resulting ZIP
 still stores NFC.
 
+### 沒有 git 的原始碼包 / A source drop without git
+
+原始碼包沒有 `.git`，也可能落在完全沒有 git 的機器上（Linux VM 的 guest 就是）。那裡
+`apply_patches.zsh` 仍然可用：狀態由腳本自己比對 patch 的文字判斷——patch 新增的每一行都在
+檔案裡就是已套用；不全在、而它移除的每一行都還在，就是未套用；其餘為過期——`patch` 指令只
+用來做出修改，做完再比對一次。原始碼包沒有會被擋住的升級，所以 `build_libarchive.zsh` 在那裡
+套用後**不還原**。
+
+狀態不交給 `patch -R --dry-run` 判斷：Apple 的 patch 2.0 遇到「反向 patch 對上未 patch 的原始碼」
+會改為正向套用並以 0 結束，於是沒動過的原始碼被回報為已套用，接著的 `--revert` 把檔案改寫了
+（2026-10-13，發生在暫存副本上）。只刪不增的 patch 無法用文字比對分辨，會被歸為過期交給人看。
+
+Without git the script reads the state from the patch text itself -- applied when every
+added line is in the file, missing when not all are while every removed line still is,
+stale otherwise -- uses `patch` only to make the change, and reads the text again
+afterwards. A source drop is left patched after the build. The state is not asked of
+`patch -R --dry-run`: Apple's patch 2.0 applies a reversed patch forward against
+unpatched sources and exits 0. A patch that only deletes cannot be judged this way and is
+reported stale.
+
 ---
 
 ## 手動用法 / Manual usage

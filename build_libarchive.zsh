@@ -19,19 +19,19 @@ cd "$SCRIPT_DIR"
 . ./platform.zsh
 
 # A source drop has no .git and may land where there is no git at all (the Buildroot
-# guest). There the sources are whatever was shipped, so this script can neither fetch
-# the pin nor apply or check the patches -- and it says so rather than building in
-# silence, because an unpatched libarchive builds and links exactly like a patched one.
+# guest). There the sources are whatever was shipped: this script cannot fetch the pin,
+# and says so. The patches are still applied -- apply_patches.zsh works without git --
+# because an unpatched libarchive builds and links exactly like a patched one.
 # 原始碼包沒有 .git，也可能落在完全沒有 git 的地方（Buildroot guest）。那裡的原始碼就是送
-# 進來的那一份，本腳本既取不到 pin，也無法套用或檢查 patch——所以要明說，而不是默默建置，
-# 因為未 patch 的 libarchive 建置與連結起來和 patch 過的一模一樣。
+# 進來的那一份：本腳本取不到 pin，並會明說。patch 仍然會套用——apply_patches.zsh 不需要
+# git——因為未 patch 的 libarchive 建置與連結起來和 patch 過的一模一樣。
 in_git=0
 if command -v git >/dev/null 2>&1 && [ -e .git ]; then in_git=1; fi
 if [ "$in_git" = 1 ]; then
     git submodule update --init libarchive
 elif [ -f libarchive/CMakeLists.txt ]; then
-    echo "[NOTICE] not a git checkout: building libarchive/ as shipped; patch/ is neither applied nor checked here" >&2
-    echo "[注意] 不是 git checkout：依送來的 libarchive/ 原樣建置；此處不會套用也不會檢查 patch/" >&2
+    echo "[NOTICE] not a git checkout: building libarchive/ as shipped, at whatever commit that is" >&2
+    echo "[注意] 不是 git checkout：依送來的 libarchive/ 原樣建置，不論它是哪個 commit" >&2
 else
     echo "[FAIL] no git checkout and no libarchive/ sources / 既非 git checkout，也沒有 libarchive/ 原始碼" >&2
     exit 1
@@ -87,8 +87,13 @@ revert_patches() {
     fi
     exit $st
 }
-if [ "$in_git" = 1 ] && [ -x ./patch/apply_patches.zsh ]; then
-    trap revert_patches EXIT
+if [ -x ./patch/apply_patches.zsh ]; then
+    # In a source drop there is no upgrade for a dirty tree to block, so the patches
+    # stay applied; only a git checkout is reverted. A patch that will not apply stops
+    # the build either way (set -e).
+    # 原始碼包沒有會被髒工作區擋住的升級，所以 patch 留著不還原；只有 git checkout 才還原。
+    # patch 套不上時，兩種情況都會讓建置停下（set -e）。
+    [ "$in_git" = 1 ] && trap revert_patches EXIT
     ./patch/apply_patches.zsh
 fi
 

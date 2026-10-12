@@ -73,12 +73,83 @@ esac
 
 typeset -i problems=0 applied=0 already=0 obsolete=0
 
+# A source drop has no .git, and may sit on a machine with no git at all (the Buildroot
+# guest). The sources still need the patches, and "cannot tell" is the one answer this
+# script must not give in silence: on 2026-10-12 a drop had to be patched on the host
+# before packing, and inside the guest nothing could say whether that had been done.
+#
+# Without git the state is read from the text, not asked of `patch`. `patch -R --dry-run`
+# was tried first and is not an answer: Apple's patch 2.0, given a reversed patch against
+# unpatched sources, decides the patch is "unreversed", applies it forward and exits 0 --
+# so untouched sources were reported as patched, and the --revert that followed rewrote
+# them (2026-10-13, on a scratch copy). What is compared instead is plain: a patch is
+# applied when every line it adds is in the file, and missing when not all of them are
+# while every line it removes still is. Anything else is stale. `patch` is used only to
+# make the change, and the text is read again afterwards to see that it did.
+#
+# 原始碼包沒有 .git，也可能落在完全沒有 git 的機器上（Buildroot guest）。那些原始碼一樣
+# 需要 patch，而「無從判斷」正是本腳本不能默默給出的答案：2026-10-12 的原始碼包得先在
+# host 套好 patch 再打包，而 guest 內沒有任何東西說得出那一步做了沒有。
+#
+# 沒有 git 時，狀態是從文字讀出來的，不是去問 `patch`。先試過 `patch -R --dry-run`，那不是
+# 答案：Apple 的 patch 2.0 拿到反向 patch 對上未 patch 的原始碼時，會判定它「其實沒反」、
+# 改為正向套用並以 0 結束——於是沒動過的原始碼被回報為已 patch，接著的 --revert 把它們改寫
+# 了（2026-10-13，發生在暫存副本上）。改為直接比對：patch 新增的每一行都在檔案裡，就是
+# 已套用；不全在、而它移除的每一行都還在，就是未套用；其餘皆為過期。`patch` 只用來做出
+# 修改，做完再讀一次文字確認它真的做了。
+with_git() { [[ -e $ROOT/$1/.git ]] && command -v git >/dev/null 2>&1; }
+text_state() {   # submodule patch -> applied | missing | stale
+  local sub=$1 p=$2 line body file="" added_ok=1 removed_ok=1
+  local -i n_added=0
+  while IFS= read -r line || [[ -n $line ]]; do
+    case $line in
+      '+++ b/'*) file=$ROOT/$sub/${line#+++ b/} ;;
+      '--- '*|'+++ '*) ;;
+      '+'*) body=${line#+}
+            [[ -n ${body//[[:space:]]/} ]] || continue
+            n_added=$(( n_added + 1 ))
+            grep -Fxq -- "$body" "$file" 2>/dev/null || added_ok=0 ;;
+      '-'*) body=${line#-}
+            [[ -n ${body//[[:space:]]/} ]] || continue
+            grep -Fxq -- "$body" "$file" 2>/dev/null || removed_ok=0 ;;
+    esac
+  done < "$p"
+  # A patch that only deletes cannot be told apart this way; call it stale so a person looks.
+  # 只刪不增的 patch 無法這樣分辨；歸為過期，交給人看。
+  if (( n_added == 0 )); then print stale
+  elif (( added_ok )); then print applied
+  elif (( removed_ok )); then print missing
+  else print stale; fi
+}
+p_state() {   # submodule patch -> applied | missing | stale
+  if with_git "$1"; then
+    if git -C "$1" apply --check --reverse "$2" 2>/dev/null; then print applied
+    elif git -C "$1" apply --check "$2" 2>/dev/null; then print missing
+    else print stale; fi
+  else
+    text_state "$1" "$2"
+  fi
+}
+p_apply() {
+  if with_git "$1"; then git -C "$1" apply "$2" 2>/dev/null
+  else ( cd "$1" && patch -p1 -N -i "$2" ) >/dev/null 2>&1 </dev/null; [[ $(text_state "$1" "$2") == applied ]]; fi
+}
+p_reverse() {
+  if with_git "$1"; then git -C "$1" apply --reverse "$2" 2>/dev/null
+  else ( cd "$1" && patch -p1 -R -i "$2" ) >/dev/null 2>&1 </dev/null; [[ $(text_state "$1" "$2") == missing ]]; fi
+}
+
 for dir in "$HERE"/*(/N); do
   sub=${dir:t}
-  [[ -d $ROOT/$sub/.git || -f $ROOT/$sub/.git ]] || {
+  [[ -n "$(print -r -- "$ROOT/$sub"/*(N[1]))" ]] || {
     print -- "  – $sub — submodule 未 checkout / not checked out"
     continue
   }
+  if ! with_git "$sub" && ! command -v patch >/dev/null 2>&1; then
+    print -- "  ✗ $sub — 沒有 git checkout，也沒有 patch 指令，無法套用或檢查 / neither a git checkout nor a patch command: cannot apply or check"
+    problems=$(( problems + 1 ))
+    continue
+  fi
 
   for p in "$dir"/*.patch(N); do
     name=${p:t}
@@ -93,26 +164,20 @@ for dir in "$HERE"/*(/N); do
     # already applied (reverse-applies), or neither -- upstream moved, and whether
     # that means "they fixed it, delete this patch" or "redo this patch" is a
     # judgement call. The script never guesses and never forces.
-    if git -C "$sub" apply --check --reverse "$p" 2>/dev/null; then
-      state=applied
-    elif git -C "$sub" apply --check "$p" 2>/dev/null; then
-      state=missing
-    else
-      state=stale
-    fi
+    state=$(p_state "$sub" "$p")
 
     case "$MODE:$state" in
       check:applied)  print -- "  ✓ $sub/$name — 已套用 / applied"; already=$(( already + 1 )) ;;
       check:missing)  print -- "  ↑ $sub/$name — 未套用 / not applied"; problems=$(( problems + 1 )) ;;
       apply:applied)  print -- "  ✓ $sub/$name — 已套用，略過 / already applied"; already=$(( already + 1 )) ;;
       apply:missing)
-        if git -C "$sub" apply "$p" 2>/dev/null; then
+        if p_apply "$sub" "$p"; then
           print -- "  + $sub/$name — 已套用 / applied"; applied=$(( applied + 1 ))
         else
           print -- "  ✗ $sub/$name — 套用失敗 / failed to apply"; problems=$(( problems + 1 ))
         fi ;;
       revert:applied)
-        if git -C "$sub" apply --reverse "$p" 2>/dev/null; then
+        if p_reverse "$sub" "$p"; then
           print -- "  - $sub/$name — 已還原 / reverted"
         else
           print -- "  ✗ $sub/$name — 還原失敗 / failed to revert"; problems=$(( problems + 1 ))

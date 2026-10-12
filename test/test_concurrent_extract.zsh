@@ -42,6 +42,16 @@ fi
 ROUNDS=${ROUNDS:-10}
 SHARDS=${SHARDS:-8}
 SYS_TAR=${SYS_TAR:-tar}
+# Keep macOS out of the fixtures. When the files carry an extended attribute, bsdtar there
+# writes an AppleDouble "._name" member beside each one, and which files carry one depends
+# on how this shell was launched (com.apple.provenance), not on this script. 2026-10-12: the
+# same tree passed from a terminal and failed from an app-launched session, with twice the
+# expected members in the fixture.
+# 讓 macOS 的特性不進入測資。檔案帶有延伸屬性時，該平台的 bsdtar 會在每個成員旁多寫一個
+# AppleDouble「._名稱」成員，而檔案帶不帶屬性取決於這個 shell 是怎麼啟動的
+# （com.apple.provenance），與本腳本無關。2026-10-12：同一棵樹從終端機執行通過，從 app
+# 啟動的 session 執行則失敗，測資裡的成員數是預期的兩倍。
+export COPYFILE_DISABLE=1
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

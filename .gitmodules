@@ -49,4 +49,4 @@
 [submodule "libxml2"]
 	path = libxml2
 	url = https://github.com/GNOME/libxml2.git
-	branch = 2.13
+	branch = 2.15

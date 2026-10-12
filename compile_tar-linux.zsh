@@ -284,9 +284,9 @@ SWIFT_TAR_LZFSE_SOURCE=$([[ -n $TEMP_CLI ]] && print -r -- lzfse2/lzfse-cli.swif
 # Swift 匯入的 zlib 必須就是連結的那一份：codec 為靜態時，經 cmodules/PinnedZlib 使用固定
 # submodule 的 header；否則經產生的 module map 使用 sysroot 的。
 if [[ "$CODECS_STATIC" == 1 ]]; then
-    ZLIB_SWIFT_FLAGS=(-I cmodules/PinnedZlib -Xcc -I"$PWD/zlib")
+    ZLIB_SWIFT_FLAGS=(-I "$PWD/cmodules/PinnedZlib" -Xcc -I"$PWD/zlib")
 else
-    ZLIB_MODULEMAP="build/zlib-sysroot.modulemap"
+    ZLIB_MODULEMAP="$PWD/build/zlib-sysroot.modulemap"
     cat > "$ZLIB_MODULEMAP" <<MODMAP
 module zlib [system] {
     header "$SYSROOT/include/zlib.h"
@@ -333,45 +333,47 @@ SWIFT_RUNTIME_DIR="$SWIFT_PREFIX/lib/swift/linux"
 #
 # 旗標提交至此之前，已在 QEMU aarch64 guest 內以本腳本實測四種組合，全部 rc=0；
 # Swift 6 模式未新增任何 Swift 5 建置沒有的警告。
-# -z separate-code: without it GNU ld warned "release/swift_tar has a LOAD segment with RWX
-# permissions", and it was right -- the whole image, code included, was one writable and
-# executable segment. Traced on 2026-10-13: Swift 6.3.3 on aarch64 emits the protocol
-# conformance descriptors of payload-free enums (here TarCodec and WriteBackend) into a
-# section named `.rodata` with the writable flag set; any `enum E { case a, b }` does it,
-# however the conformance is declared. GNU ld places sections by name, so the flag lands
-# on the output .rodata, which sits in the text segment, and the two can no longer be
-# separated. The option puts code in a segment of its own (R, E, RW), so nothing is both
-# writable and executable. The cause is not removed -- .rodata stays writable and there is
-# no GNU_RELRO -- and that is recorded in todo/todo.md rather than hidden.
+# The link, and why it is not left to the defaults. GNU ld used to warn "release/swift_tar
+# has a LOAD segment with RWX permissions", and it was right -- the whole image, code
+# included, was one writable and executable segment. Traced on 2026-10-13: Swift 6.3.3 on
+# aarch64 emits the protocol conformance descriptors of payload-free enums (here TarCodec
+# and WriteBackend) into a section named `.rodata` with the writable flag set; any
+# `enum E { case a, b }` does it, however the conformance is declared. GNU ld places
+# sections by name, so the flag landed on the output .rodata, which sits in the text
+# segment. Three things are done about it, and the third is the one that removes the cause:
 #
-# lld is used instead whenever the toolchain's ld.lld can start. Measured the same day: it
-# places by flags, so code gets its own segment without being asked (R, R E, RW, RW), and
-# .data.rel.ro and .got come under GNU_RELRO, which GNU ld did not give this binary. It
-# does not make .rodata read-only -- the writable flag is on the compiler's output, and
-# lld honours it by putting .rodata in the writable data segment; that part stays in
-# todo/todo.md. On the Buildroot guest ld.lld does not start by itself: lld is one binary
-# for four linkers and needs libxml2.so.2 at load time for the Windows one. When that is
-# the reason, libxml2 is built with clang from the libxml2/ submodule and put on the
-# linker's library path only. Without ld.lld, or without the means to make it start, the
-# link falls back to GNU ld with -z separate-code and says so.
+#   * -z separate-code for GNU ld, so code has a segment of its own whatever else happens.
+#   * lld whenever the toolchain's ld.lld can start. It places by flags. On the Buildroot
+#     guest ld.lld does not start by itself: lld is one binary for four linkers and needs
+#     libxml2.so.2 at load time for the Windows one. When that is the reason, libxml2 is
+#     built with clang from the libxml2/ submodule and put on the linker's library path
+#     only. Without ld.lld, or without the means to make it start, the link uses the
+#     system ld and says so.
+#   * the writable flag is taken off `.rodata` between compile and link (below).
 #
-# -z separate-code：沒有它時 GNU ld 會警告「release/swift_tar has a LOAD segment with RWX
-# permissions」，而且它說得對——整個映像（含程式碼）是單一個可寫又可執行的區段。2026-10-13
-# 追查：aarch64 上的 Swift 6.3.3 把無 payload enum（此處是 TarCodec 與 WriteBackend）的
-# protocol conformance descriptor 放進一個名為 `.rodata`、卻帶可寫旗標的 section；任何
-# `enum E { case a, b }` 都會如此，不論 conformance 怎麼宣告。GNU ld 依名稱安置 section，
-# 於是旗標落到輸出的 .rodata 上，而它位在 text 區段裡，兩者再也分不開。這個選項把程式碼
-# 放進自己的區段（R、E、RW），於是沒有任何東西同時可寫又可執行。成因並未消除——.rodata 仍
-# 可寫，也沒有 GNU_RELRO——這一點記在 todo/todo.md，而不是藏起來：lld 依旗標安置，能排出
-# 可寫，也沒有 GNU_RELRO——這一點記在 todo/todo.md，而不是藏起來。
+# Measured in the VM the same day, with the flag removed: lld gives R, R E, RW, RW and GNU
+# ld gives R, R E, R, RW; both have GNU_RELRO over .data.rel.ro and .got, and .rodata is in
+# a read-only segment under both. Before the flag was removed, neither linker could do
+# that: GNU ld had no GNU_RELRO at all and lld put .rodata in the writable data segment.
 #
-# 只要工具鏈的 ld.lld 起得來，就改用 lld。同日實測：它依旗標安置，所以程式碼不必要求就有
-# 自己的區段（R、R E、RW、RW），.data.rel.ro 與 .got 也納入 GNU_RELRO——GNU ld 沒有給這支
-# 執行檔這個。它不會讓 .rodata 變唯讀：可寫旗標在編譯器的輸出上，lld 照著它把 .rodata 放進
-# 可寫的資料區段；那一部分仍留在 todo/todo.md。在 Buildroot guest 上 ld.lld 自己起不來：
-# lld 是四個連結器共用的一支執行檔，載入時就需要 libxml2.so.2（給 Windows 那一個用）。原因
-# 是這個時，就用 clang 從 libxml2/ submodule 建出 libxml2，並且只放進連結器的函式庫路徑。
-# 沒有 ld.lld、或沒有辦法讓它起來時，連結退回 GNU ld 加 -z separate-code，並明白說出來。
+# 連結，以及為什麼不交給預設值。GNU ld 原本會警告「release/swift_tar has a LOAD segment with
+# RWX permissions」，而且它說得對——整個映像（含程式碼）是單一個可寫又可執行的區段。
+# 2026-10-13 追查：aarch64 上的 Swift 6.3.3 把無 payload enum（此處是 TarCodec 與
+# WriteBackend）的 protocol conformance descriptor 放進一個名為 `.rodata`、卻帶可寫旗標的
+# section；任何 `enum E { case a, b }` 都會如此，不論 conformance 怎麼宣告。GNU ld 依名稱安置
+# section，於是旗標落到輸出的 .rodata 上，而它位在 text 區段裡。對此做了三件事，其中第三件
+# 才是消除成因的那一件：
+#
+#   * 給 GNU ld 的 -z separate-code，讓程式碼無論如何都有自己的區段。
+#   * 工具鏈的 ld.lld 起得來時就用 lld，它依旗標安置。在 Buildroot guest 上 ld.lld 自己
+#     起不來：lld 是四個連結器共用的一支執行檔，載入時就需要 libxml2.so.2（給 Windows 那
+#     一個用）。原因是這個時，就用 clang 從 libxml2/ submodule 建出 libxml2，並且只放進
+#     連結器的函式庫路徑。沒有 ld.lld、或沒有辦法讓它起來時，改用系統的 ld 並明白說出來。
+#   * 在編譯與連結之間把 `.rodata` 的可寫旗標拿掉（見下）。
+#
+# 同日在 VM 上實測，旗標拿掉之後：lld 得到 R、R E、RW、RW，GNU ld 得到 R、R E、R、RW；兩者
+# 都有涵蓋 .data.rel.ro 與 .got 的 GNU_RELRO，.rodata 在兩者之下都位於唯讀區段。旗標拿掉
+# 之前，兩個連結器都做不到：GNU ld 完全沒有 GNU_RELRO，lld 則把 .rodata 放進可寫的資料區段。
 LLD="$SWIFT_PREFIX/bin/ld.lld"
 LINK_ENV=()
 LINKER_FLAGS=(-Xlinker -z -Xlinker separate-code)
@@ -380,10 +382,31 @@ if [[ -x "$LLD" ]]; then
     if ! lld_err=$("$LLD" --version 2>&1 >/dev/null); then
         if [[ "$lld_err" == *libxml2.so.2* && -f libxml2/CMakeLists.txt ]] && command -v cmake >/dev/null 2>&1; then
             log_msg "ld.lld needs libxml2.so.2; building it from libxml2/ / ld.lld 需要 libxml2.so.2，從 libxml2/ 建出"
+            # lld asks for a file named libxml2.so.2 whose symbols carry the version nodes
+            # it was linked against. libxml2 2.14 changed the soname and dropped its
+            # version script, so both are supplied here: the nodes are read from lld's own
+            # imports, and the old file name is a link to the library just built. The
+            # loader looks a library up by file name, not by the soname inside it.
+            # lld 要的是名為 libxml2.so.2 的檔案，且符號帶有它當初連結時的版本節點。libxml2
+            # 自 2.14 起換了 soname，也不再附 version script，所以兩者都在這裡補上：節點由
+            # lld 自己的匯入表讀出，舊檔名則是指向剛建好的函式庫的連結。載入器依檔名找
+            # 函式庫，不看裡面的 soname。
+            xml_imports=(${(u)${(f)"$(readelf --dyn-syms -W "$LLD" | grep -o '[A-Za-z_0-9]*@LIBXML2_[0-9.]*')"}})
+            (( ${#xml_imports} )) || die "讀不出 ld.lld 匯入的 libxml2 符號 / cannot read the libxml2 symbols ld.lld imports"
+            xml_map="$PWD/build/libxml2-linux.map"
+            for node in ${(u)xml_imports#*@}; do
+                print -r -- "$node {"
+                print -r -- "  global:"
+                for imp in $xml_imports; do
+                    [[ "${imp#*@}" == "$node" ]] && print -r -- "    ${imp%@*};"
+                done
+                print -r -- "};"
+            done > "$xml_map"
             CC="$CLANG" cmake -S libxml2 -B build/libxml2-linux -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
-                -DLIBXML2_WITH_ICU=OFF -DLIBXML2_WITH_ZLIB=OFF -DLIBXML2_WITH_LZMA=OFF -DLIBXML2_WITH_PYTHON=OFF \
-                -DLIBXML2_WITH_TESTS=OFF -DLIBXML2_WITH_PROGRAMS=OFF
+                -DLIBXML2_WITH_ICU=OFF -DLIBXML2_WITH_TESTS=OFF -DLIBXML2_WITH_PROGRAMS=OFF \
+                -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--version-script=$xml_map"
             cmake --build build/libxml2-linux
+            [[ -e build/libxml2-linux/libxml2.so.2 ]] || ln -s libxml2.so build/libxml2-linux/libxml2.so.2
             LINK_ENV=(env LD_LIBRARY_PATH="$PWD/build/libxml2-linux${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
             "${LINK_ENV[@]}" "$LLD" --version >/dev/null \
                 || die "libxml2 建好後 ld.lld 仍起不來 / ld.lld still does not start with the libxml2 just built"
@@ -393,19 +416,51 @@ if [[ -x "$LLD" ]]; then
     if [[ -z "$lld_err" ]]; then
         LINKER_FLAGS=(-use-ld=lld)
     else
-        log_msg "NOTICE: ld.lld does not start ($lld_err); linking with the system ld, so no GNU_RELRO."
-        log_msg "注意：ld.lld 起不來，改用系統的 ld 連結，因此沒有 GNU_RELRO。"
+        log_msg "NOTICE: ld.lld does not start ($lld_err); linking with the system ld."
+        log_msg "注意：ld.lld 起不來，改用系統的 ld 連結。"
     fi
 else
-    log_msg "NOTICE: no ld.lld in the toolchain; linking with the system ld, so no GNU_RELRO."
-    log_msg "注意：工具鏈沒有 ld.lld，改用系統的 ld 連結，因此沒有 GNU_RELRO。"
+    log_msg "NOTICE: no ld.lld in the toolchain; linking with the system ld."
+    log_msg "注意：工具鏈沒有 ld.lld，改用系統的 ld 連結。"
 fi
 
+# Compile and link are separate steps so the writable flag can be taken off `.rodata` in
+# between. The flag is the compiler's (see above) and no linker removes it: GNU ld and lld
+# both leave every string constant and all of Swift's read-only metadata writable at run
+# time. Nothing needs it writable at load -- of the 1657 dynamic relocations in the lld
+# build, none lands in `.rodata` (measured 2026-10-13). Whether the Swift runtime writes
+# there later is not something a measurement can rule out; if it does, the write now
+# faults instead of succeeding. Decided with the user the same day.
+# The objects go to a directory of their own because swiftc -c names each after its source
+# and writes it to the working directory.
+#
+# 編譯與連結分成兩步，中間才能把 `.rodata` 的可寫旗標拿掉。旗標是編譯器給的（見上），沒有
+# 任何連結器會拿掉它：GNU ld 與 lld 都讓每一個字串常數與 Swift 的唯讀中繼資料在執行期可寫。
+# 載入時沒有東西需要它可寫——lld 建置的 1657 筆動態重定位中，沒有任何一筆落在 `.rodata`
+# （2026-10-13 實測）。Swift runtime 之後會不會寫它，量測排除不了；若會，那次寫入現在會
+# 觸發錯誤，而不是成功。同日與使用者討論後決定。
+# 目的檔放進自己的目錄，因為 swiftc -c 以原始檔命名每一個目的檔，並寫到工作目錄。
 log_msg "Build swift_tar / 建置 swift_tar"
-"${LINK_ENV[@]}" "$SWIFTC" -O -swift-version 6 "${SWIFT_DEFINES[@]}" \
-    "$TEMP_VERSION" "${CLI_SRC[@]}" swift_tar.swift rgb1.swift crypto.swift \
+OBJDIR="build/swift-obj-linux"
+rm -rf "$OBJDIR"
+mkdir -p "$OBJDIR"
+swift_srcs=("$TEMP_VERSION" "${CLI_SRC[@]}" swift_tar.swift rgb1.swift crypto.swift)
+swift_srcs=(${swift_srcs:A})
+( cd "$OBJDIR" && "$SWIFTC" -O -swift-version 6 "${SWIFT_DEFINES[@]}" -c "${swift_srcs[@]}" "${ZLIB_SWIFT_FLAGS[@]}" )
+
+OBJCOPY="$SWIFT_PREFIX/bin/llvm-objcopy"
+[[ -x "$OBJCOPY" ]] || OBJCOPY=$(whence -p objcopy) || OBJCOPY=""
+if [[ -n "$OBJCOPY" ]]; then
+    for o in "$OBJDIR"/*.o; do
+        "$OBJCOPY" --set-section-flags .rodata=alloc,readonly,data "$o"
+    done
+else
+    log_msg "NOTICE: no llvm-objcopy or objcopy; .rodata stays writable in this build."
+    log_msg "注意：沒有 llvm-objcopy 或 objcopy；本次建置的 .rodata 仍可寫。"
+fi
+
+"${LINK_ENV[@]}" "$SWIFTC" "$OBJDIR"/*.o \
     build/libarchive_zip_bridge.o \
-    "${ZLIB_SWIFT_FLAGS[@]}" \
     "${ARCHIVE_LINK[@]}" \
     "${CODEC_LINK[@]}" \
     "${LINKER_FLAGS[@]}" \
@@ -427,6 +482,13 @@ if command -v readelf >/dev/null 2>&1; then
     # 捲過好幾週。見上方的 -z separate-code。
     if readelf -lW release/swift_tar | grep -E '^ +LOAD ' | grep -q 'RWE'; then
         die "release/swift_tar 有同時可寫又可執行的 LOAD 區段 / has a LOAD segment that is both writable and executable"
+    fi
+    # Likewise for .rodata once the flag was taken off above: if it is writable again, an
+    # input this script did not rewrite brought the flag back.
+    # .rodata 亦然：上面已拿掉旗標，若它又變成可寫，就是有本腳本沒改寫到的輸入把旗標帶回來。
+    rodata=($(readelf -SW release/swift_tar | grep -E '\] \.rodata +PROGBITS' | sed 's/^.*\] //'))
+    if [[ -n "$OBJCOPY" && "${rodata[7]:-}" == *W* ]]; then
+        die "release/swift_tar 的 .rodata 可寫（旗標 ${rodata[7]}）/ .rodata is writable (flags ${rodata[7]})"
     fi
 fi
 

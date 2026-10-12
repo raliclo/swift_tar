@@ -46,3 +46,7 @@
 	path = xz
 	url = https://github.com/tukaani-project/xz
 	branch = master
+[submodule "libxml2"]
+	path = libxml2
+	url = https://github.com/GNOME/libxml2.git
+	branch = 2.13

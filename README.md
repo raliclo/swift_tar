@@ -76,6 +76,12 @@ outright. And `-DEXCLUDE_LZFSE` is applied automatically when `lzfse2/` is not
 checked out, so the same script serves a full clone and a source drop without a
 flag.
 
+The link uses the toolchain's `ld.lld` when it can start, which gives the binary
+`GNU_RELRO`. `ld.lld` needs `libxml2.so.2` at load time; where that is the only
+thing missing, the script builds it with clang from the `libxml2/` submodule and
+puts it on the linker's library path only. Otherwise it links with the system
+`ld` and says so. swift_tar itself never links libxml2.
+
 Verified on aarch64 Linux (buildroot, glibc, Swift 6.3.3) under QEMU: builds
 clean, records its RPATH, and reports its linked libraries in
 `version-linux.txt`.

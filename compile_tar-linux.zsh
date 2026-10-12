@@ -342,9 +342,18 @@ SWIFT_RUNTIME_DIR="$SWIFT_PREFIX/lib/swift/linux"
 # on the output .rodata, which sits in the text segment, and the two can no longer be
 # separated. The option puts code in a segment of its own (R, E, RW), so nothing is both
 # writable and executable. The cause is not removed -- .rodata stays writable and there is
-# no GNU_RELRO -- and that is recorded in todo/todo.md rather than hidden: lld places by
-# flags and would lay this out properly, but the toolchain's ld.lld does not start on the
-# Buildroot guest (libxml2.so.2 is missing), so that path could not be tested.
+# no GNU_RELRO -- and that is recorded in todo/todo.md rather than hidden.
+#
+# lld is used instead whenever the toolchain's ld.lld can start. Measured the same day: it
+# places by flags, so code gets its own segment without being asked (R, R E, RW, RW), and
+# .data.rel.ro and .got come under GNU_RELRO, which GNU ld did not give this binary. It
+# does not make .rodata read-only -- the writable flag is on the compiler's output, and
+# lld honours it by putting .rodata in the writable data segment; that part stays in
+# todo/todo.md. On the Buildroot guest ld.lld does not start by itself: lld is one binary
+# for four linkers and needs libxml2.so.2 at load time for the Windows one. When that is
+# the reason, libxml2 is built with clang from the libxml2/ submodule and put on the
+# linker's library path only. Without ld.lld, or without the means to make it start, the
+# link falls back to GNU ld with -z separate-code and says so.
 #
 # -z separate-code：沒有它時 GNU ld 會警告「release/swift_tar has a LOAD segment with RWX
 # permissions」，而且它說得對——整個映像（含程式碼）是單一個可寫又可執行的區段。2026-10-13
@@ -354,15 +363,52 @@ SWIFT_RUNTIME_DIR="$SWIFT_PREFIX/lib/swift/linux"
 # 於是旗標落到輸出的 .rodata 上，而它位在 text 區段裡，兩者再也分不開。這個選項把程式碼
 # 放進自己的區段（R、E、RW），於是沒有任何東西同時可寫又可執行。成因並未消除——.rodata 仍
 # 可寫，也沒有 GNU_RELRO——這一點記在 todo/todo.md，而不是藏起來：lld 依旗標安置，能排出
-# 正確的配置，但工具鏈的 ld.lld 在 Buildroot guest 上起不來（缺 libxml2.so.2），那條路無法測。
+# 可寫，也沒有 GNU_RELRO——這一點記在 todo/todo.md，而不是藏起來。
+#
+# 只要工具鏈的 ld.lld 起得來，就改用 lld。同日實測：它依旗標安置，所以程式碼不必要求就有
+# 自己的區段（R、R E、RW、RW），.data.rel.ro 與 .got 也納入 GNU_RELRO——GNU ld 沒有給這支
+# 執行檔這個。它不會讓 .rodata 變唯讀：可寫旗標在編譯器的輸出上，lld 照著它把 .rodata 放進
+# 可寫的資料區段；那一部分仍留在 todo/todo.md。在 Buildroot guest 上 ld.lld 自己起不來：
+# lld 是四個連結器共用的一支執行檔，載入時就需要 libxml2.so.2（給 Windows 那一個用）。原因
+# 是這個時，就用 clang 從 libxml2/ submodule 建出 libxml2，並且只放進連結器的函式庫路徑。
+# 沒有 ld.lld、或沒有辦法讓它起來時，連結退回 GNU ld 加 -z separate-code，並明白說出來。
+LLD="$SWIFT_PREFIX/bin/ld.lld"
+LINK_ENV=()
+LINKER_FLAGS=(-Xlinker -z -Xlinker separate-code)
+if [[ -x "$LLD" ]]; then
+    lld_err=""
+    if ! lld_err=$("$LLD" --version 2>&1 >/dev/null); then
+        if [[ "$lld_err" == *libxml2.so.2* && -f libxml2/CMakeLists.txt ]] && command -v cmake >/dev/null 2>&1; then
+            log_msg "ld.lld needs libxml2.so.2; building it from libxml2/ / ld.lld 需要 libxml2.so.2，從 libxml2/ 建出"
+            CC="$CLANG" cmake -S libxml2 -B build/libxml2-linux -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+                -DLIBXML2_WITH_ICU=OFF -DLIBXML2_WITH_ZLIB=OFF -DLIBXML2_WITH_LZMA=OFF -DLIBXML2_WITH_PYTHON=OFF \
+                -DLIBXML2_WITH_TESTS=OFF -DLIBXML2_WITH_PROGRAMS=OFF
+            cmake --build build/libxml2-linux
+            LINK_ENV=(env LD_LIBRARY_PATH="$PWD/build/libxml2-linux${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
+            "${LINK_ENV[@]}" "$LLD" --version >/dev/null \
+                || die "libxml2 建好後 ld.lld 仍起不來 / ld.lld still does not start with the libxml2 just built"
+            lld_err=""
+        fi
+    fi
+    if [[ -z "$lld_err" ]]; then
+        LINKER_FLAGS=(-use-ld=lld)
+    else
+        log_msg "NOTICE: ld.lld does not start ($lld_err); linking with the system ld, so no GNU_RELRO."
+        log_msg "注意：ld.lld 起不來，改用系統的 ld 連結，因此沒有 GNU_RELRO。"
+    fi
+else
+    log_msg "NOTICE: no ld.lld in the toolchain; linking with the system ld, so no GNU_RELRO."
+    log_msg "注意：工具鏈沒有 ld.lld，改用系統的 ld 連結，因此沒有 GNU_RELRO。"
+fi
+
 log_msg "Build swift_tar / 建置 swift_tar"
-"$SWIFTC" -O -swift-version 6 "${SWIFT_DEFINES[@]}" \
+"${LINK_ENV[@]}" "$SWIFTC" -O -swift-version 6 "${SWIFT_DEFINES[@]}" \
     "$TEMP_VERSION" "${CLI_SRC[@]}" swift_tar.swift rgb1.swift crypto.swift \
     build/libarchive_zip_bridge.o \
     "${ZLIB_SWIFT_FLAGS[@]}" \
     "${ARCHIVE_LINK[@]}" \
     "${CODEC_LINK[@]}" \
-    -Xlinker -z -Xlinker separate-code \
+    "${LINKER_FLAGS[@]}" \
     -Xlinker -rpath -Xlinker "$SWIFT_RUNTIME_DIR" \
     -Xlinker -rpath -Xlinker "$SYSROOT/lib" \
     -o release/swift_tar

@@ -64,6 +64,10 @@ Linux 用 `compile_tar-linux.zsh`、Windows 用 `compile_tar-win.bat`——故�
 `LIBARCHIVE_STATIC` 或 `CODECS_STATIC` 為 `1` 或 `0` 可直接決定。另外，未 checkout `lzfse2/` 時會自動套用 `-DEXCLUDE_LZFSE`，使同一支腳本無需
 旗標即可服務完整 clone 與純原始碼投放兩種情況。
 
+工具鏈的 `ld.lld` 起得來時，連結就用它，執行檔因此有 `GNU_RELRO`。`ld.lld` 載入時需要
+`libxml2.so.2`；只缺這一項時，腳本用 clang 從 `libxml2/` submodule 建出它，並且只放進連結器的
+函式庫路徑。其餘情況改用系統的 `ld` 連結並明白說出來。swift_tar 本身不連結 libxml2。
+
 已於 QEMU 下的 aarch64 Linux（buildroot、glibc、Swift 6.3.3）驗證：建置無誤、正確記錄
 RPATH，並將所連結的函式庫寫入 `version-linux.txt`。
 

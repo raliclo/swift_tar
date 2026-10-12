@@ -1007,30 +1007,79 @@ self-test and `-test` pass. Every first-round failure other than the FIFO came f
 the tests chose their tools on a guest whose `tar` is an old swift_tar. A source drop
 records its pins as `unknown-source-drop`, because there is no git to ask.
 
-## 🔴 Linux：`.rodata` 仍可寫、沒有 GNU_RELRO——`-z separate-code` 只拿掉了 RWX / On Linux `.rodata` is still writable and there is no GNU_RELRO
+## 🔴 Linux：`.rodata` 仍可寫——改用 lld 後有了 GNU_RELRO，但這一項還在 / On Linux `.rodata` is still writable; lld brought GNU_RELRO, not this
 
-**現況**：`-z separate-code` 之後，`release/swift_tar` 的區段是 R／E／RW，沒有任何東西同時可寫
-又可執行，連結器不再警告。但成因還在：所有唯讀資料（`.rodata`、`swift5_*`、`.eh_frame`）落在
-RW 區段，而且沒有 `GNU_RELRO`。同一台機器上 `print("hi")` 的 Swift 程式有 RELRO，這個沒有。
+**現況（2026-10-13，VM 實測）**：`compile_tar-linux.zsh` 在工具鏈的 `ld.lld` 起得來時改用 lld。
+區段是 R／R E／RW／RW，`.data.rel.ro` 與 `.got` 納入 `GNU_RELRO`，建置 0 則警告，20 支測試、
+`--crypto-selftest`、`-test` 全數以 0 結束。**但 `.rodata` 仍是 `WA`，位在不受 RELRO 保護的那個
+RW 區段**——所有字串常數與 Swift 的唯讀中繼資料在執行期仍可被改寫。
 
-**成因（2026-10-13 在 VM 上逐步追出）**：aarch64 上的 Swift 6.3.3 把無 payload enum 的 protocol
-conformance descriptor 放進一個名為 `.rodata`、卻帶可寫旗標（`WA`）的 section。實測六種寫法——
-隱含合成、明寫 `Equatable`、明寫 `Hashable`，各自搭配 `==`、`switch`、`Set`——在 `-O` 與 `-Onone`
-下全部如此，所以不是原始碼改得掉的。本樹中觸發它的是 `TarCodec` 與 `WriteBackend`。GNU ld
-（2.45.1）依名稱安置 section，於是輸出的 `.rodata` 變成可寫，而它位在 text 區段裡。
+**成因**：aarch64 上的 Swift 6.3.3 把無 payload enum 的 protocol conformance descriptor 放進一個
+名為 `.rodata`、卻帶可寫旗標的 section。實測六種寫法——隱含合成、明寫 `Equatable`、明寫
+`Hashable`，各自搭配 `==`、`switch`、`Set`——在 `-O` 與 `-Onone` 下全部如此，所以不是原始碼改得
+掉的。本樹中觸發它的是 `TarCodec` 與 `WriteBackend`。GNU ld 依名稱安置，把整個可寫的 `.rodata`
+放進 text 區段（原本的 RWX 警告）；lld 依旗標安置，把它放進可寫的資料區段。兩者都只是照著編譯
+器給的旗標做。
 
-**還沒試的路**：lld 依旗標而非名稱安置 section，應能排出正確配置並保留 RELRO。工具鏈自帶
-`ld.lld`，但它在 Buildroot guest 上起不來（缺 `libxml2.so.2`），所以 `-use-ld=lld` 這條路沒有測過，
-也就沒有寫進建置腳本。恢復時：在有 libxml2 的 Linux（WSL／Ubuntu）上試 `-use-ld=lld`，以
-`readelf -lW` 確認有 `GNU_RELRO` 且 `.rodata` 不在可寫區段，測試全過後再決定是否設為預設。
+**已量到的一件事**：lld 建出的執行檔有 1657 筆動態重定位，**落在 `.rodata` 範圍內的是 0 筆**。
+也就是載入器不需要寫它。Swift runtime 在執行期會不會寫它，沒有量。
 
-The RWX segment is gone, the cause is not. Swift 6.3.3 on aarch64 emits the conformance
-descriptors of payload-free enums into a section named `.rodata` with the writable flag;
-all six ways of declaring and using such an enum do it, at -O and -Onone. GNU ld places
-by name, so the output `.rodata` became writable inside the text segment. With
-`-z separate-code` code has its own segment, but read-only data is now in the RW one and
-there is no GNU_RELRO. lld places by flags and should fix both; the toolchain's ld.lld
-does not start on the guest (no libxml2.so.2), so it is untested and not in the script.
+**還沒試的路**（都需要先討論，因為它們改的是編譯器的輸出）：
+- 先 `-emit-object`，以 `llvm-objcopy` 清掉該 section 的可寫旗標或改名為 `.data.rel.ro`，再連結。
+  若 runtime 真的會寫，前者會在執行期當掉；後者（RELRO）在重定位完成後同樣唯讀。
+- 向 Swift 回報：最小重現是任何 `enum E { case a, b }` 在 aarch64 Linux 上的目的檔。
+
+沒有 lld 時（沒有 `ld.lld`，或缺 libxml2 又沒有 cmake／`libxml2/`）退回 GNU ld 加
+`-z separate-code`：R／R E／RW，沒有 `GNU_RELRO`，腳本會印出 NOTICE。
+
+lld is now the linker whenever the toolchain's ld.lld can start: segments are R, R E, RW,
+RW, `.data.rel.ro` and `.got` are under GNU_RELRO, zero warnings, every suite exits 0.
+`.rodata` is still `WA` and sits in the RW segment RELRO does not cover, because Swift
+6.3.3 on aarch64 emits the conformance descriptors of payload-free enums into a section
+named `.rodata` with the writable flag, however the enum is declared or used. Measured:
+of 1657 dynamic relocations, none lands in `.rodata`, so the loader does not need it
+writable; whether the Swift runtime writes there was not measured. Untried, and to be
+discussed first because both rewrite compiler output: clearing the flag or renaming the
+section to `.data.rel.ro` with llvm-objcopy between compile and link; reporting it to
+Swift. Without lld the link falls back to GNU ld with `-z separate-code` and no RELRO.
+
+## 🔴 libxml2 釘在 2.13 線，不是最新版 / libxml2 is pinned to the 2.13 line, not the latest
+
+**現況**：`libxml2/` submodule 追蹤 `2.13` 分支，pin 是 `v2.13.9`（`04af2cab`）。它只在 Linux 上、
+為了讓工具鏈的 `ld.lld` 起得來而建置；swift_tar 不連結它。最新的發行版是 `v2.15.4`
+（`96498992`，2026-10-13 查）。
+
+**為什麼不是最新版**：Swift 6.3.3 工具鏈的 `lld` 要的是
+
+- 檔名 `libxml2.so.2`；
+- 版本節點 `LIBXML2_2.4.30` 與 `LIBXML2_2.6.0`（`readelf -V` 讀出）。
+
+2.13.9 兩者都給：soname 是 `libxml2.so.2`，cmake 建置會套用樹內的 `libxml2.syms`。2.15.4 兩者
+都不給：soname 是 `libxml2.so.16`（2.14 起），樹內也不再有 `libxml2.syms`。**2.15.4 沒有實際建過，
+以上是讀 `CMakeLists.txt` 與檔案清單得到的。**
+
+**恢復時要做的**：
+1. 把 `.gitmodules` 的 `branch` 改為 `2.15`（或 `master`），移動 pin。
+2. 讓 `ld.lld` 找得到它：以連結器旗標把 soname 蓋成 `libxml2.so.2`，或在 `build/libxml2-linux/`
+   放一個同名的符號連結。
+3. 處理版本節點：以 `readelf --dyn-syms` 列出 `lld` 匯入的 `@LIBXML2_*` 符號，產生一份只含
+   那兩個節點的 version script 交給連結器。沒有版本定義時 glibc 只會警告並繼續，但那則警告
+   會出現在每一次連結。
+4. 確認 `lld` 匯入的每個符號在 2.15 都還在（2.14 移除了一批 API）。連結 ELF 時不會呼叫它們，
+   但若 `lld` 是以 `BIND_NOW` 連結的，缺任何一個就起不來——要先讀 `readelf -d` 的旗標。
+5. 在 VM 上跑 `compile_tar-linux.zsh`，確認 `.comment` 記的是 LLD、有 `GNU_RELRO`、測試全過。
+
+`sync_all.zsh --update --all` 會把它帶到 `2.13` 的 tip，不會跨到 2.14 之後——這是刻意的。
+
+The `libxml2/` submodule tracks branch `2.13` and is pinned at `v2.13.9`; it exists only
+so the toolchain's ld.lld can start on Linux, and swift_tar does not link it. The latest
+release is `v2.15.4`. It is not used because the toolchain's lld asks for a file named
+`libxml2.so.2` carrying the version nodes `LIBXML2_2.4.30` and `LIBXML2_2.6.0`; 2.13.9
+provides both, while 2.15.4 has soname `libxml2.so.16` and no `libxml2.syms` -- read from
+its CMakeLists.txt and file list, not built. To move: change the branch and pin, give the
+library the old soname or a symlink, generate a version script for the two nodes from the
+symbols lld imports, confirm each imported symbol still exists (and whether lld binds
+eagerly), then rebuild and test in the VM.
 
 ## ⏸ 暫緩（2026-10-09，使用者決定）：重量 M4 的管線上限 / Re-measure the M4's pipe ceiling
 

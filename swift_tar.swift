@@ -582,6 +582,7 @@ private func posixRunCompress(exe: String, args: [String], input: Data) -> Data?
         eprint("swift_tar: '\(exe)' not found in PATH / 在 PATH 中找不到 '\(exe)'")
         return nil
     }
+    guard subprocessesUsable() else { return nil }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: path)
     process.arguments = args
@@ -5910,6 +5911,73 @@ func compareTrees(_ a: String, _ b: String) -> Bool {
     return true
 }
 
+/// Whether starting a subprocess here would come back.
+///
+/// On Linux, Foundation's `Process` needs a working loopback interface: with `lo` down it
+/// prints "Could not create wakeup socket pair for CFSocket!!!" and `waitUntilExit()`
+/// never returns. That is the state of a machine booted with `init=/bin/sh`, where
+/// nothing configures `lo` -- on 2026-10-12 `swift_tar -test` sat there at 0.4% CPU for
+/// 18 minutes, and took a whole test run with it. A hang says nothing about its cause, so
+/// the condition is tested for: a TCP connection to a listener of our own on 127.0.0.1
+/// either completes at once or, with the interface down, never does. Measured on the
+/// Buildroot guest in both states; a UDP connect and an AF_UNIX socketpair both succeed
+/// with `lo` down and so tell nothing. Checked once, and the half second is only spent
+/// when the answer is no.
+///
+/// 在此啟動子行程是否回得來。
+///
+/// Linux 上 Foundation 的 `Process` 需要可用的 loopback 介面：`lo` 沒啟用時它會印出
+/// 「Could not create wakeup socket pair for CFSocket!!!」，而 `waitUntilExit()` 永不返回。
+/// 以 `init=/bin/sh` 開機的機器正是這種狀態，沒有任何東西會設定 `lo`——2026-10-12
+/// `swift_tar -test` 以 0.4% CPU 在那裡停了 18 分鐘，連帶拖住整輪測試。卡住本身不會說明
+/// 成因，所以直接測這個條件：對自己在 127.0.0.1 上的 listener 建立 TCP 連線，不是立刻完成，
+/// 就是（介面未啟用時）永遠不會。已在 Buildroot guest 的兩種狀態下實測；UDP connect 與
+/// AF_UNIX socketpair 在 `lo` 未啟用時都會成功，分辨不出來。只檢查一次，而且只有答案是
+/// 「不行」時才會花掉那半秒。
+#if os(Linux)
+private let loopbackConnects: Bool = {
+    let listener = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+    guard listener >= 0 else { return false }
+    defer { close(listener) }
+    var addr = sockaddr_in()
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_addr.s_addr = UInt32(0x7f00_0001).bigEndian
+    var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let bound = withUnsafeMutablePointer(to: &addr) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa -> Bool in
+            bind(listener, sa, len) == 0 && listen(listener, 1) == 0
+                && getsockname(listener, sa, &len) == 0
+        }
+    }
+    guard bound else { return false }
+    let client = socket(AF_INET, Int32(SOCK_STREAM.rawValue) | Int32(SOCK_NONBLOCK.rawValue), 0)
+    guard client >= 0 else { return false }
+    defer { close(client) }
+    let started = withUnsafePointer(to: &addr) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, len) }
+    }
+    if started == 0 { return true }
+    guard errno == EINPROGRESS else { return false }
+    var waiting = pollfd(fd: client, events: Int16(POLLOUT), revents: 0)
+    guard poll(&waiting, 1, 500) == 1 else { return false }
+    var pending: Int32 = 0
+    var pendingLen = socklen_t(MemoryLayout<Int32>.size)
+    return getsockopt(client, SOL_SOCKET, SO_ERROR, &pending, &pendingLen) == 0 && pending == 0
+}()
+#endif
+
+/// False, with the reason on stderr, where a subprocess would never be waited for.
+/// 子行程會等不回來時回傳 false，並在 stderr 說明原因。
+func subprocessesUsable() -> Bool {
+#if os(Linux)
+    if !loopbackConnects {
+        eprint("swift_tar: cannot run a subprocess: no TCP connection to 127.0.0.1 can be made, and Foundation would wait forever. Bring the loopback interface up (ip link set lo up). / 無法執行子行程：連不上 127.0.0.1，Foundation 會永久等待。請啟用 loopback 介面（ip link set lo up）。")
+        return false
+    }
+#endif
+    return true
+}
+
 /// Run a tar binary (self or the standard tar) as a subprocess and wait for
 /// exit; returns true on exit code 0. `cwd`, when given, matches "-C dir"
 /// for create so both sides always archive the same relative "src/..."
@@ -5922,6 +5990,7 @@ func compareTrees(_ a: String, _ b: String) -> Bool {
 /// tar 項目名稱，所以建檔這一側絕不傳絕對路徑進去。
 @discardableResult
 func runTarProcess(_ exePath: String, _ args: [String], cwd: String? = nil) -> Bool {
+    guard subprocessesUsable() else { return false }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: exePath)
     process.arguments = args
@@ -5957,6 +6026,7 @@ func runTarProcessCapturingStdout(_ exePath: String, _ args: [String],
     // createFile 標了 @discardableResult，swift-corelibs-foundation 沒有，故此行僅在
     // Linux 產生警告。把回傳值用掉既是誠實地消掉它，也是比較好的程式碼——失敗在此處
     // 就被指名，而不是延到下一行變成一個 nil 的 FileHandle。
+    guard subprocessesUsable() else { return false }
     guard FileManager.default.createFile(atPath: toFile, contents: nil) else { return false }
     guard let out = FileHandle(forWritingAtPath: toFile) else { return false }
     defer { try? out.close() }
@@ -6027,6 +6097,12 @@ func runSelfTest(debug: Bool = false) {
     // ZIP 時，改用 Info-ZIP 的 unzip 與 zip 備援，兩者亦不存在才判定失敗。
     // 被跳過的項目乍看與通過無異，而本套測試正是整輪 benchmark 的守門條件。
 
+    // Before anything else starts a subprocess, and a failure: findStandardTar would
+    // otherwise turn every candidate down for not answering, and the "not found, skipping"
+    // branch below would end this run with 0.
+    // 在任何東西啟動子行程之前先檢查，並且算失敗：否則 findStandardTar 會因為得不到回答而
+    // 排除每一個候選，而下方「找不到，略過」的分支會讓這次執行以 0 結束。
+    guard subprocessesUsable() else { exit(1) }
     guard let stdTar = findStandardTar(debug: debug) else {
         print("[swift_tar -test] standard tar not found on PATH, skipping cross-compat round-trip / 在 PATH 中找不到標準 tar，略過互通性測試")
         exit(0)

@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
-# build_codecs.zsh -- build liblzma (xz), liblz4 and libzstd from their pinned
+# build_codecs.zsh -- build zlib, liblzma (xz), liblz4 and libzstd from their pinned
 # submodules as static libraries, and record the gitlinks in version-mac.txt.
-# build_codecs.zsh -- 以固定版本的 submodule 建置 liblzma(xz)、liblz4 與 libzstd
+# build_codecs.zsh -- 以固定版本的 submodule 建置 zlib、liblzma(xz)、liblz4 與 libzstd
 # 靜態庫，並將 gitlink 記入 version-mac.txt。
 #
 #   zsh ./build_codecs.zsh          build all three / 建置三者
@@ -73,7 +73,15 @@ version_file="version-mac.txt"
 # 不做乾淨重建。cmake 是增量的，而本腳本每次 compile_tar.zsh 都會執行；每次編譯都把三個
 # 函式庫重建一遍，等於花數分鐘重建完全相同的位元組。build_libarchive.zsh 亦採同一立場。
 
-git submodule update --init xz lz4 zstd
+git submodule update --init zlib xz lz4 zstd
+
+# Build zlib from the same headers imported by Swift.
+# 以 Swift 匯入的同一份標頭建置 zlib。
+cmake -S zlib -B build/zlib-macos \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DZLIB_BUILD_SHARED=OFF -DZLIB_BUILD_STATIC=ON -DZLIB_BUILD_TESTING=OFF
+cmake --build build/zlib-macos --config Release --target zlibstatic --parallel
+[ -f build/zlib-macos/libz.a ] || exit 1
 
 # ---- xz / liblzma ----
 # The encoder is needed as well as the decoder: swift_tar calls
@@ -181,9 +189,9 @@ tmp_version="$version_file.tmp"
     # grep 在沒有輸出時以 1 結束，在此情境即代表檔案裡只有 codec 鍵。僅容忍該狀態；
     # 真正的 grep 錯誤（2）仍會失敗，而檔案不存在已於上方擋下，故此處不會靜默產生
     # 一份被截斷的紀錄。
-    grep -vE '^(lz4|xz|zstd)_(dylib_version|path|version|commit|linkage)=' \
+    grep -vE '^(zlib|lz4|xz|zstd)_(dylib_version|path|version|commit|linkage)=' \
         "$version_file" || [ $? -eq 1 ]
-    for pair in "lz4:lz4" "xz:xz" "zstd:zstd"; do
+    for pair in "zlib:zlib" "lz4:lz4" "xz:xz" "zstd:zstd"; do
         key="${pair%%:*}"; dir="${pair#*:}"
         echo "${key}_version=$(describe "$dir")"
         echo "${key}_commit=$(git -C "$dir" rev-parse HEAD)"

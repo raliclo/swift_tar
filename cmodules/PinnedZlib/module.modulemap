@@ -1,0 +1,4 @@
+module PinnedZlib [system] {
+    header "../../zlib/zlib.h"
+    export *
+}

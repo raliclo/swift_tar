@@ -57,7 +57,11 @@ func cMessage(_ buffer: [CChar]) -> String {
     String(decoding: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) },
            as: UTF8.self)
 }
+#if canImport(PinnedZlib)
+import PinnedZlib
+#else
 import zlib
+#endif
 #if os(Windows)
 // CRT-level file I/O for the -write_ucrt extraction backend (one open per
 // file, mtime set on the open fd via _futime64 — same syscall profile as

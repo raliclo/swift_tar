@@ -83,7 +83,13 @@ case "$(swift_tar_platform)" in
         exit 1
         ;;
 esac
-cmake -S libarchive -B "$build_dir" \
+typeset -a zlib_options
+zlib_options=()
+if [[ -n ${ZLIB_LIBRARY:-} ]]; then
+    zlib_options=(-DZLIB_LIBRARY="$ZLIB_LIBRARY" -DZLIB_LIBRARY_RELEASE="$ZLIB_LIBRARY" \
+                  -DZLIB_INCLUDE_DIR="${ZLIB_INCLUDE_DIR:?}")
+fi
+cmake -S libarchive -B "$build_dir" "${zlib_options[@]}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=OFF \
     -DENABLE_ZLIB=ON \

@@ -931,38 +931,40 @@ lzfse2 的 `run_round.command`（lzfse2 `d566228`）；`tgz_inflight_rss.zsh` �
 Fixed: building no longer installs unless `--install` is given; every existing caller
 passes it, so their behaviour is unchanged.
 
-## 🔴 Linux：ZIP／ZIP64 存不了 FIFO——patch 0002 只進得了靜態 libarchive / On Linux a FIFO cannot go into a ZIP: patch 0002 reaches only the static libarchive
+## Linux：ZIP／ZIP64 存不了 FIFO ▸ ✅ 已修正 2026-10-13 / On Linux a FIFO could not go into a ZIP
 
 **怎麼發現的**：2026-10-12 在 Linux VM（aarch64、HVF）驗證 `5455bec`..`ab05de0` 時，
-`test/test_zip_fidelity.zsh` 為 PASS 16／FAIL 4，四項都是 FIFO：
+`test/test_zip_fidelity.zsh` 為 PASS 16／FAIL 4，四項都是 FIFO
+（`zip format cannot archive named pipes`）。
 
-```
-FAIL: --zip: -c says nothing on stderr (swift_tar: tree/c/pipe: tree/c/pipe: zip format cannot archive named pipes)
-FAIL: --zip: a FIFO comes back as a FIFO
-FAIL: --zip64: -c says nothing on stderr (…同上)
-FAIL: --zip64: a FIFO comes back as a FIFO
-```
+**成因**：`ab05de0` 的修正是 `patch/libarchive/0002-zip-store-fifo.patch`，而 patch 只進得了
+`build_libarchive.zsh` 建出的靜態庫。`compile_tar-linux.zsh` 當時預設連結 sysroot 的共享庫
+（`libarchive.so.13.8.8`）；建置成功、沒有任何訊息，功能就是不在。
 
-**成因**：`ab05de0` 讓 ZIP 往返保留 FIFO 的做法，是修改 libarchive 本身
-（`patch/libarchive/0002-zip-store-fifo.patch`）。patch 只會進到 `build_libarchive.zsh` 建出的
-靜態庫。`compile_tar-linux.zsh` 預設連結 sysroot 的共享庫（該次為 `libarchive.so.13.8.8`），
-那份沒有 patch；`LIBARCHIVE_STATIC=1` 需要 cmake，而該 VM 沒有。目錄時間與可重現性兩項修正在
-bridge 內，Linux 上通過。`0001`（NFD 正規化）只影響 `__APPLE__`，不受此影響。
+**修法**：
+- `compile_tar-linux.zsh`：未設定 `LIBARCHIVE_STATIC` 時，只要 cmake 與 `libarchive/` 都在就走
+  靜態（與 macOS、Windows 一致）；退回共享時印出 NOTICE，明說 patch 不在、ZIP 存不了 FIFO。
+  bridge 改在選定之後編譯，對著實際連結的那份 header，並帶 `-fPIC`。
+- `build_libarchive.zsh`：Linux 加 `CMAKE_POSITION_INDEPENDENT_CODE`；cmake 設定完檢查
+  `HAVE_ZLIB_H`（找不到 zlib 時 cmake 照樣成功，產出只能 store 的 ZIP 後端）；不是 git checkout
+  時依送來的原始碼建置並明說 patch 未套用也未檢查。
+- VM 映像加入 cmake 3.31.6 與 ninja 1.12.1；`run.sh` 的 preamble 把它們放進 PATH。
 
-**尚未決定怎麼修**，可行的方向：(a) 在 Linux 建置環境補上 cmake，預設改走靜態；(b) 連結共享庫時
-讓測試與 FAQ 明說 FIFO 不支援，而不是失敗。恢復時由使用者決定。釘住它的測試已存在
-（`test_zip_fidelity.zsh`，在此環境 4 項失敗）。
+**驗證**：VM 上 `test_zip_fidelity` 20／0，`version-linux.txt` 記為 `libarchive_linkage=static`。
+沒有 cmake 的那一輪（同一棵樹）印出 NOTICE 且同樣 4 項失敗，所以退路看得見。
 
-On Linux `-c --zip` refuses a FIFO. The fix in `ab05de0` is a patch to libarchive, and a
-patch reaches only the static library `build_libarchive.zsh` builds; the Linux build links
-the sysroot's shared libarchive by default, and `LIBARCHIVE_STATIC=1` needs cmake, which
-the VM lacks. Directory times and reproducibility were fixed in the bridge and pass. No fix
-chosen yet: either make the static build the Linux default, or have the tests and FAQ say
-FIFOs are unsupported with a shared libarchive. `test_zip_fidelity.zsh` already pins it.
+**仍然成立的限制**：guest 沒有 git，patch 是在 host 套好再打包送進去的；在 guest 內
+`build_libarchive.zsh` 無從確認 patch 在不在，只有 `test_zip_fidelity` 會發現。
+
+Fixed 2026-10-13. The Linux build defaulted to the sysroot's shared libarchive, which
+this tree's patches cannot reach, so a fix made on macOS never arrived and nothing said
+so. The build is now static wherever cmake and `libarchive/` are present, and the shared
+fallback prints what it lacks. On the VM: `test_zip_fidelity` 20/0. In a git-less source
+drop the patches must arrive already applied; only the test can tell.
 
 ## ⏸ 暫緩（2026-10-09，使用者決定）：本 session 的改動尚未在 Windows 建置驗證 / Not yet built or tested on Windows
 
-*（Linux 一半已於 2026-10-12 完成，見下。）*
+*（Linux 一半已於 2026-10-13 完成，見下。）*
 
 2026-10-07〜09 的提交（`5455bec` 到 `ab05de0`）在 Windows 上仍未建置過。尚未驗證的部分：
 - `ReadAhead`、`--strict` 的 `winCreateSymlink`／`winCreateHardlink` 回傳值，各有只在 Windows
@@ -971,35 +973,33 @@ FIFOs are unsupported with a shared libarchive. `test_zip_fidelity.zsh` already 
 - `patch/libarchive/0002-zip-store-fifo.patch`：Windows 沒有 FIFO，但寫出端與讀取端的改動仍會
   編進去；
 - 2026-10-12 的 submodule 升級（libarchive `abaa707d`→`7197234b`、lz4 `0774d055`→`8aba903e`、
-  lzfse2 `6e01a03`→`01a87cc`）只在 macOS 建置與測試過。Linux 連結 sysroot 的共享庫，不吃這些
-  pin（lzfse2 除外）。
+  lzfse2 `6e01a03`→`01a87cc`）；
+- 2026-10-13 的 `findStandardTar` 改動：`-test` 會對 PATH 上的候選 tar 執行 `--version`。
+  Windows 走 System32 的分支不經過它，但退回 PATH 搜尋時會。
 
-**Linux，2026-10-12（VM、aarch64、HVF、Swift 6.3.3）**：`compile_tar-linux.zsh` 以
-`-swift-version 6` 建置成功，Swift 診斷 0 則（連結器有 1 則 `LOAD segment with RWX permissions`
-警告，未處理）。測試 19 支：15 支全數通過，4 支有失敗：
+**Linux，2026-10-13（VM、aarch64、HVF、Swift 6.3.3、cmake 3.31.6）**：`compile_tar-linux.zsh` 以
+`-swift-version 6` 建置成功，Swift 診斷 0 則，libarchive 為靜態（pin `7197234b` 加兩份 patch）。
+`test/` 19 支全數以 0 結束，`--crypto-selftest` 51／0，`swift_tar -test` 16 項全過
+（標準 tar 選到 `/usr/bin/bsdtar`）。連結器的 `LOAD segment with RWX permissions` 警告仍在，未處理。
+lz4、zlib、zstd、xz、bzip2 仍連結 sysroot 的共享庫，所以 lz4 的 pin 升級在 Linux 上沒有驗證到。
 
-| 測試 | 結果 | 原因 |
+2026-10-12 第一輪有 4 支失敗，除上方 FIFO 一項外都出在測試如何挑工具，已一併修正：
+
+| 當時的失敗 | 成因 | 修法 |
 |---|---|---|
-| `test_zip_fidelity` | 16／4 | **真的缺陷**，見上方 🔴 條目 |
-| `test_blind_findings` | 174／6 | guest 工具：`/usr/bin/tar` 是舊版 swift_tar（4 項拿它當參考 tar），busybox `touch -d` 不接受小數秒（2 項，測資建不出來） |
-| `test_concurrent_extract` | 16／1 | guest 工具：同一個參考 tar 不認 `--no-recursion`，目錄 shard 有 840 筆而非 84；其後 16 項（含每一輪的重建比對）通過 |
-| `test_no_lzfse` | 14／1 | guest 工具：`-test` 的「外部 zip 建立」一項需要 `zip`，guest 沒有 |
+| `test_blind_findings` 4 項、`test_concurrent_extract` 1 項 | guest 的 `/usr/bin/tar` 是舊版 swift_tar，被當成參考 tar | 四支測試挑參考 tar 時排除自稱 swift_tar 的候選，改用 bsdtar |
+| `test_blind_findings` 2 項 | BusyBox `touch -d` 不接受小數秒，測資建不出來 | 斷言改用檔案實際的小數；`-d` 失敗時以 `touch -r` 複製參考檔的時間 |
+| `test_no_lzfse` 1 項（`-test` 的 ZIP 互通） | `findStandardTar` 選到舊版 swift_tar，之後又選到沒有 gzip 的 BusyBox tar | 排除自稱 swift_tar 或 BusyBox 的候選，PATH 上的 `tar` 都不合用時才找 bsdtar |
+| `test_concurrent_extract`、`test_create_readahead` 以 127 結束 | guest 沒有 `shasum` | 沒有時改用 `sha256sum` |
+| `swift_tar -test` 永久睡著（18 分鐘、CPU 0.4%） | guest 的 `lo` 沒啟用，Foundation 印 `Could not create wakeup socket pair for CFSocket!!!` 後不再醒來 | `run.sh` 的 preamble 加 `ip link set lo up`。**程式本身沒有改**：在沒有 loopback 的機器上 `-test` 仍會卡住 |
 
-guest 還有兩件事會讓結果看起來像程式壞掉，其實不是：
-- **沒有 `shasum`**。`test_concurrent_extract` 與 `test_create_readahead` 以 127 結束；在 PATH 放一個
-  轉呼叫 `sha256sum` 的 shim 後才得到上表的數字。
-- **`lo` 沒有啟用**（`init=/bin/sh`）。`swift_tar -test` 會印
-  `Could not create wakeup socket pair for CFSocket!!!` 然後**永久睡著**（量到 18 分鐘、CPU 0.4%），
-  完整版與公開版皆然；`ip link set lo up` 之後 5 秒內結束。`test_no_lzfse` 因此整支卡住。
-
-Windows is still unverified, including the 2026-10-12 submodule bumps. Linux was verified
-on 2026-10-12: the Swift 6 build succeeds with no Swift diagnostics, 15 of 19 suites pass
-outright, and of the four with failures only `test_zip_fidelity` is a defect (entry above);
-the rest trace to the guest's tools -- its `tar` is an old swift_tar, busybox `touch`
-takes no fractional seconds, and there is no `zip`. Two more guest gaps look like program
-faults and are not: no `shasum` (two suites exit 127 without a shim), and a loopback
-interface that is down, which makes `swift_tar -test` sleep forever in Foundation until
-`ip link set lo up`.
+Windows is still unverified, including the submodule bumps and the 2026-10-13 change to
+how `-test` picks its standard tar. Linux: the Swift 6 build succeeds, libarchive is
+static at the new pin with both patches, and all 19 suites, the crypto self-test and
+`-test` pass. Every other first-round failure came from how the tests chose their tools
+on a guest whose `tar` is an old swift_tar; those choices are fixed. One thing is not:
+`swift_tar -test` still hangs on a machine with no loopback interface -- the VM runner
+now brings it up, the program is unchanged.
 
 ## ⏸ 暫緩（2026-10-09，使用者決定）：重量 M4 的管線上限 / Re-measure the M4's pipe ceiling
 

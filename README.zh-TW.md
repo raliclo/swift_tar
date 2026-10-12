@@ -57,9 +57,10 @@ Linux 用 `compile_tar-linux.zsh`、Windows 用 `compile_tar-win.bat`——故�
 `sos/linux_kernal_vm_interactive` 下的 buildroot aarch64 設備），否則改用 `PATH` 上的
 `swiftc` 與 `/usr`。可用 `SWIFT_PREFIX` 與 `SYSROOT` 覆寫。
 
-與 macOS 版有兩點不同。libarchive 改以 sysroot 的共享庫連結，因為本腳本首次驗證所在
-的設備沒有 cmake；在有 cmake 的發行版上可設定 `LIBARCHIVE_STATIC=1` 改建內附的靜態
-版本。另外，未 checkout `lzfse2/` 時會自動套用 `-DEXCLUDE_LZFSE`，使同一支腳本無需
+與 macOS 版有兩點不同。只有在 cmake 與 `libarchive/` 原始碼都在時，libarchive 才是內附
+的靜態版；缺少時腳本改連結 sysroot 的共享庫並明白說出來，而那樣的建置不含本樹對
+libarchive 的 patch（`-c --zip` 存不了 FIFO）。設定 `LIBARCHIVE_STATIC=1` 或 `=0` 可直接
+決定。另外，未 checkout `lzfse2/` 時會自動套用 `-DEXCLUDE_LZFSE`，使同一支腳本無需
 旗標即可服務完整 clone 與純原始碼投放兩種情況。
 
 已於 QEMU 下的 aarch64 Linux（buildroot、glibc、Swift 6.3.3）驗證：建置無誤、正確記錄

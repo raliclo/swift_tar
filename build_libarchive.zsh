@@ -18,7 +18,24 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"
 . ./platform.zsh
 
-git submodule update --init libarchive
+# A source drop has no .git and may land where there is no git at all (the Buildroot
+# guest). There the sources are whatever was shipped, so this script can neither fetch
+# the pin nor apply or check the patches -- and it says so rather than building in
+# silence, because an unpatched libarchive builds and links exactly like a patched one.
+# 原始碼包沒有 .git，也可能落在完全沒有 git 的地方（Buildroot guest）。那裡的原始碼就是送
+# 進來的那一份，本腳本既取不到 pin，也無法套用或檢查 patch——所以要明說，而不是默默建置，
+# 因為未 patch 的 libarchive 建置與連結起來和 patch 過的一模一樣。
+in_git=0
+if command -v git >/dev/null 2>&1 && [ -e .git ]; then in_git=1; fi
+if [ "$in_git" = 1 ]; then
+    git submodule update --init libarchive
+elif [ -f libarchive/CMakeLists.txt ]; then
+    echo "[NOTICE] not a git checkout: building libarchive/ as shipped; patch/ is neither applied nor checked here" >&2
+    echo "[注意] 不是 git checkout：依送來的 libarchive/ 原樣建置；此處不會套用也不會檢查 patch/" >&2
+else
+    echo "[FAIL] no git checkout and no libarchive/ sources / 既非 git checkout，也沒有 libarchive/ 原始碼" >&2
+    exit 1
+fi
 
 # 套用本樹對 libarchive 的 patch，建置完成後還原，使 submodule 只在編譯期間是「髒」的。
 #
@@ -70,14 +87,20 @@ revert_patches() {
     fi
     exit $st
 }
-if [ -x ./patch/apply_patches.zsh ]; then
+if [ "$in_git" = 1 ] && [ -x ./patch/apply_patches.zsh ]; then
     trap revert_patches EXIT
     ./patch/apply_patches.zsh
 fi
 
+# Linux links swift_tar as a PIE, so the static library must be position-independent;
+# without this the link fails on the first relocation. macOS objects always are.
+# Linux 以 PIE 連結 swift_tar，靜態庫必須是位置無關碼；否則連結會在第一個重定位失敗。
+# macOS 的目的檔一律如此。
+platform_flags=()
 case "$(swift_tar_platform)" in
     mac)   build_dir="build/libarchive-macos"; version_file="version-mac.txt" ;;
-    linux) build_dir="build/libarchive-linux"; version_file="version-linux.txt" ;;
+    linux) build_dir="build/libarchive-linux"; version_file="version-linux.txt"
+           platform_flags=(-DCMAKE_POSITION_INDEPENDENT_CODE=ON) ;;
     *)
         echo "[FAIL] unsupported platform / 不支援的平台：$(swift_tar_platform)" >&2
         exit 1
@@ -100,7 +123,17 @@ cmake -S libarchive -B "$build_dir" "${zlib_options[@]}" \
     -DENABLE_PCREPOSIX=OFF -DENABLE_PCRE2POSIX=OFF -DENABLE_CNG=OFF \
     -DENABLE_TAR=OFF -DENABLE_CPIO=OFF -DENABLE_CAT=OFF -DENABLE_UNZIP=OFF \
     -DENABLE_XATTR=OFF -DENABLE_ACL=OFF -DENABLE_ICONV=OFF \
-    -DENABLE_TEST=OFF -DENABLE_INSTALL=OFF
+    -DENABLE_TEST=OFF -DENABLE_INSTALL=OFF \
+    "${platform_flags[@]}"
+
+# ENABLE_ZLIB=ON is a request, not a guarantee: when cmake finds no zlib it configures
+# without one and the build succeeds, producing a ZIP backend that can only store.
+# ENABLE_ZLIB=ON 是請求而非保證：cmake 找不到 zlib 時會照樣完成設定、建置也成功，產出一個
+# 只能 store 的 ZIP 後端。
+if ! grep -q '^#define HAVE_ZLIB_H 1' "$build_dir/config.h"; then
+    echo "[FAIL] cmake configured libarchive without zlib; set ZLIB_LIBRARY and ZLIB_INCLUDE_DIR / cmake 設定出的 libarchive 不含 zlib，請設定 ZLIB_LIBRARY 與 ZLIB_INCLUDE_DIR" >&2
+    exit 1
+fi
 cmake --build "$build_dir" --config Release --target archive_static --parallel
 
 archive_lib="$build_dir/libarchive/libarchive.a"
@@ -116,8 +149,15 @@ clang -O2 -Ilibarchive/libarchive -c libarchive_zip_bridge.c \
 # build_libarchive-win.zsh without letting a Linux build overwrite macOS data.
 # 將固定的 gitlink 記錄於本平台的來源資訊檔，與 build_libarchive-win.zsh 相同，
 # 且不讓 Linux 建置覆寫 macOS 資料。
-libarchive_version=$(git -C libarchive describe --tags --always)
-libarchive_commit=$(git -C libarchive rev-parse HEAD)
+if [ "$in_git" = 1 ]; then
+    libarchive_version=$(git -C libarchive describe --tags --always)
+    libarchive_commit=$(git -C libarchive rev-parse HEAD)
+else
+    # No git to ask; say so rather than leave the previous build's values in place.
+    # 沒有 git 可問；明說，而不是把上一次建置的值留在原處。
+    libarchive_version=unknown-source-drop
+    libarchive_commit=unknown
+fi
 tmp_version="$version_file.tmp"
 {
     grep -vE '^libarchive_(version|commit|linkage)=' "$version_file" 2>/dev/null || true

@@ -65,10 +65,11 @@ and `/workspace/sysroot` when they exist (the buildroot aarch64 appliance under
 `sos/linux_kernal_vm_interactive`), otherwise `swiftc` from `PATH` and `/usr`.
 Override with `SWIFT_PREFIX` and `SYSROOT`.
 
-Two differences from the macOS build. libarchive is linked shared from the
-sysroot, because the appliance it was first proven on has no cmake; set
-`LIBARCHIVE_STATIC=1` on a distro that does to build the bundled static copy
-instead. And `-DEXCLUDE_LZFSE` is applied automatically when `lzfse2/` is not
+Two differences from the macOS build. libarchive is the bundled static copy
+only where cmake and the `libarchive/` sources are present; without them the
+script links the sysroot's shared library and says so, and that build lacks
+this tree's libarchive patches (`-c --zip` cannot store a FIFO). Set
+`LIBARCHIVE_STATIC=1` or `=0` to decide outright. And `-DEXCLUDE_LZFSE` is applied automatically when `lzfse2/` is not
 checked out, so the same script serves a full clone and a source drop without a
 flag.
 

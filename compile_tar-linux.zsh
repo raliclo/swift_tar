@@ -14,11 +14,14 @@
 # 條件判斷，只會讓 macOS 路徑更難讀且毫無收穫。
 #
 # Differences from the macOS build / 與 macOS 版的差異：
-#   * libarchive is linked shared from the sysroot. The appliance this was
-#     first proven on has no cmake, so the bundled static build is not an
-#     option there; a distro with cmake can still set LIBARCHIVE_STATIC=1.
-#     libarchive 改以 sysroot 的共享庫連結。本腳本首次驗證所在的設備沒有 cmake，
-#     故內附靜態建置在該處不可行；有 cmake 的發行版仍可設定 LIBARCHIVE_STATIC=1。
+#   * libarchive is the bundled static copy when cmake and libarchive/ are present,
+#     as on macOS and Windows, because this tree's patches reach only that copy.
+#     Without them it falls back to the sysroot's shared library and says so: the
+#     appliance this was first proven on had no cmake. LIBARCHIVE_STATIC=0 or =1
+#     decides outright.
+#     有 cmake 與 libarchive/ 時使用內附的靜態版，與 macOS、Windows 相同，因為本樹的
+#     patch 只進得了那一份。缺少時退回 sysroot 的共享庫並明白說出來：本腳本首次驗證
+#     所在的設備沒有 cmake。LIBARCHIVE_STATIC=0 或 =1 直接決定。
 #   * swift_tar.swift does `import zlib`, and cmodules/zlib/module.modulemap
 #     points at the bundled zlib submodule. We link the sysroot's libz, so the
 #     header must be the sysroot's too — a module map is generated against it
@@ -31,7 +34,8 @@
 # Environment / 環境變數:
 #   SWIFT_PREFIX      Swift toolchain prefix (contains bin/swiftc, bin/clang)
 #   SYSROOT           prefix holding include/ and lib/ for the codecs
-#   LIBARCHIVE_STATIC set to 1 to build the bundled static libarchive instead
+#   LIBARCHIVE_STATIC 1 = bundled static libarchive, 0 = the sysroot's shared one;
+#                     unset = static when cmake and libarchive/ are present
 #
 # Defaults target the buildroot aarch64 appliance under
 # sos/linux_kernal_vm_interactive; on an ordinary distro both are auto-detected.
@@ -50,7 +54,7 @@ set -euo pipefail
 
 script_path="${0:A}"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-    sed -n '3,47p' "$script_path" | sed 's/^# \{0,1\}//'
+    sed -n '3,51p' "$script_path" | sed 's/^# \{0,1\}//'
     exit 0
 fi
 
@@ -164,16 +168,51 @@ mkdir -p build release
 TEMP_VERSION="build/swift_tar_version.swift"
 trap 'rm -f "$TEMP_CLI"' EXIT
 
-log_msg "Compile the libarchive ZIP bridge / 編譯 libarchive ZIP bridge"
-"$CLANG" -O2 -fPIC -I"$SYSROOT/include" \
-    -c libarchive_zip_bridge.c -o build/libarchive_zip_bridge.o
+# Static when it can be, shared otherwise. This tree's libarchive patches reach only the
+# library build_libarchive.zsh builds; a sysroot's shared libarchive is whatever the distro
+# shipped. Shared used to be the default here, and on 2026-10-12 that is how a fix made on
+# macOS (patch 0002, FIFOs in ZIP) turned out never to have reached Linux: the build
+# succeeded, and `-c --zip` refused a FIFO. So: unset means static wherever cmake and the
+# libarchive sources are both present, and the shared fallback says what it lacks instead
+# of passing for the same thing. LIBARCHIVE_STATIC=0 or =1 still decides outright.
+# 能靜態就靜態，否則才共享。本樹對 libarchive 的 patch 只進得了 build_libarchive.zsh 建出的
+# 那一份；sysroot 的共享庫則是發行版給什麼就是什麼。這裡原本預設共享，2026-10-12 就是因此
+# 才發現一項在 macOS 完成的修正（patch 0002，ZIP 內的 FIFO）從未到達 Linux：建置成功，而
+# `-c --zip` 拒絕 FIFO。因此：未設定時，只要 cmake 與 libarchive 原始碼都在就走靜態；退回
+# 共享時明說少了什麼，而不是看起來一樣。LIBARCHIVE_STATIC=0 或 =1 仍直接決定。
+if [[ -z "${LIBARCHIVE_STATIC:-}" ]]; then
+    if command -v cmake >/dev/null 2>&1 && [[ -f libarchive/CMakeLists.txt ]]; then
+        LIBARCHIVE_STATIC=1
+    else
+        LIBARCHIVE_STATIC=0
+        log_msg "NOTICE: no cmake or no libarchive/ sources; linking the sysroot's shared libarchive."
+        log_msg "        patch/libarchive/*.patch are NOT in this build: -c --zip cannot store a FIFO."
+        log_msg "注意：缺 cmake 或 libarchive/ 原始碼，改連結 sysroot 的共享 libarchive。"
+        log_msg "      本次建置不含 patch/libarchive/*.patch：-c --zip 存不了 FIFO。"
+    fi
+fi
 
 ARCHIVE_LINK=(-L"$SYSROOT/lib" -larchive)
-if [[ "${LIBARCHIVE_STATIC:-0}" == 1 ]]; then
+ARCHIVE_INCLUDE="$SYSROOT/include"
+if [[ "$LIBARCHIVE_STATIC" == 1 ]]; then
     command -v cmake >/dev/null 2>&1 || die "LIBARCHIVE_STATIC=1 需要 cmake / requires cmake"
-    zsh ./build_libarchive.zsh
+    # cmake must find the same zlib and compiler this script links with, not whatever it
+    # would discover on its own. / cmake 必須找到本腳本連結的同一份 zlib 與編譯器。
+    CC="$CLANG" ZLIB_LIBRARY="${ZLIB_LIBRARY:-$SYSROOT/lib/libz.so}" ZLIB_INCLUDE_DIR="${ZLIB_INCLUDE_DIR:-$SYSROOT/include}" \
+        zsh ./build_libarchive.zsh
     ARCHIVE_LINK=("build/libarchive-$(swift_tar_platform)/libarchive/libarchive.a")
+    ARCHIVE_INCLUDE="libarchive/libarchive"
 fi
+
+# After the choice above, and here rather than left to build_libarchive.zsh: the bridge
+# must be compiled against the headers of the libarchive it is linked with, and with
+# -fPIC, which a PIE link on Linux requires and that script (written for macOS) omits.
+# 放在上述選擇之後，且在這裡編譯而不交給 build_libarchive.zsh：bridge 必須對著它所連結的那份
+# libarchive 的 header 編譯，並帶 -fPIC——Linux 的 PIE 連結需要它，而那支腳本（為 macOS 而寫）
+# 沒有帶。
+log_msg "Compile the libarchive ZIP bridge / 編譯 libarchive ZIP bridge"
+"$CLANG" -O2 -fPIC -I"$ARCHIVE_INCLUDE" -I"$SYSROOT/include" \
+    -c libarchive_zip_bridge.c -o build/libarchive_zip_bridge.o
 
 # After build_libarchive.zsh, not before. generate_version.zsh reuses the stamp when
 # the rest of version-linux.txt matches the committed copy, and build_libarchive.zsh
@@ -325,7 +364,7 @@ record_provenance() {
     local version_file="version-$(swift_tar_platform).txt"
     local tmp_version="$version_file.tmp"
     local strip='^(zlib|bzip2|lz4|xz|zstd)_(so_version|path|linkage)='
-    if [[ "${LIBARCHIVE_STATIC:-0}" == 1 ]]; then
+    if [[ "$LIBARCHIVE_STATIC" == 1 ]]; then
         strip+='|^libarchive_(so_version|path)='
     else
         strip+='|^libarchive_(so_version|path|linkage|version|commit)='
@@ -337,7 +376,7 @@ record_provenance() {
         record_linked lz4        'liblz4\.so'
         record_linked xz         'liblzma\.so'
         record_linked zstd       'libzstd\.so'
-        [[ "${LIBARCHIVE_STATIC:-0}" == 1 ]] || record_linked libarchive 'libarchive\.so'
+        [[ "$LIBARCHIVE_STATIC" == 1 ]] || record_linked libarchive 'libarchive\.so'
     } > "$tmp_version"
     mv "$tmp_version" "$version_file"
     log_msg "Recorded linked libraries in $version_file / 已將連結的函式庫記入 $version_file"

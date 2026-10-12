@@ -36,6 +36,9 @@
 #   SYSROOT           prefix holding include/ and lib/ for the codecs
 #   LIBARCHIVE_STATIC 1 = bundled static libarchive, 0 = the sysroot's shared one;
 #                     unset = static when cmake and libarchive/ are present
+#   CODECS_STATIC     1 = zlib, liblzma, liblz4, libzstd from the submodules, 0 = the
+#                     sysroot's shared ones; unset = static when cmake and all four
+#                     source trees are present
 #
 # Defaults target the buildroot aarch64 appliance under
 # sos/linux_kernal_vm_interactive; on an ordinary distro both are auto-detected.
@@ -54,7 +57,7 @@ set -euo pipefail
 
 script_path="${0:A}"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-    sed -n '3,51p' "$script_path" | sed 's/^# \{0,1\}//'
+    sed -n '3,54p' "$script_path" | sed 's/^# \{0,1\}//'
     exit 0
 fi
 
@@ -106,7 +109,7 @@ log_msg "sysroot:      $SYSROOT"
 # Name the missing header rather than letting the compiler emit a wall of
 # errors that all trace back to one absent package.
 # 直接指出缺少哪個 header，而不是讓編譯器噴出一整片、其實全源自單一套件缺失的錯誤。
-for h in zlib.h bzlib.h lzma.h zstd.h lz4.h archive.h; do
+for h in bzlib.h; do
     [[ -f "$SYSROOT/include/$h" ]] || die "sysroot 缺少 header / missing header: $SYSROOT/include/$h"
 done
 
@@ -192,16 +195,54 @@ if [[ -z "${LIBARCHIVE_STATIC:-}" ]]; then
     fi
 fi
 
+# The codecs follow the same rule, for the same reason: a pin in this tree means nothing
+# on a platform that links whatever the sysroot has. zlib, liblzma, liblz4 and libzstd are
+# built from the submodules by build_codecs.zsh when cmake and all four sources are
+# present; bzip2 has no submodule and stays the sysroot's. CODECS_STATIC=0 or =1 decides
+# outright.
+# codec 依同一條規則，理由也相同：在連結 sysroot 現有版本的平台上，本樹的 pin 毫無意義。
+# cmake 與四份原始碼都在時，zlib、liblzma、liblz4、libzstd 由 build_codecs.zsh 從
+# submodule 建出；bzip2 沒有 submodule，維持使用 sysroot 的。CODECS_STATIC=0 或 =1 直接決定。
+if [[ -z "${CODECS_STATIC:-}" ]]; then
+    if command -v cmake >/dev/null 2>&1 && [[ -f zlib/CMakeLists.txt && -f xz/CMakeLists.txt \
+          && -f lz4/build/cmake/CMakeLists.txt && -f zstd/build/cmake/CMakeLists.txt ]]; then
+        CODECS_STATIC=1
+    else
+        CODECS_STATIC=0
+        log_msg "NOTICE: no cmake or no codec sources; linking the sysroot's zlib, liblzma, liblz4 and libzstd."
+        log_msg "        The submodule pins for those four are NOT what this build contains."
+        log_msg "注意：缺 cmake 或 codec 原始碼，改連結 sysroot 的 zlib、liblzma、liblz4、libzstd。"
+        log_msg "      本次建置的內容不是這四者的 submodule pin。"
+    fi
+fi
+if [[ "$CODECS_STATIC" == 1 ]]; then
+    command -v cmake >/dev/null 2>&1 || die "CODECS_STATIC=1 需要 cmake / requires cmake"
+    CC="$CLANG" zsh ./build_codecs.zsh
+    CODEC_LINK=(build/xz-linux/liblzma.a build/lz4-linux/liblz4.a build/zstd-linux/lib/libzstd.a
+                build/zlib-linux/libz.a -L"$SYSROOT/lib" -lbz2)
+    ZLIB_FOR_ARCHIVE_LIB="$PWD/build/zlib-linux/libz.a"
+    ZLIB_FOR_ARCHIVE_INC="$PWD/zlib"
+else
+    for h in zlib.h lzma.h zstd.h lz4.h; do
+        [[ -f "$SYSROOT/include/$h" ]] || die "sysroot 缺少 header / missing header: $SYSROOT/include/$h"
+    done
+    CODEC_LINK=(-L"$SYSROOT/lib" -lz -lbz2 -llzma -lzstd -llz4)
+    ZLIB_FOR_ARCHIVE_LIB="$SYSROOT/lib/libz.so"
+    ZLIB_FOR_ARCHIVE_INC="$SYSROOT/include"
+fi
+
 ARCHIVE_LINK=(-L"$SYSROOT/lib" -larchive)
 ARCHIVE_INCLUDE="$SYSROOT/include"
 if [[ "$LIBARCHIVE_STATIC" == 1 ]]; then
     command -v cmake >/dev/null 2>&1 || die "LIBARCHIVE_STATIC=1 需要 cmake / requires cmake"
     # cmake must find the same zlib and compiler this script links with, not whatever it
     # would discover on its own. / cmake 必須找到本腳本連結的同一份 zlib 與編譯器。
-    CC="$CLANG" ZLIB_LIBRARY="${ZLIB_LIBRARY:-$SYSROOT/lib/libz.so}" ZLIB_INCLUDE_DIR="${ZLIB_INCLUDE_DIR:-$SYSROOT/include}" \
+    CC="$CLANG" ZLIB_LIBRARY="${ZLIB_LIBRARY:-$ZLIB_FOR_ARCHIVE_LIB}" ZLIB_INCLUDE_DIR="${ZLIB_INCLUDE_DIR:-$ZLIB_FOR_ARCHIVE_INC}" \
         zsh ./build_libarchive.zsh
     ARCHIVE_LINK=("build/libarchive-$(swift_tar_platform)/libarchive/libarchive.a")
     ARCHIVE_INCLUDE="libarchive/libarchive"
+else
+    [[ -f "$SYSROOT/include/archive.h" ]] || die "sysroot 缺少 header / missing header: $SYSROOT/include/archive.h"
 fi
 
 # After the choice above, and here rather than left to build_libarchive.zsh: the bridge
@@ -237,13 +278,23 @@ log_msg "Generate version constants / 產生版本常數"
 # 這次實際編入的 lzfse-cli.swift；公開版為空。/ The lzfse-cli.swift compiled in; empty for the public build.
 SWIFT_TAR_LZFSE_SOURCE=$([[ -n $TEMP_CLI ]] && print -r -- lzfse2/lzfse-cli.swift) zsh ./generate_version.zsh "$TEMP_VERSION"
 
-ZLIB_MODULEMAP="build/zlib-sysroot.modulemap"
-cat > "$ZLIB_MODULEMAP" <<MODMAP
+# The zlib that Swift imports must be the zlib that is linked: the pinned submodule's
+# header through cmodules/PinnedZlib when the codecs are static, the sysroot's through a
+# generated module map otherwise.
+# Swift 匯入的 zlib 必須就是連結的那一份：codec 為靜態時，經 cmodules/PinnedZlib 使用固定
+# submodule 的 header；否則經產生的 module map 使用 sysroot 的。
+if [[ "$CODECS_STATIC" == 1 ]]; then
+    ZLIB_SWIFT_FLAGS=(-I cmodules/PinnedZlib -Xcc -I"$PWD/zlib")
+else
+    ZLIB_MODULEMAP="build/zlib-sysroot.modulemap"
+    cat > "$ZLIB_MODULEMAP" <<MODMAP
 module zlib [system] {
     header "$SYSROOT/include/zlib.h"
     export *
 }
 MODMAP
+    ZLIB_SWIFT_FLAGS=(-Xcc -fmodule-map-file="$ZLIB_MODULEMAP" -Xcc -I"$SYSROOT/include" -I"$SYSROOT/include")
+fi
 
 # Record the Swift runtime location in the binary. Without an RPATH it can only
 # start with LD_LIBRARY_PATH set, and that does not survive the boundaries a
@@ -282,15 +333,36 @@ SWIFT_RUNTIME_DIR="$SWIFT_PREFIX/lib/swift/linux"
 #
 # 旗標提交至此之前，已在 QEMU aarch64 guest 內以本腳本實測四種組合，全部 rc=0；
 # Swift 6 模式未新增任何 Swift 5 建置沒有的警告。
+# -z separate-code: without it GNU ld warned "release/swift_tar has a LOAD segment with RWX
+# permissions", and it was right -- the whole image, code included, was one writable and
+# executable segment. Traced on 2026-10-13: Swift 6.3.3 on aarch64 emits the protocol
+# conformance descriptors of payload-free enums (here TarCodec and WriteBackend) into a
+# section named `.rodata` with the writable flag set; any `enum E { case a, b }` does it,
+# however the conformance is declared. GNU ld places sections by name, so the flag lands
+# on the output .rodata, which sits in the text segment, and the two can no longer be
+# separated. The option puts code in a segment of its own (R, E, RW), so nothing is both
+# writable and executable. The cause is not removed -- .rodata stays writable and there is
+# no GNU_RELRO -- and that is recorded in todo/todo.md rather than hidden: lld places by
+# flags and would lay this out properly, but the toolchain's ld.lld does not start on the
+# Buildroot guest (libxml2.so.2 is missing), so that path could not be tested.
+#
+# -z separate-code：沒有它時 GNU ld 會警告「release/swift_tar has a LOAD segment with RWX
+# permissions」，而且它說得對——整個映像（含程式碼）是單一個可寫又可執行的區段。2026-10-13
+# 追查：aarch64 上的 Swift 6.3.3 把無 payload enum（此處是 TarCodec 與 WriteBackend）的
+# protocol conformance descriptor 放進一個名為 `.rodata`、卻帶可寫旗標的 section；任何
+# `enum E { case a, b }` 都會如此，不論 conformance 怎麼宣告。GNU ld 依名稱安置 section，
+# 於是旗標落到輸出的 .rodata 上，而它位在 text 區段裡，兩者再也分不開。這個選項把程式碼
+# 放進自己的區段（R、E、RW），於是沒有任何東西同時可寫又可執行。成因並未消除——.rodata 仍
+# 可寫，也沒有 GNU_RELRO——這一點記在 todo/todo.md，而不是藏起來：lld 依旗標安置，能排出
+# 正確的配置，但工具鏈的 ld.lld 在 Buildroot guest 上起不來（缺 libxml2.so.2），那條路無法測。
 log_msg "Build swift_tar / 建置 swift_tar"
 "$SWIFTC" -O -swift-version 6 "${SWIFT_DEFINES[@]}" \
     "$TEMP_VERSION" "${CLI_SRC[@]}" swift_tar.swift rgb1.swift crypto.swift \
     build/libarchive_zip_bridge.o \
-    -Xcc -fmodule-map-file="$ZLIB_MODULEMAP" \
-    -Xcc -I"$SYSROOT/include" \
-    -I"$SYSROOT/include" \
+    "${ZLIB_SWIFT_FLAGS[@]}" \
     "${ARCHIVE_LINK[@]}" \
-    -L"$SYSROOT/lib" -lz -lbz2 -llzma -lzstd -llz4 \
+    "${CODEC_LINK[@]}" \
+    -Xlinker -z -Xlinker separate-code \
     -Xlinker -rpath -Xlinker "$SWIFT_RUNTIME_DIR" \
     -Xlinker -rpath -Xlinker "$SYSROOT/lib" \
     -o release/swift_tar
@@ -303,6 +375,13 @@ log_msg "Built ./release/swift_tar / 已建置 ./release/swift_tar"
 if command -v readelf >/dev/null 2>&1; then
     readelf -d release/swift_tar 2>/dev/null | grep -E 'RUNPATH|RPATH' \
         || log_msg "WARNING: no RUNPATH recorded / 警告：未記錄 RUNPATH"
+    # A build whose code is writable is refused, whatever the linker chose to say about
+    # it: the warning this replaces scrolled past for weeks. See -z separate-code above.
+    # 程式碼可寫的建置一律拒絕，不論連結器有沒有說話：這裡取代的那則警告已經在畫面上
+    # 捲過好幾週。見上方的 -z separate-code。
+    if readelf -lW release/swift_tar | grep -E '^ +LOAD ' | grep -q 'RWE'; then
+        die "release/swift_tar 有同時可寫又可執行的 LOAD 區段 / has a LOAD segment that is both writable and executable"
+    fi
 fi
 
 # Record what the binary actually links, read back from the binary. The macOS
@@ -363,7 +442,15 @@ record_linked() {        # key  soname-prefix
 record_provenance() {
     local version_file="version-$(swift_tar_platform).txt"
     local tmp_version="$version_file.tmp"
-    local strip='^(zlib|bzip2|lz4|xz|zstd)_(so_version|path|linkage)='
+    # Static codecs are recorded by build_codecs.zsh (version, commit, linkage=static) and
+    # must survive this filter; shared ones are read back from the binary here, and any
+    # static record left by an earlier build must go.
+    # 靜態 codec 由 build_codecs.zsh 記錄（version、commit、linkage=static），不能被這個過濾器
+    # 刪掉；共享的則在此從執行檔讀回，而先前建置留下的靜態紀錄必須清掉。
+    local strip='^bzip2_(so_version|path|linkage)='
+    if [[ "$CODECS_STATIC" != 1 ]]; then
+        strip+='|^(zlib|lz4|xz|zstd)_(so_version|path|linkage|version|commit)='
+    fi
     if [[ "$LIBARCHIVE_STATIC" == 1 ]]; then
         strip+='|^libarchive_(so_version|path)='
     else
@@ -371,11 +458,11 @@ record_provenance() {
     fi
     {
         grep -vE "$strip" "$version_file" || [ $? -eq 1 ]
-        record_linked zlib       'libz\.so'
+        [[ "$CODECS_STATIC" == 1 ]] || record_linked zlib       'libz\.so'
         record_linked bzip2      'libbz2\.so'
-        record_linked lz4        'liblz4\.so'
-        record_linked xz         'liblzma\.so'
-        record_linked zstd       'libzstd\.so'
+        [[ "$CODECS_STATIC" == 1 ]] || record_linked lz4        'liblz4\.so'
+        [[ "$CODECS_STATIC" == 1 ]] || record_linked xz         'liblzma\.so'
+        [[ "$CODECS_STATIC" == 1 ]] || record_linked zstd       'libzstd\.so'
         [[ "$LIBARCHIVE_STATIC" == 1 ]] || record_linked libarchive 'libarchive\.so'
     } > "$tmp_version"
     mv "$tmp_version" "$version_file"

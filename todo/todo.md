@@ -953,14 +953,17 @@ passes it, so their behaviour is unchanged.
 **驗證**：VM 上 `test_zip_fidelity` 20／0，`version-linux.txt` 記為 `libarchive_linkage=static`。
 沒有 cmake 的那一輪（同一棵樹）印出 NOTICE 且同樣 4 項失敗，所以退路看得見。
 
-**仍然成立的限制**：guest 沒有 git，patch 是在 host 套好再打包送進去的；在 guest 內
-`build_libarchive.zsh` 無從確認 patch 在不在，只有 `test_zip_fidelity` 會發現。
+**原本的限制，已於同日解除**：guest 沒有 git，第一輪的 patch 是在 host 套好再打包送進去的，
+guest 內無從確認。現在 `patch/apply_patches.zsh` 在沒有 git 時自己比對 patch 的文字來判斷狀態、
+以 `patch` 指令套用、套完再比對一次；送未 patch 的原始碼進 guest，建置過程印出兩份「已套用」，
+`test_zip_fidelity` 20／0。
 
 Fixed 2026-10-13. The Linux build defaulted to the sysroot's shared libarchive, which
 this tree's patches cannot reach, so a fix made on macOS never arrived and nothing said
 so. The build is now static wherever cmake and `libarchive/` are present, and the shared
-fallback prints what it lacks. On the VM: `test_zip_fidelity` 20/0. In a git-less source
-drop the patches must arrive already applied; only the test can tell.
+fallback prints what it lacks. On the VM: `test_zip_fidelity` 20/0. A git-less source
+drop is now patched where it is built: apply_patches.zsh reads the state from the text
+and re-reads it after `patch` has run.
 
 ## ⏸ 暫緩（2026-10-09，使用者決定）：本 session 的改動尚未在 Windows 建置驗證 / Not yet built or tested on Windows
 
@@ -978,10 +981,12 @@ drop the patches must arrive already applied; only the test can tell.
   Windows 走 System32 的分支不經過它，但退回 PATH 搜尋時會。
 
 **Linux，2026-10-13（VM、aarch64、HVF、Swift 6.3.3、cmake 3.31.6）**：`compile_tar-linux.zsh` 以
-`-swift-version 6` 建置成功，Swift 診斷 0 則，libarchive 為靜態（pin `7197234b` 加兩份 patch）。
+`-swift-version 6` 建置成功，Swift 與連結器的診斷皆為 0 則。libarchive（pin `7197234b` 加兩份
+patch，patch 在 guest 內套用）與 zlib、liblzma、liblz4、libzstd 都由 submodule 靜態建出，只有
+bzip2 仍是 sysroot 的共享庫——所以 2026-10-12 的 lz4 與 libarchive 升級現在在 Linux 上也驗證到了。
 `test/` 19 支全數以 0 結束，`--crypto-selftest` 51／0，`swift_tar -test` 16 項全過
-（標準 tar 選到 `/usr/bin/bsdtar`）。連結器的 `LOAD segment with RWX permissions` 警告仍在，未處理。
-lz4、zlib、zstd、xz、bzip2 仍連結 sysroot 的共享庫，所以 lz4 的 pin 升級在 Linux 上沒有驗證到。
+（標準 tar 選到 `/usr/bin/bsdtar`）。原始碼包沒有 git，`version-linux.txt` 因此把各 pin 記為
+`unknown-source-drop`：建進去的是哪個 commit，要看打包時 host 的 `git submodule status`。
 
 2026-10-12 第一輪有 4 支失敗，除上方 FIFO 一項外都出在測試如何挑工具，已一併修正：
 
@@ -991,15 +996,41 @@ lz4、zlib、zstd、xz、bzip2 仍連結 sysroot 的共享庫，所以 lz4 的 p
 | `test_blind_findings` 2 項 | BusyBox `touch -d` 不接受小數秒，測資建不出來 | 斷言改用檔案實際的小數；`-d` 失敗時以 `touch -r` 複製參考檔的時間 |
 | `test_no_lzfse` 1 項（`-test` 的 ZIP 互通） | `findStandardTar` 選到舊版 swift_tar，之後又選到沒有 gzip 的 BusyBox tar | 排除自稱 swift_tar 或 BusyBox 的候選，PATH 上的 `tar` 都不合用時才找 bsdtar |
 | `test_concurrent_extract`、`test_create_readahead` 以 127 結束 | guest 沒有 `shasum` | 沒有時改用 `sha256sum` |
-| `swift_tar -test` 永久睡著（18 分鐘、CPU 0.4%） | guest 的 `lo` 沒啟用，Foundation 印 `Could not create wakeup socket pair for CFSocket!!!` 後不再醒來 | `run.sh` 的 preamble 加 `ip link set lo up`。**程式本身沒有改**：在沒有 loopback 的機器上 `-test` 仍會卡住 |
+| `swift_tar -test` 永久睡著（18 分鐘、CPU 0.4%） | guest 的 `lo` 沒啟用，Foundation 印 `Could not create wakeup socket pair for CFSocket!!!` 後不再醒來 | 程式在啟動子行程前先對 127.0.0.1 試一次 TCP 連線，連不上就說明原因並失敗（`-test` 以 1 結束，實測不到 1 秒）；`run.sh` 的 preamble 另外加了 `ip link set lo up` |
+| 連結器警告 `LOAD segment with RWX permissions` | 見下方 🔴 條目 | 連結時加 `-z separate-code`，區段成為 R／E／RW，警告消失 |
 
-Windows is still unverified, including the submodule bumps and the 2026-10-13 change to
-how `-test` picks its standard tar. Linux: the Swift 6 build succeeds, libarchive is
-static at the new pin with both patches, and all 19 suites, the crypto self-test and
-`-test` pass. Every other first-round failure came from how the tests chose their tools
-on a guest whose `tar` is an old swift_tar; those choices are fixed. One thing is not:
-`swift_tar -test` still hangs on a machine with no loopback interface -- the VM runner
-now brings it up, the program is unchanged.
+Windows is still unverified, including the submodule bumps and the 2026-10-13 changes to
+how `-test` picks its standard tar and checks that a subprocess can run. Linux: the
+Swift 6 build succeeds with no diagnostics from the compiler or the linker; libarchive
+and the four submodule codecs are static, patched in the guest; all 19 suites, the crypto
+self-test and `-test` pass. Every first-round failure other than the FIFO came from how
+the tests chose their tools on a guest whose `tar` is an old swift_tar. A source drop
+records its pins as `unknown-source-drop`, because there is no git to ask.
+
+## 🔴 Linux：`.rodata` 仍可寫、沒有 GNU_RELRO——`-z separate-code` 只拿掉了 RWX / On Linux `.rodata` is still writable and there is no GNU_RELRO
+
+**現況**：`-z separate-code` 之後，`release/swift_tar` 的區段是 R／E／RW，沒有任何東西同時可寫
+又可執行，連結器不再警告。但成因還在：所有唯讀資料（`.rodata`、`swift5_*`、`.eh_frame`）落在
+RW 區段，而且沒有 `GNU_RELRO`。同一台機器上 `print("hi")` 的 Swift 程式有 RELRO，這個沒有。
+
+**成因（2026-10-13 在 VM 上逐步追出）**：aarch64 上的 Swift 6.3.3 把無 payload enum 的 protocol
+conformance descriptor 放進一個名為 `.rodata`、卻帶可寫旗標（`WA`）的 section。實測六種寫法——
+隱含合成、明寫 `Equatable`、明寫 `Hashable`，各自搭配 `==`、`switch`、`Set`——在 `-O` 與 `-Onone`
+下全部如此，所以不是原始碼改得掉的。本樹中觸發它的是 `TarCodec` 與 `WriteBackend`。GNU ld
+（2.45.1）依名稱安置 section，於是輸出的 `.rodata` 變成可寫，而它位在 text 區段裡。
+
+**還沒試的路**：lld 依旗標而非名稱安置 section，應能排出正確配置並保留 RELRO。工具鏈自帶
+`ld.lld`，但它在 Buildroot guest 上起不來（缺 `libxml2.so.2`），所以 `-use-ld=lld` 這條路沒有測過，
+也就沒有寫進建置腳本。恢復時：在有 libxml2 的 Linux（WSL／Ubuntu）上試 `-use-ld=lld`，以
+`readelf -lW` 確認有 `GNU_RELRO` 且 `.rodata` 不在可寫區段，測試全過後再決定是否設為預設。
+
+The RWX segment is gone, the cause is not. Swift 6.3.3 on aarch64 emits the conformance
+descriptors of payload-free enums into a section named `.rodata` with the writable flag;
+all six ways of declaring and using such an enum do it, at -O and -Onone. GNU ld places
+by name, so the output `.rodata` became writable inside the text segment. With
+`-z separate-code` code has its own segment, but read-only data is now in the RW one and
+there is no GNU_RELRO. lld places by flags and should fix both; the toolchain's ld.lld
+does not start on the guest (no libxml2.so.2), so it is untested and not in the script.
 
 ## ⏸ 暫緩（2026-10-09，使用者決定）：重量 M4 的管線上限 / Re-measure the M4's pipe ceiling
 

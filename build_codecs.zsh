@@ -1,8 +1,8 @@
 #!/usr/bin/env zsh
 # build_codecs.zsh -- build zlib, liblzma (xz), liblz4 and libzstd from their pinned
-# submodules as static libraries, and record the gitlinks in version-mac.txt.
+# submodules as static libraries, and record the gitlinks in version-<platform>.txt.
 # build_codecs.zsh -- 以固定版本的 submodule 建置 zlib、liblzma(xz)、liblz4 與 libzstd
-# 靜態庫，並將 gitlink 記入 version-mac.txt。
+# 靜態庫，並將 gitlink 記入 version-<平台>.txt。
 #
 #   zsh ./build_codecs.zsh          build all three / 建置三者
 #   zsh ./build_codecs.zsh --help   print this synopsis and exit / 印出說明後結束
@@ -55,17 +55,25 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"
 . ./platform.zsh
 
-# macOS only. Linux links the distribution's liblzma/liblz4/libzstd from the
-# sysroot (compile_tar-linux.zsh) and Windows shells out to scoop CLIs; neither
-# is changed by this script.
-# 僅限 macOS。Linux 連結發行版 sysroot 內的 liblzma／liblz4／libzstd
-# （compile_tar-linux.zsh），Windows 則呼叫 scoop 安裝的 CLI；兩者皆不受本腳本影響。
-if [ "$(swift_tar_platform)" != "mac" ]; then
-    echo "[FAIL] build_codecs.zsh is macOS-only / 本腳本僅適用於 macOS：$(swift_tar_platform)" >&2
-    exit 1
-fi
-
-version_file="version-mac.txt"
+# macOS and Linux. Linux used to link the distribution's liblzma/liblz4/libzstd from the
+# sysroot, which meant a pin moved by sync_all.zsh was built and tested on macOS only:
+# on 2026-10-12 lz4 went 0774d055 -> 8aba903e and the Linux run that followed linked
+# liblz4.so.1.10.0 exactly as before. compile_tar-linux.zsh now calls this when cmake and
+# the sources are present. Windows has its own build_*-win.zsh scripts.
+# macOS 與 Linux。Linux 原本連結發行版 sysroot 內的 liblzma／liblz4／libzstd，於是
+# sync_all.zsh 移動的 pin 只在 macOS 建置與測試：2026-10-12 lz4 由 0774d055 升到 8aba903e，
+# 而隨後的 Linux 那一輪照舊連結 liblz4.so.1.10.0。現在 cmake 與原始碼都在時，
+# compile_tar-linux.zsh 會呼叫本腳本。Windows 另有自己的 build_*-win.zsh。
+case "$(swift_tar_platform)" in
+    mac)   plat=macos; version_file="version-mac.txt"; pic=() ;;
+    linux) plat=linux; version_file="version-linux.txt"; pic=(-DCMAKE_POSITION_INDEPENDENT_CODE=ON) ;;
+    *)
+        echo "[FAIL] build_codecs.zsh supports macOS and Linux / 本腳本僅適用於 macOS 與 Linux：$(swift_tar_platform)" >&2
+        exit 1
+        ;;
+esac
+# `pic`: the objects end up in a PIE on Linux; macOS objects are position-independent anyway.
+# `pic`：在 Linux 上這些目的檔會進到 PIE；macOS 的目的檔本來就是位置無關碼。
 
 # Not a clean rebuild. cmake is incremental, and this runs on every
 # compile_tar.zsh; a clean rebuild of three libraries per compile would be minutes
@@ -73,15 +81,31 @@ version_file="version-mac.txt"
 # 不做乾淨重建。cmake 是增量的，而本腳本每次 compile_tar.zsh 都會執行；每次編譯都把三個
 # 函式庫重建一遍，等於花數分鐘重建完全相同的位元組。build_libarchive.zsh 亦採同一立場。
 
-git submodule update --init zlib xz lz4 zstd
+# A source drop has no .git and may have no git (the Buildroot guest): build what was
+# shipped, and record that the commit is not known rather than keep the previous one.
+# 原始碼包沒有 .git，也可能沒有 git（Buildroot guest）：依送來的內容建置，並記下 commit
+# 不明，而不是沿用上一次的值。
+in_git=0
+if command -v git >/dev/null 2>&1 && [ -e .git ]; then in_git=1; fi
+if [ "$in_git" = 1 ]; then
+    git submodule update --init zlib xz lz4 zstd
+else
+    for d in zlib xz lz4/build/cmake zstd/build/cmake; do
+        if [ ! -f "$d/CMakeLists.txt" ]; then
+            echo "[FAIL] not a git checkout and $d/ has no sources / 不是 git checkout，且 $d/ 沒有原始碼" >&2
+            exit 1
+        fi
+    done
+    echo "[NOTICE] not a git checkout: building the codec sources as shipped / 不是 git checkout：依送來的 codec 原始碼原樣建置" >&2
+fi
 
 # Build zlib from the same headers imported by Swift.
 # 以 Swift 匯入的同一份標頭建置 zlib。
-cmake -S zlib -B build/zlib-macos \
+cmake -S zlib -B build/zlib-$plat \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DZLIB_BUILD_SHARED=OFF -DZLIB_BUILD_STATIC=ON -DZLIB_BUILD_TESTING=OFF
-cmake --build build/zlib-macos --config Release --target zlibstatic --parallel
-[ -f build/zlib-macos/libz.a ] || exit 1
+cmake --build build/zlib-$plat --config Release --target zlibstatic --parallel
+[ -f build/zlib-$plat/libz.a ] || exit 1
 
 # ---- xz / liblzma ----
 # The encoder is needed as well as the decoder: swift_tar calls
@@ -91,20 +115,20 @@ cmake --build build/zlib-macos --config Release --target zlibstatic --parallel
 # 編碼器與解碼器都需要：swift_tar 會呼叫 lzma_easy_buffer_encode。lzip 解碼器維持開啟，
 # 因為 lzma_lzip_decoder 是已宣告的進入點之一——若關掉，`.lz` 支援會靜默消失，因為
 # @_silgen_name 是在連結期而非編譯期解析。
-cmake -S xz -B build/xz-macos \
-    -DCMAKE_BUILD_TYPE=Release \
+cmake -S xz -B build/xz-$plat \
+    -DCMAKE_BUILD_TYPE=Release "${pic[@]}" \
     -DBUILD_SHARED_LIBS=OFF \
     -DXZ_NLS=OFF -DXZ_DOC=OFF \
     -DXZ_TOOL_XZ=OFF -DXZ_TOOL_XZDEC=OFF \
     -DXZ_TOOL_LZMADEC=OFF -DXZ_TOOL_LZMAINFO=OFF
-cmake --build build/xz-macos --config Release --target liblzma --parallel
+cmake --build build/xz-$plat --config Release --target liblzma --parallel
 
 # ---- lz4 ----
-cmake -S lz4/build/cmake -B build/lz4-macos \
-    -DCMAKE_BUILD_TYPE=Release \
+cmake -S lz4/build/cmake -B build/lz4-$plat \
+    -DCMAKE_BUILD_TYPE=Release "${pic[@]}" \
     -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON \
     -DLZ4_BUILD_CLI=OFF -DLZ4_BUILD_LEGACY_LZ4C=OFF
-cmake --build build/lz4-macos --config Release --target lz4_static --parallel
+cmake --build build/lz4-$plat --config Release --target lz4_static --parallel
 
 # ---- zstd ----
 # The same option set build_zstd-win.zsh uses, deliberately: swift_tar compresses
@@ -125,21 +149,21 @@ cmake --build build/lz4-macos --config Release --target lz4_static --parallel
 # 的 libzstd 帶有 legacy 支援，因此在此之前 macOS 版能解 v0.8 之前的舊格式 frame，而
 # Windows 版不能。與 Windows 一致可消除這個不對稱——同一棵樹的一個平台讀得到、另一個
 # 拒收，比兩者都不支援一個上游自 2016 年起就不再產生的格式更糟。
-cmake -S zstd/build/cmake -B build/zstd-macos \
-    -DCMAKE_BUILD_TYPE=Release \
+cmake -S zstd/build/cmake -B build/zstd-$plat \
+    -DCMAKE_BUILD_TYPE=Release "${pic[@]}" \
     -DZSTD_BUILD_STATIC=ON \
     -DZSTD_BUILD_SHARED=OFF \
     -DZSTD_BUILD_PROGRAMS=OFF \
     -DZSTD_BUILD_TESTS=OFF \
     -DZSTD_LEGACY_SUPPORT=OFF \
     -DZSTD_MULTITHREAD_SUPPORT=OFF
-cmake --build build/zstd-macos --config Release --target libzstd_static --parallel
+cmake --build build/zstd-$plat --config Release --target libzstd_static --parallel
 
 # ---- check the artefacts exist, and say which ones did not ----
 # 檢查產物是否存在，並指出沒有產出的是哪一個
-lib_xz="build/xz-macos/liblzma.a"
-lib_lz4="build/lz4-macos/liblz4.a"
-lib_zstd="build/zstd-macos/lib/libzstd.a"
+lib_xz="build/xz-$plat/liblzma.a"
+lib_lz4="build/lz4-$plat/liblz4.a"
+lib_zstd="build/zstd-$plat/lib/libzstd.a"
 #
 # `lib_path`, not `path`. In zsh `path` is tied to `PATH`, so assigning a filename
 # to it replaces the command search path with that one string -- every later `git`,
@@ -159,7 +183,7 @@ for pair in "xz:$lib_xz" "lz4:$lib_lz4" "zstd:$lib_zstd"; do
 done
 if [ "$missing" -ne 0 ]; then
     echo "[hint] .a files that were built instead / 實際建出的 .a：" >&2
-    find build/xz-macos build/lz4-macos build/zstd-macos -name '*.a' >&2 || true
+    find build/xz-$plat build/lz4-$plat build/zstd-$plat -name '*.a' >&2 || true
     exit 1
 fi
 
@@ -173,8 +197,13 @@ fi
 # ——已經沒有 dylib 可讀。此處同時清掉 homebrew 時期遺留的 *_dylib_version 與 *_path
 # 鍵，否則它們會留在檔案裡，描述一個執行檔已不再載入的函式庫。
 describe() {             # submodule dir / submodule 目錄
+    if [ "$in_git" != 1 ]; then echo unknown-source-drop; return; fi
     git -C "$1" describe --tags --exact-match 2>/dev/null || \
         git -C "$1" describe --tags --always
+}
+commit_of() {            # submodule dir / submodule 目錄
+    if [ "$in_git" != 1 ]; then echo unknown; return; fi
+    git -C "$1" rev-parse HEAD
 }
 if [ ! -f "$version_file" ]; then
     echo "[FAIL] $version_file missing / 找不到 $version_file" >&2
@@ -189,12 +218,12 @@ tmp_version="$version_file.tmp"
     # grep 在沒有輸出時以 1 結束，在此情境即代表檔案裡只有 codec 鍵。僅容忍該狀態；
     # 真正的 grep 錯誤（2）仍會失敗，而檔案不存在已於上方擋下，故此處不會靜默產生
     # 一份被截斷的紀錄。
-    grep -vE '^(zlib|lz4|xz|zstd)_(dylib_version|path|version|commit|linkage)=' \
+    grep -vE '^(zlib|lz4|xz|zstd)_(dylib_version|so_version|path|version|commit|linkage)=' \
         "$version_file" || [ $? -eq 1 ]
     for pair in "zlib:zlib" "lz4:lz4" "xz:xz" "zstd:zstd"; do
         key="${pair%%:*}"; dir="${pair#*:}"
         echo "${key}_version=$(describe "$dir")"
-        echo "${key}_commit=$(git -C "$dir" rev-parse HEAD)"
+        echo "${key}_commit=$(commit_of "$dir")"
         echo "${key}_linkage=static"
     done
 } > "$tmp_version"

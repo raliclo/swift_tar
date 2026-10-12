@@ -41,7 +41,22 @@ fi
 [ -x "$ST" ] || { echo "error: build first — missing $ST" >&2; exit 1; }
 ROUNDS=${ROUNDS:-10}
 SHARDS=${SHARDS:-8}
-SYS_TAR=${SYS_TAR:-tar}
+# The reference tar must not be swift_tar itself, which is what `tar` is on the Buildroot
+# guest; see test_blind_findings.zsh. bsdtar is present there.
+# 參考 tar 不能是 swift_tar 自己，而 Buildroot guest 上的 `tar` 正是；見
+# test_blind_findings.zsh。該處另有 bsdtar。
+if [ -z "${SYS_TAR:-}" ]; then
+  for candidate in tar bsdtar; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    "$candidate" --version 2>&1 | grep -q swift_tar && continue
+    SYS_TAR="$candidate"
+    break
+  done
+fi
+if [ -z "${SYS_TAR:-}" ]; then
+  echo "error: no reference tar other than swift_tar itself (tried tar, bsdtar) / 找不到 swift_tar 以外的參考 tar" >&2
+  exit 1
+fi
 # Keep macOS out of the fixtures. When the files carry an extended attribute, bsdtar there
 # writes an AppleDouble "._name" member beside each one, and which files carry one depends
 # on how this shell was launched (com.apple.provenance), not on this script. 2026-10-12: the
@@ -102,7 +117,12 @@ ndirs=$("$ST" -t -f "$TMP/plain/dirs.tar" 2>/dev/null | wc -l | tr -d ' ')
 [ "$ndirs" = "${#DIRS}" ] && ok "precondition: the directory shard lists all ${#DIRS} directories" \
   || bad "precondition: the directory shard lists all ${#DIRS} directories (got $ndirs)"
 
-manifest() { ( cd "$1" && find . -type f | sort | xargs shasum -a 256 ) | shasum -a 256 | cut -c1-16; }
+# shasum where it exists, sha256sum otherwise: the Buildroot guest has only the latter, and
+# without this the suite ended with 127 and no verdict (2026-10-12).
+# 有 shasum 就用，否則用 sha256sum：Buildroot guest 只有後者，少了這段時本套件以 127 結束而
+# 沒有任何結論（2026-10-12）。
+if command -v shasum >/dev/null 2>&1; then SHA256=(shasum -a 256); else SHA256=(sha256sum); fi
+manifest() { ( cd "$1" && find . -type f | sort | xargs "${SHA256[@]}" ) | "${SHA256[@]}" | cut -c1-16; }
 WANT=$(manifest "$SRC")
 mode_of() { zstat -L +mode "$1" 2>/dev/null | awk '{printf "%o", $1 % 4096}'; }
 mtime_of() { zstat -L +mtime "$1" 2>/dev/null || print -r -- absent; }

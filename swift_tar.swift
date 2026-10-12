@@ -5839,14 +5839,45 @@ func findStandardTar(debug: Bool = false) -> String? {
     let env = ProcessInfo.processInfo.environment
     let pathVar = env["Path"] ?? env["PATH"] ?? env["path"] ?? ""
     let sep: Character = pathVar.contains(";") ? ";" : ":"
-    for dir in pathVar.split(separator: sep) {
-        for name in ["tar.exe", "tar"] {
-            let candidate = "\(dir)/\(name)"
-            guard FileManager.default.isExecutableFile(atPath: candidate) else { continue }
-            let candSize = (try? FileManager.default.attributesOfItem(atPath: candidate)[.size] as? Int) ?? nil
-            dprint("findStandardTar: candidate=\(candidate) size=\(String(describing: candSize))")
-            if let ownSize, let candSize, candSize == ownSize { continue }   // looks like a copy of ourselves
-            return candidate
+    // A candidate of another size can still be swift_tar: an older build installed as
+    // `tar`. The Buildroot guest's /usr/bin/tar is one, and with it as the "standard" tar
+    // the round trips compared swift_tar against swift_tar while the ZIP checks, which it
+    // cannot serve, failed for want of a peer (2026-10-12). So ask the candidate what it
+    // is, and look for bsdtar once every `tar` on PATH has been turned down.
+    // 大小不同的候選仍可能是 swift_tar：被安裝成 `tar` 的舊版。Buildroot guest 的
+    // /usr/bin/tar 就是，拿它當「標準」tar 時，往返測試其實是 swift_tar 對 swift_tar，而它
+    // 做不到的 ZIP 檢查則因沒有對象而失敗（2026-10-12）。因此直接問候選它是什麼，並在 PATH
+    // 上每一個 `tar` 都被排除之後才找 bsdtar。
+    //
+    // BusyBox's tar is turned down the same way, and so is one that cannot answer
+    // --version at all. It is a real tar, but the one on that guest has no gzip, bzip2
+    // or xz, and once the old swift_tar was skipped it was next on PATH (/bin/tar): the
+    // .tar.gz round trips failed against it while bsdtar sat in /usr/bin unused.
+    // BusyBox 的 tar 以同樣方式排除，連 --version 都答不出來的也是。它是真正的 tar，但該
+    // guest 上的那一份沒有 gzip、bzip2、xz，而舊版 swift_tar 被略過之後，PATH 上的下一個
+    // 就是它（/bin/tar）：.tar.gz 往返對它失敗，/usr/bin 裡的 bsdtar 卻沒被用到。
+    func unfitAsStandardTar(_ candidate: String) -> Bool {
+        let probe = NSTemporaryDirectory() + "swift_tar_idprobe_\(ProcessInfo.processInfo.processIdentifier)"
+        defer { try? FileManager.default.removeItem(atPath: probe) }
+        guard runTarProcessCapturingStdout(candidate, ["--version"], toFile: probe),
+              let text = try? String(contentsOfFile: probe, encoding: .utf8) else { return true }
+        let lower = text.lowercased()
+        return lower.contains("swift_tar") || lower.contains("busybox")
+    }
+    for names in [["tar.exe", "tar"], ["bsdtar.exe", "bsdtar"]] {
+        for dir in pathVar.split(separator: sep) {
+            for name in names {
+                let candidate = "\(dir)/\(name)"
+                guard FileManager.default.isExecutableFile(atPath: candidate) else { continue }
+                let candSize = (try? FileManager.default.attributesOfItem(atPath: candidate)[.size] as? Int) ?? nil
+                dprint("findStandardTar: candidate=\(candidate) size=\(String(describing: candSize))")
+                if let ownSize, let candSize, candSize == ownSize { continue }   // looks like a copy of ourselves
+                if unfitAsStandardTar(candidate) {
+                    dprint("findStandardTar: \(candidate) is swift_tar, BusyBox, or silent on --version; skipped")
+                    continue
+                }
+                return candidate
+            }
         }
     }
     return nil

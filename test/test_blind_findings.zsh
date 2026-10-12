@@ -59,6 +59,14 @@ if [ -z "${SYS_TAR:-}" ]; then
   : > "$probe/f"
   for candidate in tar bsdtar; do
     command -v "$candidate" >/dev/null 2>&1 || continue
+    # A `tar` that is swift_tar itself is no reference: every comparison against it passes
+    # or fails for reasons that say nothing about the binary under test. The Buildroot
+    # guest's /usr/bin/tar is an older swift_tar (2026-10-12: four checks here failed on
+    # the two versions disagreeing with each other).
+    # 本身就是 swift_tar 的 `tar` 不能當參考：與它的每一項比較，通過或失敗都說明不了受測
+    # 執行檔的任何事。Buildroot guest 的 /usr/bin/tar 是較舊的 swift_tar（2026-10-12：此處
+    # 有四項檢查因新舊兩版彼此不一致而失敗）。
+    "$candidate" --version 2>&1 | grep -q swift_tar && continue
     if ( cd "$probe" && "$candidate" -cf probe.tar f ) >/dev/null 2>&1 && [ -s "$probe/probe.tar" ]; then
       SYS_TAR="$candidate"
       break
@@ -2251,10 +2259,25 @@ print -r -- whole > "$SUB/src/whole.txt"
 # `set -e` 之下結束整個套件。
 touch -d '2026-01-01T12:00:00.123456789' "$SUB/src/frac.txt" || true
 touch -t 202601011200.00 "$SUB/src/whole.txt"
+# The fraction asserted is the one the file actually has, read back, rather than the one
+# asked for. BusyBox touch rejects a fractional -d ("invalid date"), which left the file at
+# its creation time and failed the check below on the Buildroot guest with nothing wrong in
+# swift_tar (2026-10-12). A creation time carries a fraction of its own, and that serves
+# as well: what is under test is that nine digits reach the archive, not which nine.
+# 斷言的小數是檔案實際帶的那一個（讀回來），而不是要求設定的那一個。BusyBox 的 touch 不接受
+# 帶小數的 -d（「invalid date」），檔案於是停在建立時間，使下方檢查在 Buildroot guest 上失敗，
+# 而 swift_tar 並無問題（2026-10-12）。建立時間自己就帶小數，同樣可用：受測的是九位數有沒有
+# 進到封存，不是哪九位。
+zmodload zsh/stat
+sub_ns=$(zstat -L -F '%N' +mtime "$SUB/src/frac.txt" 2>/dev/null || true)
 "$ST" -c -f "$SUB/frac.tar"  -C "$SUB/src" frac.txt  >/dev/null 2>&1 || true
 "$ST" -c -f "$SUB/whole.tar" -C "$SUB/src" whole.txt >/dev/null 2>&1 || true
-eq "sub-second mtime: stored as a pax record with nine digits of nanoseconds" "1" \
-   "$(grep -a -c 'mtime=[0-9]*\.123456789' "$SUB/frac.tar" 2>/dev/null || true)"
+if [[ $sub_ns != <-> || $sub_ns == 000000000 ]]; then
+  echo "SKIP: sub-second mtime stored (no file with a fractional mtime could be made here; got '$sub_ns')"
+else
+  eq "sub-second mtime: stored as a pax record with nine digits of nanoseconds ($sub_ns)" "1" \
+     "$(grep -a -c "mtime=[0-9]*\.$sub_ns" "$SUB/frac.tar" 2>/dev/null || true)"
+fi
 eq "whole-second mtime: no pax mtime record, so no extra header" "0" \
    "$(grep -a -c 'mtime=' "$SUB/whole.tar" 2>/dev/null || true)"
 ( cd "$SUB" && "$SYS_TAR" -u -f frac.tar -C src frac.txt ) >/dev/null 2>&1 || true
@@ -2291,6 +2314,20 @@ touch -d "$ns_t" "$NS/src/small.txt" "$NS/src/big.bin" "$NS/src/d/inner.txt" "$N
 [ -p "$NS/src/fifo" ] && { touch -d "$ns_t" "$NS/src/fifo" || true; }
 [ -L "$NS/src/link" ] && { touch -h -d "$ns_t" "$NS/src/link" || true; }
 touch -d "$ns_t" "$NS/src/d" || true
+# Where touch takes no fractional -d (BusyBox: "invalid date"), every entry is still at its
+# own creation time and none equals the reference, so the checks below failed on the
+# Buildroot guest for the fixture's sake (2026-10-12). Copy the reference file's time onto
+# each entry instead: `-r` needs no date parsing, and a creation time has a fraction.
+# touch 不接受帶小數的 -d 時（BusyBox：「invalid date」），每個項目都還停在各自的建立時間，
+# 沒有一個等於參考檔，於是下方檢查在 Buildroot guest 上因測資而失敗（2026-10-12）。改把
+# 參考檔的時間複製到每個項目上：`-r` 不必解析日期，而建立時間本身帶小數。
+zmodload zsh/stat
+if [[ "$(zstat -L -F '%s.%N' +mtime "$NS/src/small.txt")" != "$(zstat -L -F '%s.%N' +mtime "$NS/ref")" ]]; then
+  touch -r "$NS/ref" "$NS/src/small.txt" "$NS/src/big.bin" "$NS/src/d/inner.txt" || true
+  [ -p "$NS/src/fifo" ] && { touch -r "$NS/ref" "$NS/src/fifo" || true; }
+  [ -L "$NS/src/link" ] && { touch -h -r "$NS/ref" "$NS/src/link" || true; }
+  touch -r "$NS/ref" "$NS/src/d" || true
+fi
 ( cd "$NS" && "$ST" -c -f ns.tar -C src . ) >/dev/null 2>&1 || true
 "$ST" -x -f "$NS/ns.tar" -C "$NS/out" >/dev/null 2>&1 || true
 # Times are read with zsh's own zstat, one syntax on every platform, rather than the

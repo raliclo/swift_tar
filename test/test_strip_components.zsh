@@ -44,6 +44,14 @@ if [ -z "${SYS_TAR:-}" ]; then
   : > "$probe/f"
   for candidate in tar bsdtar; do
     command -v "$candidate" >/dev/null 2>&1 || continue
+    # A `tar` that is swift_tar itself is no reference: every comparison against it passes
+    # or fails for reasons that say nothing about the binary under test. The Buildroot
+    # guest's /usr/bin/tar is an older swift_tar (2026-10-12: four checks here failed on
+    # the two versions disagreeing with each other).
+    # 本身就是 swift_tar 的 `tar` 不能當參考：與它的每一項比較，通過或失敗都說明不了受測
+    # 執行檔的任何事。Buildroot guest 的 /usr/bin/tar 是較舊的 swift_tar（2026-10-12：此處
+    # 有四項檢查因新舊兩版彼此不一致而失敗）。
+    "$candidate" --version 2>&1 | grep -q swift_tar && continue
     if ( cd "$probe" && "$candidate" -cf probe.tar f ) >/dev/null 2>&1 && [ -s "$probe/probe.tar" ]; then
       SYS_TAR="$candidate"
       break

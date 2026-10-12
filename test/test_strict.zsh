@@ -33,7 +33,22 @@ if [ -z "${ST:-}" ]; then
   esac
 fi
 [ -x "$ST" ] || { echo "error: build first — missing $ST" >&2; exit 1; }
-SYS_TAR=${SYS_TAR:-tar}
+# The reference tar must not be swift_tar itself, which is what `tar` is on the Buildroot
+# guest; see test_blind_findings.zsh. bsdtar is present there.
+# 參考 tar 不能是 swift_tar 自己，而 Buildroot guest 上的 `tar` 正是；見
+# test_blind_findings.zsh。該處另有 bsdtar。
+if [ -z "${SYS_TAR:-}" ]; then
+  for candidate in tar bsdtar; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    "$candidate" --version 2>&1 | grep -q swift_tar && continue
+    SYS_TAR="$candidate"
+    break
+  done
+fi
+if [ -z "${SYS_TAR:-}" ]; then
+  echo "error: no reference tar other than swift_tar itself (tried tar, bsdtar) / 找不到 swift_tar 以外的參考 tar" >&2
+  exit 1
+fi
 # Keep macOS out of the fixtures. When the files carry an extended attribute, bsdtar there
 # writes an AppleDouble "._name" member beside each one, and which files carry one depends
 # on how this shell was launched (com.apple.provenance), not on this script. 2026-10-12: the

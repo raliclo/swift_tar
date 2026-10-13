@@ -792,7 +792,7 @@ corpus spanning three 4 MiB chunks:
 | `--encrypt` | **no, by design** — a fresh nonce each run; the decrypted plaintext is identical |
 | `--zip`, `--zip64` | **yes**, across runs, since 2026-10-09 — each entry records its mtime only. Before that it also recorded atime and ctime, which reading the tree changes, so no two runs matched |
 | `--zip`, `--zip64`, on another filesystem or platform | **no** — members are written in the order the filesystem lists them, and ZIP headers hold local time. Measured 2026-10-13: one tree gave different ZIPs on macOS (APFS) and Linux (tmpfs), same size, different order |
-| the same with `--zip-sorted` and one `TZ` | **yes** — byte-identical on macOS and Linux (measured 2026-10-13). Members are sorted like the tar path's. It holds the whole file list in memory, about 1.6 KB per entry: 1,001,377 entries took 1.5–1.8 GB against 0.18 GB without it |
+| the same with `--zip-sorted` and one `TZ` | **yes** — byte-identical on macOS and Linux (measured 2026-10-13). Members are sorted like the tar path's. It lists one directory at a time and holds only that directory's names, so memory is close to the default's: 1,001,206 entries peaked at 175 MB against 173 MB without it |
 
 The `-n` result is the useful one: chunking is deterministic, not merely
 reassembled in the right order, so an archive built with `-n 16` on one machine

@@ -5618,11 +5618,11 @@ private func printTarUsage() {
       --zip64          : True ZIP container with ZIP64 records forced
                          建立真實 ZIP 容器並強制寫入 ZIP64 記錄
       --zip-sorted     : With --zip/--zip64: write members in sorted order, the
-                         same on every filesystem. Holds the whole file list in
-                         memory (about 1.6 KB per entry). Without it members
-                         follow the filesystem's own order
+                         same on every filesystem. One directory's names are
+                         held at a time, so memory is close to the default's.
+                         Without it members follow the filesystem's own order
                          搭配 --zip／--zip64：依排序後的順序寫出成員，在任何檔案系統
-                         上都相同。整份檔案清單會留在記憶體（每個項目約 1.6 KB）。
+                         上都相同。一次只留一個目錄的名稱，記憶體與預設相近。
                          不加時，成員順序跟著檔案系統
       --gzip, -z       : zlib, one gzip member per 4MiB chunk (pigz-style .tar.gz)
                          每 4MiB 分塊一個 gzip 成員（pigz 式標準 .tar.gz）

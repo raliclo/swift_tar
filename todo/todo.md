@@ -3367,7 +3367,53 @@ Windows, the other codecs and ZIP, and paths other than a plain `-c`.
 
 ## `--zip` 的成員順序跟著檔案系統走，同一棵樹在 macOS 與 Linux 得到不同的 ZIP ▸ ✅ 已處理 2026-10-13：預設維持原樣，`--zip-sorted` 取得固定順序 / `--zip` stores members in filesystem order, so one tree gives different ZIPs on macOS and Linux; `--zip-sorted` fixes the order
 
-**目前的狀態（2026-10-13 晚，取代下方「修正」一節所說的預設行為）**：`d0aa97b` 讓排序成為
+**`--zip-sorted` 的記憶體已降到與預設相當（2026-10-13 深夜，下方三個想法中的 1 與 2 一起做，
+3 依使用者決定不做）**：
+
+- **做法**：`add_sorted_tree` 一次只對一個目錄開啟 libarchive 的走訪——寫出目錄自己的項目、
+  讀出它的名稱、關閉 reader、排序、逐一處理，遇到目錄就遞迴。每個名稱只留路徑（想法 1）；
+  一般檔案與目錄在輪到時才依路徑重新讀取，其他種類（symlink、裝置）保留列出時的項目。列目錄
+  仍由 libarchive 做，所以沒有自己寫 readdir，Windows 也不必自己列目錄。
+- **改成逐目錄之後要自己補的兩件事**：
+  - **`-h` 的迴圈**：libarchive 靠自己的堆疊比對祖先目錄的身分，而逐目錄開啟使那個堆疊只有
+    一層。第一版沒有補，`ln -s . loop` 加 `-h` 會一路繞到 `Can't stat` 並以 1 結束（舊版以 0
+    結束）。現在走訪自己帶著祖先的 dev／ino。規則與 libarchive 相同：正在列出的目錄本身不算
+    祖先，所以指向它的連結會被跟進去一次。我原先以為 libarchive 對樹的頂端記的是 0／0，
+    比對輸出後發現不是，已改正。
+  - **file descriptor**：往下走之前先關閉 reader，同時只開一個目錄。
+- **輸出沒有變**：claw-code 的 `--zip --zip-sorted`、`--zip64 --zip-sorted`、加 `-h` 三種，
+  以及一百萬個項目的樹，新舊執行檔的 sha256 都相同。另以 20 個邊界情況逐一比對新舊執行檔
+  （symlink、迴圈、`-h`、結尾斜線、`.`、多個引數、`--exclude`、封存在樹內、不可讀的目錄）：
+  17 個完全相同；3 個只有 stderr 或失敗時的殘餘輸出不同——`--exclude -v` 的「略過」訊息現在
+  穿插在成員之間而不是全部印在最前面，以及遇到不可讀的目錄時兩者都以 1 結束，但新版在出錯前
+  已經寫出一部分（與預設模式相同）。
+- **實測**（M4，`-c --zip -f -`，最大常駐記憶體）：
+
+  | 樹 | 項目數 | 預設 | 舊的 `--zip-sorted` | 新的 `--zip-sorted` |
+  |---|---|---|---|---|
+  | claw-code（真實內容） | 5,855 | 8.1 MB | 19.5 MB | 9.5 MB |
+  | claw-code 的目錄結構 × 171，檔案清空 | 1,001,206 | 173.5 MB | 1,822.8 MB | 175.2 MB |
+
+  一百萬個項目的時間：預設 19.7 秒、舊的 34.5 秒、新的 21.8 秒（再跑一次 22.1 秒）。真實內容
+  的 claw-code 三者都在 29.7–30.7 秒，沒有量得到的差別。剩下那 175 MB 不是走訪用的，預設模式
+  也有。
+- **測試**：新增 `test/test_zip_sorted.zsh`（53 個斷言）：巢狀順序、兩個引數、`--exclude`、
+  記憶體（30,151 個成員，`--zip-sorted` 的最大值必須低於預設的兩倍）、`-h` 與指回上層的連結、
+  只給 40 個 file descriptor 走 120 層。**舊的 `--zip-sorted` 執行檔在記憶體兩項失敗**
+  （55,088 對 9,664）；**把迴圈偵測拿掉後建出的執行檔在 `-h` 的 18 項失敗**。file descriptor
+  那一項沒有做過對應的破壞測試。
+- **整輪驗證**：macOS 21 個腳本加 `--crypto-selftest`、`-test` 全部以 0 結束，建置 0 警告；
+  Linux VM（lld、0 警告）21 個腳本加兩個自測都是 `TEST_RC=0`、`FAULTS=0`，
+  `test_zip_sorted` 53／0、`test_zip_fidelity` 37／0。`cross_platform_bytes.zsh compare mac
+  linux` 以 0 結束，兩個平台上每一項的 sha256 都與改動前那一輪相同（兩個隨機的 encrypt 項目
+  除外），zip 仍是 `7ba62a87…`、zip64 仍是 `dd3bee3f…`。
+- **與舊版不同、已知的地方**：路徑超過 `PATH_MAX` 的目錄，libarchive 的單次走訪是用 fchdir
+  走下去的，逐目錄開啟則是用完整路徑，所以會開不了。那種深度的一般檔案本來就讀不到（開檔用的
+  是完整路徑），所以只影響目錄與連結本身。沒有為它寫測試。
+- **Windows 沒有建置也沒有測試**：這次加了 Windows 專用的程式碼（寬字元路徑的保存、
+  `archive_read_disk_open_w`、以寬字元路徑重建項目），全部沒有編譯過。
+
+**前一個狀態（2026-10-13 晚，取代下方「修正」一節所說的預設行為）**：`d0aa97b` 讓排序成為
 預設。量過記憶體之後，使用者決定兩種都留、以省記憶體的那個為預設：
 
 - **預設**：與 `d0aa97b` 之前相同，走訪交出一個項目就寫一個，順序跟著檔案系統。不印警告
@@ -3412,7 +3458,7 @@ Windows, the other codecs and ZIP, and paths other than a plain `-c`.
   改回 20 後 21 項與上一輪逐項相同。輸入不同，不是程式的問題。
 - Windows 沒有建置也沒有測試。
 
-**之後可以怎麼降低 `--zip-sorted` 的記憶體**（都還沒做，也沒有量過）：
+**之後可以怎麼降低 `--zip-sorted` 的記憶體**（寫下時都還沒做；1 與 2 已於當晚深夜完成，見本項開頭，3 不做）：
 1. **只留路徑，不留整個項目。** 走訪時只記下每個項目的路徑（claw-code 平均 95 bytes）與
    類型，排序後再逐一重新 stat 建出項目。估計每個項目約 0.1–0.15 KB，一百萬個約 150 MB。
    代價是 Windows 上要另外保存寬字元路徑，那一段沒辦法在這台機器上測。
@@ -3512,6 +3558,19 @@ UTC+8、guest 是 UTC，不設 `TZ` 時檔頭時間欄差 8 小時。比對腳�
 
 **沒有比的**：`--lzip`（依使用者決定；它執行 PATH 上的 `lzip`，位元組屬於那支程式）、Windows、
 `--other3-optimal` 與其餘 LZFSE 模式、非預設的壓縮等級、RGB1。
+
+Later the same night, `--zip-sorted` stopped holding the tree (ideas 1 and 2 together; 3
+was ruled out by the user). `add_sorted_tree` opens libarchive's walk on one directory at a
+time, keeps only each name's path, sorts, and reads a regular file or directory again from
+its path at its turn. Two things libarchive did from its own stack had to be carried by
+the walk: the -h check for links that lead back to a directory above (compared by dev/ino,
+the directory being listed not counted, as in libarchive), and closing the reader before
+going down so one directory is open at a time. Output is byte-identical to the previous
+sorted mode on claw-code and on a 1,001,206-entry tree; peak memory there is 175 MB against
+173 MB for the default and 1,823 MB before, and 21.8 s against 19.7 s and 34.5 s.
+`test/test_zip_sorted.zsh` (53 checks) fails on the previous binary (memory) and on a build
+without the link check (18 checks). Known difference: a directory whose path exceeds
+PATH_MAX can no longer be opened. The Windows-only code added here was never compiled.
 
 Status as of the evening of 2026-10-13, which supersedes the default described in the
 next paragraph: after memory was measured the user chose to keep both behaviours with the

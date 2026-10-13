@@ -187,6 +187,53 @@ static const char *entry_sort_name(struct archive_entry *entry) {
     return name != NULL ? name : "";
 }
 
+/* What --zip-sorted remembers about one name in a directory while that directory is being
+ * listed: the paths needed to come back to it, and nothing else. A whole archive_entry is
+ * about 1.6 KB (measured 2026-10-13), so a regular file or a directory is read again from
+ * its path when its turn comes; only the other kinds (symlinks, devices) keep the entry the
+ * listing produced, because reading those again is not the same operation under -h.
+ * Windows keeps wide paths: the narrow form cannot hold every name there.
+ * --zip-sorted 在列出某個目錄時，對其中一個名稱所記住的東西：回頭找它所需的路徑，僅此而已。
+ * 一個完整的 archive_entry 約 1.6 KB（2026-10-13 實測），所以一般檔案與目錄在輪到時才依路徑
+ * 重新讀取；只有其他種類（symlink、裝置）保留列出時得到的項目，因為在 -h 之下重新讀它們並不是
+ * 同一個操作。Windows 保留寬字元路徑：窄字元形式裝不下那裡的每一個名稱。 */
+typedef struct {
+    char *sort_name;
+    int is_directory;
+    struct archive_entry *entry;
+#ifdef _WIN32
+    wchar_t *pathname;
+    wchar_t *sourcepath;
+#else
+    char *pathname;
+#endif
+} sorted_child;
+
+static void free_child(sorted_child *child) {
+    free(child->sort_name);
+    free(child->pathname);
+#ifdef _WIN32
+    free(child->sourcepath);
+#endif
+    if (child->entry != NULL) archive_entry_free(child->entry);
+}
+
+static char *copy_string(const char *text) {
+    size_t size = strlen(text) + 1;
+    char *copy = (char *)malloc(size);
+    if (copy != NULL) memcpy(copy, text, size);
+    return copy;
+}
+
+#ifdef _WIN32
+static wchar_t *copy_wide_string(const wchar_t *text) {
+    size_t size = (wcslen(text) + 1) * sizeof(wchar_t);
+    wchar_t *copy = (wchar_t *)malloc(size);
+    if (copy != NULL) memcpy(copy, text, size);
+    return copy;
+}
+#endif
+
 /* Order members the way the tar path does: each directory's names sorted, and a directory
  * before what is inside it. Comparing whole paths as strings is not that order -- `d.x/f`
  * would land before `d/f` because '.' sorts below '/' -- so the end of a path component
@@ -194,11 +241,9 @@ static const char *entry_sort_name(struct archive_entry *entry) {
  * 依 tar 路徑的方式排列成員：每個目錄內的名稱排序，且目錄先於其內容。把整條路徑當字串比較
  * 並不是這個順序——因為 '.' 排在 '/' 之前，`d.x/f` 會跑到 `d/f` 前面——所以讓路徑元件的結尾
  * （'/' 或字串結尾）排在其他所有位元組之前。 */
-static int compare_entries(const void *left, const void *right) {
-    const unsigned char *a = (const unsigned char *)
-        entry_sort_name(*(struct archive_entry *const *)left);
-    const unsigned char *b = (const unsigned char *)
-        entry_sort_name(*(struct archive_entry *const *)right);
+static int compare_children(const void *left, const void *right) {
+    const unsigned char *a = (const unsigned char *)((const sorted_child *)left)->sort_name;
+    const unsigned char *b = (const unsigned char *)((const sorted_child *)right)->sort_name;
     int rank_a, rank_b;
 
     while (*a != '\0' && *a == *b) { ++a; ++b; }
@@ -268,6 +313,307 @@ static int write_entry(struct archive *writer,
     return copy_file_to_archive(writer, entry, error_buffer, error_capacity);
 }
 
+/* Whether an entry the disk reader handed over is left out of the archive. Returns 1 when
+ * it is (and has been reported where that is called for), 0 when it should be written.
+ * 判斷 disk reader 交出的項目是否不進封存。回傳 1 表示不進（該回報的已回報），0 表示應寫出。 */
+static int skip_entry(struct archive_entry *entry,
+                      file_id archive_id,
+                      int verbose,
+                      int (*is_excluded)(const char *path, int is_directory)) {
+    /* 在 descend 與 write_header 之前先問身分：封存本身是一般檔案，不會被 descend，
+     * 而在寫入之前攔下它，才能讓每個平台走同一條路徑，不必依賴 libarchive 是否回報。
+     * 訊息沿用 libarchive 的原文，好讓兩個平台的 stderr 一致——測試斷言的正是這句話。
+     * Ask about identity before descend and before write_header: the archive itself is a
+     * regular file and is never descended into, and stopping it before the write is what
+     * lets every platform take one path rather than depending on whether libarchive
+     * reports it. The wording is libarchive's own, so stderr reads the same on both
+     * platforms -- which is what the test asserts. */
+    if (archive_id.valid) {
+        file_id entry_id = file_identity(archive_entry_sourcepath(entry));
+        if (same_file(entry_id, archive_id)) {
+            fprintf(stderr, "swift_tar: %s: Can't add archive to itself\n",
+                    archive_entry_pathname(entry));
+            return 1;
+        }
+    }
+
+    /* --exclude, asked of the tar path's own matcher before descend, so an excluded
+     * directory is never walked -- the same order TarWriter.add uses. Until 2026-09-27
+     * this backend never consulted --exclude at all.
+     * --exclude，於 descend 之前詢問 tar 路徑自己的比對器，故被排除的目錄不會被走進去
+     * ——與 TarWriter.add 的順序相同。2026-09-27 之前本後端完全不看 --exclude。 */
+    if (is_excluded != NULL) {
+        const char *name = archive_entry_pathname_utf8(entry);
+        if (name == NULL) name = archive_entry_pathname(entry);
+        if (name != NULL && is_excluded(name, archive_entry_filetype(entry) == AE_IFDIR)) {
+            if (verbose) fprintf(stderr, "skipping %s / 略過 %s\n", name, name);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Everything one --zip-sorted argument's walk carries from directory to directory.
+ * 一個 --zip-sorted 引數的走訪，從一個目錄帶到下一個目錄的所有東西。 */
+typedef struct {
+    struct archive *writer;
+    struct archive *disk;       /* lists one directory at a time / 一次列出一個目錄 */
+    struct archive *stat_disk;  /* reads one file's metadata / 讀取單一檔案的中繼資料 */
+    file_id archive_id;
+    int verbose;
+    int follow_symlinks;
+    int (*is_excluded)(const char *path, int is_directory);
+    char *error_buffer;
+    size_t error_capacity;
+} sorted_walk;
+
+/* The directories above the one being listed, innermost first, by identity. Only -h reads
+ * it: a link that leads back to one of these is stored as a link instead of being followed
+ * round again. libarchive's own walk does this from its stack, and listing one directory
+ * at a time leaves that stack one deep, so the chain is carried here. The directory
+ * being listed is itself not in the chain, as in libarchive: a link to it is followed once.
+ * 正在列出的目錄之上的各層目錄，由內而外，以身分表示。只有 -h 會用到：指回其中任何一層的連結
+ * 存成連結本身，不再繞進去一次。libarchive 自己的走訪是靠它的堆疊做這件事，而一次只列一個目錄
+ * 使那個堆疊只有一層深，所以這條鏈改由這裡帶著。正在列出的目錄本身不在鏈中，與 libarchive 相同：
+ * 指向它的連結會被跟進去一次。 */
+typedef struct ancestor {
+    la_int64_t dev;
+    la_int64_t ino;
+    const struct ancestor *parent;
+} ancestor;
+
+static int is_ancestor(const ancestor *chain, la_int64_t dev, la_int64_t ino) {
+    for (; chain != NULL; chain = chain->parent) {
+        if (chain->dev == dev && chain->ino == ino) return 1;
+    }
+    return 0;
+}
+
+/* Read one name's entry from its path. `physical` reads a link as the link whatever -h
+ * says. Returns NULL with the error set.
+ * 依路徑讀出一個名稱的項目。`physical` 表示不論 -h 為何，都把連結當成連結本身來讀。失敗時回傳
+ * NULL 並設好錯誤。 */
+static struct archive_entry *read_child_entry(sorted_walk *walk,
+                                              const sorted_child *child,
+                                              int physical) {
+    struct archive_entry *entry = archive_entry_new();
+    int status;
+
+    if (entry == NULL) {
+        set_error(walk->error_buffer, walk->error_capacity, "archive_entry_new failed");
+        return NULL;
+    }
+#ifdef _WIN32
+    archive_entry_copy_pathname_w(entry, child->pathname);
+    if (child->sourcepath != NULL) archive_entry_copy_sourcepath_w(entry, child->sourcepath);
+#else
+    archive_entry_copy_pathname(entry, child->pathname);
+    archive_entry_copy_sourcepath(entry, child->pathname);
+#endif
+    if (physical && walk->follow_symlinks) archive_read_disk_set_symlink_physical(walk->stat_disk);
+    status = archive_read_disk_entry_from_file(walk->stat_disk, entry, -1, NULL);
+    if (physical && walk->follow_symlinks) archive_read_disk_set_symlink_logical(walk->stat_disk);
+    if (status < ARCHIVE_OK) {
+        set_archive_error(walk->error_buffer, walk->error_capacity,
+                          "archive_read_disk_entry_from_file", walk->stat_disk);
+        archive_entry_free(entry);
+        return NULL;
+    }
+    return entry;
+}
+
+/* --zip-sorted: write `path` (or, below the argument itself, the directory `from`) and
+ * everything under it, each directory's names in sorted order.
+ *
+ * One directory is listed at a time. Its own entry is written first; then its names are
+ * read, the reader is closed, the names are sorted, and each is written in turn -- a
+ * directory by calling this again. So what is held is the names of the directories on the
+ * way down, not the tree: memory follows the largest directory, not the number of files.
+ * Until 2026-10-13 the whole tree's entries were collected and sorted at once, which took
+ * 1.79 GB for 1,001,377 entries against 0.18 GB unsorted.
+ *
+ * The reader is closed before going down so that only one directory is ever open: left
+ * open, a tree a few hundred levels deep would run out of file descriptors.
+ *
+ * Reading each file again at its turn is also what keeps its header honest: the size is
+ * taken just before the data is copied, not before every earlier member was compressed.
+ *
+ * --zip-sorted：寫出 `path`（在引數本身之下則是目錄 `from`）與其下的一切，每個目錄內的名稱
+ * 依排序後的順序。
+ *
+ * 一次只列出一個目錄。先寫出它自己的項目；再讀出它的名稱、關閉 reader、排序，然後逐一寫出
+ * ——遇到目錄就再呼叫本函式。所以留在記憶體裡的是一路往下各層目錄的名稱，而不是整棵樹：記憶體
+ * 跟著最大的單一目錄走，不跟著檔案總數走。2026-10-13 之前是把整棵樹的項目一次收集再排序，
+ * 1,001,377 個項目用掉 1.79 GB，不排序是 0.18 GB。
+ *
+ * 往下走之前先關閉 reader，使任何時候都只有一個目錄是開著的：若留著不關，幾百層深的樹會把
+ * file descriptor 用完。
+ *
+ * 輪到時才重新讀取每個檔案，同時也讓它的標頭不會說錯：大小是在複製資料之前才取得的，而不是在
+ * 壓縮所有先前成員之前。 */
+static int add_sorted_tree(sorted_walk *walk, const char *path, const sorted_child *from,
+                           const ancestor *above) {
+    ancestor self = {0, 0, above};
+    struct archive_entry *entry = NULL;
+    sorted_child *children = NULL;
+    size_t child_count = 0;
+    size_t child_capacity = 0;
+    size_t index;
+    int at_top = 1;
+    int result = -1;
+    int status;
+
+    if (from == NULL) status = archive_read_disk_open(walk->disk, path);
+#ifdef _WIN32
+    else status = archive_read_disk_open_w(walk->disk, from->pathname);
+#else
+    else status = archive_read_disk_open(walk->disk, from->pathname);
+#endif
+    if (status != ARCHIVE_OK) {
+        set_archive_error(walk->error_buffer, walk->error_capacity,
+                          "archive_read_disk_open", walk->disk);
+        return -1;
+    }
+
+    for (;;) {
+        sorted_child *child;
+
+        entry = archive_entry_new();
+        if (entry == NULL) {
+            set_error(walk->error_buffer, walk->error_capacity, "archive_entry_new failed");
+            goto close_reader;
+        }
+
+        status = archive_read_next_header2(walk->disk, entry);
+        if (status == ARCHIVE_EOF) {
+            archive_entry_free(entry);
+            entry = NULL;
+            break;
+        }
+        if (status < ARCHIVE_OK) {
+            set_archive_error(walk->error_buffer, walk->error_capacity,
+                              "archive_read_next_header", walk->disk);
+            goto close_reader;
+        }
+
+        /* A directory reached from its parent was already asked about there.
+         * 從上層目錄走進來的目錄，在上層已經問過了。 */
+        if ((!at_top || from == NULL) &&
+            skip_entry(entry, walk->archive_id, walk->verbose, walk->is_excluded)) {
+            at_top = 0;
+            archive_entry_free(entry);
+            entry = NULL;
+            continue;
+        }
+
+        if (at_top) {
+            /* The thing this call was opened on. Go one level in, and no further: the
+             * names read after this are its own, and none of them is descended into here.
+             * 本次呼叫所開啟的對象。只往內走一層：此後讀到的都是它自己的名稱，這裡不再走進
+             * 其中任何一個。 */
+            at_top = 0;
+            self.dev = (la_int64_t)archive_entry_dev(entry);
+            self.ino = archive_entry_ino64(entry);
+            if (archive_read_disk_can_descend(walk->disk)) archive_read_disk_descend(walk->disk);
+            if (write_entry(walk->writer, entry, walk->verbose,
+                            walk->error_buffer, walk->error_capacity) != 0) {
+                goto close_reader;
+            }
+            archive_entry_free(entry);
+            entry = NULL;
+            continue;
+        }
+
+        if (child_count == child_capacity) {
+            size_t capacity = child_capacity == 0 ? 64 : child_capacity * 2;
+            sorted_child *grown = (sorted_child *)realloc(children, capacity * sizeof(*children));
+            if (grown == NULL) {
+                set_error(walk->error_buffer, walk->error_capacity,
+                          "out of memory while listing files");
+                goto close_reader;
+            }
+            children = grown;
+            child_capacity = capacity;
+        }
+        child = &children[child_count];
+        memset(child, 0, sizeof(*child));
+        child->is_directory = archive_read_disk_can_descend(walk->disk);
+        child->sort_name = copy_string(entry_sort_name(entry));
+#ifdef _WIN32
+        if (archive_entry_pathname_w(entry) != NULL) {
+            child->pathname = copy_wide_string(archive_entry_pathname_w(entry));
+        }
+        if (archive_entry_sourcepath_w(entry) != NULL) {
+            child->sourcepath = copy_wide_string(archive_entry_sourcepath_w(entry));
+        }
+#else
+        if (archive_entry_pathname(entry) != NULL) {
+            child->pathname = copy_string(archive_entry_pathname(entry));
+        }
+#endif
+        ++child_count;
+        if (child->sort_name == NULL || child->pathname == NULL) {
+            set_error(walk->error_buffer, walk->error_capacity,
+                      "out of memory while listing files");
+            goto close_reader;
+        }
+        if (walk->follow_symlinks && child->is_directory &&
+            is_ancestor(above, (la_int64_t)archive_entry_dev(entry), archive_entry_ino64(entry))) {
+            /* It leads back to a directory this walk is already inside. Take it as the
+             * link it is, and go in only if it turns out not to be a link at all.
+             * 它指回這次走訪已經身在其中的目錄。把它當成連結本身；只有在它其實不是連結時才
+             * 走進去。 */
+            archive_entry_free(entry);
+            entry = read_child_entry(walk, child, 1);
+            if (entry == NULL) goto close_reader;
+            child->is_directory = archive_entry_filetype(entry) == AE_IFDIR;
+        }
+        if (!child->is_directory && archive_entry_filetype(entry) != AE_IFREG) {
+            child->entry = entry;
+        } else {
+            archive_entry_free(entry);
+        }
+        entry = NULL;
+    }
+    archive_read_close(walk->disk);
+
+    if (child_count > 1) qsort(children, child_count, sizeof(*children), compare_children);
+
+    for (index = 0; index < child_count; ++index) {
+        sorted_child *child = &children[index];
+
+        if (child->is_directory) {
+            if (add_sorted_tree(walk, NULL, child, &self) != 0) goto cleanup;
+            continue;
+        }
+
+        entry = child->entry;
+        child->entry = NULL;
+        if (entry == NULL) {
+            entry = read_child_entry(walk, child, 0);
+            if (entry == NULL) goto cleanup;
+        }
+
+        if (write_entry(walk->writer, entry, walk->verbose,
+                        walk->error_buffer, walk->error_capacity) != 0) {
+            goto cleanup;
+        }
+        archive_entry_free(entry);
+        entry = NULL;
+    }
+    result = 0;
+    goto cleanup;
+
+close_reader:
+    archive_read_close(walk->disk);
+
+cleanup:
+    if (entry != NULL) archive_entry_free(entry);
+    for (index = 0; index < child_count; ++index) free_child(&children[index]);
+    free(children);
+    return result;
+}
+
 static int add_path(struct archive *writer,
                     const char *path,
                     file_id archive_id,
@@ -280,10 +626,6 @@ static int add_path(struct archive *writer,
     struct archive *disk = archive_read_disk_new();
     struct archive *stat_disk = NULL;
     struct archive_entry *entry = NULL;
-    struct archive_entry **entries = NULL;
-    size_t entry_count = 0;
-    size_t entry_capacity = 0;
-    size_t entry_index;
     int result = -1;
     int status;
 
@@ -314,12 +656,16 @@ static int add_path(struct archive *writer,
     archive_read_disk_set_behavior(disk, 0);
     archive_read_disk_set_standard_lookup(disk);
 
-    /* A second handle, never opened on a tree, for reading one file's metadata again just
-     * before it is written (see below); only the sorted mode needs it. Same symlink rule as
-     * the walk; nothing but stat.
-     * 第二個 handle，不對任何樹開啟，用來在寫出某個檔案之前重新讀它的中繼資料（見下方）；只有
-     * 排序模式需要。symlink 規則與走訪相同；只做 stat，不讀其他東西。 */
+    /* --zip-sorted lists and writes one directory at a time (add_sorted_tree). It needs a
+     * second handle, never opened on a tree, for reading one file's metadata from its path:
+     * a handle that has walked a tree no longer does that. Same symlink rule as the walk;
+     * nothing but stat.
+     * --zip-sorted 一次列出並寫出一個目錄（add_sorted_tree）。它需要第二個 handle，不對任何樹
+     * 開啟，用來依路徑讀取單一檔案的中繼資料：走訪過樹的 handle 不再做這件事。symlink 規則與
+     * 走訪相同；只做 stat，不讀其他東西。 */
     if (sort_members) {
+        sorted_walk walk;
+
         stat_disk = archive_read_disk_new();
         if (stat_disk == NULL) {
             set_error(error_buffer, error_capacity, "archive_read_disk_new failed");
@@ -331,6 +677,18 @@ static int add_path(struct archive *writer,
             ARCHIVE_READDISK_NO_XATTR | ARCHIVE_READDISK_NO_ACL |
             ARCHIVE_READDISK_NO_FFLAGS | ARCHIVE_READDISK_NO_SPARSE);
         archive_read_disk_set_standard_lookup(stat_disk);
+
+        walk.writer = writer;
+        walk.disk = disk;
+        walk.stat_disk = stat_disk;
+        walk.archive_id = archive_id;
+        walk.verbose = verbose;
+        walk.follow_symlinks = follow_symlinks;
+        walk.is_excluded = is_excluded;
+        walk.error_buffer = error_buffer;
+        walk.error_capacity = error_capacity;
+        result = add_sorted_tree(&walk, path, NULL, NULL);
+        goto cleanup;
     }
 
     status = archive_read_disk_open(disk, path);
@@ -339,6 +697,13 @@ static int add_path(struct archive *writer,
         goto cleanup;
     }
 
+    /* The default: write each entry as the walk hands it over. Nothing is held, so memory
+     * does not grow with the tree, and the order is the filesystem's -- which differs
+     * between filesystems, so one tree gave different archives on APFS and on tmpfs
+     * (2026-10-13).
+     * 預設：走訪交出一個項目就寫一個。不保留任何東西，所以記憶體不隨樹的大小成長；順序則是
+     * 檔案系統的——它因檔案系統而異，所以同一棵樹在 APFS 與 tmpfs 上得到不同的封存
+     * （2026-10-13）。 */
     for (;;) {
         entry = archive_entry_new();
         if (entry == NULL) {
@@ -357,100 +722,17 @@ static int add_path(struct archive *writer,
             goto cleanup;
         }
 
-        /* 在 descend 與 write_header 之前先問身分：封存本身是一般檔案，不會被 descend，
-         * 而在寫入之前攔下它，才能讓每個平台走同一條路徑，不必依賴 libarchive 是否回報。
-         * 訊息沿用 libarchive 的原文，好讓兩個平台的 stderr 一致——測試斷言的正是這句話。
-         * Ask about identity before descend and before write_header: the archive itself is a
-         * regular file and is never descended into, and stopping it before the write is what
-         * lets every platform take one path rather than depending on whether libarchive
-         * reports it. The wording is libarchive's own, so stderr reads the same on both
-         * platforms -- which is what the test asserts. */
-        if (archive_id.valid) {
-            file_id entry_id = file_identity(archive_entry_sourcepath(entry));
-            if (same_file(entry_id, archive_id)) {
-                fprintf(stderr, "swift_tar: %s: Can't add archive to itself\n",
-                        archive_entry_pathname(entry));
-                archive_entry_free(entry);
-                entry = NULL;
-                continue;
-            }
-        }
-
-        /* --exclude, asked of the tar path's own matcher before descend, so an excluded
-         * directory is never walked -- the same order TarWriter.add uses. Until 2026-09-27
-         * this backend never consulted --exclude at all.
-         * --exclude，於 descend 之前詢問 tar 路徑自己的比對器，故被排除的目錄不會被走進去
-         * ——與 TarWriter.add 的順序相同。2026-09-27 之前本後端完全不看 --exclude。 */
-        if (is_excluded != NULL) {
-            const char *name = archive_entry_pathname_utf8(entry);
-            if (name == NULL) name = archive_entry_pathname(entry);
-            if (name != NULL && is_excluded(name, archive_entry_filetype(entry) == AE_IFDIR)) {
-                if (verbose) fprintf(stderr, "skipping %s / 略過 %s\n", name, name);
-                archive_entry_free(entry);
-                entry = NULL;
-                continue;
-            }
-        }
-
-        if (archive_read_disk_can_descend(disk)) archive_read_disk_descend(disk);
-
-        /* The default: write each entry as the walk hands it over. Nothing is held, so
-         * memory does not grow with the tree, and the order is the filesystem's -- which
-         * differs between filesystems, so one tree gave different archives on APFS and on
-         * tmpfs (2026-10-13). --zip-sorted takes the other branch.
-         * 預設：走訪交出一個項目就寫一個。不保留任何東西，所以記憶體不隨樹的大小成長；順序則是
-         * 檔案系統的——它因檔案系統而異，所以同一棵樹在 APFS 與 tmpfs 上得到不同的封存
-         * （2026-10-13）。--zip-sorted 走另一個分支。 */
-        if (!sort_members) {
-            if (write_entry(writer, entry, verbose, error_buffer, error_capacity) != 0) {
-                goto cleanup;
-            }
+        if (skip_entry(entry, archive_id, verbose, is_excluded)) {
             archive_entry_free(entry);
             entry = NULL;
             continue;
         }
 
-        /* --zip-sorted: keep the entry and write nothing yet; they are sorted below and
-         * written after the walk. This holds every entry of the tree until it is written
-         * (about 1.8 KB each, measured 2026-10-13), which is why it is not the default.
-         * --zip-sorted：先留下項目，暫不寫出；走訪結束後於下方排序再寫出。整棵樹的項目都要留到
-         * 寫出為止（每個約 1.8 KB，2026-10-13 實測），這就是它不是預設的原因。 */
-        if (entry_count == entry_capacity) {
-            size_t capacity = entry_capacity == 0 ? 256 : entry_capacity * 2;
-            struct archive_entry **grown =
-                (struct archive_entry **)realloc(entries, capacity * sizeof(*entries));
-            if (grown == NULL) {
-                set_error(error_buffer, error_capacity, "out of memory while listing files");
-                goto cleanup;
-            }
-            entries = grown;
-            entry_capacity = capacity;
-        }
-        entries[entry_count++] = entry;
-        entry = NULL;
-    }
-
-    if (entry_count > 1) qsort(entries, entry_count, sizeof(*entries), compare_entries);
-
-    for (entry_index = 0; entry_index < entry_count; ++entry_index) {
-        entry = entries[entry_index];
-        entries[entry_index] = NULL;
-
-        /* Read a regular file's size again, now that its turn has come. The walk above
-         * recorded it before any earlier member was compressed, and a file that has grown
-         * since would not fit the size in its header: the writer takes no more than that,
-         * and the run would end there. A failure is left for the open below to report.
-         * 輪到一般檔案時，重新讀一次它的大小。上面的走訪是在壓縮任何先前成員之前記下它的；
-         * 此後變大的檔案會超出標頭裡的大小——寫出端不收超過的部分，整次執行就停在那裡。
-         * 這裡若失敗，交給下方開檔時回報。 */
-        if (archive_entry_filetype(entry) == AE_IFREG) {
-            archive_read_disk_entry_from_file(stat_disk, entry, -1, NULL);
-        }
+        if (archive_read_disk_can_descend(disk)) archive_read_disk_descend(disk);
 
         if (write_entry(writer, entry, verbose, error_buffer, error_capacity) != 0) {
             goto cleanup;
         }
-
         archive_entry_free(entry);
         entry = NULL;
     }
@@ -458,10 +740,6 @@ static int add_path(struct archive *writer,
 
 cleanup:
     if (entry != NULL) archive_entry_free(entry);
-    for (entry_index = 0; entry_index < entry_count; ++entry_index) {
-        if (entries[entry_index] != NULL) archive_entry_free(entries[entry_index]);
-    }
-    free(entries);
     if (stat_disk != NULL) archive_read_free(stat_disk);
     archive_read_free(disk);
     return result;

@@ -1030,8 +1030,8 @@ records its pins as `unknown-source-drop`, because there is no git to ask.
 | lld | R／R E／RW／RW | 有 | 唯讀（`AMSo`） |
 | GNU ld（退回路徑） | R／R E／R／RW | 有 | 唯讀（`A`） |
 
-lld 路徑：20 支測試、`--crypto-selftest`、`-test` 全數以 0 結束，核心 log 沒有任何 fault。GNU ld
-路徑只跑了 `--crypto-selftest`、`-test` 與三支測試（zip_fidelity、strict、encrypt），全過。
+lld 路徑與 GNU ld 路徑各自跑過整輪：20 支測試、`--crypto-selftest`、`-test` 全數以 0 結束，核心 log 沒有
+任何 fault（GNU ld 路徑的整輪是在 `309d695` 上補跑的）。
 
 **沒有被證明的事**：載入時沒有東西需要 `.rodata` 可寫（1657 筆動態重定位中 0 筆落在其中）。
 Swift runtime 在某條沒被測試走到的路徑上會不會寫它，測試全過不能排除；若會，現在會以 SIGSEGV

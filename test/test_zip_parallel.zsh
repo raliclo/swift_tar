@@ -175,6 +175,18 @@ else
   echo "SKIP: thread-use case (no threaded ZIP path in this build, or one core)"
 fi
 
+# --help said "-n: default 2×cores" long after the code had gone to one per core (the 2×
+# measured 2.7% faster for twice the memory). With -n now also the ZIP thread count, the
+# wrong default was being read by more people.
+# --help 的 -n 寫著「預設 2×核心數」，而程式早已改為每個核心一個（2× 只快 2.7%，記憶體加倍）。
+# -n 現在也是 ZIP 的執行緒數，讀到那個錯誤預設值的人更多了。
+help_text=$("$ST" --help 2>&1)
+if print -r -- "$help_text" | grep -q 'default: one per core' && ! print -r -- "$help_text" | grep -q -E '2×cores|2×核心數'; then
+  ok "--help gives the -n default as one per core"
+else
+  bad "--help gives the -n default as one per core"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

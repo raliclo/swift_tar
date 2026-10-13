@@ -5695,8 +5695,9 @@ private func printTarUsage() {
                       : (-x only) strip N leading path components from member
                         names before extraction, matching standard tar
                         （僅 -x）解出前移除成員路徑前 N 層，語意同標準 tar
-      -n <N>          : In-flight parallel chunks (default 2×cores)
-                        平行在途分塊數（預設 2×核心數）
+      -n <N>          : In-flight parallel chunks (default: one per core;
+                        capped at 4×cores)
+                        平行在途分塊數（預設每個核心一個；上限為 4×核心數）
                         With --zip/--zip64: how many members are compressed at
                         once; the archive is the same bytes whatever N is
                         搭配 --zip／--zip64：同時壓縮的成員數；不論 N 為何，封存的

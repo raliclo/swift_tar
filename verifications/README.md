@@ -662,3 +662,45 @@ is untouched either way — gzip's window is 32 KiB, so the chunk never reaches 
 `zstd_decode_gap.zsh --mode chunk` answers a different question — frame count
 at a fixed chunk size, varied through `--zstd-level` — and the two must not be
 cited for each other.
+
+## ZIP: what compressing members on `-n` threads buys (2026-10-14)
+
+`zip_parallel_speed.zsh` → `zip_parallel_speed.csv2`, `zip_parallel_speed_output.txt`
+
+Since `79fa438` each ZIP member is deflated by one thread and the members are
+written in order; `-n` is how many are compressed at once, one per core by
+default. The script packs one tree with every `-n`, three interleaved rounds,
+keeps each case's fastest round, and hashes the output: `record` exits 1 when
+any two sorted swift_tar cases differ in sha256, because speed bought by
+changing the bytes would be a different result.
+
+claw-code (1.3 GB, about 5,400 files):
+
+| | `-n 1` | `-n 2` | `-n 4` | `-n 8` | default | peak memory, `-n 1` → default |
+|---|---|---|---|---|---|---|
+| Apple M4 (10 cores) | 30.4 s | 15.5 s | 9.1 s | 7.7 s | 7.3 s (4.2×) | 9 MB → 180 MB |
+| Linux guest (4 vCPU, HVF) | 29.2 s | 14.8 s | 9.0 s | 9.2 s | 8.8 s (3.3×) | 22 MB → 134 MB |
+
+* **The bytes do not change.** Every `-n` gives the same sha256 on a platform,
+  and the guest's is the one `cross_platform_bytes.csv2` holds.
+* **Two and four threads scale almost linearly; past that it flattens.** On the
+  M4 only four cores are performance cores, and user CPU time rises from 28.6 s
+  to 36 s once the efficiency cores join. There is also no parallelism inside
+  one file, so the largest members bound the run.
+* **`-n` above the core count is slower** (`-n 16`: 7.6 s on the M4, 9.9 s in
+  the guest) and holds more memory.
+* **`-n 1` is the old path.** A build of the same sources without the threaded
+  path took 29.8 s against 30.4 s.
+* **Other tools on the same machine are single-threaded:** Info-ZIP `zip -r -6`
+  33.1 s and `bsdtar --format zip` 32.8 s on the M4; `bsdtar` 28.4 s in the
+  guest.
+* **Sorting does not cost time.** On the M4 `--zip-unsorted` was slower than the
+  default in all three rounds (7.8 to 8.6 s against 7.3 to 7.5 s); in the guest
+  the two swapped places from round to round (9.1 to 10.0 s against 8.8 to
+  10.1 s). Why the M4 differs was not looked into.
+
+Limits of this run: the M4 carried a load average of 4 to 6 from other work, so
+its absolute times are upper bounds; the M4's corpus was the tree
+`cross_platform_bytes.zsh` leaves behind (one file added, one changed), which is
+why its sha256 is not the guest's; Windows was not measured, and its build has
+no threaded path.

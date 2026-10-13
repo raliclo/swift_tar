@@ -3348,8 +3348,12 @@ macOS 上對修正前的執行檔是 199／1（得到 `13`），修正後 200／
 
 **沒有驗證的**：
 - Windows。走同一段程式碼，OS 位元組應由 10 變為 3，但沒有建置或執行。
-- bzip2、xz、lz4、lzip 與 ZIP 的輸出沒有跨平台比對。
-- 只比對了 `-c` 直接寫檔；`-u`、`--delete`、加密等路徑沒有比。
+- ~~bzip2、xz、lz4、lzip 與 ZIP 的輸出沒有跨平台比對。~~ **同日補上**：bzip2、xz、lz4 兩邊
+  相同；ZIP 不同，另立下一項；lzip 依使用者決定不比（它執行的是 PATH 上的 `lzip`）。
+- ~~只比對了 `-c` 直接寫檔；`-u`、`--delete`、加密等路徑沒有比。~~ **同日補上**：`-r`、`-u`、
+  `--delete` 每一步之後的封存檔兩邊相同；加密見下一項的表。
+- 整套比對現在是 `verifications/cross_platform_bytes.zsh`，紀錄在
+  `verifications/cross_platform_bytes.csv2` 與 `cross_platform_bytes_output.txt`。
 
 The gzip member header has an OS byte at offset 9 that zlib fills in from the build host
 (19 on macOS, 3 on Linux, 10 on Windows), so `--gzip` gave the same size and a different
@@ -3360,3 +3364,70 @@ archives read as before. After the fix all four modes give the same sha256 on ma
 in the Linux VM for a 1.4 GB tree, given the same ownership on both sides. One check was
 added (199/1 before on macOS, 200/0 after); on Linux it passes either way. Not verified:
 Windows, the other codecs and ZIP, and paths other than a plain `-c`.
+
+## `--zip` 的成員順序跟著檔案系統走，同一棵樹在 macOS 與 Linux 得到不同的 ZIP ▸ 🔴 未修正（2026-10-13 發現）/ `--zip` stores members in filesystem order, so one tree gives different ZIPs on macOS and Linux
+
+**現象**：`verifications/cross_platform_bytes.zsh` 以同一份語料（claw-code，5,408 個檔案）在
+macOS 與 Linux VM 各打包一次。`--zip` 與 `--zip64` 兩邊**大小相同**（494,240,952 與
+494,284,292 bytes）、sha256 不同。其餘 21 項都符合預期，所以 `compare` 目前以 1 結束。
+
+**成因**：ZIP 後端（`libarchive_zip_bridge.c` 的 `add_path`）以 libarchive 的
+`archive_read_disk` 走訪目錄，成員順序就是 readdir 給的順序。tar 這一邊則是自己走訪，並對每
+一層的子項目 `sorted()`。同一個目錄的實測：
+
+```
+macOS（APFS）                            Linux（tmpfs）
+claw-code/tests/                         claw-code/tests/
+claw-code/tests/test_porting_workspace.py   claw-code/tests/test_security_scope.py
+claw-code/tests/test_roadmap_helpers.py     claw-code/tests/test_roadmap_helpers.py
+claw-code/tests/test_security_scope.py      claw-code/tests/test_pre_push_hook_contract.py
+claw-code/tests/__init__.py                 claw-code/tests/test_porting_workspace.py
+claw-code/tests/test_pre_push_hook_contract.py   claw-code/tests/__init__.py
+```
+
+成員集合相同，順序不同；兩邊都不是排序過的。
+
+**影響**：兩邊的 ZIP 都正確，都通過 `unzip -t`，解出的內容相同。受影響的是「同一份輸入得到同
+一個檔案」這個性質——換一個檔案系統就可能換一個順序，所以它不只是跨平台的問題。
+
+**另一個會讓 ZIP 不同的輸入：時區。** ZIP 檔頭的時間是本地時間（格式如此）。macOS 這台是
+UTC+8、guest 是 UTC，不設 `TZ` 時檔頭時間欄差 8 小時。比對腳本因此一律設 `TZ=UTC`。設了之後，
+兩邊第一個成員（目錄項）的 96 bytes 完全相同；之後就因為順序不同而無從逐位元組對照。
+**「順序修好之後兩邊就會相同」是推論，還沒有驗證。**
+
+**尚未做**：
+- 修正。讓 ZIP 後端依排序過的順序加入成員——由 Swift 端展開樹再逐一交給 bridge，或在 bridge
+  內先收集再排序。兩種都會動到 `--exclude`、`-h`、硬連結與目錄 mtime 那幾條既有的路徑，修的
+  時候要連同 `test_zip_fidelity.zsh` 一起看。**修正會改變 `--zip` 在每個平台上的成員順序。**
+- 一項會對未修正執行檔失敗的測試。單一平台上要重現，需要一個 readdir 順序不是字典序的目錄；
+  上面那個 `tests/` 在 APFS 與 tmpfs 上都是。
+- 修好後重跑 `cross_platform_bytes.zsh`，`compare` 應以 0 結束。
+
+**同一輪比對的其餘結果**（macOS 對 Linux VM，`verifications/cross_platform_bytes_output.txt`）：
+
+| 項目 | 結果 |
+|---|---|
+| 無 codec、zstd、gzip、LZFSE、bzip2、xz、lz4（整份語料） | 7 項皆相同 |
+| `--zip`、`--zip64` | **不同**（本項） |
+| 純 tar 的 `-c`、`-r`、`-u`、`--delete`，每一步之後的封存檔 | 4 項皆相同 |
+| `-u` 與 `--delete` 之後的 `-t` 清單 | 相同 |
+| `--encrypt` 的密文 | 每次都不同，同一台機器跑兩次亦然——salt 與 nonce 是隨機的，設計如此 |
+| 解密後的內容（純 tar 與 zstd 各一） | 與未加密的輸出相同，兩個平台皆然 |
+| 另一個平台加密的檔案 | 兩個方向都解得開，解出的目錄與來源相同 |
+
+**沒有比的**：`--lzip`（依使用者決定；它執行 PATH 上的 `lzip`，位元組屬於那支程式）、Windows、
+`--other3-optimal` 與其餘 LZFSE 模式、非預設的壓縮等級、RGB1。
+
+The ZIP backend walks directories through libarchive's `archive_read_disk`, so members
+come out in readdir order; the tar side walks the tree itself and sorts each level. One
+corpus therefore gives ZIPs of the same size and different content on macOS (APFS) and
+Linux (tmpfs): same member set, different order, sorted on neither. Both archives are
+valid. ZIP headers also hold local time, so the comparison sets TZ=UTC; with that, the
+first member's 96 bytes match, and that the whole file would match once the order is
+fixed is an inference, not a measurement. Not yet done: the fix (which will change member
+order on every platform), a test that fails against the unfixed binary, and a rerun in
+which `compare` exits 0. Everything else in the same round behaved as expected: seven
+codecs identical, `-r`/`-u`/`--delete` identical at every step, ciphertext different on
+every run by design, and decryption giving back the unencrypted bytes in both directions.
+Not compared: `--lzip` by the user's decision, Windows, the other LZFSE modes,
+non-default levels, RGB1.

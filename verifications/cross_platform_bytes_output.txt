@@ -1,0 +1,37 @@
+[Info] date / 日期: 2026-10-13 13:37:09 CST
+[Info] script / 腳本: verifications/cross_platform_bytes.zsh compare mac linux
+[Info] corpus / 語料: claw-code, 5408 files, extracted on both sides from one archive, owner 501:20, TZ=UTC
+[Info] mac: Apple M4, swift_tar 20261012-233235, git d0266e9, RAM disk (APFS)
+[Info] linux: QEMU aarch64 guest (HVF, 4 vCPU), swift_tar 20261013-053124 built in the guest from a source drop taken from the working tree that became 4dbb39d (no program source changed between that and d0266e9), tmpfs
+[Info] records / 紀錄: verifications/cross_platform_bytes.csv2
+[Info] exit code / 退出碼: 1 (zip and zip64 differ; see todo/todo.md / zip 與 zip64 不同，見 todo/todo.md)
+
+same          none
+same          zstd3
+same          gzip
+same          lzfse
+same          bzip2
+same          xz
+same          lz4
+DIFFERENT     zip
+DIFFERENT     zip64
+same          tar-create
+same          tar-append-r
+same          overlay-state
+same          tar-update-u
+same          listing-after-u
+same          tar-delete
+same          listing-after-delete
+same          sub-plain
+same          sub-zstd
+differs-ok    encrypt-run1 (random salt and nonce / 隨機 salt 與 nonce)
+differs-ok    encrypt-run2 (random salt and nonce / 隨機 salt 與 nonce)
+same          decrypt-own
+same          decrypt-own-zstd
+same          decrypt-foreign
+same          mac: decrypt-own = sub-plain
+same          mac: decrypt-own-zstd = sub-zstd
+same          mac: decrypt-foreign = sub-plain
+same          linux: decrypt-own = sub-plain
+same          linux: decrypt-own-zstd = sub-zstd
+same          linux: decrypt-foreign = sub-plain

@@ -147,8 +147,17 @@ if [ ! -f "$archive_lib" ]; then
     exit 1
 fi
 
-clang -O2 -Ilibarchive/libarchive -c libarchive_zip_bridge.c \
-    -o build/libarchive_zip_bridge.o
+# SWIFT_TAR_ZIP_PARALLEL: the library just built carries patch/libarchive/0003, which is
+# what the bridge's threaded compression writes through. The bridge deflates with zlib
+# itself there, so it needs the header of the same zlib libarchive was configured with.
+# SWIFT_TAR_ZIP_PARALLEL：剛建好的函式庫帶有 patch/libarchive/0003，bridge 的多執行緒壓縮就是
+# 經由它寫出。bridge 在那條路徑上自己用 zlib 做 deflate，所以需要 libarchive 設定時所用的
+# 同一份 zlib 的 header。
+typeset -a bridge_zlib
+bridge_zlib=()
+[[ -n ${ZLIB_INCLUDE_DIR:-} ]] && bridge_zlib=(-I"$ZLIB_INCLUDE_DIR")
+clang -O2 -DSWIFT_TAR_ZIP_PARALLEL -Ilibarchive/libarchive "${bridge_zlib[@]}" \
+    -c libarchive_zip_bridge.c -o build/libarchive_zip_bridge.o
 
 # Record the pinned gitlink in this platform's provenance file, mirroring
 # build_libarchive-win.zsh without letting a Linux build overwrite macOS data.

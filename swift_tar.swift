@@ -138,6 +138,7 @@ private func cSwiftTarZipCreate(
     _ followSymlinks: Int32,
     _ isExcluded: (@convention(c) (UnsafePointer<CChar>?, Int32) -> Int32)?,
     _ sortMembers: Int32,
+    _ threads: Int32,
     _ errorBuffer: UnsafeMutablePointer<CChar>,
     _ errorCapacity: Int
 ) -> Int32
@@ -208,7 +209,7 @@ private func isZipMagic(_ archivePath: String) -> Bool {
 
 private func runZipCreate(archivePath: String, files: [String], changeDir: String,
                           forceZip64: Bool, verbose: Bool, dereference: Bool,
-                          sortMembers: Bool) throws {
+                          sortMembers: Bool, threads: Int) throws {
     guard !files.isEmpty else {
         throw TarError.io("no files to archive / 未指定要打包的檔案")
     }
@@ -263,7 +264,7 @@ private func runZipCreate(archivePath: String, files: [String], changeDir: Strin
                                            return zipEntryIsExcluded(String(cString: path),
                                                                      isDirectory: isDirectory != 0) ? 1 : 0
                                        },
-                                       sortMembers ? 1 : 0,
+                                       sortMembers ? 1 : 0, Int32(threads),
                                        &error, error.count)
                 }
             }
@@ -5696,6 +5697,10 @@ private func printTarUsage() {
                         （僅 -x）解出前移除成員路徑前 N 層，語意同標準 tar
       -n <N>          : In-flight parallel chunks (default 2×cores)
                         平行在途分塊數（預設 2×核心數）
+                        With --zip/--zip64: how many members are compressed at
+                        once; the archive is the same bytes whatever N is
+                        搭配 --zip／--zip64：同時壓縮的成員數；不論 N 為何，封存的
+                        位元組都相同
       --encrypt       : (-c only) encrypt the archive with ChaCha20-Poly1305.
                         The passphrase is read from the terminal without echo;
                         reading auto-detects encryption, so no flag is needed
@@ -7166,7 +7171,7 @@ struct SwiftTarMain {
                     try runZipCreate(archivePath: archivePath, files: files,
                                      changeDir: destDir, forceZip64: forceZip64,
                                      verbose: verbose, dereference: tarDereference,
-                                     sortMembers: !zipUnsorted)
+                                     sortMembers: !zipUnsorted, threads: inflightN)
                 } else {
                     try runCreate(archivePath: archivePath, files: files, codec: codec,
                                   changeDir: destDir, inflight: inflightN, verbose: verbose)

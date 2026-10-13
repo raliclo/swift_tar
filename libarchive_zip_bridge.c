@@ -18,6 +18,11 @@
 #else
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef SWIFT_TAR_ZIP_PARALLEL
+#include <fcntl.h>
+#include <pthread.h>
+#include <zlib.h>
+#endif
 #define swift_tar_chdir chdir
 #define swift_tar_getcwd getcwd
 #endif
@@ -253,15 +258,16 @@ static int compare_children(const void *left, const void *right) {
     return (int)*a - (int)*b;
 }
 
-/* Write one entry and, for a regular file, its data. Returns 0 when the walk should go on
- * (the entry was written, or could not be and was reported) and -1 when the run must end.
- * 寫出一個項目；若為一般檔案，連同其資料。回傳 0 表示走訪應繼續（項目已寫出，或寫不進去且已
- * 回報），-1 表示整次執行必須結束。 */
-static int write_entry(struct archive *writer,
-                       struct archive_entry *entry,
-                       int verbose,
-                       char *error_buffer,
-                       size_t error_capacity) {
+/* Write one entry's header. Returns 1 when its data is to follow, 0 when the entry could
+ * not be written and was reported (the run goes on, with no data for it), and -1 when the
+ * run must end.
+ * 寫出一個項目的標頭。回傳 1 表示接著要寫它的資料；0 表示這個項目寫不進去且已回報（執行繼續，
+ * 不寫它的資料）；-1 表示整次執行必須結束。 */
+static int write_entry_header(struct archive *writer,
+                              struct archive_entry *entry,
+                              int verbose,
+                              char *error_buffer,
+                              size_t error_capacity) {
     int status;
 
     if (verbose) fprintf(stderr, "a %s\n", archive_entry_pathname(entry));
@@ -310,7 +316,408 @@ static int write_entry(struct archive *writer,
         fprintf(stderr, "swift_tar: %s: %s\n",
                 archive_entry_pathname(entry), archive_error_string(writer));
     }
+    return 1;
+}
+
+/* Write one entry and, for a regular file, its data, read and compressed here. Returns 0
+ * when the walk should go on and -1 when the run must end.
+ * 寫出一個項目；若為一般檔案，連同其資料，在這裡讀取並壓縮。回傳 0 表示走訪應繼續，-1 表示
+ * 整次執行必須結束。 */
+static int write_entry(struct archive *writer,
+                       struct archive_entry *entry,
+                       int verbose,
+                       char *error_buffer,
+                       size_t error_capacity) {
+    int status = write_entry_header(writer, entry, verbose, error_buffer, error_capacity);
+    if (status <= 0) return status;
     return copy_file_to_archive(writer, entry, error_buffer, error_capacity);
+}
+
+/* ---- compressing members on several threads -------------------------------------------
+ *
+ * A ZIP is one stream and its members are written in order, but each member is its own
+ * deflate stream, so the compressing can be done ahead of the writing. The walk hands
+ * every entry to the pipeline; a regular file's data is read and deflated by a worker
+ * thread into memory, and the calling thread writes the members in the order they were
+ * handed over, waiting only when the next one is not finished yet.
+ *
+ * The bytes do not change with the number of threads. A worker makes the same deflate
+ * stream libarchive's ZIP writer would have made (same zlib, same settings), and
+ * archive_write_zip_data_deflated (patch/libarchive/0003) writes it in place of
+ * archive_write_data.
+ *
+ * What is held is bounded: at most ZIP_WINDOW_JOBS members, and at most ZIP_WINDOW_BYTES
+ * of file data handed over and not yet written. A file larger than ZIP_LARGE_FILE is not
+ * handed to a worker; it is compressed by the calling thread when its turn comes, as
+ * without threads, so that its compressed form never has to be held.
+ *
+ * Only where the build says the patched libarchive is linked (SWIFT_TAR_ZIP_PARALLEL) and
+ * not on Windows; elsewhere, and with one thread, every entry is written as it arrives.
+ *
+ * ---- 以多個執行緒壓縮成員 ----
+ *
+ * ZIP 是單一串流，成員依序寫出，但每個成員各是一條自己的 deflate 串流，所以壓縮可以走在寫出
+ * 之前。走訪把每個項目交給管線；一般檔案的資料由工作執行緒讀取並 deflate 到記憶體，呼叫端的
+ * 執行緒則依交付的順序寫出成員，只有在下一個還沒完成時才等待。
+ *
+ * 位元組不隨執行緒數改變。工作執行緒做出的 deflate 串流，與 libarchive 的 ZIP 寫出端本來會
+ * 做出的相同（同一份 zlib、同樣的設定），再由 archive_write_zip_data_deflated
+ * （patch/libarchive/0003）取代 archive_write_data 寫入。
+ *
+ * 留在記憶體的東西有上限：最多 ZIP_WINDOW_JOBS 個成員，以及最多 ZIP_WINDOW_BYTES 已交付而尚未
+ * 寫出的檔案資料。大於 ZIP_LARGE_FILE 的檔案不交給工作執行緒；輪到它時由呼叫端的執行緒壓縮，
+ * 與沒有執行緒時相同，這樣就不必把它壓縮後的樣子留在記憶體。
+ *
+ * 只在建置表明連結的是打過 patch 的 libarchive（SWIFT_TAR_ZIP_PARALLEL）且不是 Windows 時啟用；
+ * 其他情況，以及只有一個執行緒時，每個項目到了就寫。 */
+#define ZIP_DEFLATE_LEVEL 6
+#define ZIP_DEFLATE_LEVEL_TEXT "6"
+
+#if defined(SWIFT_TAR_ZIP_PARALLEL) && !defined(_WIN32)
+#define ZIP_WINDOW_JOBS 256
+#define ZIP_WINDOW_BYTES ((la_int64_t)256 * 1024 * 1024)
+#define ZIP_LARGE_FILE ((la_int64_t)64 * 1024 * 1024)
+
+/* Declared here as well as in the patched archive.h: a build that reverts the patch
+ * after building the library compiles this file against the unpatched header.
+ * 除了打過 patch 的 archive.h 之外，這裡也宣告一次：建完函式庫就還原 patch 的建置，是對著
+ * 未 patch 的 header 編譯本檔的。 */
+int archive_write_zip_data_deflated(struct archive *, const void *, size_t,
+                                    unsigned long, la_int64_t);
+
+typedef struct {
+    struct archive_entry *entry;
+    la_int64_t cost;          /* bytes counted against the window; 0 = not for a worker */
+    int done;
+    int failed;
+    unsigned char *data;      /* the finished deflate stream */
+    size_t length;
+    unsigned long crc;
+    la_int64_t bytes;         /* uncompressed bytes actually read */
+    char error[512];
+} zip_job;
+#endif
+
+typedef struct {
+    struct archive *writer;
+    int verbose;
+    char *error_buffer;
+    size_t error_capacity;
+#if defined(SWIFT_TAR_ZIP_PARALLEL) && !defined(_WIN32)
+    int thread_count;         /* 0 = write every entry as it arrives */
+    int started;
+    pthread_t *threads;
+    pthread_mutex_t lock;
+    pthread_cond_t work_ready;
+    pthread_cond_t job_done;
+    zip_job *jobs;            /* a ring; a job's place is its number modulo the size */
+    size_t first;             /* number of the oldest job not yet written */
+    size_t end;               /* number the next job will get */
+    size_t claim;             /* number of the next job a worker will look at */
+    la_int64_t in_flight;
+    int base_dir;             /* what relative paths are relative to */
+    int stopping;
+#endif
+} zip_pipeline;
+
+#if defined(SWIFT_TAR_ZIP_PARALLEL) && !defined(_WIN32)
+/* Read one file and deflate it into memory. Runs on a worker thread; touches nothing but
+ * its job. The file is opened relative to base_dir, not to the working directory, which
+ * libarchive's walk may be changing on the calling thread at this very moment.
+ * 讀取一個檔案並 deflate 到記憶體。在工作執行緒上執行；只碰自己的 job。檔案是相對於 base_dir
+ * 開啟，而不是相對於工作目錄——呼叫端執行緒上的 libarchive 走訪可能正在改變工作目錄。 */
+static void compress_job(zip_job *job, int base_dir, unsigned char *input, size_t input_size) {
+    const char *path = archive_entry_sourcepath(job->entry);
+    z_stream stream;
+    size_t capacity = 64 * 1024;
+    int fd;
+    int flush = Z_NO_FLUSH;
+
+    fd = openat(base_dir, path != NULL ? path : "", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        snprintf(job->error, sizeof(job->error), "cannot open '%s': %s",
+                 path != NULL ? path : "<unknown>", strerror(errno));
+        job->failed = 1;
+        return;
+    }
+    memset(&stream, 0, sizeof(stream));
+    job->data = (unsigned char *)malloc(capacity);
+    if (job->data == NULL ||
+        deflateInit2(&stream, ZIP_DEFLATE_LEVEL, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+        snprintf(job->error, sizeof(job->error), "out of memory while compressing '%s'", path);
+        job->failed = 1;
+        close(fd);
+        return;
+    }
+    job->crc = crc32(0L, Z_NULL, 0);
+    stream.next_out = job->data;
+    stream.avail_out = (uInt)capacity;
+
+    for (;;) {
+        int status;
+
+        if (stream.avail_in == 0 && flush == Z_NO_FLUSH) {
+            ssize_t count = read(fd, input, input_size);
+            if (count < 0) {
+                if (errno == EINTR) continue;
+                snprintf(job->error, sizeof(job->error), "failed while reading an input file");
+                job->failed = 1;
+                break;
+            }
+            if (count == 0) {
+                flush = Z_FINISH;
+            } else {
+                job->crc = crc32(job->crc, input, (uInt)count);
+                job->bytes += count;
+                stream.next_in = input;
+                stream.avail_in = (uInt)count;
+            }
+        }
+        status = deflate(&stream, flush);
+        if (status == Z_STREAM_END) break;
+        if (status != Z_OK && status != Z_BUF_ERROR) {
+            snprintf(job->error, sizeof(job->error), "deflate failed on '%s'", path);
+            job->failed = 1;
+            break;
+        }
+        if (stream.avail_out == 0) {
+            size_t used = capacity;
+            unsigned char *grown = (unsigned char *)realloc(job->data, capacity * 2);
+            if (grown == NULL) {
+                snprintf(job->error, sizeof(job->error),
+                         "out of memory while compressing '%s'", path);
+                job->failed = 1;
+                break;
+            }
+            job->data = grown;
+            capacity *= 2;
+            stream.next_out = job->data + used;
+            stream.avail_out = (uInt)(capacity - used);
+        }
+    }
+    job->length = capacity - stream.avail_out;
+    deflateEnd(&stream);
+    close(fd);
+}
+
+static void *pipeline_worker(void *context) {
+    zip_pipeline *pipeline = (zip_pipeline *)context;
+    size_t input_size = 256 * 1024;
+    unsigned char *input = (unsigned char *)malloc(input_size);
+
+    pthread_mutex_lock(&pipeline->lock);
+    for (;;) {
+        zip_job *job;
+
+        /* Find the next job that has data. Jobs without any are finished the moment they
+         * are handed over and nobody wakes a worker for them, so the writer may already
+         * have written them and reused their places in the ring: never look at a number
+         * below `first`. (Until this was added, a file that followed more than a ring's
+         * worth of empty members was compressed once for each time its place came round.)
+         * 找出下一個帶有資料的 job。不帶資料的 job 一交付就算完成，也不會為它喚醒任何工作
+         * 執行緒，所以寫出端可能早已把它們寫完、並重用了它們在環裡的位置：絕不去看編號小於
+         * `first` 的 job。（加上這一段之前，跟在超過一整圈空成員之後的檔案，它的位置每轉到
+         * 一次就被壓縮一次。） */
+        while (!pipeline->stopping) {
+            if (pipeline->claim < pipeline->first) pipeline->claim = pipeline->first;
+            while (pipeline->claim < pipeline->end &&
+                   pipeline->jobs[pipeline->claim % ZIP_WINDOW_JOBS].cost == 0) {
+                pipeline->claim++;
+            }
+            if (pipeline->claim < pipeline->end) break;
+            pthread_cond_wait(&pipeline->work_ready, &pipeline->lock);
+        }
+        if (pipeline->stopping) break;
+        job = &pipeline->jobs[pipeline->claim++ % ZIP_WINDOW_JOBS];
+        pthread_mutex_unlock(&pipeline->lock);
+
+        if (input == NULL) {
+            snprintf(job->error, sizeof(job->error), "out of memory while compressing");
+            job->failed = 1;
+        } else {
+            compress_job(job, pipeline->base_dir, input, input_size);
+        }
+
+        pthread_mutex_lock(&pipeline->lock);
+        job->done = 1;
+        pthread_cond_broadcast(&pipeline->job_done);
+    }
+    pthread_mutex_unlock(&pipeline->lock);
+    free(input);
+    return NULL;
+}
+
+/* Write the oldest job, waiting for its worker if need be, and let go of it.
+ * 寫出最舊的 job，必要時等它的工作執行緒完成，然後放掉它。 */
+static int pipeline_write_first(zip_pipeline *pipeline) {
+    zip_job *job = &pipeline->jobs[pipeline->first % ZIP_WINDOW_JOBS];
+    int result = 0;
+
+    pthread_mutex_lock(&pipeline->lock);
+    while (!job->done) pthread_cond_wait(&pipeline->job_done, &pipeline->lock);
+    pthread_mutex_unlock(&pipeline->lock);
+
+    if (job->cost == 0) {
+        result = write_entry(pipeline->writer, job->entry, pipeline->verbose,
+                             pipeline->error_buffer, pipeline->error_capacity);
+    } else if (job->failed) {
+        set_error(pipeline->error_buffer, pipeline->error_capacity, job->error);
+        result = -1;
+    } else {
+        int status;
+
+        /* The size the header states is the number of bytes the worker read, so a file
+         * that changed size after it was listed is still stored as what was read.
+         * 標頭所記的大小是工作執行緒實際讀到的位元組數，所以列出之後大小變了的檔案，存下的仍是
+         * 實際讀到的內容。 */
+        archive_entry_set_size(job->entry, job->bytes);
+        status = write_entry_header(pipeline->writer, job->entry, pipeline->verbose,
+                                    pipeline->error_buffer, pipeline->error_capacity);
+        if (status < 0) {
+            result = -1;
+        } else if (status > 0 && job->bytes > 0 &&
+                   archive_write_zip_data_deflated(pipeline->writer, job->data, job->length,
+                                                   job->crc, job->bytes) != ARCHIVE_OK) {
+            set_archive_error(pipeline->error_buffer, pipeline->error_capacity,
+                              "archive_write_zip_data_deflated", pipeline->writer);
+            result = -1;
+        }
+    }
+
+    free(job->data);
+    archive_entry_free(job->entry);
+    pthread_mutex_lock(&pipeline->lock);
+    pipeline->in_flight -= job->cost;
+    pipeline->first++;
+    pthread_mutex_unlock(&pipeline->lock);
+    return result;
+}
+#endif
+
+/* Start the pipeline. `threads` is how many may compress at once; 1 or less, or a build
+ * without the threaded path, writes every entry as it arrives. Call after any chdir: the
+ * directory current now is the one relative paths are opened against.
+ * 啟動管線。`threads` 是可同時壓縮的數量；1 以下，或建置不含執行緒路徑時，每個項目到了就寫。
+ * 要在 chdir 之後呼叫：此刻的工作目錄，就是之後開啟相對路徑時所依據的目錄。 */
+static int pipeline_open(zip_pipeline *pipeline, struct archive *writer, int verbose,
+                         int threads, char *error_buffer, size_t error_capacity) {
+    memset(pipeline, 0, sizeof(*pipeline));
+    pipeline->writer = writer;
+    pipeline->verbose = verbose;
+    pipeline->error_buffer = error_buffer;
+    pipeline->error_capacity = error_capacity;
+#if defined(SWIFT_TAR_ZIP_PARALLEL) && !defined(_WIN32)
+    pipeline->base_dir = -1;
+    if (threads <= 1) return 0;
+    pipeline->base_dir = open(".", O_RDONLY | O_CLOEXEC);
+    pipeline->jobs = (zip_job *)calloc(ZIP_WINDOW_JOBS, sizeof(zip_job));
+    pipeline->threads = (pthread_t *)calloc((size_t)threads, sizeof(pthread_t));
+    if (pipeline->base_dir < 0 || pipeline->jobs == NULL || pipeline->threads == NULL) {
+        set_error(error_buffer, error_capacity, "cannot start the compression threads");
+        return -1;
+    }
+    pthread_mutex_init(&pipeline->lock, NULL);
+    pthread_cond_init(&pipeline->work_ready, NULL);
+    pthread_cond_init(&pipeline->job_done, NULL);
+    pipeline->thread_count = threads;
+    while (pipeline->started < threads) {
+        if (pthread_create(&pipeline->threads[pipeline->started], NULL,
+                           pipeline_worker, pipeline) != 0) {
+            set_error(error_buffer, error_capacity, "cannot start the compression threads");
+            return -1;
+        }
+        pipeline->started++;
+    }
+#else
+    (void)threads;
+#endif
+    return 0;
+}
+
+/* Hand one entry over; the pipeline owns it from here, whatever is returned. Returns 0
+ * when the walk should go on and -1 when the run must end.
+ * 交付一個項目；不論回傳什麼，此後它歸管線所有。回傳 0 表示走訪應繼續，-1 表示整次執行必須
+ * 結束。 */
+static int pipeline_add(zip_pipeline *pipeline, struct archive_entry *entry) {
+#if defined(SWIFT_TAR_ZIP_PARALLEL) && !defined(_WIN32)
+    if (pipeline->thread_count > 0) {
+        zip_job *job;
+        la_int64_t cost = 0;
+
+        if (archive_entry_filetype(entry) == AE_IFREG && archive_entry_size(entry) > 0 &&
+            archive_entry_size(entry) <= ZIP_LARGE_FILE) {
+            cost = archive_entry_size(entry);
+        }
+        while (pipeline->end - pipeline->first == ZIP_WINDOW_JOBS ||
+               (pipeline->end != pipeline->first &&
+                pipeline->in_flight + cost > ZIP_WINDOW_BYTES)) {
+            if (pipeline_write_first(pipeline) != 0) {
+                archive_entry_free(entry);
+                return -1;
+            }
+        }
+        pthread_mutex_lock(&pipeline->lock);
+        job = &pipeline->jobs[pipeline->end % ZIP_WINDOW_JOBS];
+        memset(job, 0, sizeof(*job));
+        job->entry = entry;
+        job->cost = cost;
+        job->done = cost == 0;
+        pipeline->in_flight += cost;
+        pipeline->end++;
+        if (cost > 0) pthread_cond_signal(&pipeline->work_ready);
+        pthread_mutex_unlock(&pipeline->lock);
+        return 0;
+    }
+#endif
+    {
+        int result = write_entry(pipeline->writer, entry, pipeline->verbose,
+                                 pipeline->error_buffer, pipeline->error_capacity);
+        archive_entry_free(entry);
+        return result;
+    }
+}
+
+/* Write everything handed over so far. / 把目前為止交付的全部寫出。 */
+static int pipeline_drain(zip_pipeline *pipeline) {
+#if defined(SWIFT_TAR_ZIP_PARALLEL) && !defined(_WIN32)
+    while (pipeline->end != pipeline->first) {
+        if (pipeline_write_first(pipeline) != 0) return -1;
+    }
+#else
+    (void)pipeline;
+#endif
+    return 0;
+}
+
+/* Stop the workers and free what was handed over and never written (after an error).
+ * 停止工作執行緒，並釋放已交付而未寫出的東西（發生錯誤之後）。 */
+static void pipeline_close(zip_pipeline *pipeline) {
+#if defined(SWIFT_TAR_ZIP_PARALLEL) && !defined(_WIN32)
+    int index;
+
+    if (pipeline->thread_count > 0) {
+        pthread_mutex_lock(&pipeline->lock);
+        pipeline->stopping = 1;
+        pthread_cond_broadcast(&pipeline->work_ready);
+        pthread_mutex_unlock(&pipeline->lock);
+    }
+    for (index = 0; index < pipeline->started; ++index) pthread_join(pipeline->threads[index], NULL);
+    for (; pipeline->jobs != NULL && pipeline->first != pipeline->end; pipeline->first++) {
+        zip_job *job = &pipeline->jobs[pipeline->first % ZIP_WINDOW_JOBS];
+        free(job->data);
+        archive_entry_free(job->entry);
+    }
+    if (pipeline->thread_count > 0) {
+        pthread_cond_destroy(&pipeline->job_done);
+        pthread_cond_destroy(&pipeline->work_ready);
+        pthread_mutex_destroy(&pipeline->lock);
+    }
+    free(pipeline->threads);
+    free(pipeline->jobs);
+    if (pipeline->base_dir >= 0) close(pipeline->base_dir);
+#else
+    (void)pipeline;
+#endif
 }
 
 /* Whether an entry the disk reader handed over is left out of the archive. Returns 1 when
@@ -356,7 +763,7 @@ static int skip_entry(struct archive_entry *entry,
 /* Everything one argument's sorted walk carries from directory to directory.
  * 一個引數的排序走訪，從一個目錄帶到下一個目錄的所有東西。 */
 typedef struct {
-    struct archive *writer;
+    zip_pipeline *pipeline;
     struct archive *disk;       /* lists one directory at a time / 一次列出一個目錄 */
     struct archive *stat_disk;  /* reads one file's metadata / 讀取單一檔案的中繼資料 */
     file_id archive_id;
@@ -515,12 +922,9 @@ static int add_sorted_tree(sorted_walk *walk, const char *path, const sorted_chi
             self.dev = (la_int64_t)archive_entry_dev(entry);
             self.ino = archive_entry_ino64(entry);
             if (archive_read_disk_can_descend(walk->disk)) archive_read_disk_descend(walk->disk);
-            if (write_entry(walk->writer, entry, walk->verbose,
-                            walk->error_buffer, walk->error_capacity) != 0) {
-                goto close_reader;
-            }
-            archive_entry_free(entry);
+            status = pipeline_add(walk->pipeline, entry);
             entry = NULL;
+            if (status != 0) goto close_reader;
             continue;
         }
 
@@ -594,12 +998,9 @@ static int add_sorted_tree(sorted_walk *walk, const char *path, const sorted_chi
             if (entry == NULL) goto cleanup;
         }
 
-        if (write_entry(walk->writer, entry, walk->verbose,
-                        walk->error_buffer, walk->error_capacity) != 0) {
-            goto cleanup;
-        }
-        archive_entry_free(entry);
+        status = pipeline_add(walk->pipeline, entry);
         entry = NULL;
+        if (status != 0) goto cleanup;
     }
     result = 0;
     goto cleanup;
@@ -614,7 +1015,7 @@ cleanup:
     return result;
 }
 
-static int add_path(struct archive *writer,
+static int add_path(zip_pipeline *pipeline,
                     const char *path,
                     file_id archive_id,
                     int verbose,
@@ -678,7 +1079,7 @@ static int add_path(struct archive *writer,
             ARCHIVE_READDISK_NO_FFLAGS | ARCHIVE_READDISK_NO_SPARSE);
         archive_read_disk_set_standard_lookup(stat_disk);
 
-        walk.writer = writer;
+        walk.pipeline = pipeline;
         walk.disk = disk;
         walk.stat_disk = stat_disk;
         walk.archive_id = archive_id;
@@ -730,11 +1131,9 @@ static int add_path(struct archive *writer,
 
         if (archive_read_disk_can_descend(disk)) archive_read_disk_descend(disk);
 
-        if (write_entry(writer, entry, verbose, error_buffer, error_capacity) != 0) {
-            goto cleanup;
-        }
-        archive_entry_free(entry);
+        status = pipeline_add(pipeline, entry);
         entry = NULL;
+        if (status != 0) goto cleanup;
     }
     result = 0;
 
@@ -809,6 +1208,7 @@ int swift_tar_zip_create(const char *archive_path,
                          int follow_symlinks,
                          int (*is_excluded)(const char *path, int is_directory),
                          int sort_members,
+                         int threads,
                          char *error_buffer,
                          size_t error_capacity) {
     adopt_environment_charset();
@@ -818,6 +1218,8 @@ int swift_tar_zip_create(const char *archive_path,
     int result = -1;
     int status;
     size_t index;
+    zip_pipeline pipeline;
+    int pipeline_opened = 0;
 
     if (paths == NULL || path_count == 0) {
         set_error(error_buffer, error_capacity, "no files to archive / 未指定要打包的檔案");
@@ -831,7 +1233,8 @@ int swift_tar_zip_create(const char *archive_path,
     }
     if (archive_write_set_format_zip(writer) != ARCHIVE_OK ||
         archive_write_zip_set_compression_deflate(writer) != ARCHIVE_OK ||
-        archive_write_set_format_option(writer, "zip", "compression-level", "6") != ARCHIVE_OK) {
+        archive_write_set_format_option(writer, "zip", "compression-level",
+                                        ZIP_DEFLATE_LEVEL_TEXT) != ARCHIVE_OK) {
         set_archive_error(error_buffer, error_capacity, "configure ZIP writer", writer);
         goto cleanup;
     }
@@ -934,16 +1337,23 @@ int swift_tar_zip_create(const char *archive_path,
         }
     }
 
+    pipeline_opened = 1;
+    if (pipeline_open(&pipeline, writer, verbose, threads, error_buffer, error_capacity) != 0) {
+        goto cleanup;
+    }
+
     for (index = 0; index < path_count; ++index) {
-        if (add_path(writer, paths[index], archive_id, verbose, follow_symlinks, is_excluded,
+        if (add_path(&pipeline, paths[index], archive_id, verbose, follow_symlinks, is_excluded,
                      sort_members,
                      error_buffer, error_capacity) != 0) {
             goto cleanup;
         }
     }
+    if (pipeline_drain(&pipeline) != 0) goto cleanup;
     result = 0;
 
 cleanup:
+    if (pipeline_opened) pipeline_close(&pipeline);
     if (original_dir != NULL) {
         if (swift_tar_chdir(original_dir) != 0 && result == 0) {
             set_error(error_buffer, error_capacity, "failed to restore working directory");

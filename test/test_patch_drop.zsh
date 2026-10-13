@@ -47,6 +47,27 @@ for p in "$ROOT"/patch/libarchive/*.patch(N); do
 done
 files=(${(u)files})
 (( ${#files} )) || { echo "SKIP: no libarchive patches"; exit 0; }
+# A shape busybox's patch cannot apply, read from the patch text so that it is caught on a
+# machine that has another patch(1). apply_patches.zsh passes -N, and with -N busybox takes a
+# hunk for already applied the moment the file line that follows an insertion equals one of
+# the lines being inserted. 0003 first put a function whose definition starts with a line
+# holding just `int` in front of another such line: it applied on macOS, and the Linux
+# guest, whose patch is busybox's, reported "Hunk 2 FAILED" and built nothing (2026-10-14).
+# busybox 的 patch 套不上的一種形狀，直接從 patch 的文字判斷，這樣在裝著別種 patch(1) 的機器上
+# 也抓得到。apply_patches.zsh 會帶 -N，而 busybox 在 -N 之下，只要插入點之後的那一行與被插入的
+# 任何一行相同，就把該 hunk 當成已經套用。0003 起初把一個「定義以單獨一行 `int` 開頭」的函式放在
+# 另一個同樣開頭的函式之前：macOS 上套得上，而 patch 是 busybox 版的 Linux guest 回報
+# 「Hunk 2 FAILED」，什麼都沒建出來（2026-10-14）。
+for p in "$ROOT"/patch/libarchive/*.patch(N); do
+  clash=$(awk '/^@@/ { body = 1; split("", run); inrun = 0; next }
+               !body { next }
+               /^diff / { body = 0; next }
+               /^\+/ { run[substr($0, 2)] = 1; inrun = 1; next }
+               { if (inrun && (substr($0, 2) in run)) print "[" substr($0, 2) "]"; split("", run); inrun = 0 }' "$p")
+  [ -z "$clash" ] && ok "${p:t}: no inserted line equals the line after the insertion" \
+    || bad "${p:t}: no inserted line equals the line after the insertion (${clash//$'\n'/ })"
+done
+
 # The submodule must be unpatched for the copy to start unpatched. / submodule 須為未 patch 狀態。
 # --check exits 1 when a patch is missing, which is the state wanted here; under pipefail
 # that would fail the pipeline, so the output is taken first.
@@ -89,9 +110,15 @@ for f in $files; do cmp -s "$TMP/libarchive/$f" "$ROOT/libarchive/$f" || same=0;
 # Neither state: one line a patch adds is present and one it removes is gone.
 # 兩者皆非：patch 新增的某一行在、移除的某一行不在。
 f=${files[1]}
+# The last patch that removes a line: one that only adds (0003) has no line to take away.
+# 取最後一份有移除行的 patch：只新增的 patch（0003）沒有可以拿掉的行。
 p=("$ROOT"/patch/libarchive/*.patch(N))
-gone=$(grep -m1 -E '^-[^-]' "${p[-1]}" | cut -c2-)
-target="$TMP/libarchive/${$(grep -m1 '^+++ b/' "${p[-1]}")#+++ b/}"
+last=""
+for candidate in "${(@Oa)p}"; do
+  if grep -q -E '^-[^-]' "$candidate"; then last=$candidate; break; fi
+done
+gone=$(grep -m1 -E '^-[^-]' "$last" | cut -c2-)
+target="$TMP/libarchive/${$(grep -m1 '^+++ b/' "$last")#+++ b/}"
 grep -vFx -- "$gone" "$target" > "$target.new" && mv "$target.new" "$target"
 rc=0; run --check || rc=$?
 grep -q 'neither applies nor reverses' "$TMP/out" && [ "$rc" = 1 ] \

@@ -3623,3 +3623,115 @@ codecs identical, `-r`/`-u`/`--delete` identical at every step, ciphertext diffe
 every run by design, and decryption giving back the unencrypted bytes in both directions.
 Not compared: `--lzip` by the user's decision, Windows, the other LZFSE modes,
 non-default levels, RGB1.
+
+## `-c --zip` 只用一個執行緒壓縮 ▸ ✅ 已修正 2026-10-14：成員由 `-n` 個執行緒壓縮，位元組不變 / `-c --zip` compressed on one thread; members are now compressed on `-n` threads with the bytes unchanged
+
+**原本**：ZIP 後端經由 libarchive 寫出，而 libarchive 的 ZIP 寫出端是在寫出每個成員時才
+deflate，只用一個執行緒。claw-code（1.3 GB，5,408 個檔案）在 M4 上要 30 秒左右，其中走訪加
+stat 只有 0.04 秒，其餘幾乎全是壓縮。使用者先問過能不能平行走訪，看到這個比例後決定只做平行
+壓縮，不做平行走訪。
+
+**做法**：ZIP 的每個成員各是一條獨立的 deflate 串流。走訪把每個項目交給一條管線
+（`libarchive_zip_bridge.c` 的 `zip_pipeline`）：一般檔案由工作執行緒讀取並 deflate 到記憶體，
+呼叫端的執行緒依交付的順序寫出，只在下一個還沒完成時等待。寫出時經由
+`patch/libarchive/0003-zip-write-deflated.patch` 新增的 `archive_write_zip_data_deflated`
+把壓好的串流原樣放進去。工作執行緒用同一份 zlib、同樣的參數，所以位元組與單一執行緒相同。
+
+- **上限**：最多留住 256 個成員、256 MiB 尚未寫出的檔案資料。大於 64 MiB 的檔案不交給工作
+  執行緒，輪到時由寫出的執行緒照原本的方式壓縮，這樣不必把它壓縮後的樣子留在記憶體。
+- **`-n`**：同時壓縮的成員數，預設為核心數。`-n 1` 走的就是原本的路徑。
+- **工作目錄**：工作執行緒以 `openat` 相對於 `-C` 之後的目錄開檔，不依賴行程的工作目錄——
+  libarchive 的走訪可能同時在另一個執行緒上改變它。
+- **檔案大小**：標頭記的是工作執行緒實際讀到的位元組數，所以列出之後大小變了的檔案仍然存得
+  進去（單一執行緒的路徑上，變大的檔案會讓執行以 1 結束）。
+
+**實測**（M4，10 核，claw-code，`-c --zip -f -`，各跑一次）：
+
+| `-n` | 耗時 | CPU 時間（user） | 最大常駐記憶體 |
+|---|---|---|---|
+| 1 | 31.5 秒 | 29.3 秒 | 8 MB |
+| 2 | 16.2 秒 | 30.0 秒 | 95 MB |
+| 4 | 9.5 秒 | 29.7 秒 | 124 MB |
+| 8 | 7.9 秒 | 36.1 秒 | 172 MB |
+| 10（預設） | 7.5 秒 | 36.3 秒 | 184 MB |
+| 16 | 7.7 秒 | 35.9 秒 | 211 MB |
+
+六種的 sha256 全部相同，也與加入平行壓縮之前的執行檔相同。Linux VM（4 vCPU）：`-n 1` 29.3 秒、
+`-n 2` 14.9 秒、`-n 4` 9.9 秒，三者 sha256 相同。8 個執行緒之後不再變快：這台機器是 4 個效能
+核心加 6 個效率核心，而且最大的幾個檔案（40–57 MB）各自只能由一個執行緒壓。**同一個檔案之內
+沒有平行**——那會改變位元組。
+
+**過程中找到的兩個問題**：
+
+1. **連續超過 256 個沒有資料的成員之後，下一個檔案被重複壓縮。** 空檔案與目錄一交付就算完成，
+   不會喚醒工作執行緒；工作執行緒醒來時從很久以前的編號開始找，而那些編號在環裡的位置已經被
+   重用，於是同一個檔案的位置每轉到一次就被壓一次。一個 27 bytes 的檔案被存成 135 bytes
+   （五次），CRC 也是對那 135 bytes 算的，所以 **`unzip -t` 回報沒有錯誤**。我自己寫的位元組
+   比對沒有抓到它（那棵樹沒有這種形狀），是 `test_zip_fidelity.zsh` 既有的「變大的檔案」那一項
+   碰巧踩到。修正：工作執行緒不看編號小於「最舊的未寫出成員」的位置。`test_zip_parallel.zsh`
+   加了 700 個空檔案排在最前面的目錄；有 bug 的建置在這棵樹上 15 項失敗（以 134 結束）。
+2. **patch 0003 在 Linux guest 套不上。** guest 的 `patch` 是 busybox 版；`apply_patches.zsh`
+   帶 `-N`，而 busybox 在 `-N` 之下，只要插入點之後的那一行與被插入的任何一行相同，就把該 hunk
+   當成已套用過。0003 起初把一個「定義以單獨一行 `int` 開頭」的函式放在另一個同樣開頭的函式
+   之前。macOS 上套得上（Apple 的 patch），所以 macOS 整輪全過，guest 回報 `Hunk 2 FAILED`、
+   建置以 1 結束。修正：把函式移到 `static int` 之前。`test_patch_drop.zsh` 加了一項直接從 patch
+   文字判斷這種形狀的檢查，在 macOS 上就抓得到（拿舊版的 0003 試過，會失敗）。同一支測試原本
+   假設最後一份 patch 一定有移除的行，0003 只增不減，一併改成取「最後一份有移除行的 patch」。
+
+**測試**：新增 `test/test_zip_parallel.zsh`（macOS 70 項；Linux guest 以 root 執行，讀不到的
+檔案那一組略過，66 項）：
+
+- `-n 1`、`2`、`4`、`16` 與加 `-C` 的 `-n 8`，在兩種成員順序、`--zip` 與 `--zip64` 下位元組相同；
+- 以 swift_tar 解回後內容相同、成員數相同；系統的 `unzip -t` 接受；
+- `-v` 的清單逐行相同；讀不到的檔案以 1 結束且訊息與 `-n 1` 相同；
+- **執行緒真的有用到**：`-n 1` 的 CPU 時間約為經過時間的 100%，`-n 4` 在 macOS 是 376%、在
+  guest 是 386%。把建置的 `-DSWIFT_TAR_ZIP_PARALLEL` 拿掉後，只有這一項失敗（100%），其餘
+  全過——所以只有它分得出「悄悄退回單一執行緒」的建置。這一項第一次在 guest 被略過：guest 沒有
+  `getconf`，測試把核心數當成 1；改為再試 `nproc` 之後才真的執行。
+
+另外以一棵 2,262 個項目的混合樹（空檔案、小檔、大小不一的檔案、1,000 個空檔案的目錄）跑了
+84 次（`-n` 2 到 40、兩種順序、各 6 輪），全部與 `-n 1` 相同。這個壓力測試沒有收進測試腳本。
+
+**整輪驗證**：macOS 22 個腳本加 `--crypto-selftest`、`-test` 全部以 0 結束，建置 0 警告。
+Linux VM（lld、0 警告）22 個腳本加兩個自測都是 `TEST_RC=0`、`FAULTS=0`。
+`cross_platform_bytes.zsh compare mac linux` 以 0 結束；zip 仍是 `7ba62a87…`、zip64 仍是
+`dd3bee3f…`，這次兩邊都是預設選項（排序、以核心數的執行緒壓縮）。
+
+**沒有驗證、或已知的限制**：
+
+- **Windows 沒有建置也沒有測試。** 多執行緒路徑在 Windows 不啟用（`#if` 排除），`-c --zip` 維持
+  單一執行緒；但 patch 0003 仍會套用到 Windows 建置的 libarchive，那一段沒有在 Windows 編譯過。
+- **連結 sysroot 共享 libarchive 的 Linux 建置**不帶 `SWIFT_TAR_ZIP_PARALLEL`，維持單一執行緒；
+  建置時的提示已加上這一句。這種建置沒有實際建過。
+- **工作執行緒開檔失敗、讀取失敗、記憶體不足**這三條錯誤路徑沒有測試涵蓋：讀不到的檔案在走訪
+  階段就被 libarchive 擋下，到不了工作執行緒。
+- **記憶體變多**：預設從 8 MB 變成 184 MB（claw-code）。上限由 256 MiB 的視窗決定，內容壓不動時
+  會接近它。要回到原本的用量可以加 `-n 1`。
+- **macOS 完整重建 libarchive 時有一個上游的警告**（`archive_write_disk_posix.c:1584`，
+  `-Wpointer-sign`），不是這次的程式碼；平常的增量建置不會重編那個檔案，所以看不到。guest 的
+  完整建置是 0 警告。
+- `--help` 的 `-n` 寫「預設 2×核心數」，程式實際是核心數。這是既有的不一致，沒有動。
+
+The ZIP backend compressed on one thread because libarchive's ZIP writer deflates each
+member as it writes it. Members are now handed to a pipeline in `libarchive_zip_bridge.c`:
+worker threads read and deflate regular files into memory, and the calling thread writes
+them in order through `archive_write_zip_data_deflated`, added by
+`patch/libarchive/0003`. Same zlib, same settings, so the bytes are those of one thread:
+the sha256 is identical for `-n 1` through `16` and to the binary from before the change.
+claw-code on an M4 goes from 31.5 s (`-n 1`) to 7.5 s (`-n 10`, the default), with peak
+memory rising from 8 MB to 184 MB; in the 4-vCPU Linux guest, 29.3 s to 9.9 s. There is no
+parallelism inside one file. The window holds at most 256 members and 256 MiB of pending
+file data; files over 64 MiB are compressed by the writing thread.
+
+Two defects turned up on the way. A file following more than 256 dataless members was
+compressed once per turn of the ring (27 bytes stored as 135, with a CRC over the 135, so
+`unzip -t` passed); an existing test caught it, not the new one, which now has that shape.
+And patch 0003 did not apply in the Linux guest: busybox `patch -N` takes a hunk for
+already applied when the line after an insertion equals an inserted line, and a function
+starting with a lone `int` sat before another such line. The function was moved, and
+`test_patch_drop.zsh` now reads that shape from the patch text.
+
+Not verified: Windows (the threaded path is compiled out there, but patch 0003 still
+applies to its libarchive and was never compiled on Windows); a Linux build against a
+shared system libarchive (one thread, never built); the workers' open, read and
+out-of-memory error paths.

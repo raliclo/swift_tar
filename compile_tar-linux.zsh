@@ -189,9 +189,11 @@ if [[ -z "${LIBARCHIVE_STATIC:-}" ]]; then
     else
         LIBARCHIVE_STATIC=0
         log_msg "NOTICE: no cmake or no libarchive/ sources; linking the sysroot's shared libarchive."
-        log_msg "        patch/libarchive/*.patch are NOT in this build: -c --zip cannot store a FIFO."
+        log_msg "        patch/libarchive/*.patch are NOT in this build: -c --zip cannot store a FIFO"
+        log_msg "        and compresses on one thread whatever -n is."
         log_msg "注意：缺 cmake 或 libarchive/ 原始碼，改連結 sysroot 的共享 libarchive。"
-        log_msg "      本次建置不含 patch/libarchive/*.patch：-c --zip 存不了 FIFO。"
+        log_msg "      本次建置不含 patch/libarchive/*.patch：-c --zip 存不了 FIFO，"
+        log_msg "      且不論 -n 為何都只用一個執行緒壓縮。"
     fi
 fi
 
@@ -251,8 +253,19 @@ fi
 # 放在上述選擇之後，且在這裡編譯而不交給 build_libarchive.zsh：bridge 必須對著它所連結的那份
 # libarchive 的 header 編譯，並帶 -fPIC——Linux 的 PIE 連結需要它，而那支腳本（為 macOS 而寫）
 # 沒有帶。
+#
+# SWIFT_TAR_ZIP_PARALLEL only with the static library: the bridge's threaded compression
+# writes through patch/libarchive/0003, which a sysroot's shared libarchive does not have.
+# Without the flag -c --zip compresses on one thread, whatever -n says.
+# 只有靜態函式庫才帶 SWIFT_TAR_ZIP_PARALLEL：bridge 的多執行緒壓縮是經由 patch/libarchive/0003
+# 寫出，而 sysroot 的共享 libarchive 沒有它。不帶這個旗標時，不論 -n 為何，-c --zip 都只用
+# 一個執行緒壓縮。
 log_msg "Compile the libarchive ZIP bridge / 編譯 libarchive ZIP bridge"
-"$CLANG" -O2 -fPIC -I"$ARCHIVE_INCLUDE" -I"$SYSROOT/include" \
+bridge_flags=()
+if [[ "$LIBARCHIVE_STATIC" == 1 ]]; then
+    bridge_flags=(-DSWIFT_TAR_ZIP_PARALLEL -I"$ZLIB_FOR_ARCHIVE_INC")
+fi
+"$CLANG" -O2 -fPIC "${bridge_flags[@]}" -I"$ARCHIVE_INCLUDE" -I"$SYSROOT/include" \
     -c libarchive_zip_bridge.c -o build/libarchive_zip_bridge.o
 
 # After build_libarchive.zsh, not before. generate_version.zsh reuses the stamp when

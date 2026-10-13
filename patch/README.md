@@ -209,3 +209,43 @@ into a regular file. The upstream conversion works around Info-ZIP recording a p
 from; such entries carry data and are still converted. The one edge case is an Info-ZIP
 entry from an empty pipe, which now extracts as a FIFO. Info-ZIP `unzip` and stock bsdtar
 extract these entries as empty regular files.
+
+### `libarchive/0003-zip-write-deflated.patch`
+
+**改什麼**:只動 `archive_write_set_format_zip.c`,只增不減。新增一個函式
+`archive_write_zip_data_deflated(archive, 資料, 長度, crc32, 未壓縮長度)`:在
+`archive_write_header` 之後、取代 `archive_write_data` 呼叫一次,交給它一條**已經壓好的**
+raw deflate 串流。它把串流原樣寫出,並記下呼叫端給的 CRC-32 與未壓縮長度——這兩個數字本來是
+寫出端自己邊壓邊算的。另加一個旗標 `entry_deflated`,讓 `finish_entry` 不再對沒用到的
+壓縮器做 `Z_FINISH`(否則會多寫出一個空的 deflate 區塊)。
+
+**為什麼**:使用者要求 ZIP 以多核心壓縮(2026-10-14)。libarchive 的 ZIP 寫出端是在寫出每個
+成員時才 deflate,只用一個執行緒。ZIP 的每個成員各是一條獨立的 deflate 串流,所以可以由
+工作執行緒先壓好,寫出端只負責依序放進去;但 libarchive 沒有「接收已壓縮資料」的入口,
+`archive_write_data` 一律會再壓一次。這份 patch 就是那個入口。
+
+**位元組不變**:呼叫端(`libarchive_zip_bridge.c`)用同一份 zlib、同樣的參數(raw deflate、
+window 15、memLevel 8、預設策略、等級 6)壓縮,得到的串流與寫出端自己壓的相同。實測
+claw-code:`-n 1`(走原本的路徑)與 `-n 2`、`4`、`8`、`10`、`16` 的 sha256 全部相同,也與
+加入這份 patch 之前的執行檔相同。
+
+**宣告不放進 `archive.h`**:改 `archive.h` 會讓每次建置把整個 libarchive 重新編譯一遍(建置是
+「套用 → 建置 → 還原」)。所以原型寫在 `.c` 檔內、函式定義之前,bridge 自己也宣告一次。
+
+**沒有這份 patch 的建置**:bridge 的多執行緒路徑由 `-DSWIFT_TAR_ZIP_PARALLEL` 開啟,只有連結
+本樹建出的靜態庫時才會帶(`build_libarchive.zsh` 與 `compile_tar-linux.zsh` 的靜態分支)。
+Windows 與「連結 sysroot 共享 libarchive」的 Linux 建置不帶這個旗標,`-c --zip` 維持單一
+執行緒,不論 `-n` 為何。`test/test_zip_parallel.zsh` 的最後一項會分辨這兩種建置。
+
+**上游修好了要怎麼知道**:同 0001。若上游的 ZIP 寫出端有了自己的多執行緒 deflate 或
+「寫入已壓縮資料」的 API,就該改用它並刪掉這份 patch。
+
+Adds one function to the ZIP writer, `archive_write_zip_data_deflated`, which takes an
+entry's data as a finished raw deflate stream plus its CRC-32 and uncompressed length, and
+a flag that stops `finish_entry` from flushing the unused compressor. It is what lets the
+bridge compress members on worker threads; libarchive's writer deflates on one thread and
+has no entry point for data that is already compressed. With the same zlib and settings the
+archive is byte-identical (measured across `-n 1` to `16`, and against the binary from
+before the patch). The prototype lives in the `.c` file, not `archive.h`, so that a build
+does not recompile the whole library. Builds without the patch (Windows, a sysroot's shared
+libarchive on Linux) do not define `SWIFT_TAR_ZIP_PARALLEL` and compress on one thread.

@@ -166,7 +166,7 @@ release/swift_tar -c --bvx3-optimal -f src.tar.bvx3 src/
 release/swift_tar -c --gzip         -f src.tar.gz    src/     # 標準 .tar.gz
 release/swift_tar -c --zip          -f src.zip       src/     # 標準 ZIP
 release/swift_tar -c --zip64        -f src.zip       src/     # 強制 ZIP64 記錄
-release/swift_tar -c --zip --zip-sorted -f src.zip   src/     # 在任何檔案系統上成員順序都相同
+release/swift_tar -c --zip --zip-unsorted -f src.zip src/     # 成員依檔案系統的順序，不排序
 release/swift_tar -c --zstd -f src.tar.zst -C /path/to parent-leaf
 tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # （或以管線灌入）
 ```
@@ -699,8 +699,8 @@ cmp a.tar b.tar     # -> 第 138 個位元組起不同
 | 同上，跨 `-n 1`、`2`、`4`、`8`、`16` | **是**——平行度不會改變任何一個位元組 |
 | `--encrypt` | **否，且是刻意如此**——每次執行使用新的 nonce；解密後的明文相同 |
 | `--zip`、`--zip64` | **是**，跨執行成立，自 2026-10-09 起——每個項目只記錄 mtime。在此之前還記錄了 atime 與 ctime，而讀取這棵樹本身就會改變它們，所以任兩次執行都不相同 |
-| `--zip`、`--zip64`，換一個檔案系統或平台 | **否**——成員依檔案系統列出的順序寫出，而 ZIP 檔頭存的是本地時間。2026-10-13 實測：同一棵樹在 macOS（APFS）與 Linux（tmpfs）得到不同的 ZIP，大小相同、順序不同 |
-| 同上，加 `--zip-sorted` 並使用同一個 `TZ` | **是**——macOS 與 Linux 逐位元組相同（2026-10-13 實測）。成員的排序方式與 tar 路徑相同。它一次只列一個目錄，只留那個目錄的名稱，所以記憶體與預設相近：1,001,206 個項目最大用到 175 MB，不加時是 173 MB |
+| `--zip`、`--zip64`，換一個檔案系統或平台，使用同一個 `TZ` | **是**——macOS 與 Linux 逐位元組相同（2026-10-13 實測）。成員的排序方式與 tar 路徑相同，一次處理一個目錄。ZIP 檔頭存的是本地時間，所以 `TZ` 必須相同 |
+| 同上，加 `--zip-unsorted` | **否**——成員依檔案系統列出的順序寫出。2026-10-13 實測：同一棵樹在 macOS（APFS）與 Linux（tmpfs）得到不同的 ZIP，大小相同、順序不同。兩種方式的記憶體相同：1,001,206 個項目排序時最大 175 MB，不排序時 173 MB |
 
 其中 `-n` 那一列才是真正有用的結論：分塊是決定性的，而不只是「碰巧以正確順序重組」，
 因此在一台機器上以 `-n 16` 建立的封存，會與另一台機器上以 `-n 1` 建立的完全相同。加密

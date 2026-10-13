@@ -5617,13 +5617,11 @@ private func printTarUsage() {
                          透過 libarchive 建立真實 ZIP 容器（Deflate；需要時自動 ZIP64）
       --zip64          : True ZIP container with ZIP64 records forced
                          建立真實 ZIP 容器並強制寫入 ZIP64 記錄
-      --zip-sorted     : With --zip/--zip64: write members in sorted order, the
-                         same on every filesystem. One directory's names are
-                         held at a time, so memory is close to the default's.
-                         Without it members follow the filesystem's own order
-                         搭配 --zip／--zip64：依排序後的順序寫出成員，在任何檔案系統
-                         上都相同。一次只留一個目錄的名稱，記憶體與預設相近。
-                         不加時，成員順序跟著檔案系統
+      --zip-unsorted   : With --zip/--zip64: write members in the order the
+                         filesystem lists them. Without it members are sorted,
+                         the same on every filesystem
+                         搭配 --zip／--zip64：依檔案系統列出的順序寫出成員。不加時
+                         成員經過排序，在任何檔案系統上都相同
       --gzip, -z       : zlib, one gzip member per 4MiB chunk (pigz-style .tar.gz)
                          每 4MiB 分塊一個 gzip 成員（pigz 式標準 .tar.gz）
       --bzip2, -j      : libbz2, one stream per chunk (pbzip2-style .tar.bz2)
@@ -5790,8 +5788,8 @@ private func printTarUsage() {
       - ZIP64 records are written when an entry needs them; cannot be turned
         off (--zip64 writes them always)
         需要時寫入 ZIP64 記錄；無法關閉（--zip64 則一律寫入）
-      - ZIP members follow the filesystem's order         -> --zip-sorted
-        ZIP 成員順序跟著檔案系統                             -> --zip-sorted
+      - ZIP members are written in sorted order            -> --zip-unsorted
+        ZIP 成員依排序後的順序寫出                           -> --zip-unsorted
       - -x refuses absolute paths, ".." and paths through a symlink; cannot be
         turned off
         -x 拒絕絕對路徑、".." 與穿過 symlink 的路徑；無法關閉
@@ -6644,7 +6642,7 @@ struct SwiftTarMain {
             "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
             // codecs / 壓縮引擎
             "--gzip", "-z", "--bzip2", "-j", "--xz", "-J", "--lzip", "--zstd", "--zstd-parallel",
-            "--lz4", "--zip", "--zip64", "--zip-sorted",
+            "--lz4", "--zip", "--zip64", "--zip-unsorted",
             // RGB1 fields / RGB1 欄位
             "--width", "--height", "--lat", "--lng", "--height-m", "--title",
             "--country", "--creator-email", "--right", "--created-ms",
@@ -6947,12 +6945,12 @@ struct SwiftTarMain {
             eprint("Error: --zip64 is a create-only option. / 錯誤：--zip64 僅能用於建立封存。")
             exit(1)
         }
-        // --zip-sorted changes how the ZIP backend orders members and nothing else, so
+        // --zip-unsorted changes how the ZIP backend orders members and nothing else, so
         // anywhere it could not take effect it is refused rather than ignored.
-        // --zip-sorted 只改變 ZIP 後端排列成員的方式；凡是它起不了作用的地方，一律拒絕而非忽略。
-        let zipSorted = args.contains("--zip-sorted")
-        if zipSorted && !(doCreate && (explicitZip || forceZip64)) {
-            eprint("Error: --zip-sorted applies only to -c with --zip or --zip64. / 錯誤：--zip-sorted 只適用於 -c 搭配 --zip 或 --zip64。")
+        // --zip-unsorted 只改變 ZIP 後端排列成員的方式；凡是它起不了作用的地方，一律拒絕而非忽略。
+        let zipUnsorted = args.contains("--zip-unsorted")
+        if zipUnsorted && !(doCreate && (explicitZip || forceZip64)) {
+            eprint("Error: --zip-unsorted applies only to -c with --zip or --zip64. / 錯誤：--zip-unsorted 只適用於 -c 搭配 --zip 或 --zip64。")
             exit(1)
         }
 
@@ -7168,7 +7166,7 @@ struct SwiftTarMain {
                     try runZipCreate(archivePath: archivePath, files: files,
                                      changeDir: destDir, forceZip64: forceZip64,
                                      verbose: verbose, dereference: tarDereference,
-                                     sortMembers: zipSorted)
+                                     sortMembers: !zipUnsorted)
                 } else {
                     try runCreate(archivePath: archivePath, files: files, codec: codec,
                                   changeDir: destDir, inflight: inflightN, verbose: verbose)

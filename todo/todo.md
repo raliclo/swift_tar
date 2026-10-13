@@ -3365,7 +3365,20 @@ in the Linux VM for a 1.4 GB tree, given the same ownership on both sides. One c
 added (199/1 before on macOS, 200/0 after); on Linux it passes either way. Not verified:
 Windows, the other codecs and ZIP, and paths other than a plain `-c`.
 
-## `--zip` 的成員順序跟著檔案系統走，同一棵樹在 macOS 與 Linux 得到不同的 ZIP ▸ ✅ 已處理 2026-10-13：預設維持原樣，`--zip-sorted` 取得固定順序 / `--zip` stores members in filesystem order, so one tree gives different ZIPs on macOS and Linux; `--zip-sorted` fixes the order
+## `--zip` 的成員順序跟著檔案系統走，同一棵樹在 macOS 與 Linux 得到不同的 ZIP ▸ ✅ 已修正 2026-10-14：預設排序，`--zip-unsorted` 取得檔案系統的順序 / `--zip` stored members in filesystem order, so one tree gave different ZIPs on macOS and Linux; it now sorts, and `--zip-unsorted` keeps the old order
+
+**排序成為預設，`--zip-sorted` 改為 `--zip-unsorted`（2026-10-14，使用者的決定）**：記憶體已經
+相同，所以不再需要讓使用者為固定順序另外加選項。`--zip`／`--zip64` 現在預設排序；
+`--zip-unsorted` 取得檔案系統的順序（邊走邊寫）。`--zip-sorted` 這個選項只存在過一天、沒有
+push 過，已移除而不是保留成別名——現在給它會得到「未知選項」。下面各段寫到 `--zip-sorted` 與
+「預設」的地方，是當時的名稱：當時的 `--zip-sorted` 就是現在的預設，當時的預設就是現在的
+`--zip-unsorted`。`cross_platform_bytes.zsh` 的 zip／zip64 兩項因此不再帶選項。
+
+On 2026-10-14 sorting became the default and `--zip-sorted` was replaced by
+`--zip-unsorted` (the user's decision; memory is the same either way). `--zip-sorted`
+existed for one day and was never pushed, so it was removed, not kept as an alias. In the
+paragraphs below, `--zip-sorted` is what the default now does and "the default" is what
+`--zip-unsorted` now does.
 
 **`--zip-sorted` 的記憶體已降到與預設相當（2026-10-13 深夜，下方三個想法中的 1 與 2 一起做，
 3 依使用者決定不做）**：

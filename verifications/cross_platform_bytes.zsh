@@ -94,13 +94,13 @@ run)
     #    and its version, not to swift_tar, and a guest without it has nothing to compare.
     # 1. 每種內建 codec 與兩種 ZIP，整份語料。刻意不含 --lzip：它執行的是 PATH 上的 `lzip`，
     #    輸出的位元組屬於那支程式與它的版本，不屬於 swift_tar；沒有裝它的 guest 也無從比較。
-    #    Both ZIP forms carry --zip-sorted. Without it members follow the filesystem's
-    #    order (the default, which holds nothing in memory), so the two platforms are
+    #    Both ZIP forms use the default, sorted order. With --zip-unsorted members follow
+    #    the filesystem's order, so the two platforms are
     #    expected to differ and there is nothing to assert.
-    #    兩種 ZIP 都加 --zip-sorted。不加時成員順序跟著檔案系統（預設，不在記憶體中保留任何
-    #    東西），兩個平台本來就會不同，沒有可斷言的東西。
+    #    兩種 ZIP 都用預設的排序順序。加了 --zip-unsorted 時成員順序跟著檔案系統，
+    #    兩個平台本來就會不同，沒有可斷言的東西。
     for c in "none:" "zstd3:--zstd --zstd-level 3" "gzip:--gzip" "lzfse:--other3-fast" \
-             "bzip2:--bzip2" "xz:--xz" "lz4:--lz4" "zip:--zip --zip-sorted" "zip64:--zip64 --zip-sorted"; do
+             "bzip2:--bzip2" "xz:--xz" "lz4:--lz4" "zip:--zip" "zip64:--zip64"; do
         name=${c%%:*}; flags=(${=c#*:}); rm -f $W/a.bin
         "$ST" -c -f $W/a.bin $flags -C $W/src claw-code 2> $W/err.txt; rc=$?
         emit $name $rc $W/a.bin

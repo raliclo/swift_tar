@@ -187,13 +187,13 @@ static const char *entry_sort_name(struct archive_entry *entry) {
     return name != NULL ? name : "";
 }
 
-/* What --zip-sorted remembers about one name in a directory while that directory is being
+/* What the sorted walk remembers about one name in a directory while that directory is being
  * listed: the paths needed to come back to it, and nothing else. A whole archive_entry is
  * about 1.6 KB (measured 2026-10-13), so a regular file or a directory is read again from
  * its path when its turn comes; only the other kinds (symlinks, devices) keep the entry the
  * listing produced, because reading those again is not the same operation under -h.
  * Windows keeps wide paths: the narrow form cannot hold every name there.
- * --zip-sorted 在列出某個目錄時，對其中一個名稱所記住的東西：回頭找它所需的路徑，僅此而已。
+ * 排序的走訪在列出某個目錄時，對其中一個名稱所記住的東西：回頭找它所需的路徑，僅此而已。
  * 一個完整的 archive_entry 約 1.6 KB（2026-10-13 實測），所以一般檔案與目錄在輪到時才依路徑
  * 重新讀取；只有其他種類（symlink、裝置）保留列出時得到的項目，因為在 -h 之下重新讀它們並不是
  * 同一個操作。Windows 保留寬字元路徑：窄字元形式裝不下那裡的每一個名稱。 */
@@ -353,8 +353,8 @@ static int skip_entry(struct archive_entry *entry,
     return 0;
 }
 
-/* Everything one --zip-sorted argument's walk carries from directory to directory.
- * 一個 --zip-sorted 引數的走訪，從一個目錄帶到下一個目錄的所有東西。 */
+/* Everything one argument's sorted walk carries from directory to directory.
+ * 一個引數的排序走訪，從一個目錄帶到下一個目錄的所有東西。 */
 typedef struct {
     struct archive *writer;
     struct archive *disk;       /* lists one directory at a time / 一次列出一個目錄 */
@@ -422,7 +422,7 @@ static struct archive_entry *read_child_entry(sorted_walk *walk,
     return entry;
 }
 
-/* --zip-sorted: write `path` (or, below the argument itself, the directory `from`) and
+/* The sorted order (the default): write `path` (or, below the argument itself, the directory `from`) and
  * everything under it, each directory's names in sorted order.
  *
  * One directory is listed at a time. Its own entry is written first; then its names are
@@ -438,7 +438,7 @@ static struct archive_entry *read_child_entry(sorted_walk *walk,
  * Reading each file again at its turn is also what keeps its header honest: the size is
  * taken just before the data is copied, not before every earlier member was compressed.
  *
- * --zip-sorted：寫出 `path`（在引數本身之下則是目錄 `from`）與其下的一切，每個目錄內的名稱
+ * 排序的順序（預設）：寫出 `path`（在引數本身之下則是目錄 `from`）與其下的一切，每個目錄內的名稱
  * 依排序後的順序。
  *
  * 一次只列出一個目錄。先寫出它自己的項目；再讀出它的名稱、關閉 reader、排序，然後逐一寫出
@@ -656,11 +656,11 @@ static int add_path(struct archive *writer,
     archive_read_disk_set_behavior(disk, 0);
     archive_read_disk_set_standard_lookup(disk);
 
-    /* --zip-sorted lists and writes one directory at a time (add_sorted_tree). It needs a
+    /* The sorted order lists and writes one directory at a time (add_sorted_tree). It needs a
      * second handle, never opened on a tree, for reading one file's metadata from its path:
      * a handle that has walked a tree no longer does that. Same symlink rule as the walk;
      * nothing but stat.
-     * --zip-sorted 一次列出並寫出一個目錄（add_sorted_tree）。它需要第二個 handle，不對任何樹
+     * 排序的順序一次列出並寫出一個目錄（add_sorted_tree）。它需要第二個 handle，不對任何樹
      * 開啟，用來依路徑讀取單一檔案的中繼資料：走訪過樹的 handle 不再做這件事。symlink 規則與
      * 走訪相同；只做 stat，不讀其他東西。 */
     if (sort_members) {
@@ -697,11 +697,11 @@ static int add_path(struct archive *writer,
         goto cleanup;
     }
 
-    /* The default: write each entry as the walk hands it over. Nothing is held, so memory
+    /* --zip-unsorted: write each entry as the walk hands it over. Nothing is held, so memory
      * does not grow with the tree, and the order is the filesystem's -- which differs
      * between filesystems, so one tree gave different archives on APFS and on tmpfs
      * (2026-10-13).
-     * 預設：走訪交出一個項目就寫一個。不保留任何東西，所以記憶體不隨樹的大小成長；順序則是
+     * --zip-unsorted：走訪交出一個項目就寫一個。不保留任何東西，記憶體不隨樹的大小成長；順序則是
      * 檔案系統的——它因檔案系統而異，所以同一棵樹在 APFS 與 tmpfs 上得到不同的封存
      * （2026-10-13）。 */
     for (;;) {

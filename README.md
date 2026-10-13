@@ -189,7 +189,7 @@ release/swift_tar -c --bvx3-optimal -f src.tar.bvx3 src/
 release/swift_tar -c --gzip         -f src.tar.gz    src/     # standard .tar.gz
 release/swift_tar -c --zip          -f src.zip       src/     # standard ZIP
 release/swift_tar -c --zip64        -f src.zip       src/     # force ZIP64 records
-release/swift_tar -c --zip --zip-sorted -f src.zip   src/     # same member order on every filesystem
+release/swift_tar -c --zip --zip-unsorted -f src.zip src/     # members in the filesystem's order, not sorted
 release/swift_tar -c --zstd -f src.tar.zst -C /path/to parent-leaf
 tar -cf - src/ | release/swift_tar -c --xz -f src.tar.xz -    # (or pipe in)
 ```
@@ -791,8 +791,8 @@ corpus spanning three 4 MiB chunks:
 | the same, across `-n 1`, `2`, `4`, `8`, `16` | **yes** — parallelism does not change a byte |
 | `--encrypt` | **no, by design** — a fresh nonce each run; the decrypted plaintext is identical |
 | `--zip`, `--zip64` | **yes**, across runs, since 2026-10-09 — each entry records its mtime only. Before that it also recorded atime and ctime, which reading the tree changes, so no two runs matched |
-| `--zip`, `--zip64`, on another filesystem or platform | **no** — members are written in the order the filesystem lists them, and ZIP headers hold local time. Measured 2026-10-13: one tree gave different ZIPs on macOS (APFS) and Linux (tmpfs), same size, different order |
-| the same with `--zip-sorted` and one `TZ` | **yes** — byte-identical on macOS and Linux (measured 2026-10-13). Members are sorted like the tar path's. It lists one directory at a time and holds only that directory's names, so memory is close to the default's: 1,001,206 entries peaked at 175 MB against 173 MB without it |
+| `--zip`, `--zip64`, on another filesystem or platform, with one `TZ` | **yes** — byte-identical on macOS and Linux (measured 2026-10-13). Members are sorted like the tar path's, one directory at a time. ZIP headers hold local time, so `TZ` has to match |
+| the same with `--zip-unsorted` | **no** — members are written in the order the filesystem lists them. Measured 2026-10-13: one tree gave different ZIPs on macOS (APFS) and Linux (tmpfs), same size, different order. Memory is the same either way: 1,001,206 entries peaked at 175 MB sorted and 173 MB unsorted |
 
 The `-n` result is the useful one: chunking is deterministic, not merely
 reassembled in the right order, so an archive built with `-n 16` on one machine

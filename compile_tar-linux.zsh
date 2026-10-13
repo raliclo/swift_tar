@@ -14,14 +14,13 @@
 # 條件判斷，只會讓 macOS 路徑更難讀且毫無收穫。
 #
 # Differences from the macOS build / 與 macOS 版的差異：
-#   * libarchive is the bundled static copy when cmake and libarchive/ are present,
-#     as on macOS and Windows, because this tree's patches reach only that copy.
-#     Without them it falls back to the sysroot's shared library and says so: the
-#     appliance this was first proven on had no cmake. LIBARCHIVE_STATIC=0 or =1
-#     decides outright.
-#     有 cmake 與 libarchive/ 時使用內附的靜態版，與 macOS、Windows 相同，因為本樹的
-#     patch 只進得了那一份。缺少時退回 sysroot 的共享庫並明白說出來：本腳本首次驗證
-#     所在的設備沒有 cmake。LIBARCHIVE_STATIC=0 或 =1 直接決定。
+#   * (No longer a difference, 2026-10-14.) libarchive is always the bundled static
+#     copy built from libarchive/, as on macOS and Windows, because this tree's
+#     patches reach only that copy. Without cmake or the sources the build stops;
+#     it used to fall back to the sysroot's shared library.
+#     （2026-10-14 起不再是差異。）libarchive 一律是由 libarchive/ 建出的內附靜態版，
+#     與 macOS、Windows 相同，因為本樹的 patch 只進得了那一份。缺 cmake 或原始碼時
+#     建置直接停止；以前會退回 sysroot 的共享庫。
 #   * swift_tar.swift does `import zlib`, and cmodules/zlib/module.modulemap
 #     points at the bundled zlib submodule. We link the sysroot's libz, so the
 #     header must be the sysroot's too — a module map is generated against it
@@ -34,8 +33,6 @@
 # Environment / 環境變數:
 #   SWIFT_PREFIX      Swift toolchain prefix (contains bin/swiftc, bin/clang)
 #   SYSROOT           prefix holding include/ and lib/ for the codecs
-#   LIBARCHIVE_STATIC 1 = bundled static libarchive, 0 = the sysroot's shared one;
-#                     unset = static when cmake and libarchive/ are present
 #   CODECS_STATIC     1 = zlib, liblzma, liblz4, libzstd from the submodules, 0 = the
 #                     sysroot's shared ones; unset = static when cmake and all four
 #                     source trees are present
@@ -171,31 +168,23 @@ mkdir -p build release
 TEMP_VERSION="build/swift_tar_version.swift"
 trap 'rm -f "$TEMP_CLI"' EXIT
 
-# Static when it can be, shared otherwise. This tree's libarchive patches reach only the
-# library build_libarchive.zsh builds; a sysroot's shared libarchive is whatever the distro
-# shipped. Shared used to be the default here, and on 2026-10-12 that is how a fix made on
-# macOS (patch 0002, FIFOs in ZIP) turned out never to have reached Linux: the build
-# succeeded, and `-c --zip` refused a FIFO. So: unset means static wherever cmake and the
-# libarchive sources are both present, and the shared fallback says what it lacks instead
-# of passing for the same thing. LIBARCHIVE_STATIC=0 or =1 still decides outright.
-# 能靜態就靜態，否則才共享。本樹對 libarchive 的 patch 只進得了 build_libarchive.zsh 建出的
-# 那一份；sysroot 的共享庫則是發行版給什麼就是什麼。這裡原本預設共享，2026-10-12 就是因此
-# 才發現一項在 macOS 完成的修正（patch 0002，ZIP 內的 FIFO）從未到達 Linux：建置成功，而
-# `-c --zip` 拒絕 FIFO。因此：未設定時，只要 cmake 與 libarchive 原始碼都在就走靜態；退回
-# 共享時明說少了什麼，而不是看起來一樣。LIBARCHIVE_STATIC=0 或 =1 仍直接決定。
-if [[ -z "${LIBARCHIVE_STATIC:-}" ]]; then
-    if command -v cmake >/dev/null 2>&1 && [[ -f libarchive/CMakeLists.txt ]]; then
-        LIBARCHIVE_STATIC=1
-    else
-        LIBARCHIVE_STATIC=0
-        log_msg "NOTICE: no cmake or no libarchive/ sources; linking the sysroot's shared libarchive."
-        log_msg "        patch/libarchive/*.patch are NOT in this build: -c --zip cannot store a FIFO"
-        log_msg "        and compresses on one thread whatever -n is."
-        log_msg "注意：缺 cmake 或 libarchive/ 原始碼，改連結 sysroot 的共享 libarchive。"
-        log_msg "      本次建置不含 patch/libarchive/*.patch：-c --zip 存不了 FIFO，"
-        log_msg "      且不論 -n 為何都只用一個執行緒壓縮。"
-    fi
-fi
+# libarchive is always built from libarchive/, as on macOS. This tree's libarchive patches
+# reach only the library build_libarchive.zsh builds; a sysroot's shared libarchive is
+# whatever the distro shipped. Shared used to be the default here, and on 2026-10-12 that
+# is how a fix made on macOS (patch 0002, FIFOs in ZIP) turned out never to have reached
+# Linux: the build succeeded, and `-c --zip` refused a FIFO. It then stayed as a fallback
+# for a machine without cmake, giving a second kind of Linux binary (no FIFO in ZIP, one
+# compression thread) that nothing built or tested; removed 2026-10-14. LIBARCHIVE_STATIC
+# used to choose between the two, and =0 is refused instead of being ignored.
+# libarchive 一律由 libarchive/ 建出，與 macOS 相同。本樹對 libarchive 的 patch 只進得了
+# build_libarchive.zsh 建出的那一份；sysroot 的共享庫則是發行版給什麼就是什麼。這裡原本預設
+# 共享，2026-10-12 就是因此才發現一項在 macOS 完成的修正（patch 0002，ZIP 內的 FIFO）從未到達
+# Linux：建置成功，而 `-c --zip` 拒絕 FIFO。之後它留作沒有 cmake 的機器的退路，等於多出第二種
+# Linux 執行檔（ZIP 存不了 FIFO、只用一個執行緒壓縮），而沒有任何東西建過或測過它；2026-10-14
+# 移除。LIBARCHIVE_STATIC 原本用來在兩者之間選擇，現在 =0 會被拒絕而不是被忽略。
+[[ "${LIBARCHIVE_STATIC:-1}" == 1 ]] || die "LIBARCHIVE_STATIC=${LIBARCHIVE_STATIC} 已不支援：libarchive 一律由 libarchive/ 建出 / is no longer supported: libarchive is always built from libarchive/"
+command -v cmake >/dev/null 2>&1 || die "建置 libarchive 需要 cmake / building libarchive requires cmake"
+[[ -f libarchive/CMakeLists.txt ]] || die "找不到 libarchive 原始碼（libarchive/CMakeLists.txt）；請執行 git submodule update --init libarchive / libarchive sources not found; run git submodule update --init libarchive"
 
 # The codecs follow the same rule, for the same reason: a pin in this tree means nothing
 # on a platform that links whatever the sysroot has. zlib, liblzma, liblz4 and libzstd are
@@ -233,19 +222,12 @@ else
     ZLIB_FOR_ARCHIVE_INC="$SYSROOT/include"
 fi
 
-ARCHIVE_LINK=(-L"$SYSROOT/lib" -larchive)
-ARCHIVE_INCLUDE="$SYSROOT/include"
-if [[ "$LIBARCHIVE_STATIC" == 1 ]]; then
-    command -v cmake >/dev/null 2>&1 || die "LIBARCHIVE_STATIC=1 需要 cmake / requires cmake"
-    # cmake must find the same zlib and compiler this script links with, not whatever it
-    # would discover on its own. / cmake 必須找到本腳本連結的同一份 zlib 與編譯器。
-    CC="$CLANG" ZLIB_LIBRARY="${ZLIB_LIBRARY:-$ZLIB_FOR_ARCHIVE_LIB}" ZLIB_INCLUDE_DIR="${ZLIB_INCLUDE_DIR:-$ZLIB_FOR_ARCHIVE_INC}" \
-        zsh ./build_libarchive.zsh
-    ARCHIVE_LINK=("build/libarchive-$(swift_tar_platform)/libarchive/libarchive.a")
-    ARCHIVE_INCLUDE="libarchive/libarchive"
-else
-    [[ -f "$SYSROOT/include/archive.h" ]] || die "sysroot 缺少 header / missing header: $SYSROOT/include/archive.h"
-fi
+# cmake must find the same zlib and compiler this script links with, not whatever it
+# would discover on its own. / cmake 必須找到本腳本連結的同一份 zlib 與編譯器。
+CC="$CLANG" ZLIB_LIBRARY="${ZLIB_LIBRARY:-$ZLIB_FOR_ARCHIVE_LIB}" ZLIB_INCLUDE_DIR="${ZLIB_INCLUDE_DIR:-$ZLIB_FOR_ARCHIVE_INC}" \
+    zsh ./build_libarchive.zsh
+ARCHIVE_LINK=("build/libarchive-$(swift_tar_platform)/libarchive/libarchive.a")
+ARCHIVE_INCLUDE="libarchive/libarchive"
 
 # After the choice above, and here rather than left to build_libarchive.zsh: the bridge
 # must be compiled against the headers of the libarchive it is linked with, and with
@@ -254,18 +236,12 @@ fi
 # libarchive 的 header 編譯，並帶 -fPIC——Linux 的 PIE 連結需要它，而那支腳本（為 macOS 而寫）
 # 沒有帶。
 #
-# SWIFT_TAR_ZIP_PARALLEL only with the static library: the bridge's threaded compression
-# writes through patch/libarchive/0003, which a sysroot's shared libarchive does not have.
-# Without the flag -c --zip compresses on one thread, whatever -n says.
-# 只有靜態函式庫才帶 SWIFT_TAR_ZIP_PARALLEL：bridge 的多執行緒壓縮是經由 patch/libarchive/0003
-# 寫出，而 sysroot 的共享 libarchive 沒有它。不帶這個旗標時，不論 -n 為何，-c --zip 都只用
-# 一個執行緒壓縮。
+# SWIFT_TAR_ZIP_PARALLEL: the bridge's threaded compression writes through
+# patch/libarchive/0003, which the library built above has.
+# SWIFT_TAR_ZIP_PARALLEL：bridge 的多執行緒壓縮是經由 patch/libarchive/0003 寫出，而上面建出的
+# 函式庫帶有它。
 log_msg "Compile the libarchive ZIP bridge / 編譯 libarchive ZIP bridge"
-bridge_flags=()
-if [[ "$LIBARCHIVE_STATIC" == 1 ]]; then
-    bridge_flags=(-DSWIFT_TAR_ZIP_PARALLEL -I"$ZLIB_FOR_ARCHIVE_INC")
-fi
-"$CLANG" -O2 -fPIC "${bridge_flags[@]}" -I"$ARCHIVE_INCLUDE" -I"$SYSROOT/include" \
+"$CLANG" -O2 -fPIC -DSWIFT_TAR_ZIP_PARALLEL -I"$ZLIB_FOR_ARCHIVE_INC" -I"$ARCHIVE_INCLUDE" -I"$SYSROOT/include" \
     -c libarchive_zip_bridge.c -o build/libarchive_zip_bridge.o
 
 # After build_libarchive.zsh, not before. generate_version.zsh reuses the stamp when
@@ -541,23 +517,22 @@ record_linked() {        # key  soname-prefix
 # provenance 是關於本次建置的紀錄，而非建置的一部分。即使寫不出來，建置本身仍然有效，
 # 故此處回報後繼續，而不是把結束碼一併帶走。
 #
-# libarchive is read back here only when it is linked shared. With LIBARCHIVE_STATIC=1,
-# build_libarchive.zsh has already written libarchive_version/commit/linkage=static from
-# the submodule; this block used to strip libarchive_linkage and then find no libarchive.so
-# to read back, so the static build's record lost the key that says it is static (Windows/
-# WSL verification, 2026-10-07). The same shape compile_tar.zsh had until 2026-09-17: a
-# filter deleting a key it has no way to rewrite. A shared build strips libarchive_version/
-# commit as well, since they describe a submodule that is then not what was linked.
+# libarchive is not read back here: it is static, and build_libarchive.zsh has already
+# written libarchive_version/commit/linkage=static from the submodule. This block used to
+# strip libarchive_linkage and then find no libarchive.so to read back, so the static
+# build's record lost the key that says it is static (Windows/WSL verification,
+# 2026-10-07). The same shape compile_tar.zsh had until 2026-09-17: a filter deleting a
+# key it has no way to rewrite. Only the so_version/path keys an old shared build left are
+# stripped.
 #
 # grep's status 1 (nothing printed) is tolerated; any other failure goes to the caller,
 # which reports it -- no longer `2>/dev/null || true`.
 #
-# 只有在 libarchive 以共享庫連結時，才在這裡讀回它。LIBARCHIVE_STATIC=1 時，
-# build_libarchive.zsh 已依 submodule 寫入 libarchive_version／commit／linkage=static；本段原本會
-# 刪掉 libarchive_linkage，接著找不到 libarchive.so 可讀回，於是靜態建置的紀錄失去了「它是靜態」
-# 這個鍵（Windows／WSL 驗證，2026-10-07）。compile_tar.zsh 在 2026-09-17 之前也是同樣的形狀：
-# 過濾器刪掉了自己無法重寫的鍵。共享庫建置則一併清掉 libarchive_version／commit，因為它們描述的
-# submodule 此時並不是實際連結的東西。
+# 這裡不讀回 libarchive：它是靜態的，build_libarchive.zsh 已依 submodule 寫入
+# libarchive_version／commit／linkage=static。本段原本會刪掉 libarchive_linkage，接著找不到
+# libarchive.so 可讀回，於是靜態建置的紀錄失去了「它是靜態」這個鍵（Windows／WSL 驗證，
+# 2026-10-07）。compile_tar.zsh 在 2026-09-17 之前也是同樣的形狀：過濾器刪掉了自己無法重寫的鍵。
+# 只清掉舊的共享庫建置留下的 so_version／path 鍵。
 #
 # 容忍 grep 的狀態 1（沒有輸出）；其他失敗交給呼叫端回報——不再是 `2>/dev/null || true`。
 record_provenance() {
@@ -572,11 +547,7 @@ record_provenance() {
     if [[ "$CODECS_STATIC" != 1 ]]; then
         strip+='|^(zlib|lz4|xz|zstd)_(so_version|path|linkage|version|commit)='
     fi
-    if [[ "$LIBARCHIVE_STATIC" == 1 ]]; then
-        strip+='|^libarchive_(so_version|path)='
-    else
-        strip+='|^libarchive_(so_version|path|linkage|version|commit)='
-    fi
+    strip+='|^libarchive_(so_version|path)='
     {
         grep -vE "$strip" "$version_file" || [ $? -eq 1 ]
         [[ "$CODECS_STATIC" == 1 ]] || record_linked zlib       'libz\.so'
@@ -584,7 +555,6 @@ record_provenance() {
         [[ "$CODECS_STATIC" == 1 ]] || record_linked lz4        'liblz4\.so'
         [[ "$CODECS_STATIC" == 1 ]] || record_linked xz         'liblzma\.so'
         [[ "$CODECS_STATIC" == 1 ]] || record_linked zstd       'libzstd\.so'
-        [[ "$LIBARCHIVE_STATIC" == 1 ]] || record_linked libarchive 'libarchive\.so'
     } > "$tmp_version"
     mv "$tmp_version" "$version_file"
     log_msg "Recorded linked libraries in $version_file / 已將連結的函式庫記入 $version_file"

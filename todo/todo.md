@@ -965,6 +965,15 @@ fallback prints what it lacks. On the VM: `test_zip_fidelity` 20/0. A git-less s
 drop is now patched where it is built: apply_patches.zsh reads the state from the text
 and re-reads it after `patch` has run.
 
+**2026-10-14：退路移除。** 共享庫的退路等於第二種 Linux 執行檔（ZIP 存不了 FIFO、`-c --zip` 只用
+一個執行緒），而沒有任何東西建過或測過它。現在 `compile_tar-linux.zsh` 一律由 `libarchive/`
+建出 libarchive，與 macOS 相同；缺 cmake 或原始碼時以錯誤停止，`LIBARCHIVE_STATIC=0` 會被拒絕
+而不是被忽略。codec 的 `CODECS_STATIC` 退路沒有動。測試：`test/test_linux_libarchive_source.zsh`。
+2026-10-14: the shared fallback is gone. It amounted to a second kind of Linux binary that
+nothing built or tested. `compile_tar-linux.zsh` now always builds libarchive from
+`libarchive/`, as on macOS, stops when cmake or the sources are missing, and refuses
+`LIBARCHIVE_STATIC=0`. The codecs' `CODECS_STATIC` fallback is unchanged.
+
 ## ⏸ 暫緩（2026-10-09，使用者決定）：本 session 的改動尚未在 Windows 建置驗證 / Not yet built or tested on Windows
 
 *（Linux 一半已於 2026-10-13 完成，見下。）*
@@ -3701,8 +3710,10 @@ Linux VM（lld、0 警告）22 個腳本加兩個自測都是 `TEST_RC=0`、`FAU
 
 - **Windows 沒有建置也沒有測試。** 多執行緒路徑在 Windows 不啟用（`#if` 排除），`-c --zip` 維持
   單一執行緒；但 patch 0003 仍會套用到 Windows 建置的 libarchive，那一段沒有在 Windows 編譯過。
-- **連結 sysroot 共享 libarchive 的 Linux 建置**不帶 `SWIFT_TAR_ZIP_PARALLEL`，維持單一執行緒；
-  建置時的提示已加上這一句。這種建置沒有實際建過。
+- ~~**連結 sysroot 共享 libarchive 的 Linux 建置**不帶 `SWIFT_TAR_ZIP_PARALLEL`，維持單一執行緒；
+  建置時的提示已加上這一句。這種建置沒有實際建過。~~ **2026-10-14 移除了這種建置**：
+  `compile_tar-linux.zsh` 一律由 `libarchive/` 建出 libarchive，與 macOS 相同；缺 cmake 或原始碼
+  時停止，`LIBARCHIVE_STATIC=0` 會被拒絕。`test/test_linux_libarchive_source.zsh` 釘住這一點。
 - **工作執行緒開檔失敗、讀取失敗、記憶體不足**這三條錯誤路徑沒有測試涵蓋：讀不到的檔案在走訪
   階段就被 libarchive 擋下，到不了工作執行緒。
 - **記憶體變多**：預設從 8 MB 變成 184 MB（claw-code）。上限由 256 MiB 的視窗決定，內容壓不動時
@@ -3732,6 +3743,7 @@ starting with a lone `int` sat before another such line. The function was moved,
 `test_patch_drop.zsh` now reads that shape from the patch text.
 
 Not verified: Windows (the threaded path is compiled out there, but patch 0003 still
-applies to its libarchive and was never compiled on Windows); a Linux build against a
-shared system libarchive (one thread, never built); the workers' open, read and
-out-of-memory error paths.
+applies to its libarchive and was never compiled on Windows); the workers' open, read and
+out-of-memory error paths. A Linux build against a shared system libarchive (one thread,
+never built) was on this list; that kind of build was removed on 2026-10-14, and
+`compile_tar-linux.zsh` now always builds libarchive from `libarchive/`, as on macOS.

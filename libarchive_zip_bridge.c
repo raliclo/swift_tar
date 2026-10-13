@@ -208,12 +208,73 @@ static int compare_entries(const void *left, const void *right) {
     return (int)*a - (int)*b;
 }
 
+/* Write one entry and, for a regular file, its data. Returns 0 when the walk should go on
+ * (the entry was written, or could not be and was reported) and -1 when the run must end.
+ * 寫出一個項目；若為一般檔案，連同其資料。回傳 0 表示走訪應繼續（項目已寫出，或寫不進去且已
+ * 回報），-1 表示整次執行必須結束。 */
+static int write_entry(struct archive *writer,
+                       struct archive_entry *entry,
+                       int verbose,
+                       char *error_buffer,
+                       size_t error_capacity) {
+    int status;
+
+    if (verbose) fprintf(stderr, "a %s\n", archive_entry_pathname(entry));
+
+    /* mtime only. The ZIP writer puts whatever times the entry carries into the UT
+     * extra field, and archive_read_disk fills in atime and ctime -- both of which
+     * reading the file changes -- so the same tree, archived twice, gave two different
+     * ZIPs (2026-10-09: they differed from byte 59, inside the first entry's UT field).
+     * The tar path never stored either. Dropping them makes ZIP output reproducible.
+     * 只留 mtime。ZIP 寫出端會把項目帶有的時間都寫進 UT 擴充欄位，而 archive_read_disk
+     * 會填入 atime 與 ctime——讀取檔案本身就會改變這兩者——所以同一棵樹封存兩次會得到兩個
+     * 不同的 ZIP（2026-10-09：從第 59 個位元組起不同，就在第一個項目的 UT 欄位裡）。tar 路徑
+     * 從來不存這兩者。拿掉之後 ZIP 輸出可以重現。 */
+    archive_entry_unset_atime(entry);
+    archive_entry_unset_ctime(entry);
+    archive_entry_unset_birthtime(entry);
+
+    status = archive_write_header(writer, entry);
+    if (status == ARCHIVE_FATAL) {
+        set_archive_error(error_buffer, error_capacity, "archive_write_header", writer);
+        return -1;
+    }
+    if (status == ARCHIVE_FAILED) {
+        /* This entry cannot be written; the archive is still usable. libarchive
+         * defines ARCHIVE_FAILED on write_header to mean exactly that, and it is
+         * what "Can't add archive to itself" comes back as when -f names a file
+         * inside the tree being walked. Testing `status < ARCHIVE_OK` treated it
+         * as fatal, so the walk stopped at the archive file and every member
+         * after it was missing from a file that had still been created. bsdtar,
+         * on this same libarchive, skips the entry and carries on -- so did the
+         * tar path here, which excludes the archive by file identity in Swift.
+         * 此項寫不進去，但封存仍然可用。libarchive 對 write_header 的
+         * ARCHIVE_FAILED 定義正是如此，而 `-f` 指向被走訪目錄內的檔案時，
+         * "Can't add archive to itself" 回傳的就是它。原本以 `status <
+         * ARCHIVE_OK` 判斷會當成致命錯誤，於是走訪停在封存檔本身，其後的成員
+         * 全部缺席，而檔案仍被建立出來。同一套 libarchive 上的 bsdtar 是略過
+         * 該項並繼續；此處的 tar 路徑亦然，它在 Swift 端以檔案身分排除封存。 */
+        fprintf(stderr, "swift_tar: %s: %s\n",
+                archive_entry_pathname(entry), archive_error_string(writer));
+        return 0;
+    }
+    if (status < ARCHIVE_OK) {
+        /* ARCHIVE_WARN: the header was written, so keep going and copy the data,
+         * but do not let the reason go unsaid.
+         * ARCHIVE_WARN：標頭已寫入，故繼續複製資料，但不讓原因無聲消失。 */
+        fprintf(stderr, "swift_tar: %s: %s\n",
+                archive_entry_pathname(entry), archive_error_string(writer));
+    }
+    return copy_file_to_archive(writer, entry, error_buffer, error_capacity);
+}
+
 static int add_path(struct archive *writer,
                     const char *path,
                     file_id archive_id,
                     int verbose,
                     int follow_symlinks,
                     int (*is_excluded)(const char *path, int is_directory),
+                    int sort_members,
                     char *error_buffer,
                     size_t error_capacity) {
     struct archive *disk = archive_read_disk_new();
@@ -254,20 +315,23 @@ static int add_path(struct archive *writer,
     archive_read_disk_set_standard_lookup(disk);
 
     /* A second handle, never opened on a tree, for reading one file's metadata again just
-     * before it is written (see below). Same symlink rule as the walk; nothing but stat.
-     * 第二個 handle，不對任何樹開啟，用來在寫出某個檔案之前重新讀它的中繼資料（見下方）。
-     * symlink 規則與走訪相同；只做 stat，不讀其他東西。 */
-    stat_disk = archive_read_disk_new();
-    if (stat_disk == NULL) {
-        set_error(error_buffer, error_capacity, "archive_read_disk_new failed");
-        goto cleanup;
+     * before it is written (see below); only the sorted mode needs it. Same symlink rule as
+     * the walk; nothing but stat.
+     * 第二個 handle，不對任何樹開啟，用來在寫出某個檔案之前重新讀它的中繼資料（見下方）；只有
+     * 排序模式需要。symlink 規則與走訪相同；只做 stat，不讀其他東西。 */
+    if (sort_members) {
+        stat_disk = archive_read_disk_new();
+        if (stat_disk == NULL) {
+            set_error(error_buffer, error_capacity, "archive_read_disk_new failed");
+            goto cleanup;
+        }
+        if (follow_symlinks) archive_read_disk_set_symlink_logical(stat_disk);
+        else archive_read_disk_set_symlink_physical(stat_disk);
+        archive_read_disk_set_behavior(stat_disk,
+            ARCHIVE_READDISK_NO_XATTR | ARCHIVE_READDISK_NO_ACL |
+            ARCHIVE_READDISK_NO_FFLAGS | ARCHIVE_READDISK_NO_SPARSE);
+        archive_read_disk_set_standard_lookup(stat_disk);
     }
-    if (follow_symlinks) archive_read_disk_set_symlink_logical(stat_disk);
-    else archive_read_disk_set_symlink_physical(stat_disk);
-    archive_read_disk_set_behavior(stat_disk,
-        ARCHIVE_READDISK_NO_XATTR | ARCHIVE_READDISK_NO_ACL |
-        ARCHIVE_READDISK_NO_FFLAGS | ARCHIVE_READDISK_NO_SPARSE);
-    archive_read_disk_set_standard_lookup(stat_disk);
 
     status = archive_read_disk_open(disk, path);
     if (status != ARCHIVE_OK) {
@@ -330,13 +394,27 @@ static int add_path(struct archive *writer,
 
         if (archive_read_disk_can_descend(disk)) archive_read_disk_descend(disk);
 
-        /* Keep the entry and write nothing yet. libarchive hands entries over in the order
-         * the filesystem lists them, which differs between filesystems, so one tree gave
-         * different archives on APFS and on tmpfs (2026-10-13). They are sorted below and
-         * written after the walk.
-         * 先留下項目，暫不寫出。libarchive 依檔案系統列出的順序交出項目，而這個順序因檔案系統
-         * 而異，所以同一棵樹在 APFS 與 tmpfs 上得到不同的封存（2026-10-13）。走訪結束後於下方
-         * 排序再寫出。 */
+        /* The default: write each entry as the walk hands it over. Nothing is held, so
+         * memory does not grow with the tree, and the order is the filesystem's -- which
+         * differs between filesystems, so one tree gave different archives on APFS and on
+         * tmpfs (2026-10-13). --zip-sorted takes the other branch.
+         * 預設：走訪交出一個項目就寫一個。不保留任何東西，所以記憶體不隨樹的大小成長；順序則是
+         * 檔案系統的——它因檔案系統而異，所以同一棵樹在 APFS 與 tmpfs 上得到不同的封存
+         * （2026-10-13）。--zip-sorted 走另一個分支。 */
+        if (!sort_members) {
+            if (write_entry(writer, entry, verbose, error_buffer, error_capacity) != 0) {
+                goto cleanup;
+            }
+            archive_entry_free(entry);
+            entry = NULL;
+            continue;
+        }
+
+        /* --zip-sorted: keep the entry and write nothing yet; they are sorted below and
+         * written after the walk. This holds every entry of the tree until it is written
+         * (about 1.8 KB each, measured 2026-10-13), which is why it is not the default.
+         * --zip-sorted：先留下項目，暫不寫出；走訪結束後於下方排序再寫出。整棵樹的項目都要留到
+         * 寫出為止（每個約 1.8 KB，2026-10-13 實測），這就是它不是預設的原因。 */
         if (entry_count == entry_capacity) {
             size_t capacity = entry_capacity == 0 ? 256 : entry_capacity * 2;
             struct archive_entry **grown =
@@ -369,55 +447,7 @@ static int add_path(struct archive *writer,
             archive_read_disk_entry_from_file(stat_disk, entry, -1, NULL);
         }
 
-        if (verbose) fprintf(stderr, "a %s\n", archive_entry_pathname(entry));
-
-        /* mtime only. The ZIP writer puts whatever times the entry carries into the UT
-         * extra field, and archive_read_disk fills in atime and ctime -- both of which
-         * reading the file changes -- so the same tree, archived twice, gave two different
-         * ZIPs (2026-10-09: they differed from byte 59, inside the first entry's UT field).
-         * The tar path never stored either. Dropping them makes ZIP output reproducible.
-         * 只留 mtime。ZIP 寫出端會把項目帶有的時間都寫進 UT 擴充欄位，而 archive_read_disk
-         * 會填入 atime 與 ctime——讀取檔案本身就會改變這兩者——所以同一棵樹封存兩次會得到兩個
-         * 不同的 ZIP（2026-10-09：從第 59 個位元組起不同，就在第一個項目的 UT 欄位裡）。tar 路徑
-         * 從來不存這兩者。拿掉之後 ZIP 輸出可以重現。 */
-        archive_entry_unset_atime(entry);
-        archive_entry_unset_ctime(entry);
-        archive_entry_unset_birthtime(entry);
-
-        status = archive_write_header(writer, entry);
-        if (status == ARCHIVE_FATAL) {
-            set_archive_error(error_buffer, error_capacity, "archive_write_header", writer);
-            goto cleanup;
-        }
-        if (status == ARCHIVE_FAILED) {
-            /* This entry cannot be written; the archive is still usable. libarchive
-             * defines ARCHIVE_FAILED on write_header to mean exactly that, and it is
-             * what "Can't add archive to itself" comes back as when -f names a file
-             * inside the tree being walked. Testing `status < ARCHIVE_OK` treated it
-             * as fatal, so the walk stopped at the archive file and every member
-             * after it was missing from a file that had still been created. bsdtar,
-             * on this same libarchive, skips the entry and carries on -- so did the
-             * tar path here, which excludes the archive by file identity in Swift.
-             * 此項寫不進去，但封存仍然可用。libarchive 對 write_header 的
-             * ARCHIVE_FAILED 定義正是如此，而 `-f` 指向被走訪目錄內的檔案時，
-             * "Can't add archive to itself" 回傳的就是它。原本以 `status <
-             * ARCHIVE_OK` 判斷會當成致命錯誤，於是走訪停在封存檔本身，其後的成員
-             * 全部缺席，而檔案仍被建立出來。同一套 libarchive 上的 bsdtar 是略過
-             * 該項並繼續；此處的 tar 路徑亦然，它在 Swift 端以檔案身分排除封存。 */
-            fprintf(stderr, "swift_tar: %s: %s\n",
-                    archive_entry_pathname(entry), archive_error_string(writer));
-            archive_entry_free(entry);
-            entry = NULL;
-            continue;
-        }
-        if (status < ARCHIVE_OK) {
-            /* ARCHIVE_WARN: the header was written, so keep going and copy the data,
-             * but do not let the reason go unsaid.
-             * ARCHIVE_WARN：標頭已寫入，故繼續複製資料，但不讓原因無聲消失。 */
-            fprintf(stderr, "swift_tar: %s: %s\n",
-                    archive_entry_pathname(entry), archive_error_string(writer));
-        }
-        if (copy_file_to_archive(writer, entry, error_buffer, error_capacity) != 0) {
+        if (write_entry(writer, entry, verbose, error_buffer, error_capacity) != 0) {
             goto cleanup;
         }
 
@@ -500,6 +530,7 @@ int swift_tar_zip_create(const char *archive_path,
                          int verbose,
                          int follow_symlinks,
                          int (*is_excluded)(const char *path, int is_directory),
+                         int sort_members,
                          char *error_buffer,
                          size_t error_capacity) {
     adopt_environment_charset();
@@ -627,6 +658,7 @@ int swift_tar_zip_create(const char *archive_path,
 
     for (index = 0; index < path_count; ++index) {
         if (add_path(writer, paths[index], archive_id, verbose, follow_symlinks, is_excluded,
+                     sort_members,
                      error_buffer, error_capacity) != 0) {
             goto cleanup;
         }

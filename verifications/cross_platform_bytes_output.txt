@@ -1,11 +1,12 @@
-[Info] date / 日期: 2026-10-13 18:56:36 CST
+[Info] date / 日期: 2026-10-13 22:03:48 CST
 [Info] script / 腳本: verifications/cross_platform_bytes.zsh compare mac linux
 [Info] corpus / 語料: claw-code, 5408 files, extracted on both sides from one archive, owner 501:20, TZ=UTC
-[Info] mac: Apple M4, swift_tar 20261012-233235 (sha256 322ef7b6...; the version stamp did not change with the source), built from the working tree on top of e19b477 with the ZIP member order fix, RAM disk (APFS)
-[Info] linux: QEMU aarch64 guest (HVF, 4 vCPU), swift_tar 20261013-105234 built in the guest from a source drop of the same working tree, tmpfs
+[Info] zip and zip64 are written with --zip-sorted; without it members follow the filesystem's order and the platforms differ / zip 與 zip64 以 --zip-sorted 寫出；不加時成員順序跟著檔案系統，兩個平台會不同
+[Info] mac: Apple M4, swift_tar 20261012-233235 (sha256 bc78f889...; the version stamp did not change with the source), built from the working tree on top of da16ae4 with --zip-sorted added, internal disk (APFS), corpus group set to 20 after extraction
+[Info] linux: QEMU aarch64 guest (HVF, 4 vCPU), swift_tar 20261013-135854 built in the guest from a source drop of the same working tree, tmpfs
 [Info] records / 紀錄: verifications/cross_platform_bytes.csv2
 [Info] exit code / 退出碼: 0
-[Info] previous run / 上一輪: 2026-10-13 13:37 CST, exit code 1, zip and zip64 DIFFERENT (member order; see todo/todo.md) / zip 與 zip64 不同（成員順序，見 todo/todo.md）
+[Info] earlier runs / 先前: 2026-10-13 13:37 CST exit 1 (zip, zip64 DIFFERENT: filesystem order); 18:56 CST exit 0 (sorting was then the default) / 13:37 以 1 結束（zip、zip64 不同：檔案系統順序）；18:56 以 0 結束（當時排序是預設）
 
 same          none
 same          zstd3

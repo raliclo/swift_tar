@@ -96,15 +96,18 @@ for codec in --zip --zip64; do
   fi
 done
 
-# Member order. Until 2026-10-13 the ZIP backend wrote members in the order the filesystem
-# listed them, so one tree gave different archives on APFS and on tmpfs
-# (verifications/cross_platform_bytes.zsh found it). The tar path sorts each directory and
-# writes a directory before what is inside it; the ZIP listing has to match that listing.
+# Member order. By default the ZIP backend writes members in the order the filesystem
+# lists them, so one tree gives different archives on APFS and on tmpfs
+# (verifications/cross_platform_bytes.zsh found it, 2026-10-13); --zip-sorted asks for a
+# fixed order at the price of holding the file list in memory. The tar path sorts each
+# directory and writes a directory before what is inside it; with --zip-sorted the ZIP
+# listing has to match that listing.
 # Enough names that an unsorted listing is not sorted by accident, and `d.x` beside `d1`
 # because a plain sort of whole paths puts `d.x/f` in the wrong place.
-# 成員順序。2026-10-13 之前 ZIP 後端依檔案系統列出的順序寫出成員，所以同一棵樹在 APFS 與
-# tmpfs 上得到不同的封存（由 verifications/cross_platform_bytes.zsh 找到）。tar 路徑會排序
-# 每個目錄，且目錄先於其內容；ZIP 的清單必須與它相同。名稱要夠多，未排序的清單才不會碰巧
+# 成員順序。ZIP 後端預設依檔案系統列出的順序寫出成員，所以同一棵樹在 APFS 與 tmpfs 上得到
+# 不同的封存（由 verifications/cross_platform_bytes.zsh 於 2026-10-13 找到）；--zip-sorted
+# 要求固定的順序，代價是把檔案清單留在記憶體。tar 路徑會排序每個目錄，且目錄先於其內容；
+# 加了 --zip-sorted，ZIP 的清單必須與它相同。名稱要夠多，未排序的清單才不會碰巧
 # 是排序過的；`d.x` 與 `d1` 並列，是因為直接排序整條路徑會把 `d.x/f` 放錯位置。
 ORD="$TMP/ord"
 mkdir -p "$ORD/t/d2/sub" "$ORD/t/d1" "$ORD/t/d.x"
@@ -119,13 +122,31 @@ print -r -- x > "$ORD/t/d.x/f"
 "$ST" -t -f "$TMP/ord.tar" 2>&1 | sed 's:/$::' > "$TMP/ord.tar.lst"
 eq "order: the tar listing has every member" 61 "$(wc -l < "$TMP/ord.tar.lst" | tr -d ' ')"
 for codec in --zip --zip64; do
-  rc=0; ( cd -q "$ORD" && "$ST" -c $codec -f "$TMP/ord.zip" t ) >/dev/null 2>&1 || rc=$?
-  eq "$codec order: -c exits 0" 0 "$rc"
+  rc=0; ( cd -q "$ORD" && "$ST" -c $codec --zip-sorted -f "$TMP/ord.zip" t ) >/dev/null 2>&1 || rc=$?
+  eq "$codec --zip-sorted order: -c exits 0" 0 "$rc"
   "$ST" -t -f "$TMP/ord.zip" 2>&1 | sed 's:/$::' > "$TMP/ord.zip.lst"
   cmp -s "$TMP/ord.tar.lst" "$TMP/ord.zip.lst" \
-    && ok "$codec order: members are in the tar path's order" \
-    || bad "$codec order: members are in the tar path's order"
+    && ok "$codec --zip-sorted order: members are in the tar path's order" \
+    || bad "$codec --zip-sorted order: members are in the tar path's order"
+  # Without --zip-sorted the order is the filesystem's, so only the set of members is
+  # checked. / 不加 --zip-sorted 時順序是檔案系統的，所以只檢查成員的集合。
+  rc=0; ( cd -q "$ORD" && "$ST" -c $codec -f "$TMP/ord.zip" t ) >/dev/null 2>&1 || rc=$?
+  eq "$codec order: -c exits 0 without --zip-sorted" 0 "$rc"
+  "$ST" -t -f "$TMP/ord.zip" 2>&1 | sed 's:/$::' | LC_ALL=C sort > "$TMP/ord.zip.set"
+  LC_ALL=C sort "$TMP/ord.tar.lst" | cmp -s - "$TMP/ord.zip.set" \
+    && ok "$codec order: the same members without --zip-sorted" \
+    || bad "$codec order: the same members without --zip-sorted"
 done
+# --zip-sorted where it cannot take effect is refused, not ignored.
+# --zip-sorted 用在起不了作用的地方時會被拒絕，而不是被忽略。
+rc=0; ( cd -q "$ORD" && "$ST" -c --zip-sorted -f "$TMP/ord.refused.tar" t ) >/dev/null 2>"$TMP/err.sorted" || rc=$?
+eq "--zip-sorted without --zip: exits 1" 1 "$rc"
+[ -e "$TMP/ord.refused.tar" ] && bad "--zip-sorted without --zip: writes no archive" \
+  || ok "--zip-sorted without --zip: writes no archive"
+grep -q -- '--zip-sorted' "$TMP/err.sorted" && ok "--zip-sorted without --zip: stderr names the option" \
+  || bad "--zip-sorted without --zip: stderr names the option"
+rc=0; "$ST" -t --zip-sorted -f "$TMP/ord.zip" >/dev/null 2>&1 || rc=$?
+eq "--zip-sorted with -t: exits 1" 1 "$rc"
 
 # A file that grows after the walk. Sorting means every member is listed before the first
 # one is written, so a file's size is recorded long before its turn; the backend reads it
@@ -148,7 +169,7 @@ if (( HAVE_FIFO )); then
   for codec in --zip --zip64; do
     print -r -- short > "$GROW/t/zzz"
     mkfifo "$TMP/grow.fifo"
-    ( cd -q "$GROW" && "$ST" -c -v $codec -f "$TMP/grow.zip" t ) >/dev/null 2>"$TMP/grow.fifo" &
+    ( cd -q "$GROW" && "$ST" -c -v $codec --zip-sorted -f "$TMP/grow.zip" t ) >/dev/null 2>"$TMP/grow.fifo" &
     grow_pid=$!
     exec 3<"$TMP/grow.fifo"
     sleep 1
@@ -156,12 +177,12 @@ if (( HAVE_FIFO )); then
     cat <&3 >/dev/null
     exec 3<&-
     rc=0; wait $grow_pid || rc=$?
-    eq "$codec grow: -c exits 0 when a file grew after the walk" 0 "$rc"
+    eq "$codec --zip-sorted grow: -c exits 0 when a file grew after the walk" 0 "$rc"
     mkdir -p "$TMP/grow.out$codec"
     "$ST" -x -f "$TMP/grow.zip" -C "$TMP/grow.out$codec" >/dev/null 2>&1 || true
     cmp -s "$GROW/t/zzz" "$TMP/grow.out$codec/t/zzz" \
-      && ok "$codec grow: the grown file is stored whole" \
-      || bad "$codec grow: the grown file is stored whole"
+      && ok "$codec --zip-sorted grow: the grown file is stored whole" \
+      || bad "$codec --zip-sorted grow: the grown file is stored whole"
     rm -f "$TMP/grow.fifo" "$TMP/grow.zip"
   done
 else

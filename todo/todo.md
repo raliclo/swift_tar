@@ -3365,7 +3365,62 @@ in the Linux VM for a 1.4 GB tree, given the same ownership on both sides. One c
 added (199/1 before on macOS, 200/0 after); on Linux it passes either way. Not verified:
 Windows, the other codecs and ZIP, and paths other than a plain `-c`.
 
-## `--zip` 的成員順序跟著檔案系統走，同一棵樹在 macOS 與 Linux 得到不同的 ZIP ▸ ✅ 已修正 2026-10-13 / `--zip` stored members in filesystem order, so one tree gave different ZIPs on macOS and Linux
+## `--zip` 的成員順序跟著檔案系統走，同一棵樹在 macOS 與 Linux 得到不同的 ZIP ▸ ✅ 已處理 2026-10-13：預設維持原樣，`--zip-sorted` 取得固定順序 / `--zip` stores members in filesystem order, so one tree gives different ZIPs on macOS and Linux; `--zip-sorted` fixes the order
+
+**目前的狀態（2026-10-13 晚，取代下方「修正」一節所說的預設行為）**：`d0aa97b` 讓排序成為
+預設。量過記憶體之後，使用者決定兩種都留、以省記憶體的那個為預設：
+
+- **預設**：與 `d0aa97b` 之前相同，走訪交出一個項目就寫一個，順序跟著檔案系統。不印警告
+  （使用者的決定），只在 `--help` 與 README 說明。
+- **`--zip-sorted`**：`d0aa97b` 的行為——先收集、排序、再寫出。只能搭配 `-c` 與 `--zip`／
+  `--zip64`，用在其他地方會以 1 結束。
+
+以新的執行檔確認：不加選項時，輸出與 `d0aa97b` 之前的執行檔逐位元組相同；加 `--zip-sorted`
+時，與 `d0aa97b` 的執行檔逐位元組相同（claw-code，經 `-f -` 取 sha256）。
+
+**記憶體實測**（M4，`-c --zip -f -`，`/usr/bin/time -l` 的最大常駐記憶體；「修正前」是
+`d0aa97b` 之前的執行檔，「排序」是 `d0aa97b`）：
+
+| 樹 | 項目數 | 修正前 | 排序 | 每個項目多出 |
+|---|---|---|---|---|
+| claw-code × 1 | 5,857 | 8.8 MB | 19.3 MB | 1.79 KB |
+| claw-code × 4 | 23,425 | 12.3 MB | 54.6 MB | 1.80 KB |
+| claw-code × 16 | 93,697 | 23.0 MB | 184.1 MB | 1.72 KB |
+| claw-code 的目錄結構 × 171，檔案內容清空 | 1,001,377 | 184.7 MB | 1,789.3 MB | 1.60 KB |
+
+- 前三列是真實內容（APFS clone 出來的複本，不佔額外空間）。最後一列只保留 claw-code 的目錄
+  與檔名、檔案是空的，因為一百萬個真實檔案要讀 240 GB；每個項目佔的記憶體取決於路徑而非內容。
+- 成長是線性的，先前「一百萬個檔案約 1.8 GB」的推算成立（實測 1.79 GB；同一個命令再跑一次
+  是 1.50 GB，當時這台機器的 swap 已用掉約 7 GB，常駐記憶體會被壓低）。
+- **記憶體只累積到單一個命令列引數為止**：每個引數各自走訪、排序、寫出、釋放。要量到上面的
+  數字，那 16 份與 171 份必須放在同一個上層目錄下，以一個引數傳入。
+- **時間**：真實內容時沒有量得到的差別（× 1：28.2 對 28.9 秒；× 4：116.4 對 115.9 秒）。
+  空檔案時排序版較慢——一百萬個項目 18.4 秒對 32.5 秒，每個項目多約 14 微秒，來自第二次
+  stat 與排序。× 16 那一列的時間（531.7 對 466.0 秒）不能引用：兩次之間機器上有其他工作。
+
+**這次改動的驗證**：
+- `test/test_zip_fidelity.zsh` 37／0（macOS 與 Linux VM）。順序與「變大的檔案」兩組改為加
+  `--zip-sorted`；新增「不加選項時成員集合相同」與「`--zip-sorted` 用在非 ZIP 或 `-t` 時以 1
+  結束、不寫出檔案」。
+- 整輪測試：macOS 與 Linux VM（lld、0 警告）都是 20 個腳本加 `--crypto-selftest`、`-test`
+  全部以 0 結束，`FAULTS=0`。
+- `cross_platform_bytes.zsh` 的 zip／zip64 兩項改為加 `--zip-sorted`；`compare mac linux`
+  以 0 結束，兩邊仍是 `7ba62a87…` 與 `dd3bee3f…`。不加選項的預設輸出**沒有**列入跨平台
+  比對，因為它本來就會不同。
+- 一個方法上的坑：這一輪 macOS 的語料放在 `/private/tmp` 底下而不是 RAM disk，解出的檔案
+  群組是 0 而不是 20（BSD 會沿用上層目錄的群組），於是連純 tar 的 sha 都與上一輪不同。把群組
+  改回 20 後 21 項與上一輪逐項相同。輸入不同，不是程式的問題。
+- Windows 沒有建置也沒有測試。
+
+**之後可以怎麼降低 `--zip-sorted` 的記憶體**（都還沒做，也沒有量過）：
+1. **只留路徑，不留整個項目。** 走訪時只記下每個項目的路徑（claw-code 平均 95 bytes）與
+   類型，排序後再逐一重新 stat 建出項目。估計每個項目約 0.1–0.15 KB，一百萬個約 150 MB。
+   代價是 Windows 上要另外保存寬字元路徑，那一段沒辦法在這台機器上測。
+2. **一次只排一個目錄。** 自己遞迴：讀一個目錄、排序它的名稱、逐一處理，遇到子目錄就往下。
+   記憶體只與最大的單一目錄及深度有關，與預設模式相當，那時排序就可以當預設。代價是不再使用
+   libarchive 的走訪，`-h` 的迴圈偵測要自己做（比對祖先目錄的檔案身分），Windows 的路徑轉換
+   也要自己處理。這是改動最大、效果也最好的一個。
+3. **把項目清單放到暫存檔。** 記憶體固定，但多了磁碟 I/O 與清理暫存檔的責任，不建議。
 
 **修正**（發現當天）：`add_path` 先走訪、把項目收起來，排序之後才寫出。順序與 tar 路徑相同：
 每個目錄內的名稱排序，目錄先於其內容。排序以路徑元件為單位——直接比較整條路徑會把
@@ -3401,7 +3456,7 @@ handle）。測試把 `-v` 導向一個還沒人讀的 FIFO，讓寫出端停在
 | 最大常駐記憶體 | 約 8.2 MB | 約 18.6 MB |
 
 時間沒有量得到的差別。記憶體多出約 10.4 MB，除以 5,855 個項目是每個項目約 1.8 KB——整棵樹的
-項目要留到寫完為止。**一百萬個檔案會是約 1.8 GB，這是推算，沒有量過。** tar 路徑不是這樣，
+項目要留到寫完為止。**一百萬個檔案會是約 1.8 GB，這是推算，沒有量過。**（當晚已量，1.79 GB，見本項開頭的表格。） tar 路徑不是這樣，
 它是邊走邊寫。
 
 **沒有驗證的**：Windows 沒有建置也沒有測試。這次沒有加任何 Windows 專用的程式碼，但排序用的
@@ -3457,6 +3512,19 @@ UTC+8、guest 是 UTC，不設 `TZ` 時檔頭時間欄差 8 小時。比對腳�
 
 **沒有比的**：`--lzip`（依使用者決定；它執行 PATH 上的 `lzip`，位元組屬於那支程式）、Windows、
 `--other3-optimal` 與其餘 LZFSE 模式、非預設的壓縮等級、RGB1。
+
+Status as of the evening of 2026-10-13, which supersedes the default described in the
+next paragraph: after memory was measured the user chose to keep both behaviours with the
+low-memory one as the default. Without an option the backend streams as it did before
+`d0aa97b` (byte-identical to that binary) and members follow the filesystem; no warning
+is printed, by the user's decision. `--zip-sorted` gives `d0aa97b`'s behaviour and is
+refused anywhere but `-c` with `--zip`/`--zip64`. Measured peak memory, before against
+sorted: 8.8 against 19.3 MB at 5,857 entries, 23.0 against 184.1 MB at 93,697, and 184.7
+against 1,789.3 MB at 1,001,377 (claw-code's directory structure 171 times with empty
+files) -- linear, 1.6 to 1.8 KB per entry, and only up to one command-line argument at a
+time. Ways to lower it, none done: keep paths instead of whole entries (roughly a tenth),
+or sort one directory at a time with our own recursion (as low as the default, but it
+replaces libarchive's walk).
 
 Fixed the day it was found: `add_path` now collects the entries during the walk, sorts
 them the way the tar path orders members (names sorted within a directory, a directory

@@ -3276,3 +3276,36 @@ looks.
 
 Fix belongs in the zsh port, not here. Reported to its maintainer.
 修復屬於 zsh 移植版而非本程式庫，已回報給維護者。
+
+## `swift_tar -test` 每跑一次就在暫存目錄留下一個 `swift_tar_selftest_<pid>` ▸ ✅ 已修正 2026-10-13 / `swift_tar -test` leaves a `swift_tar_selftest_<pid>` directory behind on every run
+
+**現象**：`-test` 結束後，暫存目錄裡的 `swift_tar_selftest_<pid>` 還在（約 172 KB，含測試用的
+封存檔與解開的目錄）。2026-10-13 清理磁碟時在 macOS 的暫存目錄數到 14 個；再跑一次 `-test`
+（退出碼 0）之後變成 15 個。只佔空間，不影響測試結果：函式開頭會先刪一次同名目錄，所以 pid
+重複時不會讀到舊資料。
+
+**成因**：自我測試以 `defer { try? fm.removeItem(atPath: tmp) }` 登記清理，但函式以
+`exit(allOK ? 0 : 1)` 結束。`exit()` 不會返回，`defer` 因此不執行。
+
+**修正**：拿掉 `defer`，改在結尾的 `exit()` 之前明確刪除。另外讓 `-test` 多印一行
+`[swift_tar -test] working directory: <路徑>`，測試才有確切的路徑可查。
+
+**測試**：`test/test_blind_findings.zsh` 新增 2 項（`-test` 以 0 結束；它印出的工作目錄事後
+不存在）。對「已印出路徑、但仍用 `defer`」的執行檔是 198／1，修正後 199／0。第一版測試是設定
+`TMPDIR` 後列出內容，**它對未修正的執行檔也通過了**——macOS 上那個目錄不跟著 `TMPDIR` 走——
+所以改成檢查印出的路徑。macOS 上 `test/` 20 支與 `--crypto-selftest` 全數以 0 結束，跑完後
+暫存目錄裡沒有任何 `swift_tar_selftest_*`。
+
+**沒有驗證的**：Linux 與 Windows。兩者走同一段程式碼，但修正後沒有在上面建置或執行。未偵測到
+標準 tar 而提早以 0 結束的那條路徑不建立目錄，不受影響。
+
+The self-test registered its clean-up with `defer` and then ended through `exit()`, which
+never returns, so the directory stayed: fourteen had collected on macOS and one more run
+made fifteen. Space only; results were unaffected. The directory is now removed just
+before `exit()`, and `-test` prints the directory it works in so a test can check that
+exact path. Two checks were added to `test_blind_findings.zsh`: 198/1 against a binary
+that prints the path but still uses `defer`, 199/0 after the fix. A first version of the
+check set `TMPDIR` and listed it, and passed against the defective binary, because on
+macOS the directory does not follow `TMPDIR`. Verified on macOS only -- all 20 suites and
+`--crypto-selftest` exit 0 and nothing is left behind; Linux and Windows share the code
+and were not built or run after the fix.

@@ -6112,7 +6112,14 @@ func runSelfTest(debug: Bool = false) {
     let tmp = NSTemporaryDirectory() + "swift_tar_selftest_\(ProcessInfo.processInfo.processIdentifier)"
     let fm = FileManager.default
     try? fm.removeItem(atPath: tmp)
-    defer { try? fm.removeItem(atPath: tmp) }
+    // Printed so a test can check this exact path afterwards. The directory is removed
+    // just before the exit() at the end of this function: exit() never returns, so a
+    // `defer` here does not run -- one stood here until 2026-10-13 and every run left
+    // its directory behind.
+    // 印出來是為了讓測試事後能檢查這個確切的路徑。目錄在本函式結尾的 exit() 之前移除：
+    // exit() 不會返回，所以寫在這裡的 `defer` 不會執行——2026-10-13 之前這裡就是一個
+    // `defer`，每次執行都把目錄留了下來。
+    print("[swift_tar -test] working directory: \(tmp)")
 
     let srcDir = "\(tmp)/src"
     try? fm.createDirectory(atPath: "\(srcDir)/sub", withIntermediateDirectories: true)
@@ -6434,6 +6441,7 @@ func runSelfTest(debug: Bool = false) {
     }
 #endif
 
+    try? fm.removeItem(atPath: tmp)
     exit(allOK ? 0 : 1)
 }
 

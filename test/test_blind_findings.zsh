@@ -2368,6 +2368,31 @@ else
   fi
 fi
 
+# `-test` used to leave its working directory behind on every run: the clean-up was a
+# `defer`, and the function ends through exit(), which never returns. Found on 2026-10-13
+# with fourteen of them in the temp directory. `-test` prints the directory it works in,
+# and that exact path is what is checked, so another `-test` running at the same moment
+# cannot change the answer. Setting TMPDIR and listing it would not do: on macOS the
+# directory does not follow TMPDIR, and a check written that way passed against the
+# binary that still had the defect. An unreadable path fails outright.
+#
+# `-test` 原本每跑一次就留下它的工作目錄：清理寫在 `defer` 裡，而函式以 exit() 結束，不會
+# 返回。2026-10-13 發現時暫存目錄裡已有 14 個。`-test` 會印出它的工作目錄，這裡檢查的就是
+# 那個確切的路徑，所以同時在別處執行的 `-test` 不會改變結果。設定 TMPDIR 再列出內容是行不通
+# 的：macOS 上那個目錄不跟著 TMPDIR 走，那樣寫的檢查對仍有缺陷的執行檔也通過了。讀不到路徑
+# 時直接判為失敗。
+stt_rc=0; stt_out=$("$ST" -test 2>&1) || stt_rc=$?
+stt_dir=${${(M)${(f)stt_out}:#\[swift_tar -test\] working directory: *}#*directory: }
+stt_dir=${stt_dir%$'\r'}
+eq "-test exits 0" 0 "$stt_rc"
+if [[ -z $stt_dir ]]; then
+  bad "-test removes its working directory: could not read the path from its output"
+elif [[ -e $stt_dir ]]; then
+  bad "-test removes its working directory ($stt_dir is still there)"; rm -rf "$stt_dir"
+else
+  ok "-test removes its working directory"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

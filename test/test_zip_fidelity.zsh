@@ -96,6 +96,78 @@ for codec in --zip --zip64; do
   fi
 done
 
+# Member order. Until 2026-10-13 the ZIP backend wrote members in the order the filesystem
+# listed them, so one tree gave different archives on APFS and on tmpfs
+# (verifications/cross_platform_bytes.zsh found it). The tar path sorts each directory and
+# writes a directory before what is inside it; the ZIP listing has to match that listing.
+# Enough names that an unsorted listing is not sorted by accident, and `d.x` beside `d1`
+# because a plain sort of whole paths puts `d.x/f` in the wrong place.
+# 成員順序。2026-10-13 之前 ZIP 後端依檔案系統列出的順序寫出成員，所以同一棵樹在 APFS 與
+# tmpfs 上得到不同的封存（由 verifications/cross_platform_bytes.zsh 找到）。tar 路徑會排序
+# 每個目錄，且目錄先於其內容；ZIP 的清單必須與它相同。名稱要夠多，未排序的清單才不會碰巧
+# 是排序過的；`d.x` 與 `d1` 並列，是因為直接排序整條路徑會把 `d.x/f` 放錯位置。
+ORD="$TMP/ord"
+mkdir -p "$ORD/t/d2/sub" "$ORD/t/d1" "$ORD/t/d.x"
+for n in zeta alpha m.txt k9 b a.b q1 q2 q3 w e r t y u i o p; do
+  print -r -- $n > "$ORD/t/$n"
+  print -r -- $n > "$ORD/t/d2/$n"
+  print -r -- $n > "$ORD/t/d2/sub/$n"
+done
+print -r -- x > "$ORD/t/d1/f"
+print -r -- x > "$ORD/t/d.x/f"
+( cd -q "$ORD" && "$ST" -c -f "$TMP/ord.tar" t ) >/dev/null 2>&1
+"$ST" -t -f "$TMP/ord.tar" 2>&1 | sed 's:/$::' > "$TMP/ord.tar.lst"
+eq "order: the tar listing has every member" 61 "$(wc -l < "$TMP/ord.tar.lst" | tr -d ' ')"
+for codec in --zip --zip64; do
+  rc=0; ( cd -q "$ORD" && "$ST" -c $codec -f "$TMP/ord.zip" t ) >/dev/null 2>&1 || rc=$?
+  eq "$codec order: -c exits 0" 0 "$rc"
+  "$ST" -t -f "$TMP/ord.zip" 2>&1 | sed 's:/$::' > "$TMP/ord.zip.lst"
+  cmp -s "$TMP/ord.tar.lst" "$TMP/ord.zip.lst" \
+    && ok "$codec order: members are in the tar path's order" \
+    || bad "$codec order: members are in the tar path's order"
+done
+
+# A file that grows after the walk. Sorting means every member is listed before the first
+# one is written, so a file's size is recorded long before its turn; the backend reads it
+# again at that point, and without that a grown file does not fit its own header and the run
+# ends there. To hold the writer between the walk and the last member, -v goes to a FIFO
+# nobody is reading yet: 1200 long names are more than a pipe holds, so it stops part-way.
+# If the machine is slow enough that the walk has not finished after the sleep, the case
+# passes without testing anything; it cannot fail for that reason.
+# 走訪之後才變大的檔案。排序意味著所有成員都先列出、才寫出第一個，所以檔案的大小在輪到它
+# 之前很久就記下了；後端在輪到時會重讀一次，否則變大的檔案會超出自己標頭裡的大小，整次執行
+# 就停在那裡。為了讓寫出端停在走訪與最後一個成員之間，-v 導向一個還沒人讀的 FIFO：1200 個
+# 長檔名超過 pipe 的容量，所以它會停在半途。若機器慢到 sleep 之後走訪仍未結束，這項會在
+# 沒測到東西的情況下通過；它不會因此失敗。
+if (( HAVE_FIFO )); then
+  GROW="$TMP/grow"
+  mkdir -p "$GROW/t"
+  pad="$(printf 'x%.0s' {1..90})"
+  for i in {1..1200}; do : > "$GROW/t/a_${pad}_$i"; done
+  print -r -- short > "$GROW/t/zzz"
+  for codec in --zip --zip64; do
+    print -r -- short > "$GROW/t/zzz"
+    mkfifo "$TMP/grow.fifo"
+    ( cd -q "$GROW" && "$ST" -c -v $codec -f "$TMP/grow.zip" t ) >/dev/null 2>"$TMP/grow.fifo" &
+    grow_pid=$!
+    exec 3<"$TMP/grow.fifo"
+    sleep 1
+    print -r -- "grown after the walk" >> "$GROW/t/zzz"
+    cat <&3 >/dev/null
+    exec 3<&-
+    rc=0; wait $grow_pid || rc=$?
+    eq "$codec grow: -c exits 0 when a file grew after the walk" 0 "$rc"
+    mkdir -p "$TMP/grow.out$codec"
+    "$ST" -x -f "$TMP/grow.zip" -C "$TMP/grow.out$codec" >/dev/null 2>&1 || true
+    cmp -s "$GROW/t/zzz" "$TMP/grow.out$codec/t/zzz" \
+      && ok "$codec grow: the grown file is stored whole" \
+      || bad "$codec grow: the grown file is stored whole"
+    rm -f "$TMP/grow.fifo" "$TMP/grow.zip"
+  done
+else
+  echo "SKIP: grow case (no mkfifo on this platform)"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

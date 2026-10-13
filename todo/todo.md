@@ -3365,9 +3365,49 @@ in the Linux VM for a 1.4 GB tree, given the same ownership on both sides. One c
 added (199/1 before on macOS, 200/0 after); on Linux it passes either way. Not verified:
 Windows, the other codecs and ZIP, and paths other than a plain `-c`.
 
-## `--zip` 的成員順序跟著檔案系統走，同一棵樹在 macOS 與 Linux 得到不同的 ZIP ▸ 🔴 未修正（2026-10-13 發現）/ `--zip` stores members in filesystem order, so one tree gives different ZIPs on macOS and Linux
+## `--zip` 的成員順序跟著檔案系統走，同一棵樹在 macOS 與 Linux 得到不同的 ZIP ▸ ✅ 已修正 2026-10-13 / `--zip` stored members in filesystem order, so one tree gave different ZIPs on macOS and Linux
 
-**現象**：`verifications/cross_platform_bytes.zsh` 以同一份語料（claw-code，5,408 個檔案）在
+**修正**（發現當天）：`add_path` 先走訪、把項目收起來，排序之後才寫出。順序與 tar 路徑相同：
+每個目錄內的名稱排序，目錄先於其內容。排序以路徑元件為單位——直接比較整條路徑會把
+`d.x/f` 排到 `d/f` 之前，因為 `.` 小於 `/`。走訪本身沒有改，所以 `--exclude`、`-h`、
+「不把封存收進自己」這幾條規則走的仍是原來的程式。
+
+**修正帶來的一個新問題，以及它的處理**：排序意味著所有成員都先 stat 過、才開始寫第一個，
+所以一個檔案的大小在輪到它之前很久就記下了。之後變大的檔案會超出自己標頭裡的大小，
+libarchive 不收超過的部分，整次執行以 1 結束。修正前這段時間只有幾微秒。現在的做法是輪到
+一般檔案時重新 stat 一次（`archive_read_disk_entry_from_file`，另開一個不讀 xattr／ACL 的
+handle）。測試把 `-v` 導向一個還沒人讀的 FIFO，讓寫出端停在走訪與最後一個成員之間，再把那個
+檔案加長。**把重新 stat 那一行拿掉後建出的執行檔，這項測試 4 個斷言全部失敗**（`-c` 以 1
+結束）；放回去後通過。
+
+**驗證**：
+- `test/test_zip_fidelity.zsh` 新增 9 個斷言（順序 5、變大的檔案 4）。未修正的執行檔在順序那
+  兩項失敗；修正後 macOS 與 Linux VM 都是 29／0。
+- 整輪測試：macOS 20 個腳本加 `--crypto-selftest` 與 `-test` 都以 0 結束；Linux VM（lld、
+  0 警告）亦然，`FAULTS=0`。`test_patch_drop.zsh` 在 macOS 上要以 `zsh` 執行——它在 git 裡
+  的模式是 100644，直接執行得到 126，這與本項無關，也沒有動它。
+- 重跑 `cross_platform_bytes.zsh`：`--zip` 兩邊都是 `7ba62a87…`，`--zip64` 都是
+  `dd3bee3f…`，`compare mac linux` 以 **0** 結束。下面「是推論，還沒有驗證」那一句，現在
+  量過了。
+- `-h` 加上指向自己的 symlink（`ln -s . loop`）：修正前後成員數都是 123，`loop/loop` 都只
+  出現一次。
+
+**成本**（M4，RAM disk，claw-code，新舊執行檔交錯各跑 5 次；當時 load average 約 2.7）：
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| `-c --zip` 耗時，5 次的最小值 | 28.57 秒 | 28.60 秒 |
+| 5 次的範圍 | 28.57–29.19 秒 | 28.60–28.75 秒 |
+| 最大常駐記憶體 | 約 8.2 MB | 約 18.6 MB |
+
+時間沒有量得到的差別。記憶體多出約 10.4 MB，除以 5,855 個項目是每個項目約 1.8 KB——整棵樹的
+項目要留到寫完為止。**一百萬個檔案會是約 1.8 GB，這是推算，沒有量過。** tar 路徑不是這樣，
+它是邊走邊寫。
+
+**沒有驗證的**：Windows 沒有建置也沒有測試。這次沒有加任何 Windows 專用的程式碼，但排序用的
+名稱在 Windows 上來自 `archive_entry_pathname_utf8`，那條路徑沒有跑過。
+
+**現象**（以下為修正前的紀錄）：`verifications/cross_platform_bytes.zsh` 以同一份語料（claw-code，5,408 個檔案）在
 macOS 與 Linux VM 各打包一次。`--zip` 與 `--zip64` 兩邊**大小相同**（494,240,952 與
 494,284,292 bytes）、sha256 不同。其餘 21 項都符合預期，所以 `compare` 目前以 1 結束。
 
@@ -3395,7 +3435,7 @@ UTC+8、guest 是 UTC，不設 `TZ` 時檔頭時間欄差 8 小時。比對腳�
 兩邊第一個成員（目錄項）的 96 bytes 完全相同；之後就因為順序不同而無從逐位元組對照。
 **「順序修好之後兩邊就會相同」是推論，還沒有驗證。**
 
-**尚未做**：
+**當時列的「尚未做」**（三項都已完成，見上方；採用的是「在 bridge 內先收集再排序」）：
 - 修正。讓 ZIP 後端依排序過的順序加入成員——由 Swift 端展開樹再逐一交給 bridge，或在 bridge
   內先收集再排序。兩種都會動到 `--exclude`、`-h`、硬連結與目錄 mtime 那幾條既有的路徑，修的
   時候要連同 `test_zip_fidelity.zsh` 一起看。**修正會改變 `--zip` 在每個平台上的成員順序。**
@@ -3408,7 +3448,7 @@ UTC+8、guest 是 UTC，不設 `TZ` 時檔頭時間欄差 8 小時。比對腳�
 | 項目 | 結果 |
 |---|---|
 | 無 codec、zstd、gzip、LZFSE、bzip2、xz、lz4（整份語料） | 7 項皆相同 |
-| `--zip`、`--zip64` | **不同**（本項） |
+| `--zip`、`--zip64` | 當時**不同**（本項）；修正後相同 |
 | 純 tar 的 `-c`、`-r`、`-u`、`--delete`，每一步之後的封存檔 | 4 項皆相同 |
 | `-u` 與 `--delete` 之後的 `-t` 清單 | 相同 |
 | `--encrypt` 的密文 | 每次都不同，同一台機器跑兩次亦然——salt 與 nonce 是隨機的，設計如此 |
@@ -3417,6 +3457,18 @@ UTC+8、guest 是 UTC，不設 `TZ` 時檔頭時間欄差 8 小時。比對腳�
 
 **沒有比的**：`--lzip`（依使用者決定；它執行 PATH 上的 `lzip`，位元組屬於那支程式）、Windows、
 `--other3-optimal` 與其餘 LZFSE 模式、非預設的壓縮等級、RGB1。
+
+Fixed the day it was found: `add_path` now collects the entries during the walk, sorts
+them the way the tar path orders members (names sorted within a directory, a directory
+before its contents, compared by path component) and writes afterwards. Because every
+member is now listed before the first is written, a regular file is stat'ed again when its
+turn comes; without that a file that grew in between does not fit its header and the run
+exits 1, which a test demonstrates against a binary built with that line removed. Both
+platforms now give `7ba62a87…` for `--zip` and `dd3bee3f…` for `--zip64`, and `compare`
+exits 0. Time is unchanged (28.57 s before, 28.60 s after, minimum of five); peak memory
+rose from about 8.2 MB to 18.6 MB, about 1.8 KB per entry held until it is written, so a
+million files would be roughly 1.8 GB -- an extrapolation, not a measurement. Windows was
+neither built nor tested. What follows is the record from before the fix.
 
 The ZIP backend walks directories through libarchive's `archive_read_disk`, so members
 come out in readdir order; the tar side walks the tree itself and sorts each level. One

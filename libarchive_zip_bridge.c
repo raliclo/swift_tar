@@ -180,6 +180,34 @@ static int copy_file_to_archive(struct archive *writer,
     return 0;
 }
 
+/* The name an entry is ordered by. / 項目排序所依據的名稱。 */
+static const char *entry_sort_name(struct archive_entry *entry) {
+    const char *name = archive_entry_pathname_utf8(entry);
+    if (name == NULL) name = archive_entry_pathname(entry);
+    return name != NULL ? name : "";
+}
+
+/* Order members the way the tar path does: each directory's names sorted, and a directory
+ * before what is inside it. Comparing whole paths as strings is not that order -- `d.x/f`
+ * would land before `d/f` because '.' sorts below '/' -- so the end of a path component
+ * ('/' or the end of the string) is made to sort below every other byte.
+ * 依 tar 路徑的方式排列成員：每個目錄內的名稱排序，且目錄先於其內容。把整條路徑當字串比較
+ * 並不是這個順序——因為 '.' 排在 '/' 之前，`d.x/f` 會跑到 `d/f` 前面——所以讓路徑元件的結尾
+ * （'/' 或字串結尾）排在其他所有位元組之前。 */
+static int compare_entries(const void *left, const void *right) {
+    const unsigned char *a = (const unsigned char *)
+        entry_sort_name(*(struct archive_entry *const *)left);
+    const unsigned char *b = (const unsigned char *)
+        entry_sort_name(*(struct archive_entry *const *)right);
+    int rank_a, rank_b;
+
+    while (*a != '\0' && *a == *b) { ++a; ++b; }
+    rank_a = *a == '\0' ? 0 : (*a == '/' ? 1 : 2);
+    rank_b = *b == '\0' ? 0 : (*b == '/' ? 1 : 2);
+    if (rank_a != rank_b) return rank_a < rank_b ? -1 : 1;
+    return (int)*a - (int)*b;
+}
+
 static int add_path(struct archive *writer,
                     const char *path,
                     file_id archive_id,
@@ -189,7 +217,12 @@ static int add_path(struct archive *writer,
                     char *error_buffer,
                     size_t error_capacity) {
     struct archive *disk = archive_read_disk_new();
+    struct archive *stat_disk = NULL;
     struct archive_entry *entry = NULL;
+    struct archive_entry **entries = NULL;
+    size_t entry_count = 0;
+    size_t entry_capacity = 0;
+    size_t entry_index;
     int result = -1;
     int status;
 
@@ -220,6 +253,22 @@ static int add_path(struct archive *writer,
     archive_read_disk_set_behavior(disk, 0);
     archive_read_disk_set_standard_lookup(disk);
 
+    /* A second handle, never opened on a tree, for reading one file's metadata again just
+     * before it is written (see below). Same symlink rule as the walk; nothing but stat.
+     * 第二個 handle，不對任何樹開啟，用來在寫出某個檔案之前重新讀它的中繼資料（見下方）。
+     * symlink 規則與走訪相同；只做 stat，不讀其他東西。 */
+    stat_disk = archive_read_disk_new();
+    if (stat_disk == NULL) {
+        set_error(error_buffer, error_capacity, "archive_read_disk_new failed");
+        goto cleanup;
+    }
+    if (follow_symlinks) archive_read_disk_set_symlink_logical(stat_disk);
+    else archive_read_disk_set_symlink_physical(stat_disk);
+    archive_read_disk_set_behavior(stat_disk,
+        ARCHIVE_READDISK_NO_XATTR | ARCHIVE_READDISK_NO_ACL |
+        ARCHIVE_READDISK_NO_FFLAGS | ARCHIVE_READDISK_NO_SPARSE);
+    archive_read_disk_set_standard_lookup(stat_disk);
+
     status = archive_read_disk_open(disk, path);
     if (status != ARCHIVE_OK) {
         set_archive_error(error_buffer, error_capacity, "archive_read_disk_open", disk);
@@ -237,7 +286,6 @@ static int add_path(struct archive *writer,
         if (status == ARCHIVE_EOF) {
             archive_entry_free(entry);
             entry = NULL;
-            result = 0;
             break;
         }
         if (status < ARCHIVE_OK) {
@@ -281,6 +329,46 @@ static int add_path(struct archive *writer,
         }
 
         if (archive_read_disk_can_descend(disk)) archive_read_disk_descend(disk);
+
+        /* Keep the entry and write nothing yet. libarchive hands entries over in the order
+         * the filesystem lists them, which differs between filesystems, so one tree gave
+         * different archives on APFS and on tmpfs (2026-10-13). They are sorted below and
+         * written after the walk.
+         * 先留下項目，暫不寫出。libarchive 依檔案系統列出的順序交出項目，而這個順序因檔案系統
+         * 而異，所以同一棵樹在 APFS 與 tmpfs 上得到不同的封存（2026-10-13）。走訪結束後於下方
+         * 排序再寫出。 */
+        if (entry_count == entry_capacity) {
+            size_t capacity = entry_capacity == 0 ? 256 : entry_capacity * 2;
+            struct archive_entry **grown =
+                (struct archive_entry **)realloc(entries, capacity * sizeof(*entries));
+            if (grown == NULL) {
+                set_error(error_buffer, error_capacity, "out of memory while listing files");
+                goto cleanup;
+            }
+            entries = grown;
+            entry_capacity = capacity;
+        }
+        entries[entry_count++] = entry;
+        entry = NULL;
+    }
+
+    if (entry_count > 1) qsort(entries, entry_count, sizeof(*entries), compare_entries);
+
+    for (entry_index = 0; entry_index < entry_count; ++entry_index) {
+        entry = entries[entry_index];
+        entries[entry_index] = NULL;
+
+        /* Read a regular file's size again, now that its turn has come. The walk above
+         * recorded it before any earlier member was compressed, and a file that has grown
+         * since would not fit the size in its header: the writer takes no more than that,
+         * and the run would end there. A failure is left for the open below to report.
+         * 輪到一般檔案時，重新讀一次它的大小。上面的走訪是在壓縮任何先前成員之前記下它的；
+         * 此後變大的檔案會超出標頭裡的大小——寫出端不收超過的部分，整次執行就停在那裡。
+         * 這裡若失敗，交給下方開檔時回報。 */
+        if (archive_entry_filetype(entry) == AE_IFREG) {
+            archive_read_disk_entry_from_file(stat_disk, entry, -1, NULL);
+        }
+
         if (verbose) fprintf(stderr, "a %s\n", archive_entry_pathname(entry));
 
         /* mtime only. The ZIP writer puts whatever times the entry carries into the UT
@@ -336,9 +424,15 @@ static int add_path(struct archive *writer,
         archive_entry_free(entry);
         entry = NULL;
     }
+    result = 0;
 
 cleanup:
     if (entry != NULL) archive_entry_free(entry);
+    for (entry_index = 0; entry_index < entry_count; ++entry_index) {
+        if (entries[entry_index] != NULL) archive_entry_free(entries[entry_index]);
+    }
+    free(entries);
+    if (stat_disk != NULL) archive_read_free(stat_disk);
     archive_read_free(disk);
     return result;
 }

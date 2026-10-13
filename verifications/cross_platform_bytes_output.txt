@@ -1,10 +1,11 @@
-[Info] date / 日期: 2026-10-13 13:37:09 CST
+[Info] date / 日期: 2026-10-13 18:56:36 CST
 [Info] script / 腳本: verifications/cross_platform_bytes.zsh compare mac linux
 [Info] corpus / 語料: claw-code, 5408 files, extracted on both sides from one archive, owner 501:20, TZ=UTC
-[Info] mac: Apple M4, swift_tar 20261012-233235, git d0266e9, RAM disk (APFS)
-[Info] linux: QEMU aarch64 guest (HVF, 4 vCPU), swift_tar 20261013-053124 built in the guest from a source drop taken from the working tree that became 4dbb39d (no program source changed between that and d0266e9), tmpfs
+[Info] mac: Apple M4, swift_tar 20261012-233235 (sha256 322ef7b6...; the version stamp did not change with the source), built from the working tree on top of e19b477 with the ZIP member order fix, RAM disk (APFS)
+[Info] linux: QEMU aarch64 guest (HVF, 4 vCPU), swift_tar 20261013-105234 built in the guest from a source drop of the same working tree, tmpfs
 [Info] records / 紀錄: verifications/cross_platform_bytes.csv2
-[Info] exit code / 退出碼: 1 (zip and zip64 differ; see todo/todo.md / zip 與 zip64 不同，見 todo/todo.md)
+[Info] exit code / 退出碼: 0
+[Info] previous run / 上一輪: 2026-10-13 13:37 CST, exit code 1, zip and zip64 DIFFERENT (member order; see todo/todo.md) / zip 與 zip64 不同（成員順序，見 todo/todo.md）
 
 same          none
 same          zstd3
@@ -13,8 +14,8 @@ same          lzfse
 same          bzip2
 same          xz
 same          lz4
-DIFFERENT     zip
-DIFFERENT     zip64
+same          zip
+same          zip64
 same          tar-create
 same          tar-append-r
 same          overlay-state

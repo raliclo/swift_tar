@@ -838,17 +838,38 @@ func gzipCompressMember(_ input: Data, level: Int32 = 6) -> Data? {
     guard deflateInit2_(&strm, level, Z_DEFLATED, 31, 8, Z_DEFAULT_STRATEGY,
                         ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
     defer { deflateEnd(&strm) }
+    // The member header's OS byte is set to 3 (Unix) on every platform. Left to zlib it is
+    // whatever the build host is -- 19 on macOS, 3 on Linux, 10 on Windows -- so the same
+    // input gave a different archive on each: measured on 2026-10-13, where tar, zstd and
+    // LZFSE output was byte-identical between macOS and Linux and gzip alone was not.
+    // 3 is what libarchive's own gzip write filter stores. The other header fields stay
+    // as zlib writes them without a header: no name, no comment, time 0.
+    // 成員檔頭的 OS 位元組在每個平台都設為 3（Unix）。交給 zlib 決定時它是建置主機的代碼
+    // ——macOS 為 19、Linux 為 3、Windows 為 10——於是同一份輸入在各平台得到不同的封存檔：
+    // 2026-10-13 實測，tar、zstd、LZFSE 的輸出在 macOS 與 Linux 之間逐位元組相同，唯獨
+    // gzip 不同。3 也是 libarchive 自己的 gzip write filter 寫入的值。其餘檔頭欄位維持
+    // zlib 在沒有指定檔頭時的寫法：沒有檔名、沒有註解、時間為 0。
+    //
+    // zlib keeps the pointer it is given and reads the header during deflate(), so the
+    // header has to stay at one address until deflate() has returned; hence the closure.
+    // zlib 會留著傳入的指標，到 deflate() 時才讀檔頭，所以檔頭必須在 deflate() 返回之前
+    // 都待在同一個位址——這就是外層那個 closure 的用途。
+    var head = gz_header()
+    head.os = 3
     var out = Data(count: Int(deflateBound(&strm, uLong(input.count))) + 32)
     var written = 0
-    let ok = input.withUnsafeBytes { (src: UnsafeRawBufferPointer) -> Bool in
-        out.withUnsafeMutableBytes { (dst: UnsafeMutableRawBufferPointer) -> Bool in
-            strm.next_in = UnsafeMutablePointer(mutating: src.bindMemory(to: UInt8.self).baseAddress)
-            strm.avail_in = uInt(input.count)
-            strm.next_out = dst.bindMemory(to: UInt8.self).baseAddress
-            strm.avail_out = uInt(dst.count)
-            let rc = deflate(&strm, Z_FINISH)
-            written = dst.count - Int(strm.avail_out)
-            return rc == Z_STREAM_END
+    let ok = withUnsafeMutablePointer(to: &head) { (headPtr: UnsafeMutablePointer<gz_header>) -> Bool in
+        guard deflateSetHeader(&strm, headPtr) == Z_OK else { return false }
+        return input.withUnsafeBytes { (src: UnsafeRawBufferPointer) -> Bool in
+            out.withUnsafeMutableBytes { (dst: UnsafeMutableRawBufferPointer) -> Bool in
+                strm.next_in = UnsafeMutablePointer(mutating: src.bindMemory(to: UInt8.self).baseAddress)
+                strm.avail_in = uInt(input.count)
+                strm.next_out = dst.bindMemory(to: UInt8.self).baseAddress
+                strm.avail_out = uInt(dst.count)
+                let rc = deflate(&strm, Z_FINISH)
+                written = dst.count - Int(strm.avail_out)
+                return rc == Z_STREAM_END
+            }
         }
     }
     guard ok else { return nil }

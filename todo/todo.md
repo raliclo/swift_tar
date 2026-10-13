@@ -3309,3 +3309,54 @@ check set `TMPDIR` and listed it, and passed against the defective binary, becau
 macOS the directory does not follow `TMPDIR`. Verified on macOS only -- all 20 suites and
 `--crypto-selftest` exit 0 and nothing is left behind; Linux and Windows share the code
 and were not built or run after the fix.
+
+## `--gzip` 的輸出在 macOS 與 Linux 之間不是逐位元組相同 ▸ ✅ 已修正 2026-10-13 / `--gzip` output was not byte-identical between macOS and Linux
+
+**現象**：同一棵樹（claw-code，5,408 個檔案、1.4 GB）在 macOS 與 Linux VM 上各打包一次。擁有者
+對齊之後，無 codec、zstd、LZFSE 三種輸出的 sha256 兩邊相同；`--gzip` 的大小相同
+（491,971,910 bytes）、sha256 不同。
+
+**成因**：gzip 成員檔頭在位移 9 有一個 OS 位元組，zlib 依**建置主機**填入：macOS 為 19（`0x13`）、
+Linux 為 3、Windows 為 10。`gzipCompressMember` 每個分塊寫一個成員，所以每個成員都帶著這個差異。
+
+**修正**：以 `deflateSetHeader` 把 OS 位元組在每個平台都設為 3（Unix）——這也是 libarchive 自己
+的 gzip write filter 寫入的值。其餘檔頭欄位不變。**這會改變 macOS 與 Windows 上 `--gzip` 的輸出
+位元組**（只有那一個位元組）；舊封存檔照常能讀。
+
+**量測**（修正後，兩邊都從同一份語料解開，擁有者皆為 501:20，執行 `-c … -C src claw-code`）：
+
+| 模式 | bytes | macOS 與 Linux 的 sha256 |
+|---|---|---|
+| 無 codec | 1,413,876,736 | 相同（`b069eb1d…`） |
+| `--zstd --zstd-level 3` | 434,741,302 | 相同（`55435734…`） |
+| `--gzip` | 491,971,910 | 相同（`02ef4c6a…`）；修正前 macOS 是 `99801311…` |
+| `--other3-fast` | 482,735,230 | 相同（`3bcc2d98…`） |
+
+macOS 上 `-n 4` 與預設執行緒數的輸出相同（修正前就量過，四種模式皆然）；VM 是 4 個 vCPU，macOS
+是 10 核。修正後的 gzip 檔通過系統 `gzip -t`，解開後的 tar 與無 codec 的輸出 sha256 相同，解回的
+目錄與來源逐檔相同。
+
+**測試**：`test/test_blind_findings.zsh` 新增 1 項，檢查 `--gzip` 輸出位移 9 的位元組為 `03`。
+macOS 上對修正前的執行檔是 199／1（得到 `13`），修正後 200／0。**在 Linux 上這項檢查修正前後都
+通過**，因為那裡本來就是 3；它防的是 macOS 與 Windows。
+
+**兩邊要相同，輸入也得相同——這不是缺陷，但量測時踩到了**：
+- tar 檔頭記錄 uid 與 gid（不記使用者名稱）。VM 裡以 root 解開的樹是 0:0，macOS 上是 501:20，
+  要 `chown` 對齊後才比得起來。
+- 封存的若是一個剛建立的目錄（例如量測腳本的 `src/`），它的 mtime 是當下的時間，同一台機器跑
+  兩次也會不同。
+
+**沒有驗證的**：
+- Windows。走同一段程式碼，OS 位元組應由 10 變為 3，但沒有建置或執行。
+- bzip2、xz、lz4、lzip 與 ZIP 的輸出沒有跨平台比對。
+- 只比對了 `-c` 直接寫檔；`-u`、`--delete`、加密等路徑沒有比。
+
+The gzip member header has an OS byte at offset 9 that zlib fills in from the build host
+(19 on macOS, 3 on Linux, 10 on Windows), so `--gzip` gave the same size and a different
+file on each platform while tar, zstd and LZFSE output already matched. It is now set to
+3 everywhere through `deflateSetHeader`, which is also what libarchive's gzip filter
+writes; this changes one byte per member of `--gzip` output on macOS and Windows, and old
+archives read as before. After the fix all four modes give the same sha256 on macOS and
+in the Linux VM for a 1.4 GB tree, given the same ownership on both sides. One check was
+added (199/1 before on macOS, 200/0 after); on Linux it passes either way. Not verified:
+Windows, the other codecs and ZIP, and paths other than a plain `-c`.

@@ -2393,6 +2393,23 @@ else
   ok "-test removes its working directory"
 fi
 
+# The gzip member header carries an OS byte at offset 9, and zlib fills it in from the
+# build host: 19 on macOS, 3 on Linux, 10 on Windows. So the same tree packed with --gzip
+# gave a different file on each platform, while tar, zstd and LZFSE output was identical
+# (measured on 2026-10-13 with a 1.4 GB tree, macOS against Linux). It is now 3 everywhere,
+# which is what libarchive's own gzip filter writes. On Linux this check passes before the
+# fix as well as after; macOS and Windows are where it fails against the old binary.
+#
+# gzip 成員檔頭在位移 9 有一個 OS 位元組，zlib 依建置主機填入：macOS 為 19、Linux 為 3、
+# Windows 為 10。於是同一棵樹以 --gzip 打包，在每個平台得到不同的檔案，而 tar、zstd、
+# LZFSE 的輸出是相同的（2026-10-13 以 1.4 GB 的樹實測，macOS 對 Linux）。現在一律為 3，
+# 也就是 libarchive 自己的 gzip filter 寫入的值。在 Linux 上這項檢查修正前後都會通過；
+# 對舊執行檔會失敗的是 macOS 與 Windows。
+GZO="$TMP/gz-os"; mkdir -p "$GZO/src"; print -r -- "os byte" > "$GZO/src/a.txt"
+"$ST" -c --gzip -f "$GZO/a.tar.gz" -C "$GZO" src >/dev/null 2>&1 || true
+eq "--gzip: the member header's OS byte is 3 on every platform" "03" \
+   "$(od -An -tx1 -j9 -N1 "$GZO/a.tar.gz" 2>/dev/null | tr -d ' \n')"
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

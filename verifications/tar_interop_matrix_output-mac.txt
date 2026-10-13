@@ -1,8 +1,8 @@
-[Info] date: 2026-08-19 10:13:15 CST
+[Info] date: 2026-10-14 01:32:12 CST
 [Info] platform: mac
-[Info] host: Darwin 27.0.0 arm64
-[Info] swift_tar: swift_tar 20260819-101255
-[Info] corpus digest: 997967f72f0d472d86db46df5bee16cfca5a70e02c241a6f213af52947a63f21
+[Info] host: Darwin 27.2.0 arm64
+[Info] swift_tar: swift_tar 20261014-010226
+[Info] corpus digest: fa3448c545a1c8adc3f3138d9d0ca73615628997f08bbe1f426c331590f6b264
 
 == reference tar implementations found / 現場找到的參照實作 ==
   bsdtar  /usr/bin/tar

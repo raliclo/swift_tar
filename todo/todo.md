@@ -1035,7 +1035,8 @@ lld 路徑：20 支測試、`--crypto-selftest`、`-test` 全數以 0 結束，�
 
 **沒有被證明的事**：載入時沒有東西需要 `.rodata` 可寫（1657 筆動態重定位中 0 筆落在其中）。
 Swift runtime 在某條沒被測試走到的路徑上會不會寫它，測試全過不能排除；若會，現在會以 SIGSEGV
-現身，而不是靜默成功。未向 Swift 回報這個旗標。
+現身，而不是靜默成功。未向 Swift 回報這個旗標；重現方式、量到的事實與回報時要附的東西記在
+[`swift-aarch64-rodata-writable.md`](swift-aarch64-rodata-writable.md)。
 
 The cause was the compiler's: Swift 6.3.3 on aarch64 emits the conformance descriptors of
 payload-free enums into a section named `.rodata` with the writable flag, however the
@@ -1044,7 +1045,8 @@ flag from the Swift objects with llvm-objcopy in between, then refuses a binary 
 `.rodata` is writable. Measured: under lld and under GNU ld alike `.rodata` is in a
 read-only segment and GNU_RELRO covers `.data.rel.ro` and `.got`; every suite passes on
 the lld build and nothing faulted. Not proven: that no untested path in the Swift runtime
-writes there -- if one does it now faults. The flag was not reported to Swift.
+writes there -- if one does it now faults. The flag was not reported to Swift; the
+reproduction and the evidence are kept in `swift-aarch64-rodata-writable.md`.
 
 ## libxml2 釘在 2.13 線，不是最新版 ▸ ✅ 已升級 2026-10-13 / libxml2 was pinned to the 2.13 line ▸ upgraded
 

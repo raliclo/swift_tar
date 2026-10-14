@@ -192,7 +192,13 @@
 > Windows and unverified for WSL** -- re-derive with
 > `zsh test/test_blind_findings.zsh | tail -1` on each platform rather than reading either
 > number off this banner. This is the same shape the paragraph above warns about: the count
-> was true when written and nobody re-ran it for 24 days.
+> was true when written and nobody re-ran it for 24 days. **macOS now reads 200/0** (M4
+> session, same day), which also replaces the "the macOS figure is not restated here" note
+> above and the 148 it cites from `21ecf33`. **WSL reads 192/0** the same day, against the
+> same `/mnt/c` tree on the same NTFS volume as the Windows run -- which is what rules the
+> filesystem out as the cause. All three platforms now have a figure from this round:
+> **197 checks on Windows (192/5), 192 on WSL (192/0), 200 on macOS (200/0)**. The totals
+> differ by platform branches and were not reconciled.
 >
 > **2026-10-14：1 項未處理——Windows 上的子秒 mtime。** `4d24b8d` code review 的 6 項今日
 > 全部結案，Windows 與 WSL 皆驗（Windows readahead 16/0、strict 23/0；WSL 17/0、23/0）。
@@ -203,6 +209,11 @@
 > 從未通過過。實測記於條目中。**因此上方的 157／156 這一組對 Windows 已過期、對 WSL 未
 > 驗證**——請以 `zsh test/test_blind_findings.zsh | tail -1` 在各平台重新取得，不要從本
 > 橫幅讀這兩個數字。這正是上一段警告的同一種形狀：數字寫下時為真，而 24 天沒有人重跑。
+> **macOS 現為 200/0**（M4 session，同日），這同時取代上方「macOS 的數字不在此重述」那句
+> 以及它引用的 `21ecf33` 的 148。**WSL 同日為 192/0**，跑的是與 Windows 那一輪同一個
+> `/mnt/c` 工作區、同一塊 NTFS——這正是排除檔案系統成因的依據。三個平台本輪都有數字了：
+> **Windows 197 條（192/5）、WSL 192 條（192/0）、macOS 200 條（200/0）**。總數差異來自
+> 平台分支，本輪未核對。
 
 Tracked issues that are known, reproduced, and deliberately not fixed yet.
 `verifications/bsdtar_compat.zsh:385` already points here for its XFAIL, so this
@@ -246,8 +257,49 @@ file has to exist for that reference to mean anything.
 `Date`——`Date` 是 double，在今日的時間值上只剩約 238 ns 精度，`posixSetTimes` 的註解
 （`:3192`）當初就是為這個理由繞開它。
 
-重新取得：`zsh test/test_blind_findings.zsh | tail -1`（Windows 與 WSL 各跑一次；
-WSL 走 POSIX 分支，預期不受影響，但尚未在本輪量過）。
+**macOS 對照：200 通過、0 失敗、1 SKIP**（檔案系統容不下 2286-11-20），由 M4 session 於
+2026-10-14 量得。這正是本項缺的另一半：同一批檢查在 POSIX 上全過，所以那 5 條確實是
+Windows 專屬，不是普遍性缺陷——與 `#if !os(Windows)` 這個成因一致。該執行檔建於
+`f5b5499`，早於今天的 `26cc4fd`；對本項無影響，因為 `26cc4fd` 只改 `winStat` 與 reparse
+tag（在 macOS 上根本不編進去），而子秒 mtime 的兩個 commit（`46fc9b8`、`dc15bf2`）都早於
+`f5b5499`，確實在那個執行檔裡。總數 200 與 Windows 的 197（192+5）相差 3，差在平台分支，
+本輪未逐條核對，故此處不替它編理由。
+
+**WSL 對照：192 通過、0 失敗**（2026-10-14，`6.18.33.2-microsoft-standard-WSL2`，
+`release/swift_tar` 20261014-164928）。那 5 條不是被 SKIP 掉而是**確實跑過並通過**，已逐條
+確認：`sub-second mtime: stored as a pax record with nine digits of nanoseconds (123456789)`、
+`whole-second mtime: no pax mtime record`、`the reference tar's -u does not re-add the file`，
+以及 4 條 `restored:`（small file／pool limit／directory／symlink）外加 WSL 上有 mkfifo 故
+多跑的 `restored: FIFO`。
+
+**這一條排除了「檔案系統存不下」這個解釋。** WSL 跑的是 `/mnt/c/Users/lowei/proj/lzfse2/
+swift_tar`——與 Windows 那一輪**同一個工作區、同一塊 NTFS 磁碟**。同一批位元組，Linux
+build 全過，Windows build 5 條紅。差別只在程式碼路徑，與儲存媒介無關。
+
+順帶一個觀察，記錄但未解釋：同一個夾具在 WSL 側讀回完整的 `.123456789`，在 Windows 側
+讀回 `.123456700`（截到 100 ns）。DrvFs 與 Win32 API 兩條路看到的粒度不同。它不影響上述
+結論——Windows 的寫入端不是存了一個被截短的值，而是一筆記錄都沒存。
+
+三個平台的檢查總數彼此不同（Windows 197、WSL 192、macOS 200），本輪未逐條核對差異來源。
+
+重新取得：`zsh test/test_blind_findings.zsh | tail -1`，三個平台各一次。
+
+WSL counterpart, 2026-10-14: **192 pass, 0 fail**, and the five checks were verified to run
+rather than skip -- the store check passes with the full `123456789`, as do all four
+`restored:` checks plus a FIFO one that Windows does not reach. This **eliminates the
+filesystem as an explanation**: WSL ran against `/mnt/c/.../swift_tar`, the same working tree
+on the same NTFS volume as the Windows run. Same bytes, same disk, Linux build passes, Windows
+build fails 5. Recorded but not explained: the same fixture reads back `.123456789` through
+DrvFs and `.123456700` through the Win32 path. It does not affect the conclusion, because the
+Windows writer stores no pax record at all rather than a truncated one. The three platforms'
+totals all differ (197 / 192 / 200) and were not reconciled this round.
+
+macOS counterpart, measured by the M4 session 2026-10-14: **200 pass, 0 fail**, 1 skip. The
+same checks pass on POSIX, which is the other half of the diagnosis -- the 5 failures are
+Windows-specific, consistent with `#if !os(Windows)` being the cause. That binary predates
+`26cc4fd`, which does not matter here: `26cc4fd` touches only `winStat` and the reparse tag,
+neither of which compiles on macOS, and both sub-second mtime commits predate it. The 200 vs
+197 total differs by 3 platform-branch checks, not reconciled in this round.
 
 Re-measured on Windows 2026-10-14: **192 pass, 5 fail**, all sub-second mtime, and they are
 **two independent defects**. (1) The writer: `winStat` (`:2450`) truncates to whole seconds via

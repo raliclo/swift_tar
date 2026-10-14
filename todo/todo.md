@@ -203,11 +203,16 @@
 > **Fixed the same day: Windows now reads 197/0.** Both sides were implemented -- the writer
 > reads `ftLastWriteTime` out of the `GetFileAttributesExW` call `winStat` was already
 > making, and the reader sets times through `SetFileTime` instead of a Date. WSL is unchanged
-> at 192/0, because every executable line of the fix is inside `#if os(Windows)`. Nothing
-> carries 🔴 as this is written, which is a statement about
-> `grep -n '^## .*🔴' todo/todo.md` returning nothing, not a claim that the tree is clean --
-> this very entry was found by re-running a suite nobody had re-run for 24 days, not by
-> reading the file.
+> at 192/0, because every executable line of the fix is inside `#if os(Windows)`. macOS was
+> re-measured on a binary rebuilt from the fix commit itself: 200/0.
+>
+> **One item open as that work closed: the version stamp.** Confirming which binary a
+> measurement belonged to turned out to be the hard part of this round, and
+> `swift_tar --version` cannot answer it -- the stamp keys on the linked-library set, not on
+> the sources, so a pre-fix and a post-fix binary report the same string on both Windows and
+> macOS. It is a consequence of a deliberate design, so it is recorded with the measurements
+> and left for a decision rather than changed. Run
+> `grep -n '^## .*🔴' todo/todo.md` rather than trusting this paragraph.
 >
 > **2026-10-14 當日開啟並結案：Windows 上的子秒 mtime。** `4d24b8d` code review 的 6 項今日
 > 全部結案，Windows 與 WSL 皆驗（Windows readahead 16/0、strict 23/0；WSL 17/0、23/0）。
@@ -226,9 +231,14 @@
 >
 > **當日修好：Windows 現為 197/0。** 兩端都補上了——寫入端從 `winStat` 原本就在呼叫的
 > `GetFileAttributesExW` 取回 `ftLastWriteTime`，讀取端改以 `SetFileTime` 而非 Date 設定
-> 時間。WSL 維持 192/0，因為修正的每一行可執行碼都在 `#if os(Windows)` 之內。撰寫本段時
-> 無任何條目標著 🔴——那說的是 `grep -n '^## .*🔴' todo/todo.md` 沒有回報，而不是宣稱這棵
-> 樹是乾淨的：本條目本身就是靠重跑一套 24 天沒人重跑的測試找到的，不是靠讀這個檔案。
+> 時間。WSL 維持 192/0，因為修正的每一行可執行碼都在 `#if os(Windows)` 之內。macOS 已改以
+> 修正那一筆 commit 本身重建的執行檔重新量過：200/0。
+>
+> **該項結案時另有 1 項開啟：版本戳。** 本輪最難的部分其實是「確認某次量測屬於哪一個執行
+> 檔」，而 `swift_tar --version` 答不出來——戳記以連結的函式庫集合為 key，不以原始碼為 key，
+> 故修正前與修正後的執行檔在 Windows 與 macOS 上都回報同一個字串。它是一個刻意設計的後果，
+> 因此連同實測一起記錄、留待決定，而非逕行更動。請跑
+> `grep -n '^## .*🔴' todo/todo.md`，不要相信本段。
 
 Tracked issues that are known, reproduced, and deliberately not fixed yet.
 `verifications/bsdtar_compat.zsh:385` already points here for its XFAIL, so this
@@ -236,6 +246,52 @@ file has to exist for that reference to mean anything.
 
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
+
+## 2026-10-14 版本戳追蹤的是函式庫集合而非原始碼，`--version` 分不出新舊執行檔 ▸ 🔴 已記錄，待決定（非缺陷，是刻意設計的後果）/ The version stamp keys on the library set, not the sources, so `--version` cannot tell two binaries apart
+
+`generate_version.zsh:128-130`：當 `version-*.txt` 中**非** `swift_tar_version=` 的那些行
+（即 zlib／zstd／libarchive／lzfse2 的版本與 commit）以集合比較與 git 中已提交的相同時，
+直接沿用已提交的戳記，不鑄新的。`current_rest` 的來源是那些函式庫鍵值（`:43`、`:66-67`），
+`swift_tar.swift` 本身不是輸入。
+
+**這是刻意的**，理由就寫在它上面：避免 `version-*.txt` 每次重建都變動。本條目不是說該機制
+錯了，而是記錄它的一個後果，並把要不要處理留給決定。
+
+**後果（2026-10-14 兩個平台各自實測）**：
+
+| 平台 | 修正前執行檔 | 修正後執行檔（原始碼已不同） |
+| --- | --- | --- |
+| Windows | `20261014-170048` | `20261014-170048` |
+| macOS | `20261014-065250` | `20261014-065250`（自 `3926fca` 重建，由 M4 session 量） |
+
+兩邊都無法以 `--version` 分辨「這個執行檔是不是由這份原始碼建出來的」。
+
+**為什麼值得記**：本輪的正確性整個依賴這個判斷。同一個 session 早先差一點就對一個比原始碼
+舊 14 分鐘的執行檔跑測試——那會讓第 1～4 項得到**假通過**，因為要驗的修法都在那 14 分鐘裡。
+當時是靠比對 mtime 才擋下來的，不是靠版本字串。一個答不出「此執行檔是否出自此原始碼」的版本
+字串，正是這棵樹反覆記錄過的「看起來合理的錯資料」形狀，與 `grep -c $'\r'` 回傳行數同類：
+它不會報錯，只會給出一個可信的錯答案。
+
+**尚未處理**：兩個 session（Windows 與 M4）都各自判斷不該自行更動，因為那會改變一個刻意的
+設計。需要使用者決定：戳記是否也該以原始碼為 key（例如納入 `swift_tar.swift` 的 git blob
+或工作區雜湊），或維持現狀而把「如何確認執行檔是最新的」明確寫進文件。
+
+重現：建置、記下 `release/swift_tar(.exe) --version`、改一行 `swift_tar.swift`、再建置、
+再記一次——兩次相同，而 `version-*.txt` 不出現在 `git status`。
+
+`generate_version.zsh:128-130` reuses the committed stamp whenever the non-`swift_tar_version=`
+lines of `version-*.txt` (the zlib/zstd/libarchive/lzfse2 keys) match what is committed, as a
+set. `swift_tar.swift` is not an input, so the stamp tracks the library set, not the sources.
+That reuse is deliberate -- it keeps `version-*.txt` from churning on every rebuild -- so this
+entry records a consequence, not an agreed defect. Measured the same day on two platforms: the
+pre-fix and post-fix Windows binaries both report `20261014-170048`, and on macOS a rebuild
+from `3926fca` still reports `20261014-065250`, the same as earlier builds. So `--version`
+cannot answer "was this binary built from this source?" on either platform. It matters because
+this round's correctness depended on that question: earlier the same session came close to
+running a suite against a binary 14 minutes older than the source, which would have produced a
+false pass for findings 1-4, and it was mtimes that caught it, not the version string. Neither
+session changed it, since it would alter a deliberate design; the decision is the user's --
+either key the stamp on the sources too, or document how to confirm a binary is current.
 
 ## 2026-10-14 子秒 mtime 在 Windows 上兩端皆未實作，5 條檢查失敗 ▸ ✅ 已修 2026-10-14（Windows 與 WSL 皆驗）/ Sub-second mtime was unimplemented on Windows on both sides: fixed and verified on Windows and WSL
 
@@ -378,6 +434,11 @@ Windows-specific, consistent with `#if !os(Windows)` being the cause. That binar
 `26cc4fd`, which does not matter here: `26cc4fd` touches only `winStat` and the reparse tag,
 neither of which compiles on macOS, and both sub-second mtime commits predate it. The 200 vs
 197 total differs by 3 platform-branch checks, not reconciled in this round.
+
+Re-measured on macOS after the fix, by the M4 session, on a binary rebuilt from `3926fca`
+itself rather than an earlier one: build rc=0 with no warning or error lines, and
+**200 pass, 0 fail** with the same single skip. That retires the caveat above -- the macOS
+figure no longer rests on reasoning about which hunks compile there.
 
 Re-measured on Windows 2026-10-14: **192 pass, 5 fail**, all sub-second mtime, and they are
 **two independent defects**. (1) The writer: `winStat` (`:2450`) truncates to whole seconds via

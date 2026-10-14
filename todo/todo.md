@@ -8,7 +8,10 @@
 > CRLF in the `-t` / `--identify` output on Windows. The suite fails 11 of its
 > checks against the previous binary and passes all 15 against this one.
 >
-> **Nothing is open, 2026-09-06.** The ZIP/tar normalisation split opened and closed
+> **Nothing is open, 2026-09-06.** *(True as written; the current state is the 2026-10-14
+> statement at the foot of this banner. This was the only "nothing is open" line here
+> carrying no such marker, which is why the top of the file read as current for 38 days.)*
+> The ZIP/tar normalisation split opened and closed
 > on the same day: patched in the vendored libarchive, with patch/apply_patches.zsh to
 > re-apply it after a submodule update and three byte-level assertions in
 > test_blind_findings.zsh to notice if it ever goes missing. Both were checked against
@@ -176,6 +179,30 @@
 > 於下方；沒有發現的回合不記錄，因為乾淨的回合並未新增任何可供查核的事實——也正因如此，
 > 回合數無法由下方條目推得：下方**具名**的最大回合為 49，那是下限而非總數。本行在
 > 2026-09-04 之前一直寫著「17 回合」，而其下早已列有第 33、42、49 回合的條目。
+>
+> **One item open, 2026-10-14: sub-second mtime on Windows.** The 6 findings from the
+> `4d24b8d` code review all closed today, verified on Windows and WSL (readahead 16/0 and
+> 23/0 strict on Windows; 17/0 and 23/0 on WSL). Closing them meant running
+> `test_blind_findings.zsh` on Windows for the first time since the sub-second mtime work
+> landed, and it reads **192 pass, 5 fail** there -- not 157 passing, as this banner said
+> above since 2026-09-20. All 5 are sub-second mtime, both the writer and the reader are
+> unimplemented on Windows by construction, and it is not a regression from today: both
+> features landed 2026-09-27, *after* that 157 was measured, so the checks never passed
+> here. The entry has the measurements. **The 157/156 pair above is therefore stale for
+> Windows and unverified for WSL** -- re-derive with
+> `zsh test/test_blind_findings.zsh | tail -1` on each platform rather than reading either
+> number off this banner. This is the same shape the paragraph above warns about: the count
+> was true when written and nobody re-ran it for 24 days.
+>
+> **2026-10-14：1 項未處理——Windows 上的子秒 mtime。** `4d24b8d` code review 的 6 項今日
+> 全部結案，Windows 與 WSL 皆驗（Windows readahead 16/0、strict 23/0；WSL 17/0、23/0）。
+> 結案過程中，`test_blind_findings.zsh` 自子秒 mtime 那批工作落地以來第一次在 Windows 上
+> 跑，量得 **192 通過、5 失敗**——不是本橫幅上方自 2026-09-20 起寫著的「157 項全過」。
+> 失敗的 5 條全屬子秒 mtime，寫入端與讀取端在 Windows 上都是**從結構上**未實作，且不是
+> 今天的回歸：兩個功能都在 2026-09-27 落地，**晚於**那個 157 的量測日，所以這些檢查在此
+> 從未通過過。實測記於條目中。**因此上方的 157／156 這一組對 Windows 已過期、對 WSL 未
+> 驗證**——請以 `zsh test/test_blind_findings.zsh | tail -1` 在各平台重新取得，不要從本
+> 橫幅讀這兩個數字。這正是上一段警告的同一種形狀：數字寫下時為真，而 24 天沒有人重跑。
 
 Tracked issues that are known, reproduced, and deliberately not fixed yet.
 `verifications/bsdtar_compat.zsh:385` already points here for its XFAIL, so this
@@ -183,6 +210,61 @@ file has to exist for that reference to mean anything.
 
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
+
+## 2026-10-14 子秒 mtime 在 Windows 上兩端皆未實作，5 條檢查失敗 ▸ 🔴 未修 / Sub-second mtime is unimplemented on Windows on both sides: 5 checks fail
+
+`zsh test/test_blind_findings.zsh | tail -1` 在 Windows 上重新量得 **PASS: 192 FAIL: 5**（共 197 條）。
+失敗的 5 條全屬子秒 mtime，而它們是**兩個互相獨立的缺陷**，不是一個：
+
+1. **寫入端：`winStat` 只回整秒。** `swift_tar.swift:2450-2454` 取
+   `attrs[.modificationDate]` 後 `UInt64(date.timeIntervalSince1970)`，小數就在這裡沒了；
+   `add(path:)` 的 Windows 分支因此從不提供 `mtimeNanos`，`writeEntryHeader`
+   （`:3945` 的 `mtime >= (1 << 33) || mtimeNanos != 0`）永遠不成立，pax `mtime=` 記錄
+   一筆都不寫。奈秒只在 POSIX 分支取得（`:4405`／`:4408` 的 `st_mtim`／`st_mtimespec`）。
+   寫入端的邏輯本身是好的：同一區的
+   `whole-second mtime: no pax mtime record` **通過**，壞的只是餵給它的輸入。
+2. **讀取端：Windows 上根本不存在。** `posixSetTimes`（`:3202`，用
+   `utimensat`）與它的**每一個**呼叫點（`:5266`／`:5367`／`:5412`／`:5592`）都在
+   `#if !os(Windows)` 之內。Windows 走 `SetFileTime`／`setAttributes`，只設整秒。
+   **與第 1 項獨立的證明**（本機實測 2026-10-14）：以 GNU tar 1.35 `--format=pax`
+   產生確實帶 `mtime=1767240000.1234567` 的封存，用本執行檔 `-x` 解出後
+   `zstat -F '%s.%N' +mtime` 讀回 `1767240000.000000000`。封存裡有小數，還原端丟掉了它。
+
+套件裡那 4 條 `sub-second mtime restored:` 之所以也紅，是**第 1 項的後果**而非 4 個獨立
+缺陷——`test_blind_findings.zsh:2331` 的還原測資是 `"$ST" -c` 自己產的封存，在 Windows 上
+它本來就沒有小數。第 2 項要用上面那個 GNU tar 封存才看得見。
+
+**不是今天的回歸。** 寫入端 `46fc9b8` 與讀取端 `dc15bf2` 都是 2026-09-27 落地的，晚於
+橫幅那句「Windows 157 項全過」的量測日 2026-09-20——這些檢查在 Windows 上從未通過過。
+今天的 `26cc4fd`（reparse tag）沒有動 mtime 任何一條路徑。這一項就是 2026-09-27 記下的
+「所有修正只在 macOS 量過，待 Windows 與 WSL 驗證」第一次真的在 Windows 上跑出來的結果。
+
+**兩端都做得到，不是平台限制。** NTFS 以 100 ns 為刻度：測資要求 `.123456789`，讀回
+`.123456700`（截到刻度，有效位數與 GNU tar 自己輸出的 7 位相同），所以值本身存得下。
+`FILETIME` 同為 100 ns，而 Windows 還原路徑**已經**在用 `SetFileTime`，補上小數不需換 API。
+寫入端則需改讀 `ftLastWriteTime`（`GetFileAttributesExW`／`FindFirstFileW`）而不是經過
+`Date`——`Date` 是 double，在今日的時間值上只剩約 238 ns 精度，`posixSetTimes` 的註解
+（`:3192`）當初就是為這個理由繞開它。
+
+重新取得：`zsh test/test_blind_findings.zsh | tail -1`（Windows 與 WSL 各跑一次；
+WSL 走 POSIX 分支，預期不受影響，但尚未在本輪量過）。
+
+Re-measured on Windows 2026-10-14: **192 pass, 5 fail**, all sub-second mtime, and they are
+**two independent defects**. (1) The writer: `winStat` (`:2450`) truncates to whole seconds via
+`Date`, so the Windows branch never supplies `mtimeNanos` and `writeEntryHeader`'s
+`mtimeNanos != 0` never holds -- no pax `mtime=` record is written at all. Nanoseconds are
+read only on the POSIX branch (`:4405`/`:4408`). The writer's own logic is fine: the
+`whole-second mtime: no pax mtime record` check in the same block passes. (2) The reader does
+not exist on Windows: `posixSetTimes` and every call site sit inside `#if !os(Windows)`.
+Shown independently of (1): a GNU tar 1.35 `--format=pax` archive genuinely carrying
+`mtime=1767240000.1234567` extracts to `1767240000.000000000` with this binary. The four
+`sub-second mtime restored:` failures in the suite are a consequence of (1), not four defects --
+that fixture's archive is built by `"$ST" -c` itself (`test_blind_findings.zsh:2331`).
+Not a regression from today: the writer (`46fc9b8`) and reader (`dc15bf2`) both landed
+2026-09-27, after the 2026-09-20 Windows measurement the banner quotes, so these checks never
+passed here; today's `26cc4fd` touched no mtime path. Both sides are implementable: NTFS holds
+100 ns ticks (the fixture read back `.123456700`, the same 7 significant digits GNU tar emits),
+`FILETIME` is also 100 ns, and the Windows restore path already calls `SetFileTime`.
 
 ## 2026-10-14 `4d24b8d` 的 code review：reparse-point 誤判等 6 項 ▸ ✅ 已修 2026-10-14（Windows 與 WSL 皆驗）/ Code review of `4d24b8d`: 6 findings, fixed and verified on Windows and WSL
 

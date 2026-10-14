@@ -2458,34 +2458,48 @@ private func winStat(_ path: String) -> WinStat? {
     let fileIndex = (attrs[.systemFileNumber] as? UInt64) ?? 0
     // attributesOfItem reports .typeSymbolicLink for a symlink whose target exists, but
     // (measured on Swift 6.4 / windows-msvc) .typeRegular for a DANGLING one: it resolves the
-    // reparse point to classify, and a missing target falls back to "regular". That routed a
-    // dangling link into the regular-file write path, where opening the absent target made
-    // `-c` exit 1 on any tree containing one (a valid symlink was stored correctly, which hid
-    // it). GetFileAttributesW reads the reparse-point bit without following the link or needing
-    // the target -- the same proxy the extract side already uses (see winCreateSymlink) -- so
-    // the symlink is detected from that, falling back to .type. isDir is left on .type alone:
-    // add(path:) tests isSymlink before isDir, so a directory reparse point is stored as a link.
-    // attributesOfItem 對「目標存在」的 symlink 回報 .typeSymbolicLink，但（於 Swift 6.4／
-    // windows-msvc 實測）對 dangling 回報 .typeRegular：它解析 reparse point 來分類，目標不存在
-    // 時退回「regular」。這使 dangling link 被送進一般檔案寫入路徑，開啟缺失目標令任何含此類
-    // 連結的樹於 -c 時 exit 1（有效 symlink 正確存下，因而把問題遮住）。GetFileAttributesW 不
-    // 跟隨連結、不需目標即可讀出 reparse-point 位元——解出端（見 winCreateSymlink）已用同一代理
-    // ——故以它判定 symlink，再回退到 .type。isDir 維持只看 .type：add(path:) 先判 isSymlink 再
-    // 判 isDir，故目錄型 reparse point 會被存成連結。
+    // reparse point to classify, and a missing target falls back to "regular". So a dangling
+    // link has to be recognised some other way, or it goes down the regular-file write path and
+    // `-c` fails trying to open its absent target.
     //
-    // The bit alone is not enough: a deduplicated file, an AppExecLink, a WSL file and a cloud
-    // placeholder carry it too and are not links. Taken for one, each was stored as a link
-    // with an empty target, its content dropped and the exit status 0. So the bit only counts
-    // when the link's destination can be read, which is what add(path:) is about to do.
-    // 只看這個位元不夠：去重檔、AppExecLink、WSL 檔與雲端佔位檔也帶著它，卻不是連結。被當成
-    // 連結時，每一個都被存成目標為空的連結，內容遺失而結束碼為 0。所以只有在讀得出連結目的地
-    // 時才算數——那正是 add(path:) 接下來要做的事。
+    // The reparse-point attribute bit alone cannot do it: junctions, cloud placeholders, dedup
+    // stubs, WSL files and AppExecLinks set it too and are NOT links -- treating them as links
+    // stored each as a type '2' entry with an empty target, dropping its content with exit 0.
+    // destinationOfSymbolicLink cannot do it either: it returns nil for a dangling symlink
+    // exactly as it does for those non-symlink reparse points (measured on Windows 2026-10-14),
+    // so through it the two are indistinguishable -- gating on it reintroduces the dangling-link
+    // failure while fixing the junction one. Only the reparse TAG separates them:
+    // IO_REPARSE_TAG_SYMLINK -- and IO_REPARSE_TAG_LX_SYMLINK, the WSL/MSYS form a dangling
+    // `ln -s` produces -- is a symlink whatever its target's state; a junction is MOUNT_POINT,
+    // a placeholder a CLOUD tag, and so on. winReparseTag reads it from FindFirstFileW's
+    // dwReserved0 (cheap, no handle), and only for an entry whose .type did not already answer --
+    // a live symlink is .typeSymbolicLink and skips it. isDir stays on .type; a reparse point
+    // that is not a symlink keeps its .type (a junction is descended as a directory). The
+    // dangling target itself is read in add(path:) via winReadSymlinkTarget, since
+    // destinationOfSymbolicLink returns nil there.
+    // attributesOfItem 對「目標存在」的 symlink 回報 .typeSymbolicLink，但（於 Swift 6.4／
+    // windows-msvc 實測）對 dangling 回報 .typeRegular：它解析 reparse point 來分類，目標不存在時
+    // 退回「regular」。故 dangling link 必須用別的方式辨識，否則會走進一般檔案寫入路徑、`-c` 開不
+    // 到其不存在的目標而失敗。
+    //
+    // 光靠 reparse-point 屬性位元不行：junction、雲端佔位、dedup stub、WSL 檔、AppExecLink 也都設
+    // 這個位元，卻不是連結——把它們當連結會各自存成空目標的 type '2'，內容遺失而結束碼為 0。
+    // destinationOfSymbolicLink 也不行：它對 dangling symlink 與對那些非 symlink 的 reparse point
+    // 一樣回 nil（2026-10-14 於 Windows 實測），透過它無法區分兩者——以它為條件會在修好 junction 的
+    // 同時把 dangling 連結弄壞。只有 reparse TAG 能分開：IO_REPARSE_TAG_SYMLINK——以及 dangling
+    // `ln -s` 產生的 WSL/MSYS 形式 IO_REPARSE_TAG_LX_SYMLINK——無論目標狀態都是 symlink，junction 是
+    // MOUNT_POINT、佔位是 CLOUD tag 等等。winReparseTag 從 FindFirstFileW 的
+    // dwReserved0 讀取（便宜、不開 handle），且只在 .type 尚未給出答案時才查——有效 symlink 是
+    // .typeSymbolicLink，直接略過。isDir 維持只看 .type；非 symlink 的 reparse point 保留其 .type
+    // （junction 會以目錄遞迴）。dangling 的目標本身在 add(path:) 以 winReadSymlinkTarget 讀取，因為
+    // destinationOfSymbolicLink 在那裡回 nil。
     let wide = Array(winUcrtPath(path).utf16) + [0]
     let fa = wide.withUnsafeBufferPointer { GetFileAttributesW($0.baseAddress!) }
     let isReparse = fa != INVALID_FILE_ATTRIBUTES
         && (fa & UInt32(FILE_ATTRIBUTE_REPARSE_POINT)) != 0
+    let tag = isReparse ? winReparseTag(path) : nil
     let isLink = type == .typeSymbolicLink
-        || (isReparse && (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil)
+        || tag == IO_REPARSE_TAG_SYMLINK_VALUE || tag == IO_REPARSE_TAG_LX_SYMLINK_VALUE
     return WinStat(isDir: type == .typeDirectory,
                    isSymlink: isLink,
                    size: size, mtime: mtime, nlink: nlink,
@@ -2595,6 +2609,96 @@ private func winSetLinkMtime(_ path: String, _ mtime: UInt64) {
     guard handle != INVALID_HANDLE_VALUE else { return }
     defer { CloseHandle(handle) }
     _ = SetFileTime(handle, nil, nil, &ft)
+}
+
+/// The reparse tag of `path`, or nil if it is not a reparse point. Only the tag tells a symlink
+/// (IO_REPARSE_TAG_SYMLINK, dangling or not) from a junction, cloud placeholder, dedup stub or
+/// AppExecLink, which share the reparse-point attribute bit but are not links. FindFirstFileW's
+/// dwReserved0 carries it without opening a handle. Used by winStat; see the note there for why
+/// neither the bit nor destinationOfSymbolicLink can classify a dangling link.
+/// 回傳 `path` 的 reparse tag，非 reparse point 則回 nil。只有 tag 能分辨 symlink
+/// （IO_REPARSE_TAG_SYMLINK，無論是否 dangling）與 junction、雲端佔位、dedup stub、AppExecLink
+/// ——後者共用 reparse-point 屬性位元卻不是連結。FindFirstFileW 的 dwReserved0 不開 handle 即可帶出。
+private let IO_REPARSE_TAG_SYMLINK_VALUE: UInt32 = 0xA000_000C
+private let IO_REPARSE_TAG_LX_SYMLINK_VALUE: UInt32 = 0xA000_001D   // WSL/MSYS symlink (dangling `ln -s`)
+private func winReparseTag(_ path: String) -> UInt32? {
+    var data = WIN32_FIND_DATAW()
+    let h = winUcrtPath(path).withCString(encodedAs: UTF16.self) { FindFirstFileW($0, &data) }
+    guard h != INVALID_HANDLE_VALUE else { return nil }
+    FindClose(h)
+    guard (data.dwFileAttributes & DWORD(FILE_ATTRIBUTE_REPARSE_POINT)) != 0 else { return nil }
+    return data.dwReserved0
+}
+
+/// A symlink's target read straight from its reparse buffer, so a DANGLING link (target absent)
+/// still round-trips with its real linkname instead of an empty one: destinationOfSymbolicLink
+/// returns nil for it (measured on Windows 2026-10-14). FSCTL_GET_REPARSE_POINT needs no existing
+/// target. Returns the PrintName when present, else the SubstituteName with any `\??\` device
+/// prefix stripped. nil if `path` is not a symlink reparse point or the buffer cannot be parsed.
+/// 直接從 reparse buffer 讀 symlink 目標，使 dangling 連結（目標不存在）仍能帶著真正的 linkname
+/// 往返，而非空字串：destinationOfSymbolicLink 對它回 nil（2026-10-14 於 Windows 實測）。
+/// FSCTL_GET_REPARSE_POINT 不需目標存在。有 PrintName 時回 PrintName，否則回去掉 `\??\` 裝置
+/// 前綴的 SubstituteName；非 symlink reparse point 或無法解析時回 nil。
+private func winReadSymlinkTarget(_ path: String) -> String? {
+    let FSCTL_GET_REPARSE_POINT: DWORD = 0x0009_00A8
+    let handle = winUcrtPath(path).withCString(encodedAs: UTF16.self) { wide in
+        CreateFileW(wide, 0,
+                    DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE),
+                    nil, DWORD(OPEN_EXISTING),
+                    DWORD(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS), nil)
+    }
+    guard handle != INVALID_HANDLE_VALUE else { return nil }
+    defer { CloseHandle(handle) }
+    var buf = [UInt8](repeating: 0, count: 16384)   // MAXIMUM_REPARSE_DATA_BUFFER_SIZE
+    var returned: DWORD = 0
+    let ok = buf.withUnsafeMutableBytes { raw in
+        DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, nil, 0,
+                        raw.baseAddress, DWORD(raw.count), &returned, nil)
+    }
+    guard ok, Int(returned) >= 8 else { return nil }
+    func u16(_ o: Int) -> Int { Int(buf[o]) | (Int(buf[o + 1]) << 8) }
+    func u32(_ o: Int) -> UInt32 {
+        UInt32(buf[o]) | (UInt32(buf[o + 1]) << 8) | (UInt32(buf[o + 2]) << 16) | (UInt32(buf[o + 3]) << 24)
+    }
+    let tag = u32(0)
+    let dataLen = u16(4)   // REPARSE_DATA_BUFFER.ReparseDataLength: bytes after the 8-byte header
+    if tag == IO_REPARSE_TAG_SYMLINK_VALUE {
+        guard Int(returned) >= 20 else { return nil }
+        // SymbolicLinkReparseBuffer: PathBuffer begins at offset 20 (tag 4 + dataLength 2 +
+        // reserved 2 + substOff 2 + substLen 2 + printOff 2 + printLen 2 + flags 4).
+        let substOff = u16(8), substLen = u16(10), printOff = u16(12), printLen = u16(14)
+        let base = 20
+        func str(_ off: Int, _ len: Int) -> String? {
+            guard len >= 2, base + off + len <= buf.count else { return nil }
+            var units: [UInt16] = []
+            var i = base + off
+            let end = i + len
+            while i + 1 < end { units.append(UInt16(buf[i]) | (UInt16(buf[i + 1]) << 8)); i += 2 }
+            return String(decoding: units, as: UTF16.self)
+        }
+        if let p = str(printOff, printLen), !p.isEmpty { return p }
+        if var s = str(substOff, substLen) {
+            if s.hasPrefix("\\??\\") { s.removeFirst(4) }
+            return s
+        }
+        return nil
+    }
+    if tag == IO_REPARSE_TAG_LX_SYMLINK_VALUE {
+        // WSL/LX symlink: after the 8-byte header the data is a ULONG version (== 2) then the
+        // target as UTF-8 (not null-terminated), length ReparseDataLength - 4. MSYS `ln -s` to a
+        // MISSING target makes one of these -- for an existing target it makes a native
+        // IO_REPARSE_TAG_SYMLINK instead -- and Foundation understands neither the type nor the
+        // target of an LX link, so both the classification and this read have to be done by hand.
+        // WSL/LX symlink：8 位元組標頭之後是 ULONG 版本（== 2），再接 UTF-8 目標（不帶結尾 NUL），
+        // 長度為 ReparseDataLength - 4。MSYS `ln -s` 指向不存在目標時建的就是這種（目標存在時則建
+        // 原生 IO_REPARSE_TAG_SYMLINK），而 Foundation 既不懂 LX 連結的型別也讀不出其目標，故分類與
+        // 這裡的讀取都得手工處理。
+        let start = 8 + 4
+        let len = dataLen - 4
+        guard len > 0, start + len <= buf.count else { return nil }
+        return String(decoding: buf[start ..< start + len], as: UTF8.self)
+    }
+    return nil
 }
 
 /// Best-effort hardlink creation via `fsutil hardlink create` (no admin
@@ -4183,7 +4287,12 @@ final class TarWriter {
             // A tar linkname is `/`-separated; Windows reports `\`, which stored verbatim
             // makes the link extracted on Unix name a file with backslashes in it. Converted
             // only here: on POSIX `\` is a legal filename character.
-            let dest = ((try? FileManager.default.destinationOfSymbolicLink(atPath: path)) ?? "")
+            // destinationOfSymbolicLink returns nil for a DANGLING link (measured on Windows
+            // 2026-10-14), which would store an empty linkname; winReadSymlinkTarget reads the
+            // target straight from the reparse buffer in that case. winStat has already confirmed
+            // this is a symlink by its reparse tag, so a nil here means dangling, not "not a link".
+            let dest = ((try? FileManager.default.destinationOfSymbolicLink(atPath: path))
+                        ?? winReadSymlinkTarget(path) ?? "")
                 .replacingOccurrences(of: "\\", with: "/")
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
                                  size: 0, mtime: mtime, typeflag: UInt8(ascii: "2"), linkname: dest)

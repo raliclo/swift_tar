@@ -45,6 +45,22 @@ fi
 # winsymlinks:native——nativestrict 無法對不存在的目標建 symlink。且 Windows 無檔案系統
 # FIFO，故 mkfifo 夾具在該平台改為 skip，而非在 set -e 下中止整個測試。FIFO 案例驗的是
 # POSIX 專屬性質（ReadAhead 以 O_NONBLOCK 確保不卡在 FIFO），在 Windows 的 -c 路徑根本不適用。
+# MSYS is OVERWRITTEN here, not appended to. The 2026-10-14 review proposed appending
+# (`winsymlinks:native ${MSYS:-}`) to keep any other options the environment set; measured that
+# day, that breaks the fixture on this machine. This machine's zsh exports
+# MSYS=winsymlinks:nativestrict at startup, and a later winsymlinks: token does NOT override an
+# earlier one -- "winsymlinks:native winsymlinks:nativestrict" still acts as nativestrict, which
+# refuses a symlink to a missing target, so f20_dangling cannot be created and `ln -s` aborts the
+# run. The inherited value is the very thing that has to be overridden, so a plain assignment is
+# correct. (The append also leaves a trailing space when MSYS is unset, which the MSYS ln runtime
+# then fails to parse at all -- a second way the same suggestion breaks.)
+# 這裡是「覆蓋」MSYS，不是 append。2026-10-14 審查建議 append（`winsymlinks:native ${MSYS:-}`）以
+# 保留環境其他選項；當日實測，在本機會弄壞夾具。本機 zsh 啟動時就 export
+# MSYS=winsymlinks:nativestrict，而較後的 winsymlinks: token 並不會覆蓋較前的——
+# 「winsymlinks:native winsymlinks:nativestrict」仍作用為 nativestrict，它拒絕對不存在目標建
+# symlink，於是 f20_dangling 建不出來、`ln -s` 中止整個測試。繼承來的值正是必須被覆蓋的東西，故
+# 直接覆蓋才對。（append 在 MSYS 未設時還會留下尾隨空白，MSYS ln runtime 根本解析不出——同一建議
+# 弄壞它的第二種方式。）
 IS_WIN=0
 case "$(uname -s)" in MSYS*|MINGW*|CYGWIN*) IS_WIN=1; export MSYS=winsymlinks:native ;; esac
 
@@ -122,6 +138,26 @@ mkdir -p "$TMP/x1"; "$ST" -x -f "$TMP/a.tar" -C "$TMP/x1" >/dev/null 2>&1 || tru
 [ "$(manifest "$TMP/x1/src")" = "$WANT" ] && ok "tree: every file holds its own bytes" \
   || bad "tree: every file holds its own bytes"
 [ -L "$TMP/x1/src/d4/f10_link" ] && ok "tree: a symlink stays a symlink" || bad "tree: a symlink stays a symlink"
+# The DANGLING link (target absent) is the case 4d24b8d set out to fix, and the 2026-10-14
+# review found it untested: manifest() uses `find -type f`, which skips every symlink, and
+# f10_link above has a target that exists. On Windows this also measures winStat's reparse
+# handling end to end -- if destinationOfSymbolicLink returned nil for a target-less link,
+# winStat would class the dangling link as a regular file and -c would fail again (finding (a));
+# if it returned an empty string, the link would round-trip with an empty target (finding (b)).
+# `-L` catches the first, the `*nonexistent*` match catches the second.
+# 斷鏈連結（目標不存在）是 4d24b8d 要修的案例，2026-10-14 審查發現它沒被測到：manifest() 用
+# find -type f 跳過所有 symlink，而上面的 f10_link 目標存在。在 Windows 這也端到端量到 winStat 的
+# reparse 處理——若 destinationOfSymbolicLink 對無目標連結回 nil，winStat 會把斷鏈連結判成一般檔案、
+# -c 又會失敗（(a)）；若回空字串，連結會以空目標往返（(b)）。-L 抓前者，*nonexistent* 比對抓後者。
+if [ -L "$TMP/x1/src/d4/f20_dangling" ]; then
+  dangle_tgt="$(readlink "$TMP/x1/src/d4/f20_dangling" 2>/dev/null)"
+  case "$dangle_tgt" in
+    (*nonexistent*) ok "tree: a dangling symlink round-trips to its target" ;;
+    (*) bad "tree: a dangling symlink round-trips to its target (target=[$dangle_tgt])" ;;
+  esac
+else
+  bad "tree: a dangling symlink round-trips to its target (extracted as a non-link)"
+fi
 if (( have_fifo )); then
   [ -p "$TMP/x1/src/d6/f12_fifo" ] && ok "tree: a FIFO is archived as a FIFO, without blocking" \
     || bad "tree: a FIFO is archived as a FIFO, without blocking"

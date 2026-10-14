@@ -184,27 +184,29 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## 2026-10-14 `4d24b8d` 的 code review：reparse-point 誤判等 6 項 🔴 / Code review of `4d24b8d`: 6 findings
+## 2026-10-14 `4d24b8d` 的 code review：reparse-point 誤判等 6 項 ▸ ✅ 已修 2026-10-14（Windows 與 WSL 皆驗）/ Code review of `4d24b8d`: 6 findings, fixed and verified on Windows and WSL
 
-對 `4d24b8d`（Windows dangling symlink 在 `-c` 失敗的修正 + 兩測試平台分支）做 code review，發現 6 項，全部對照原始碼確認。第 1 項是本 commit 自己引入的回歸。
+對 `4d24b8d`（Windows dangling symlink 在 `-c` 失敗的修正 + 兩測試平台分支）做 code review，發現 6 項，全部對照原始碼確認。第 1 項是本 commit 自己引入的回歸，且與另一 session 在 `f5b5499` 的 finding #1 重疊——但那個修法在 Windows 上實測是壞的（見下）。驗證：Windows readahead 16/0、strict 23/0；WSL readahead 17/0、strict 23/0。
 
-1. 🔴 **`winStat` 以裸 `FILE_ATTRIBUTE_REPARSE_POINT` 位元判 symlink（`swift_tar.swift:2478`）。** junction、OneDrive／雲端 placeholder、AppExecLink、dedup 等都設此位元，於是全被當成 symlink。`add(path:)` 的 `isSymlink` 分支在 `isDir` 之前（4168），`destinationOfSymbolicLink` 對非 symlink 回 nil → `?? ""` → 存成 size 0、空 linkname 的 type `2`。一個雲端 placeholder 原本存成帶內容的一般檔案，現在內容被靜默丟棄、`-c` 仍回 0——正是本 commit 想消除的那種靜默資料遺失，換成別的 reparse 類型。成因修法：判 reparse **tag** 是否 `IO_REPARSE_TAG_SYMLINK`（`FindFirstFileW` 的 `dwReserved0`），不是裸位元。
-   `winStat` keys on the bare reparse-point bit, so junctions, cloud placeholders and AppExecLinks are all misclassified as symlinks and archived as empty-target type `2`, dropping their content with exit 0. Fix: check the reparse tag `IO_REPARSE_TAG_SYMLINK`, not the bare bit.
+修正過程揭露一個比審查者所見更深的成因：**MSYS `ln -s` 指向不存在目標時，建的是 `IO_REPARSE_TAG_LX_SYMLINK`（`0xA000001D`，WSL 式），不是原生的 `IO_REPARSE_TAG_SYMLINK`（`0xA000000C`）**；指向存在目標時才建原生式。Foundation 對 LX 連結既回報 `.typeRegular` 又令 `destinationOfSymbolicLink` 回 nil，兩者都無法分類或讀取它。（實測 tag：valid `0xa000000c`、dangling `0xa000001d`、junction `0xa0000003`。）
 
-2. 🟠 **真的 dangling symlink，`destinationOfSymbolicLink` 在 Windows 是否也回 nil 未經實測（`swift_tar.swift:4176`）。** 若和 `attributesOfItem` 同樣因「解析 reparse 來分類」而失敗，會存成空目標。由第 3 項的往返測試實測確認。
-   Unverified whether `destinationOfSymbolicLink` also returns nil for a target-less link on Windows; resolved empirically by the finding-3 test.
+1. 🔴→✅ **`winStat` 以裸 `FILE_ATTRIBUTE_REPARSE_POINT` 位元判 symlink。** junction／雲端 placeholder／AppExecLink／dedup 都設此位元，被誤判成 symlink，`destinationOfSymbolicLink` 回 nil → 存成空 linkname 的 type `2`、內容靜默丟棄。**修法**：改判 reparse **tag** 是否為 `IO_REPARSE_TAG_SYMLINK` **或** `IO_REPARSE_TAG_LX_SYMLINK`（`winReparseTag` 讀 `FindFirstFileW` 的 `dwReserved0`）。另一 session 在 `f5b5499` 用 `destinationOfSymbolicLink != nil` 當條件，但它對 dangling 與對 junction 一樣回 nil，在修好 junction 的同時把 dangling 弄壞（Windows 實測 `-c` exit 1「cannot open f20_dangling」）——已回報該 session 更正。
+   Fixed by the reparse TAG (symlink or LX-symlink), read from FindFirstFileW's dwReserved0. The f5b5499 `destinationOfSymbolicLink != nil` approach was measured broken on Windows: nil for a dangling link just as for a junction, so it reintroduced the dangling failure.
 
-3. 🟠 **測試從未驗 `f20_dangling` 往返（`test/test_create_readahead.zsh:124`）。** `manifest()` 用 `find -type f` 排除所有 symlink，唯一 symlink 斷言是對**有效**連結 `f10_link`。本 commit 修的 dangling 案例沒被驗到——壞掉仍 15/0 綠燈。加對 `f20_dangling` 解出後 `readlink` == `/nonexistent` 的斷言。
-   The dangling case the commit fixes is never asserted; add a round-trip check on `f20_dangling`'s target.
+2. 🟠→✅ **dangling symlink 的 `destinationOfSymbolicLink` 在 Windows 回 nil（已實測確認）。** 故直接讀 reparse buffer：新增 `winReadSymlinkTarget`，以 `FSCTL_GET_REPARSE_POINT` 解析原生（`SYMBOLIC_LINK_REPARSE_BUFFER`）與 LX（version + UTF-8）兩種格式取得目標；`add(path:)` 以它作為 `destinationOfSymbolicLink` 的後備。
+   Confirmed nil for dangling; read the target straight from the reparse buffer (both native and LX layouts) via FSCTL_GET_REPARSE_POINT.
 
-4. 🟡 **`GetFileAttributesW` 對每個成員都跑（`swift_tar.swift:2475`）。** 只有 `.typeRegular` 才有歧義；`.typeDirectory`／`.typeSymbolicLink` 已確定。gate 到 `.typeRegular` 可省一次系統呼叫／成員，並順便不讓目錄型 junction（回報 `.typeDirectory`）被重分類成 symlink。隨第 1 項一併解。
-   The reparse lookup runs for every member though only `.typeRegular` is ambiguous; gate it.
+3. 🟠→✅ **測試從未驗 `f20_dangling` 往返。** 已在 `test_create_readahead.zsh` 加斷言：解出後須為 symlink（`-L`）且 `readlink` 含 `nonexistent`。正是這條斷言在實測中抓出 (a)——dangling 被當成非連結——且抓出了 LX tag 的真相。
+   Added the f20_dangling round-trip assertion; it is what caught the failure and surfaced the LX tag.
 
-5. 🟡 **註解交叉引用錯函式（`swift_tar.swift:2465`）。** 寫「同 `winCreateSymlink` 的代理」，但 `winCreateSymlink` 只用 `createSymbolicLink`；真正讀 reparse 位元的是 `clearNonRegular`（2923），且其語意是「刪任何 reparse point」（裸位元正確），與此處「判是否 symlink」（需 tag）不同——precedent 其實不成立。改指 `clearNonRegular` 並註明差異。
-   Comment cites `winCreateSymlink` (which uses only `createSymbolicLink`); the bare-bit precedent is `clearNonRegular`, and its predicate differs. Fix the reference.
+4. 🟡→✅ **reparse 查詢對每個成員都跑。** 現以 `GetFileAttributesW`（便宜）先判是否 reparse，只有 reparse point 才呼叫 `FindFirstFileW` 取 tag；有效 symlink 已是 `.typeSymbolicLink`、直接短路不查。junction 回報 `.typeDirectory` 且 tag 非 symlink，故以目錄遞迴（已端到端驗：內容保留、非空 symlink）。
+   The tag lookup now runs only for an actual reparse point whose .type did not already answer.
 
-6. ⚪ **`export MSYS=winsymlinks:native` 覆蓋既有 MSYS 選項（`test/test_create_readahead.zsh:49`、`test/test_strict.zsh`）。** 改 append 式保留既有選項。
-   The assignment clobbers any pre-existing MSYS options; append instead.
+5. 🟡→✅ **winStat 註解誤指 `winCreateSymlink`。** 已改指 `clearNonRegular` 並註明語意差異（它刪任何 reparse point，此處須判是否 symlink）。
+   Comment now points at clearNonRegular and notes the differing predicate.
+
+6. ⚪→❌ **審查建議（append 保留既有 MSYS 選項）被否決。** 實測：本機 zsh 啟動時就 export `MSYS=winsymlinks:nativestrict`，而較後的 `winsymlinks:` token 不會覆蓋較前的，故 append 會讓 nativestrict 續效、dangling `ln -s` 失敗；append 在 MSYS 未設時還留下尾隨空白，MSYS ln runtime 根本解析不出。原式 `export MSYS=winsymlinks:native`（**覆蓋**）才對——要覆蓋的正是 shell 預設的 nativestrict。保留原式並在兩個測試檔記下成因。
+   Rejected: the append suggestion keeps the shell's default `winsymlinks:nativestrict` in force (a later winsymlinks token does not override an earlier one) and leaves a trailing space that the MSYS ln runtime cannot parse. Overwriting is required and correct; kept the original with the cause recorded.
 
 ## 2026-09-27 全樹程式碼審查 / Whole-tree code review
 
@@ -3801,14 +3803,14 @@ way (untested). Workaround: exclude `.git` files too, or build the drop from `gi
 Possible fix: ask git (`git rev-parse --git-dir`) in all three places, with a test on a copy
 that carries a broken `.git` file.
 
-## 2026-10-14 對 `18606cd..923b17e` 的審查：十項發現 ▸ 🟡 已修，macOS 已驗；Windows 與 Linux 的三項未驗 / Review of `18606cd..923b17e`: ten findings, fixed and verified on macOS; three await Windows or Linux
+## 2026-10-14 對 `18606cd..923b17e` 的審查：十項發現 ▸ 🟡 已修，macOS 已驗；第 1 項的修法在 Windows 實測是壞的、已另修，第 2、7 項仍待 Linux / Review of `18606cd..923b17e`: ten findings; finding 1's fix was measured broken on Windows and re-fixed, 2 and 7 await Linux
 
 **範圍**：`18606cd..923b17e`（約 3,981 行新增）。修正前後各在 macOS 上重建並跑 `test/` 全部 23 支，
 兩次皆 23 支以 0 結束；`test_patch_drop.zsh` 由 12 項變 16 項。
 
 | # | 位置 | 問題 | 修法 | 驗證 |
 | --- | --- | --- | --- | --- |
-| 1 | `swift_tar.swift` `winStat` | 任何 reparse point 都被當成 symlink；去重檔、AppExecLink、WSL 檔、雲端佔位檔被存成目標為空的連結，內容遺失而結束碼為 0 | 只有在讀得出連結目的地時，reparse 位元才算數 | **未驗：Windows 專屬程式碼，本機不編譯它** |
+| 1 | `swift_tar.swift` `winStat` | 任何 reparse point 都被當成 symlink；去重檔、AppExecLink、WSL 檔、雲端佔位檔被存成目標為空的連結，內容遺失而結束碼為 0 | ~~只有在讀得出連結目的地時，reparse 位元才算數~~ → **此修法在 Windows 實測是壞的**：dangling symlink 的 `destinationOfSymbolicLink` 也回 nil（與 junction 無異），於是修好 junction 的同時把 dangling 連結又弄壞。已改以 reparse **tag**（`IO_REPARSE_TAG_SYMLINK` 或 `IO_REPARSE_TAG_LX_SYMLINK`）分類、並以 `FSCTL_GET_REPARSE_POINT` 讀目標——見「2026-10-14 `4d24b8d` 的 code review」條目 | **Windows 已驗（2026-10-14，Win 端 session）**：原修法令 `-c` exit 1「cannot open f20_dangling」；tag 修法後 readahead 16/0、junction 端到端內容保留 |
 | 2 | `swift_tar.swift` `loopbackConnects` | 探測架不起來（拿不到 socket、bind 被拒）也回答「不行」，於是拒絕所有子行程 | 只有連線未完成、或 bind 得到 `EADDRNOTAVAIL` 才算「不行」 | **未驗：Linux 專屬程式碼，本機不編譯它** |
 | 3 | `libarchive_zip_bridge.c` | 執行中變大的檔案：`-n 1` 以錯誤結束，多執行緒卻讀到 EOF 並存下，且記憶體不受視窗上限約束 | 兩條路徑都只讀到列出時的大小 | macOS 實測，見下 |
 | 4 | `swift_tar.swift` `-test` | 找不到標準 tar 時印「略過」並以 0 結束 | 改為印出 FAIL 並以 1 結束 | macOS：PATH 清空時 rc=1 |

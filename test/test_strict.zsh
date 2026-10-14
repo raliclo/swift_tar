@@ -64,6 +64,13 @@ export COPYFILE_DISABLE=1
 # winsymlinks:native -- nativestrict cannot make a symlink to a missing target.
 # Windows：下方 symlink 夾具是 dangling（../elsewhere），需 winsymlinks:native——
 # nativestrict 無法對不存在的目標建 symlink。
+# Overwrite, not append: this machine's zsh sets MSYS=winsymlinks:nativestrict at startup, and a
+# later winsymlinks: token does not override an earlier one, so keeping the inherited value (the
+# 2026-10-14 review's append suggestion) leaves nativestrict in force and the dangling `ln -s`
+# fails. Forcing native by a plain assignment is what the fixture needs. / 覆蓋而非 append：本機
+# zsh 啟動時設 MSYS=winsymlinks:nativestrict，較後的 winsymlinks: token 不會覆蓋較前的，故保留繼承
+# 值（2026-10-14 審查的 append 建議）會讓 nativestrict 續效、dangling 的 ln -s 失敗。直接覆蓋成
+# native 才是夾具所需。
 IS_WIN=0
 case "$(uname -s)" in MSYS*|MINGW*|CYGWIN*) IS_WIN=1; export MSYS=winsymlinks:native ;; esac
 

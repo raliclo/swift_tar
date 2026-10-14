@@ -3747,3 +3747,34 @@ applies to its libarchive and was never compiled on Windows); the workers' open,
 out-of-memory error paths. A Linux build against a shared system libarchive (one thread,
 never built) was on this list; that kind of build was removed on 2026-10-14, and
 `compile_tar-linux.zsh` now always builds libarchive from `libarchive/`, as on macOS.
+
+## 複製出來的樹留著 `.git` 檔案時，建置以 git 錯誤中止 ▸ ⚪ 未修 / A copied tree that keeps its `.git` file aborts the build with a git error
+
+**回報**：2026-10-14，LinuxCS-M4 session 在它的 guest 上建置 `f0c9144` 時遇到。這個 session 沒有
+重現過，以下的成因是讀程式碼得到的。
+
+**現象**：來源樹是複製出來的（rsync 只排除 `.git/` 目錄），`.git` 這個**檔案**還在。
+`build_codecs.zsh:89` 與 `build_libarchive.zsh:29` 以 `[ -e .git ]` 判斷是否為 git checkout，
+判為是，接著 `git submodule update` 以「gitfile does not point to a valid repository」結束
+（rc=128），建置中止。
+
+**成因**：swift_tar 本身是 `lzfse2` 的 submodule，所以它的 `.git` 是一個指向上層
+`.git/modules/…` 的檔案，不是目錄；各 submodule 的 `.git` 也一樣。排除目錄的複製會把這些檔案
+留下，而它們指向的位置在目的地不存在。`patch/apply_patches.zsh:100` 的 `with_git` 用的是同一種
+判斷（`-e $ROOT/$1/.git`），預期會有同樣的問題，未實測。
+
+**繞過**：複製時也排除 `.git` 檔案（LinuxCS-M4 已這樣做），或用 `git ls-files` 列出檔案打包
+（本 session 的原始碼包一直是這樣做的，所以沒遇過）。
+
+**可能的修法**：三處都改成問 git 本身，例如 `git rev-parse --git-dir` 成功才算 git checkout，
+失敗時走原始碼包那條路並明說。要加的測試：複製一小份帶著壞掉 `.git` 檔案的樹，確認判為原始碼包。
+
+Reported on 2026-10-14 by the LinuxCS-M4 session; not reproduced here, and the cause below is
+from reading the code. A tree copied with only `.git/` directories excluded keeps its `.git`
+*files* (swift_tar is itself a submodule, so its `.git` is a gitfile, as are its submodules').
+`build_codecs.zsh:89` and `build_libarchive.zsh:29` test `[ -e .git ]`, take the copy for a
+checkout, and `git submodule update` exits 128 with "gitfile does not point to a valid
+repository". `patch/apply_patches.zsh:100` uses the same test and is expected to fail the same
+way (untested). Workaround: exclude `.git` files too, or build the drop from `git ls-files`.
+Possible fix: ask git (`git rev-parse --git-dir`) in all three places, with a test on a copy
+that carries a broken `.git` file.

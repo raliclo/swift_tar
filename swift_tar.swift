@@ -2432,6 +2432,11 @@ private struct WinStat {
     var isSymlink: Bool
     var size: UInt64
     var mtime: UInt64
+    /// The sub-second part of `mtime`, to match `st_mtim.tv_nsec` on the POSIX branch. Read
+    /// from the FILETIME, not from a Date -- see winFileTime for why a Date cannot carry it.
+    /// `mtime` 的小數部分，對應 POSIX 分支的 `st_mtim.tv_nsec`。取自 FILETIME 而非 Date，
+    /// 理由見 winFileTime。
+    var mtimeNanos: UInt32
     var nlink: UInt32
     var volumeSerial: UInt64
     var fileIndex: UInt64
@@ -2447,12 +2452,6 @@ private func winStat(_ path: String) -> WinStat? {
     guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else { return nil }
     let type = attrs[.type] as? FileAttributeType
     let size = (attrs[.size] as? UInt64) ?? 0
-    let mtime: UInt64
-    if let date = attrs[.modificationDate] as? Date {
-        mtime = UInt64(max(0, date.timeIntervalSince1970))
-    } else {
-        mtime = 0
-    }
     let nlink = UInt32((attrs[.referenceCount] as? UInt64) ?? 1)
     let volumeSerial = (attrs[.systemNumber] as? UInt64) ?? 0
     let fileIndex = (attrs[.systemFileNumber] as? UInt64) ?? 0
@@ -2493,8 +2492,51 @@ private func winStat(_ path: String) -> WinStat? {
     // .typeSymbolicLink，直接略過。isDir 維持只看 .type；非 symlink 的 reparse point 保留其 .type
     // （junction 會以目錄遞迴）。dangling 的目標本身在 add(path:) 以 winReadSymlinkTarget 讀取，因為
     // destinationOfSymbolicLink 在那裡回 nil。
+    // ONE call for both the attribute bits and the timestamp. winStat runs for every member,
+    // and finding 4 of the 2026-10-14 review was specifically about not adding a per-member
+    // Win32 query, so the precise mtime comes from GetFileAttributesExW -- which hands back
+    // ftLastWriteTime beside the attributes GetFileAttributesW was already being called for
+    // here -- rather than from a second lookup. Like GetFileAttributesW it does not follow
+    // the final reparse point, so a symlink reports its own time: lstat semantics, matching
+    // the attributesOfItem call above.
+    //
+    // 屬性位元與時間戳以**一次**呼叫取得。winStat 對每個成員都會跑，而 2026-10-14 審查的第 4
+    // 項正是「不要為每個成員多加一次 Win32 查詢」，故精確的 mtime 取自 GetFileAttributesExW
+    // ——它連同此處原本就要呼叫 GetFileAttributesW 取得的屬性一起帶回 ftLastWriteTime——而不是
+    // 另外查一次。它與 GetFileAttributesW 一樣不追隨最後一層 reparse point，故 symlink 回報
+    // 自身的時間：即 lstat 語意，與上方的 attributesOfItem 一致。
+    var fad = WIN32_FILE_ATTRIBUTE_DATA()
     let wide = Array(winUcrtPath(path).utf16) + [0]
-    let fa = wide.withUnsafeBufferPointer { GetFileAttributesW($0.baseAddress!) }
+    let gotFad = withUnsafeMutablePointer(to: &fad) { p in
+        wide.withUnsafeBufferPointer {
+            GetFileAttributesExW($0.baseAddress!, GetFileExInfoStandard, UnsafeMutableRawPointer(p))
+        }
+    }
+    let fa = gotFad ? fad.dwFileAttributes : INVALID_FILE_ATTRIBUTES
+    // FILETIME counts 100ns ticks from 1601-01-01; the Unix epoch is 11644473600 seconds
+    // later. A time at or before that epoch cannot be carried here, so it falls back to the
+    // Date path, which clamps to 0 -- the behaviour this function had before it read
+    // FILETIMEs at all, kept rather than changed alongside the precision fix.
+    // FILETIME 以 100ns 為單位自 1601-01-01 起算，Unix epoch 晚它 11644473600 秒。早於該
+    // epoch 的時間在此無法表示，故退回 Date 路徑並夾到 0——那是本函式在讀 FILETIME 之前的
+    // 行為，與這次的精度修正分開，不順手更動。
+    let mtime: UInt64
+    let mtimeNanos: UInt32
+    let ticks = gotFad
+        ? (UInt64(fad.ftLastWriteTime.dwHighDateTime) << 32)
+            | UInt64(fad.ftLastWriteTime.dwLowDateTime)
+        : 0
+    if ticks >= 116_444_736_000_000_000 {
+        let rel = ticks - 116_444_736_000_000_000
+        mtime = rel / 10_000_000
+        mtimeNanos = UInt32((rel % 10_000_000) * 100)
+    } else if let date = attrs[.modificationDate] as? Date {
+        mtime = UInt64(max(0, date.timeIntervalSince1970))
+        mtimeNanos = 0
+    } else {
+        mtime = 0
+        mtimeNanos = 0
+    }
     let isReparse = fa != INVALID_FILE_ATTRIBUTES
         && (fa & UInt32(FILE_ATTRIBUTE_REPARSE_POINT)) != 0
     let tag = isReparse ? winReparseTag(path) : nil
@@ -2502,7 +2544,7 @@ private func winStat(_ path: String) -> WinStat? {
         || tag == IO_REPARSE_TAG_SYMLINK_VALUE || tag == IO_REPARSE_TAG_LX_SYMLINK_VALUE
     return WinStat(isDir: type == .typeDirectory,
                    isSymlink: isLink,
-                   size: size, mtime: mtime, nlink: nlink,
+                   size: size, mtime: mtime, mtimeNanos: mtimeNanos, nlink: nlink,
                    volumeSerial: volumeSerial, fileIndex: fileIndex)
 }
 
@@ -2586,17 +2628,52 @@ private func winCreateSymlink(dest: String, target: String) -> Bool {
 /// 以溢位回報取代環繞運算（`&+`、`&*`）：約 30828 年之後的 mtime 會讓乘法環繞，而環繞後的值
 /// 是「另一個看起來完全合理的日期」，SetFileTime 會照單全收。呼叫端的約定是：表示不了的時間
 /// 要被拒絕，而不是被悄悄搬到別處。
-private func winFileTime(_ mtime: UInt64) -> FILETIME? {
+/// `nanos` is the sub-second part. FILETIME's own unit is 100ns, so it contributes
+/// `nanos / 100` ticks and anything finer is truncated -- which is NTFS's own granularity,
+/// not a shortfall introduced here: a file touched to `.123456789` reads back `.123456700`
+/// through the Win32 path. Passing it through a Date instead would lose far more: Date is a
+/// double, so at today's epoch values it resolves only to about 238ns.
+/// `nanos` 為小數部分。FILETIME 本身以 100ns 為單位，故它貢獻 `nanos / 100` 個 tick，更細的
+/// 部分被截去——那是 NTFS 自身的粒度，不是這裡引入的損失：touch 成 `.123456789` 的檔案，經
+/// Win32 路徑讀回來就是 `.123456700`。改用 Date 傳遞反而損失更大：Date 是 double，在今日的
+/// 時間值上只分辨得出約 238ns。
+private func winFileTime(_ mtime: UInt64, _ nanos: UInt32 = 0) -> FILETIME? {
     let (secs, addOverflow) = mtime.addingReportingOverflow(11_644_473_600)
     guard !addOverflow else { return nil }
-    let (ticks, mulOverflow) = secs.multipliedReportingOverflow(by: 10_000_000)
+    let (base, mulOverflow) = secs.multipliedReportingOverflow(by: 10_000_000)
     guard !mulOverflow else { return nil }
+    let (ticks, tickOverflow) = base.addingReportingOverflow(UInt64(nanos / 100))
+    guard !tickOverflow else { return nil }
     return FILETIME(dwLowDateTime: DWORD(truncatingIfNeeded: ticks),
                     dwHighDateTime: DWORD(truncatingIfNeeded: ticks >> 32))
 }
 
-private func winSetLinkMtime(_ path: String, _ mtime: UInt64) {
-    guard var ft = winFileTime(mtime) else { return }
+/// Set the write time of `path` ITSELF -- a regular file, a directory or a symlink -- to
+/// `mtime.nanos`, returning nil on success or a reason on failure. The one Windows mtime
+/// setter that is path-based; the pooled/inline write path sets the time on its own open
+/// descriptor instead, which costs no extra open.
+///
+/// This exists because `FileManager.setAttributes([.modificationDate:])` cannot express a
+/// sub-second mtime: its Date is a double, good for about 238ns at today's epoch values, so
+/// every pax `mtime=` fraction came back as `.000000000` on Windows. SetFileTime takes a
+/// FILETIME, whose 100ns unit holds everything NTFS can store.
+///
+/// `FILE_FLAG_OPEN_REPARSE_POINT` makes a symlink report itself rather than its target, so
+/// the archive never silently modifies a file it did not mention; on a plain file or
+/// directory there is no reparse point to follow and the flag is inert.
+/// `FILE_FLAG_BACKUP_SEMANTICS` is what allows a directory to be opened at all.
+///
+/// 將 `path` **自身**（一般檔案、目錄或 symlink）的寫入時間設為 `mtime.nanos`，成功回 nil，
+/// 失敗回原因。這是 Windows 上唯一以路徑為準的 mtime 設定函式；寫入池與 inline 路徑改在自己
+/// 已開啟的 descriptor 上設定，不必多開一次檔。
+///
+/// 它存在的理由是 `FileManager.setAttributes([.modificationDate:])` 表達不出子秒 mtime：
+/// 其 Date 是 double，在今日的時間值上僅約 238ns 精度，於是每一筆 pax `mtime=` 的小數在
+/// Windows 上都還原成 `.000000000`。SetFileTime 收 FILETIME，其 100ns 單位足以容納 NTFS
+/// 存得下的一切。
+@discardableResult
+private func winSetPathMtime(_ path: String, _ mtime: UInt64, _ nanos: UInt32 = 0) -> String? {
+    guard var ft = winFileTime(mtime, nanos) else { return "out of range: \(mtime)" }
     let handle = path.withCString(encodedAs: UTF16.self) { wide in
         CreateFileW(wide,
                     DWORD(FILE_WRITE_ATTRIBUTES),
@@ -2606,9 +2683,21 @@ private func winSetLinkMtime(_ path: String, _ mtime: UInt64) {
                     DWORD(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS),
                     nil)
     }
-    guard handle != INVALID_HANDLE_VALUE else { return }
+    guard handle != INVALID_HANDLE_VALUE else { return "cannot open: GetLastError \(GetLastError())" }
     defer { CloseHandle(handle) }
-    _ = SetFileTime(handle, nil, nil, &ft)
+    guard SetFileTime(handle, nil, nil, &ft) else {
+        return "SetFileTime: GetLastError \(GetLastError())"
+    }
+    return nil
+}
+
+/// Thin wrapper for the callers whose existing policy is to skip a failed mtime silently
+/// rather than report it. Only the write time is set, as before -- `winWriteFile` sets both
+/// access and write time, and that difference is kept rather than quietly aligned.
+/// 供「mtime 設定失敗時沿既有政策靜默略過」的呼叫端使用的薄包裝。一如既往只設寫入時間——
+/// `winWriteFile` 會同時設存取與寫入時間，該差異予以保留，不順手對齊。
+private func winSetLinkMtime(_ path: String, _ mtime: UInt64, _ nanos: UInt32 = 0) {
+    _ = winSetPathMtime(path, mtime, nanos)
 }
 
 /// The reparse tag of `path`, or nil if it is not a reparse point. Only the tag tells a symlink
@@ -2835,7 +2924,7 @@ private func winMakeDirectories(_ path: String) -> Bool {
 /// workers (distinct paths only, no shared state).
 /// 以選定後端寫出一個解壓檔案；失敗回傳錯誤訊息，成功回傳 nil。由
 /// FileWriterPool 的 worker 呼叫（路徑各自獨立，無共享狀態）。
-private func winWriteFile(dest: String, data: Data, mtime: UInt64,
+private func winWriteFile(dest: String, data: Data, mtime: UInt64, mtimeNanos: UInt32 = 0,
                           backend: WriteBackend, restoreMtime: Bool = true) -> String? {
     clearNonRegular(dest)
     switch backend {
@@ -2859,12 +2948,17 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
         }
         // Reported, not `try?`: see the .ucrt case below for the measurement.
         // 回報而非 `try?`：實測見下方 .ucrt 分支。
+        //
+        // SetFileTime via winSetPathMtime, not setAttributes([.modificationDate:]): that
+        // one takes a Date, a double that resolves to roughly 238ns at today's epoch
+        // values, so every pax `mtime=` fraction was restored as `.000000000`. The second
+        // open this costs is the same one setAttributes was already paying.
+        // 以 winSetPathMtime（SetFileTime）取代 setAttributes([.modificationDate:])：後者收
+        // Date，是 double，在今日的時間值上僅約 238ns 精度，於是每一筆 pax `mtime=` 的小數都
+        // 還原成 `.000000000`。這多出的一次開檔，正是 setAttributes 原本就已付出的那一次。
         if restoreMtime {
-            do {
-                try FileManager.default.setAttributes([.modificationDate:
-                    Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
-            } catch {
-                return "cannot restore mtime on '\(dest)' (\(error.localizedDescription))"
+            if let why = winSetPathMtime(dest, mtime, mtimeNanos) {
+                return "cannot restore mtime on '\(dest)' (\(why))"
                      + " / 無法還原 mtime '\(dest)'"
             }
         }
@@ -2973,7 +3067,7 @@ private func winWriteFile(dest: String, data: Data, mtime: UInt64,
         // winSetLinkMtime 只設寫入時間，該差異予以保留，不順手對齊。
         var mtimeFailure: String? = nil
         if writeOK && restoreMtime {
-            if var ft = winFileTime(mtime) {
+            if var ft = winFileTime(mtime, mtimeNanos) {
                 let handle = HANDLE(bitPattern: _get_osfhandle(fd))
                 if handle == nil || handle == INVALID_HANDLE_VALUE {
                     mtimeFailure = "no handle for descriptor"
@@ -3452,8 +3546,8 @@ final class FileWriterPool {
         let backend = self.backend
         queue.async {
 #if os(Windows)
-            let err = winWriteFile(dest: dest, data: data, mtime: mtime, backend: backend,
-                                   restoreMtime: restoreMtime)
+            let err = winWriteFile(dest: dest, data: data, mtime: mtime, mtimeNanos: mtimeNanos,
+                                   backend: backend, restoreMtime: restoreMtime)
 #else
             let err = posixWriteFile(dest: dest, data: data, mtime: mtime, mtimeNanos: mtimeNanos,
                                      mode: mode, restoreMtime: restoreMtime)
@@ -4274,6 +4368,14 @@ final class TarWriter {
         let mode: UInt32 = st.isDir ? 0o755 : 0o644
         let uid: UInt32 = 0, gid: UInt32 = 0
         let mtime = st.mtime
+        // Carried to every header below, as st_mtim.tv_nsec is on the POSIX branch. Without
+        // it writeEntryHeader's `mtimeNanos != 0` never held on Windows, so no pax `mtime=`
+        // record was written for any member and `bsdtar -u` re-added every file with a
+        // fractional mtime -- the defect this whole feature exists to prevent.
+        // 一如 POSIX 分支的 st_mtim.tv_nsec，往下傳給每一個標頭。少了它，writeEntryHeader 的
+        // `mtimeNanos != 0` 在 Windows 上永不成立，任何成員都不會寫出 pax `mtime=` 記錄，
+        // 於是 `bsdtar -u` 會把每個帶小數 mtime 的檔案重新加入——正是本功能要防止的缺陷。
+        let mtimeNanos = st.mtimeNanos
 
         // -u: skip non-directory entries that are not newer than the archived
         // copy. / -u：略過不比封存副本新的非目錄項目。
@@ -4295,7 +4397,8 @@ final class TarWriter {
                         ?? winReadSymlinkTarget(path) ?? "")
                 .replacingOccurrences(of: "\\", with: "/")
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
-                                 size: 0, mtime: mtime, typeflag: UInt8(ascii: "2"), linkname: dest)
+                                 size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
+                                 typeflag: UInt8(ascii: "2"), linkname: dest)
             return
         }
         if st.isDir {
@@ -4326,7 +4429,8 @@ final class TarWriter {
             if !skipForUpdate(name, mtime) {
                 if verbose { eprint("a \(name)/") }
                 try writeEntryHeader(name: name + "/", mode: mode, uid: uid, gid: gid,
-                                     size: 0, mtime: mtime, typeflag: UInt8(ascii: "5"), linkname: "")
+                                     size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
+                                     typeflag: UInt8(ascii: "5"), linkname: "")
             }
             let children = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
             try add(paths: children.sorted().map { path + "/" + $0 })
@@ -4339,7 +4443,8 @@ final class TarWriter {
         if st.nlink > 1, let first = seenInodes[key] {
             if verbose { eprint("a \(name) link to \(first)") }
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
-                                 size: 0, mtime: mtime, typeflag: UInt8(ascii: "1"),
+                                 size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
+                                 typeflag: UInt8(ascii: "1"),
                                  linkname: first)
             return
         }
@@ -4347,7 +4452,8 @@ final class TarWriter {
         if verbose { eprint("a \(name)") }
         let size = st.size
         try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
-                             size: size, mtime: mtime, typeflag: UInt8(ascii: "0"), linkname: "")
+                             size: size, mtime: mtime, mtimeNanos: mtimeNanos,
+                             typeflag: UInt8(ascii: "0"), linkname: "")
         try writeContents(path, size: size, prefetched: prefetched)
 #else
         var st = stat()
@@ -5356,7 +5462,7 @@ final class TarReader {
                 // got 2026" while the other three nodes passed.
                 if options.restoreMtime {
 #if os(Windows)
-                    winSetLinkMtime(dest, mtime)
+                    winSetLinkMtime(dest, mtime, mtimeNanos)
 #else
                     // `exactly:` for the trap described at "mtimeOutOfRange" in
                     // posixWriteFile. An out-of-range value is skipped rather than
@@ -5570,9 +5676,16 @@ final class TarReader {
                     }
                     try? out.close()
 #if os(Windows)
+                    // winSetPathMtime, not setAttributes([.modificationDate:]): a Date is a
+                    // double and cannot carry the fraction, so this path restored every pax
+                    // `mtime=` as `.000000000`. Discarded rather than reported, which is
+                    // this call site's existing policy (it was a `try?`), not a new one.
+                    // 用 winSetPathMtime 而非 setAttributes([.modificationDate:])：Date 是
+                    // double，帶不住小數，故此路徑把每一筆 pax `mtime=` 都還原成
+                    // `.000000000`。失敗時丟棄而不回報，那是本呼叫點的既有政策（原本是
+                    // `try?`），並非新訂。
                     if options.restoreMtime {
-                        try? fm.setAttributes([.modificationDate:
-                            Date(timeIntervalSince1970: TimeInterval(mtime))], ofItemAtPath: dest)
+                        winSetLinkMtime(dest, mtime, mtimeNanos)
                     }
 #endif
                 }
@@ -5655,14 +5768,14 @@ final class TarReader {
         // `FILE_FLAG_OPEN_REPARSE_POINT` is harmless on a plain directory -- with
         // no reparse point to follow, it opens the directory itself.
         if options.restoreMtime {
-            // Fields by name rather than destructured: the Windows branch has no use for
-            // `nanos` (winSetLinkMtime takes whole seconds), and an unused binding there
-            // would be a warning on that platform alone.
-            // 以欄位名稱取值而不解構：Windows 分支用不到 `nanos`（winSetLinkMtime 只收整秒），
-            // 未使用的綁定會只在那個平台產生警告。
+            // Fields by name rather than destructured, which both branches now need:
+            // winSetLinkMtime takes nanoseconds as of the sub-second mtime fix, so the two
+            // platforms differ only in which setter they call.
+            // 以欄位名稱取值而不解構，現在兩個分支都用得到：winSetLinkMtime 自子秒 mtime 修正
+            // 起已收奈秒，兩個平台的差別只剩呼叫哪一個設定函式。
             for d in dirTimes.sorted(by: { $0.path.count > $1.path.count }) {
 #if os(Windows)
-                winSetLinkMtime(d.path, d.mtime)
+                winSetLinkMtime(d.path, d.mtime, d.nanos)
 #else
                 posixSetTimes(d.path, d.mtime, d.nanos)
 #endif

@@ -180,7 +180,7 @@
 > 回合數無法由下方條目推得：下方**具名**的最大回合為 49，那是下限而非總數。本行在
 > 2026-09-04 之前一直寫著「17 回合」，而其下早已列有第 33、42、49 回合的條目。
 >
-> **One item open, 2026-10-14: sub-second mtime on Windows.** The 6 findings from the
+> **Opened and closed on 2026-10-14: sub-second mtime on Windows.** The 6 findings from the
 > `4d24b8d` code review all closed today, verified on Windows and WSL (readahead 16/0 and
 > 23/0 strict on Windows; 17/0 and 23/0 on WSL). Closing them meant running
 > `test_blind_findings.zsh` on Windows for the first time since the sub-second mtime work
@@ -200,7 +200,16 @@
 > **197 checks on Windows (192/5), 192 on WSL (192/0), 200 on macOS (200/0)**. The totals
 > differ by platform branches and were not reconciled.
 >
-> **2026-10-14：1 項未處理——Windows 上的子秒 mtime。** `4d24b8d` code review 的 6 項今日
+> **Fixed the same day: Windows now reads 197/0.** Both sides were implemented -- the writer
+> reads `ftLastWriteTime` out of the `GetFileAttributesExW` call `winStat` was already
+> making, and the reader sets times through `SetFileTime` instead of a Date. WSL is unchanged
+> at 192/0, because every executable line of the fix is inside `#if os(Windows)`. Nothing
+> carries 🔴 as this is written, which is a statement about
+> `grep -n '^## .*🔴' todo/todo.md` returning nothing, not a claim that the tree is clean --
+> this very entry was found by re-running a suite nobody had re-run for 24 days, not by
+> reading the file.
+>
+> **2026-10-14 當日開啟並結案：Windows 上的子秒 mtime。** `4d24b8d` code review 的 6 項今日
 > 全部結案，Windows 與 WSL 皆驗（Windows readahead 16/0、strict 23/0；WSL 17/0、23/0）。
 > 結案過程中，`test_blind_findings.zsh` 自子秒 mtime 那批工作落地以來第一次在 Windows 上
 > 跑，量得 **192 通過、5 失敗**——不是本橫幅上方自 2026-09-20 起寫著的「157 項全過」。
@@ -214,6 +223,12 @@
 > `/mnt/c` 工作區、同一塊 NTFS——這正是排除檔案系統成因的依據。三個平台本輪都有數字了：
 > **Windows 197 條（192/5）、WSL 192 條（192/0）、macOS 200 條（200/0）**。總數差異來自
 > 平台分支，本輪未核對。
+>
+> **當日修好：Windows 現為 197/0。** 兩端都補上了——寫入端從 `winStat` 原本就在呼叫的
+> `GetFileAttributesExW` 取回 `ftLastWriteTime`，讀取端改以 `SetFileTime` 而非 Date 設定
+> 時間。WSL 維持 192/0，因為修正的每一行可執行碼都在 `#if os(Windows)` 之內。撰寫本段時
+> 無任何條目標著 🔴——那說的是 `grep -n '^## .*🔴' todo/todo.md` 沒有回報，而不是宣稱這棵
+> 樹是乾淨的：本條目本身就是靠重跑一套 24 天沒人重跑的測試找到的，不是靠讀這個檔案。
 
 Tracked issues that are known, reproduced, and deliberately not fixed yet.
 `verifications/bsdtar_compat.zsh:385` already points here for its XFAIL, so this
@@ -222,7 +237,7 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## 2026-10-14 子秒 mtime 在 Windows 上兩端皆未實作，5 條檢查失敗 ▸ 🔴 未修 / Sub-second mtime is unimplemented on Windows on both sides: 5 checks fail
+## 2026-10-14 子秒 mtime 在 Windows 上兩端皆未實作，5 條檢查失敗 ▸ ✅ 已修 2026-10-14（Windows 與 WSL 皆驗）/ Sub-second mtime was unimplemented on Windows on both sides: fixed and verified on Windows and WSL
 
 `zsh test/test_blind_findings.zsh | tail -1` 在 Windows 上重新量得 **PASS: 192 FAIL: 5**（共 197 條）。
 失敗的 5 條全屬子秒 mtime，而它們是**兩個互相獨立的缺陷**，不是一個：
@@ -293,6 +308,69 @@ build fails 5. Recorded but not explained: the same fixture reads back `.1234567
 DrvFs and `.123456700` through the Win32 path. It does not affect the conclusion, because the
 Windows writer stores no pax record at all rather than a truncated one. The three platforms'
 totals all differ (197 / 192 / 200) and were not reconciled this round.
+
+### 修法（2026-10-14 同日）/ The fix, the same day
+
+`swift_tar.swift` +149／−36，全部在 `#if os(Windows)` 之內——唯一的例外是一段註解
+（那句「Windows 分支用不到 nanos」已不成立）。`posixSetTimes(d.path, d.mtime, d.nanos)`
+一字未動。
+
+**寫入端**
+- `WinStat` 新增 `mtimeNanos`，對應 POSIX 分支的 `st_mtim.tv_nsec`。
+- `winStat` 把原本的 `GetFileAttributesW` 換成 **`GetFileAttributesExW`**，同一次呼叫連帶
+  取回 `ftLastWriteTime`。這點是刻意的：同一輪審查的第 4 項就是「不要為每個成員多加一次
+  Win32 查詢」，若為取時間另外呼叫 `FindFirstFileW`，等於一邊修這個缺陷一邊重新引入那一
+  項。因此精確 mtime 是**零額外呼叫**取得的。早於 1970 的時間仍退回原本的 Date 路徑並夾到
+  0——那是讀 FILETIME 之前的行為，與精度修正分開，不順手更動。
+- `add(path:)` 的 4 個 `writeEntryHeader`（symlink／目錄／hardlink／一般檔案）都帶上
+  `mtimeNanos`。
+
+**讀取端（5 條路徑全部）**
+- `winFileTime` 收 `nanos`，貢獻 `nanos / 100` 個 tick（FILETIME 的單位就是 100ns）。
+- 新增 `winSetPathMtime`（回報失敗原因），`winSetLinkMtime` 改為它的薄包裝——一份實作而不
+  是第二份 `CreateFileW`+`SetFileTime`。
+- 寫入池／`.ucrt` 後端：`winFileTime(mtime, mtimeNanos)`，仍在同一個 fd 的 handle 上設定，
+  不多開檔。
+- `.foundation` 後端與 inline 大檔：原本 `setAttributes([.modificationDate:])`，Date 是
+  double、在今日的時間值上僅約 238ns 精度，改走 `SetFileTime`。
+- symlink 與目錄：`winSetLinkMtime` 帶 nanos。
+
+**驗證：三個平台各自跑過，Windows 197/0、WSL 192/0、macOS 200/0**（最後一項為修正前由 M4
+量得，而本修正在 POSIX 上零可執行碼變更，故不受影響）。`test_create_readahead` 與
+`test_strict` 一併跑過：Windows 16/0 與 23/0、WSL 17/0 與 23/0，皆與修正前相同——這點本來
+有風險，因為寫入端現在會為帶小數 mtime 的成員多寫一筆 pax 記錄，改變了 Windows 上封存的
+位元組輸出。
+
+**兩個缺陷各自獨立驗過，而不是只看套件轉綠**（修正前 → 修正後）：
+
+| 受測 | 修正前 | 修正後 |
+| --- | --- | --- |
+| 寫入端：封存裡的 pax 記錄 | 完全沒有 | `mtime=1767240000.123456700` |
+| 讀取端：自家封存往返 | `.000000000` | `.123456700` |
+| 讀取端：**GNU tar** `--format=pax` 封存 | `.000000000` | `.123456700` |
+
+第三列是關鍵：該封存由 GNU tar 1.35 產生、不經 swift_tar 寫入端，所以它單獨證明讀取端確實
+被修好，而不是寫入端的修正把讀取端的缺陷遮住了。它的小數只有 7 位
+（`mtime=1767240000.1234567`），讀取端也正確補到 100ns 刻度。
+
+重現：`touch -d '2026-01-01T12:00:00.123456789' a.txt`，再
+`tar --format=pax -cf gnu.tar a.txt`，以 `swift_tar -x` 解出後
+`zstat -L -F '%s.%N' +mtime`。
+
+The fix, same day: +149/-36 in `swift_tar.swift`, every executable line inside
+`#if os(Windows)` (the one exception is a comment that no longer held). Writer: `WinStat`
+gains `mtimeNanos`, and `winStat` swaps `GetFileAttributesW` for `GetFileAttributesExW`,
+which returns `ftLastWriteTime` in the same call -- deliberately, because finding 4 of this
+same review was about not adding a per-member Win32 query, so the precise mtime costs no
+extra call. All four `writeEntryHeader` calls carry it. Reader: `winFileTime` takes nanos
+(100ns is its own unit), a single `winSetPathMtime` replaces the two Date-based
+`setAttributes` sites, and the pool, symlink and directory paths pass nanos through.
+Verified per platform: Windows 197/0, WSL 192/0, plus 16/0 and 23/0 on Windows and 17/0 and
+23/0 on WSL, all unchanged from before the fix despite the writer now adding a pax record
+per fractional-mtime member. Both defects were also confirmed individually rather than by
+the suite alone -- in particular a GNU tar `--format=pax` archive, which does not go through
+swift_tar's writer, now restores `.123456700` where it restored `.000000000`, so the reader
+fix is proven independently of the writer fix.
 
 macOS counterpart, measured by the M4 session 2026-10-14: **200 pass, 0 fail**, 1 skip. The
 same checks pass on POSIX, which is the other half of the diagnosis -- the 5 failures are

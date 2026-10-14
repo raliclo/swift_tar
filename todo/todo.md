@@ -184,6 +184,28 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
+## 2026-10-14 `4d24b8d` 的 code review：reparse-point 誤判等 6 項 🔴 / Code review of `4d24b8d`: 6 findings
+
+對 `4d24b8d`（Windows dangling symlink 在 `-c` 失敗的修正 + 兩測試平台分支）做 code review，發現 6 項，全部對照原始碼確認。第 1 項是本 commit 自己引入的回歸。
+
+1. 🔴 **`winStat` 以裸 `FILE_ATTRIBUTE_REPARSE_POINT` 位元判 symlink（`swift_tar.swift:2478`）。** junction、OneDrive／雲端 placeholder、AppExecLink、dedup 等都設此位元，於是全被當成 symlink。`add(path:)` 的 `isSymlink` 分支在 `isDir` 之前（4168），`destinationOfSymbolicLink` 對非 symlink 回 nil → `?? ""` → 存成 size 0、空 linkname 的 type `2`。一個雲端 placeholder 原本存成帶內容的一般檔案，現在內容被靜默丟棄、`-c` 仍回 0——正是本 commit 想消除的那種靜默資料遺失，換成別的 reparse 類型。成因修法：判 reparse **tag** 是否 `IO_REPARSE_TAG_SYMLINK`（`FindFirstFileW` 的 `dwReserved0`），不是裸位元。
+   `winStat` keys on the bare reparse-point bit, so junctions, cloud placeholders and AppExecLinks are all misclassified as symlinks and archived as empty-target type `2`, dropping their content with exit 0. Fix: check the reparse tag `IO_REPARSE_TAG_SYMLINK`, not the bare bit.
+
+2. 🟠 **真的 dangling symlink，`destinationOfSymbolicLink` 在 Windows 是否也回 nil 未經實測（`swift_tar.swift:4176`）。** 若和 `attributesOfItem` 同樣因「解析 reparse 來分類」而失敗，會存成空目標。由第 3 項的往返測試實測確認。
+   Unverified whether `destinationOfSymbolicLink` also returns nil for a target-less link on Windows; resolved empirically by the finding-3 test.
+
+3. 🟠 **測試從未驗 `f20_dangling` 往返（`test/test_create_readahead.zsh:124`）。** `manifest()` 用 `find -type f` 排除所有 symlink，唯一 symlink 斷言是對**有效**連結 `f10_link`。本 commit 修的 dangling 案例沒被驗到——壞掉仍 15/0 綠燈。加對 `f20_dangling` 解出後 `readlink` == `/nonexistent` 的斷言。
+   The dangling case the commit fixes is never asserted; add a round-trip check on `f20_dangling`'s target.
+
+4. 🟡 **`GetFileAttributesW` 對每個成員都跑（`swift_tar.swift:2475`）。** 只有 `.typeRegular` 才有歧義；`.typeDirectory`／`.typeSymbolicLink` 已確定。gate 到 `.typeRegular` 可省一次系統呼叫／成員，並順便不讓目錄型 junction（回報 `.typeDirectory`）被重分類成 symlink。隨第 1 項一併解。
+   The reparse lookup runs for every member though only `.typeRegular` is ambiguous; gate it.
+
+5. 🟡 **註解交叉引用錯函式（`swift_tar.swift:2465`）。** 寫「同 `winCreateSymlink` 的代理」，但 `winCreateSymlink` 只用 `createSymbolicLink`；真正讀 reparse 位元的是 `clearNonRegular`（2923），且其語意是「刪任何 reparse point」（裸位元正確），與此處「判是否 symlink」（需 tag）不同——precedent 其實不成立。改指 `clearNonRegular` 並註明差異。
+   Comment cites `winCreateSymlink` (which uses only `createSymbolicLink`); the bare-bit precedent is `clearNonRegular`, and its predicate differs. Fix the reference.
+
+6. ⚪ **`export MSYS=winsymlinks:native` 覆蓋既有 MSYS 選項（`test/test_create_readahead.zsh:49`、`test/test_strict.zsh`）。** 改 append 式保留既有選項。
+   The assignment clobbers any pre-existing MSYS options; append instead.
+
 ## 2026-09-27 全樹程式碼審查 / Whole-tree code review
 
 範圍：21 個檔案、約 11,400 行（Swift、C bridge、三平台建置腳本、驗證工具）。審查由

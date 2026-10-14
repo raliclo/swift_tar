@@ -2386,7 +2386,7 @@ stt_dir=${${(M)${(f)stt_out}:#\[swift_tar -test\] working directory: *}#*directo
 stt_dir=${stt_dir%$'\r'}
 eq "-test exits 0" 0 "$stt_rc"
 if [[ -z $stt_dir ]]; then
-  bad "-test removes its working directory: could not read the path from its output"
+  bad "-test removes its working directory: could not read the path from its output (it ended with: ${${(f)stt_out}[-1]})"
 elif [[ -e $stt_dir ]]; then
   bad "-test removes its working directory ($stt_dir is still there)"; rm -rf "$stt_dir"
 else

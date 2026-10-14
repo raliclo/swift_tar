@@ -2472,12 +2472,22 @@ private func winStat(_ path: String) -> WinStat? {
     // 跟隨連結、不需目標即可讀出 reparse-point 位元——解出端（見 winCreateSymlink）已用同一代理
     // ——故以它判定 symlink，再回退到 .type。isDir 維持只看 .type：add(path:) 先判 isSymlink 再
     // 判 isDir，故目錄型 reparse point 會被存成連結。
+    //
+    // The bit alone is not enough: a deduplicated file, an AppExecLink, a WSL file and a cloud
+    // placeholder carry it too and are not links. Taken for one, each was stored as a link
+    // with an empty target, its content dropped and the exit status 0. So the bit only counts
+    // when the link's destination can be read, which is what add(path:) is about to do.
+    // 只看這個位元不夠：去重檔、AppExecLink、WSL 檔與雲端佔位檔也帶著它，卻不是連結。被當成
+    // 連結時，每一個都被存成目標為空的連結，內容遺失而結束碼為 0。所以只有在讀得出連結目的地
+    // 時才算數——那正是 add(path:) 接下來要做的事。
     let wide = Array(winUcrtPath(path).utf16) + [0]
     let fa = wide.withUnsafeBufferPointer { GetFileAttributesW($0.baseAddress!) }
     let isReparse = fa != INVALID_FILE_ATTRIBUTES
         && (fa & UInt32(FILE_ATTRIBUTE_REPARSE_POINT)) != 0
+    let isLink = type == .typeSymbolicLink
+        || (isReparse && (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil)
     return WinStat(isDir: type == .typeDirectory,
-                   isSymlink: type == .typeSymbolicLink || isReparse,
+                   isSymlink: isLink,
                    size: size, mtime: mtime, nlink: nlink,
                    volumeSerial: volumeSerial, fileIndex: fileIndex)
 }
@@ -5916,8 +5926,18 @@ func findStandardTar(debug: Bool = false) -> String? {
     // guest 上的那一份沒有 gzip、bzip2、xz，而舊版 swift_tar 被略過之後，PATH 上的下一個
     // 就是它（/bin/tar）：.tar.gz 往返對它失敗，/usr/bin 裡的 bsdtar 卻沒被用到。
     func unfitAsStandardTar(_ candidate: String) -> Bool {
-        let probe = NSTemporaryDirectory() + "swift_tar_idprobe_\(ProcessInfo.processInfo.processIdentifier)"
-        defer { try? FileManager.default.removeItem(atPath: probe) }
+        // The answer is written inside a directory made here and for this user only. A file
+        // straight in the temp directory, named after the pid, could be put there first by
+        // someone else as a link, and the write would then go through it (on Linux the
+        // directory is the shared /tmp). Creating the directory fails if the name is taken.
+        // 答案寫在此處建立、僅限本使用者的目錄裡。直接放在暫存目錄、以 pid 命名的檔案，別人可以
+        // 搶先放一個連結在那裡，寫入就會穿過它（Linux 上那是共用的 /tmp）。名稱已被佔用時，建立
+        // 目錄會失敗。
+        let probeDir = NSTemporaryDirectory() + "swift_tar_idprobe_\(UUID().uuidString)"
+        guard (try? FileManager.default.createDirectory(atPath: probeDir, withIntermediateDirectories: false,
+                                                        attributes: [.posixPermissions: 0o700])) != nil else { return true }
+        defer { try? FileManager.default.removeItem(atPath: probeDir) }
+        let probe = probeDir + "/version"
         guard runTarProcessCapturingStdout(candidate, ["--version"], toFile: probe),
               let text = try? String(contentsOfFile: probe, encoding: .utf8) else { return true }
         let lower = text.lowercased()
@@ -5992,24 +6012,36 @@ func compareTrees(_ a: String, _ b: String) -> Bool {
 /// 就是（介面未啟用時）永遠不會。已在 Buildroot guest 的兩種狀態下實測；UDP connect 與
 /// AF_UNIX socketpair 在 `lo` 未啟用時都會成功，分辨不出來。只檢查一次，而且只有答案是
 /// 「不行」時才會花掉那半秒。
+///
+/// Only a connection that does not complete, or 127.0.0.1 not being bindable as an
+/// address, is a "no". A probe that could not be set up for another reason (no socket,
+/// bind refused: a sandbox that denies them, or no descriptors left) has learned nothing
+/// about `lo`, and answering "no" there refused every subprocess while telling the user
+/// to bring up an interface that was up.
+/// 只有「連線沒有完成」或「127.0.0.1 不是可 bind 的位址」才算「不行」。探測因其他原因架不
+/// 起來（拿不到 socket、bind 被拒：沙箱不准，或 descriptor 用完）時，對 `lo` 一無所知；在那裡
+/// 回答「不行」會拒絕所有子行程，還叫使用者去啟用一個本來就啟用的介面。
 #if os(Linux)
 private let loopbackConnects: Bool = {
     let listener = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
-    guard listener >= 0 else { return false }
+    guard listener >= 0 else { return true }
     defer { close(listener) }
     var addr = sockaddr_in()
     addr.sin_family = sa_family_t(AF_INET)
     addr.sin_addr.s_addr = UInt32(0x7f00_0001).bigEndian
     var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+    var bindErrno: Int32 = 0
     let bound = withUnsafeMutablePointer(to: &addr) {
         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa -> Bool in
-            bind(listener, sa, len) == 0 && listen(listener, 1) == 0
-                && getsockname(listener, sa, &len) == 0
+            if bind(listener, sa, len) != 0 { bindErrno = errno; return false }
+            return listen(listener, 1) == 0 && getsockname(listener, sa, &len) == 0
         }
     }
-    guard bound else { return false }
+    // 127.0.0.1 not being an address here is the interface being down, so that one is a "no".
+    // 127.0.0.1 在這裡不是一個位址，就是介面未啟用，所以這一種算「不行」。
+    guard bound else { return bindErrno != EADDRNOTAVAIL }
     let client = socket(AF_INET, Int32(SOCK_STREAM.rawValue) | Int32(SOCK_NONBLOCK.rawValue), 0)
-    guard client >= 0 else { return false }
+    guard client >= 0 else { return true }
     defer { close(client) }
     let started = withUnsafePointer(to: &addr) {
         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(client, $0, len) }
@@ -6161,9 +6193,15 @@ func runSelfTest(debug: Bool = false) {
     // 在任何東西啟動子行程之前先檢查，並且算失敗：否則 findStandardTar 會因為得不到回答而
     // 排除每一個候選，而下方「找不到，略過」的分支會讓這次執行以 0 結束。
     guard subprocessesUsable() else { exit(1) }
+    // A failure too, for the reason given above for skip(): with no reference tar nothing
+    // below runs, and since BusyBox and swift_tar itself stopped counting as one, a host
+    // can reach this line with a `tar` on PATH. It used to print "skipping" and exit 0.
+    // 這也算失敗，理由同上面不提供 skip() 的那一段：沒有參考 tar，下面什麼都不會跑；而自從
+    // BusyBox 與 swift_tar 自己不再算數之後，PATH 上有 `tar` 的主機也可能走到這一行。這裡
+    // 原本印出「略過」並以 0 結束。
     guard let stdTar = findStandardTar(debug: debug) else {
-        print("[swift_tar -test] standard tar not found on PATH, skipping cross-compat round-trip / 在 PATH 中找不到標準 tar，略過互通性測試")
-        exit(0)
+        print("[swift_tar -test] FAIL: no standard tar on PATH (GNU tar or bsdtar; BusyBox and swift_tar do not count), so nothing was tested / 失敗：PATH 中沒有標準 tar（GNU tar 或 bsdtar；BusyBox 與 swift_tar 不算），因此什麼都沒有測")
+        exit(1)
     }
     print("[swift_tar -test] standard tar (which tar): \(stdTar)")
 

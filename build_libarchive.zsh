@@ -156,7 +156,11 @@ fi
 typeset -a bridge_zlib
 bridge_zlib=()
 [[ -n ${ZLIB_INCLUDE_DIR:-} ]] && bridge_zlib=(-I"$ZLIB_INCLUDE_DIR")
-clang -O2 -DSWIFT_TAR_ZIP_PARALLEL -Ilibarchive/libarchive "${bridge_zlib[@]}" \
+# The compiler the caller named, as cmake above was given it: compile_tar-linux.zsh passes
+# CC because clang may exist only under the Swift toolchain and not on PATH.
+# 用呼叫端指定的編譯器，與上面的 cmake 一致：compile_tar-linux.zsh 之所以傳入 CC，是因為 clang
+# 可能只存在於 Swift toolchain 之下，而不在 PATH 上。
+"${CC:-clang}" -O2 -DSWIFT_TAR_ZIP_PARALLEL -Ilibarchive/libarchive "${bridge_zlib[@]}" \
     -c libarchive_zip_bridge.c -o build/libarchive_zip_bridge.o
 
 # Record the pinned gitlink in this platform's provenance file, mirroring

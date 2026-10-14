@@ -54,7 +54,7 @@ set -euo pipefail
 
 script_path="${0:A}"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-    sed -n '3,54p' "$script_path" | sed 's/^# \{0,1\}//'
+    sed -n '3,52p' "$script_path" | sed 's/^# \{0,1\}//'
     exit 0
 fi
 

@@ -125,6 +125,50 @@ grep -q 'neither applies nor reverses' "$TMP/out" && [ "$rc" = 1 ] \
   && ok "a file matching neither state is reported stale, exit 1" \
   || bad "a file matching neither state is reported stale, exit 1 (rc $rc; $(tr '\n' '|' < "$TMP/out"))"
 
+# A patch whose only added line is already somewhere else in the file. Until 2026-10-14 the
+# state was read one line at a time anywhere in the file, so this was "applied" on sources
+# nobody had touched. In a drop of its own, with one made-up patch, so that nothing above
+# is counted twice.
+# 一份 patch，它唯一新增的那一行本來就在檔案的別處。2026-10-14 之前，狀態是逐行在檔案任何
+# 位置找出來的，所以對沒人動過的原始碼，這會是「已套用」。放在自己的一份原始碼包裡，只帶一份
+# 編出來的 patch，免得上面的東西被重複計數。
+DUP="$TMP/dup"
+mkdir -p "$DUP/patch/demo" "$DUP/demo"
+cp "$ROOT/patch/apply_patches.zsh" "$DUP/patch/"
+print -l 'int first(void) {' '    return 1;' '}' 'int second(void) {' '    int ret;' '    return 2;' '}' > "$DUP/demo/a.c"
+cp "$DUP/demo/a.c" "$DUP/a.c.orig"
+print -rl -- '--- a/a.c' '+++ b/a.c' '@@ -1,3 +1,4 @@' ' int first(void) {' '+    int ret;' '     return 1;' ' }' \
+  > "$DUP/patch/demo/0001-dup.patch"
+drun() { ( cd "$DUP" && ./patch/apply_patches.zsh "$@" ) > "$DUP/out" 2>&1; }
+rc=0; drun --check || rc=$?
+grep -q '未套用' "$DUP/out" && [ "$rc" = 1 ] \
+  && ok "a patch adding a line found elsewhere in the file is reported not applied" \
+  || bad "a patch adding a line found elsewhere in the file is reported not applied (rc $rc; $(tr '\n' '|' < "$DUP/out"))"
+rc=0; drun || rc=$?
+[ "$rc" = 0 ] && [ "$(grep -c 'int ret;' "$DUP/demo/a.c")" = 2 ] \
+  && ok "and applying it changes the file" \
+  || bad "and applying it changes the file (rc $rc; $(tr '\n' '|' < "$DUP/out"))"
+rc=0; drun --check || rc=$?
+[ "$rc" = 0 ] && ok "after which --check exits 0" || bad "after which --check exits 0 (got $rc)"
+
+# A patch that cannot be applied says why. The reason used to be thrown away, leaving
+# "failed to apply" and nothing to act on. The file is put back and made unwritable along
+# with its directory: the text still reads as not applied, and `patch` cannot write.
+# 套不上的 patch 要說出原因。原因原本被丟掉，只剩「套用失敗」而沒有可以著手的東西。把檔案放
+# 回去，連同它的目錄設成不可寫：文字讀起來仍是未套用，而 `patch` 寫不進去。
+if [ "$(id -u)" != 0 ]; then
+  cp "$DUP/a.c.orig" "$DUP/demo/a.c"
+  chmod 444 "$DUP/demo/a.c"; chmod 555 "$DUP/demo"
+  rc=0; drun || rc=$?
+  chmod 755 "$DUP/demo"; chmod 644 "$DUP/demo/a.c"
+  said=$(grep -v -e '^  ' -e '^$' -e '^已套用' "$DUP/out" || true)
+  [ "$rc" = 1 ] && grep -q 'failed to apply' "$DUP/out" && [ -n "$said" ] \
+    && ok "a patch that fails to apply shows what patch said" \
+    || bad "a patch that fails to apply shows what patch said (rc $rc; $(tr '\n' '|' < "$DUP/out"))"
+else
+  echo "SKIP: failed-apply case (root can write anywhere)"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" = 0 ]

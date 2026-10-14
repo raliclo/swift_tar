@@ -3778,3 +3778,57 @@ repository". `patch/apply_patches.zsh:100` uses the same test and is expected to
 way (untested). Workaround: exclude `.git` files too, or build the drop from `git ls-files`.
 Possible fix: ask git (`git rev-parse --git-dir`) in all three places, with a test on a copy
 that carries a broken `.git` file.
+
+## 2026-10-14 對 `18606cd..923b17e` 的審查：十項發現 ▸ 🟡 已修，macOS 已驗；Windows 與 Linux 的三項未驗 / Review of `18606cd..923b17e`: ten findings, fixed and verified on macOS; three await Windows or Linux
+
+**範圍**：`18606cd..923b17e`（約 3,981 行新增）。修正前後各在 macOS 上重建並跑 `test/` 全部 23 支，
+兩次皆 23 支以 0 結束；`test_patch_drop.zsh` 由 12 項變 16 項。
+
+| # | 位置 | 問題 | 修法 | 驗證 |
+| --- | --- | --- | --- | --- |
+| 1 | `swift_tar.swift` `winStat` | 任何 reparse point 都被當成 symlink；去重檔、AppExecLink、WSL 檔、雲端佔位檔被存成目標為空的連結，內容遺失而結束碼為 0 | 只有在讀得出連結目的地時，reparse 位元才算數 | **未驗：Windows 專屬程式碼，本機不編譯它** |
+| 2 | `swift_tar.swift` `loopbackConnects` | 探測架不起來（拿不到 socket、bind 被拒）也回答「不行」，於是拒絕所有子行程 | 只有連線未完成、或 bind 得到 `EADDRNOTAVAIL` 才算「不行」 | **未驗：Linux 專屬程式碼，本機不編譯它** |
+| 3 | `libarchive_zip_bridge.c` | 執行中變大的檔案：`-n 1` 以錯誤結束，多執行緒卻讀到 EOF 並存下，且記憶體不受視窗上限約束 | 兩條路徑都只讀到列出時的大小 | macOS 實測，見下 |
+| 4 | `swift_tar.swift` `-test` | 找不到標準 tar 時印「略過」並以 0 結束 | 改為印出 FAIL 並以 1 結束 | macOS：PATH 清空時 rc=1 |
+| 5 | `patch/apply_patches.zsh` | 無 git 時逐行在整個檔案找，新增行已存在於別處的 patch 被判為已套用；`patch` 的輸出被丟掉 | 以 hunk 為單位連同前後文比對；失敗時印出 git 或 `patch` 的輸出 | 新增 4 項測試，對舊腳本 3 項失敗 |
+| 6 | `libarchive_zip_bridge.c` | 排序走訪列目錄時逐檔讀 fflags 與 sparse map，隨後丟棄 | 列目錄的 handle 帶上與 `stat_disk` 相同的旗標 | 位元組與修正前相同，見下；**沒有量速度** |
+| 7 | `build_libarchive.zsh` | bridge 以裸 `clang` 編譯，不理會傳入的 `CC` | 改用 `${CC:-clang}` | macOS 建置通過；**Linux 上 clang 不在 PATH 的情況未驗** |
+| 8 | `swift_tar.swift` `unfitAsStandardTar` | 探測檔寫到可預測的 `swift_tar_idprobe_<pid>`，會跟隨別人預先放好的 symlink | 寫進當場建立、權限 0700 的目錄 | macOS：`-test` 通過，暫存目錄無殘留 |
+| 9 | `test/test_zip_parallel.zsh` | 單次計時的 CPU／經過時間比值，門檻只要求 2 核 | 要求 4 核，兩邊各取三次中較好的一次 | macOS：96% 與 381% |
+| 10 | `compile_tar-linux.zsh` | `--help` 多印一行 `set -euo pipefail` | 範圍由 `3,54` 改為 `3,52` | macOS 執行 `--help` 確認 |
+
+**第 3 項的實測**（macOS，一個 1 MiB 的檔案在封存期間由另一個行程持續附加）：
+
+| 執行檔 | `-n` | 結束碼 | 存下的大小 |
+| --- | --- | --- | --- |
+| 修正前 | 1 | 1（`archive_write_data` 錯誤） | — |
+| 修正前 | 8 | 0 | 201,048,576（讀到附加結束） |
+| 修正後 | 1 | 0 | 列出時的大小 |
+| 修正後 | 8 | 0 | 列出時的大小 |
+
+這是一次性的檢查，沒有寫成測試：它依賴兩個行程之間的時序。
+
+**第 6 項的實測**：一棵帶 xattr、symlink 與子目錄的樹，以修正前後的執行檔各建一次 ZIP，
+排序與 `--zip-unsorted`、`-n 1` 與 `-n 4` 共四種組合，加上單一檔案一種，五種皆逐位元組相同。
+
+**行為變更**：`swift_tar -test` 在沒有標準 tar 的主機上現在以 1 結束。拿它當守門條件、而主機上
+只有 BusyBox tar 的流程，會從「通過」變成「失敗」，這是刻意的。
+
+**還要做的**：在 Windows 上重建並跑 `test_create_readahead.zsh` 與 `test_strict.zsh`（第 1 項）；
+在 Linux 上重建並跑整輪，`lo` 啟用與未啟用各一次（第 2、7 項）。
+
+Review of `18606cd..923b17e` on 2026-10-14. All 23 scripts under `test/` exit 0 on macOS both
+before and after the fixes; `test_patch_drop.zsh` went from 12 checks to 16. Fixed: (1) `winStat`
+counted every reparse point as a symlink, so non-link reparse files lost their content with exit
+0 -- the bit now counts only when the link's destination can be read; (2) `loopbackConnects`
+answered "no" when the probe could not be set up, refusing every subprocess -- now only a
+connection that does not complete, or `EADDRNOTAVAIL` on bind, is a "no"; (3) a file growing
+during the run failed with `-n 1` and was read to EOF with threads -- both paths now stop at the
+listed size; (4) `-test` exits 1, not 0, without a standard tar; (5) `apply_patches.zsh` compares
+whole hunks with their context and shows what git or `patch` said on failure; (6) the sorted
+walk's listing handle no longer reads fflags and sparse maps it throws away; (7) the bridge is
+compiled with `${CC:-clang}`; (8) the tar probe writes inside a 0700 directory made on the spot;
+(9) the thread-use test needs four cores and takes the better of three runs; (10) `--help` range
+`3,52`. **Not verified: 1 (Windows-only code), 2 and the no-clang-on-PATH case of 7 (Linux-only
+code) -- none of it is compiled on this machine.** No speed was measured for 6; its bytes are
+identical to the build before it in five cases.

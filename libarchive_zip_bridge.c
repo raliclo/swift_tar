@@ -145,10 +145,19 @@ static int copy_file_to_archive(struct archive *writer,
     char buffer[64 * 1024];
     FILE *input;
     size_t count;
+    la_int64_t remaining;
 
     if (archive_entry_filetype(entry) != AE_IFREG || archive_entry_size(entry) == 0) {
         return 0;
     }
+    /* No more than the size the entry was listed with. A file that grew after that used to
+     * be read to its new end here: libarchive takes only the listed size, the count came
+     * back short, and the whole run ended with an error -- while the threaded path stored
+     * the same file without complaint. Both now store the listed size.
+     * 不超過項目列出時的大小。列出之後才變大的檔案，這裡原本會讀到新的結尾：libarchive 只收
+     * 列出的大小，回傳的數量少了，整次執行以錯誤結束——而執行緒路徑對同一個檔案卻照存不誤。
+     * 現在兩邊存的都是列出時的大小。 */
+    remaining = archive_entry_size(entry);
 
 #ifdef _WIN32
     {
@@ -168,8 +177,12 @@ static int copy_file_to_archive(struct archive *writer,
         return -1;
     }
 
-    while ((count = fread(buffer, 1, sizeof(buffer), input)) > 0) {
+    while (remaining > 0 &&
+           (count = fread(buffer, 1, remaining < (la_int64_t)sizeof(buffer) ?
+                                     (size_t)remaining : sizeof(buffer), input)) > 0) {
         la_ssize_t written = archive_write_data(writer, buffer, count);
+
+        remaining -= (la_int64_t)count;
         if (written < 0 || (size_t)written != count) {
             set_archive_error(error_buffer, error_capacity, "archive_write_data", writer);
             fclose(input);
@@ -432,6 +445,12 @@ static void compress_job(zip_job *job, int base_dir, unsigned char *input, size_
     size_t capacity = 64 * 1024;
     int fd;
     int flush = Z_NO_FLUSH;
+    /* What is read stops at the size the entry was listed with, which is what the window
+     * counted. Read to the end of the file instead, a file growing during the run was held
+     * here at whatever size it reached, and was stored where -n 1 ended with an error.
+     * 讀取止於項目列出時的大小，也就是視窗所計入的量。若改讀到檔案結尾，執行期間持續變大的
+     * 檔案長到多大，這裡就留多大，而且存得進去，-n 1 卻以錯誤結束。 */
+    la_int64_t remaining = job->cost;
 
     fd = openat(base_dir, path != NULL ? path : "", O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
@@ -457,7 +476,8 @@ static void compress_job(zip_job *job, int base_dir, unsigned char *input, size_
         int status;
 
         if (stream.avail_in == 0 && flush == Z_NO_FLUSH) {
-            ssize_t count = read(fd, input, input_size);
+            ssize_t count = remaining == 0 ? 0 :
+                read(fd, input, remaining < (la_int64_t)input_size ? (size_t)remaining : input_size);
             if (count < 0) {
                 if (errno == EINTR) continue;
                 snprintf(job->error, sizeof(job->error), "failed while reading an input file");
@@ -469,6 +489,7 @@ static void compress_job(zip_job *job, int base_dir, unsigned char *input, size_
             } else {
                 job->crc = crc32(job->crc, input, (uInt)count);
                 job->bytes += count;
+                remaining -= count;
                 stream.next_in = input;
                 stream.avail_in = (uInt)count;
             }
@@ -1078,6 +1099,15 @@ static int add_path(zip_pipeline *pipeline,
             ARCHIVE_READDISK_NO_XATTR | ARCHIVE_READDISK_NO_ACL |
             ARCHIVE_READDISK_NO_FFLAGS | ARCHIVE_READDISK_NO_SPARSE);
         archive_read_disk_set_standard_lookup(stat_disk);
+        /* Here `disk` lists names: apart from the entry for the thing it was opened on, every
+         * entry it makes is thrown away and read again through stat_disk, with these same
+         * flags. Without them it opened each file for its flags and sparse map on the way.
+         * 在這裡 `disk` 用來列出名稱：除了它被開啟的那個對象本身之外，它做出的每個項目都被丟掉，
+         * 再經由 stat_disk 以同樣這組旗標重讀。少了這些旗標，它會順路開啟每個檔案去讀 flags 與
+         * sparse map。 */
+        archive_read_disk_set_behavior(disk,
+            ARCHIVE_READDISK_NO_XATTR | ARCHIVE_READDISK_NO_ACL |
+            ARCHIVE_READDISK_NO_FFLAGS | ARCHIVE_READDISK_NO_SPARSE);
 
         walk.pipeline = pipeline;
         walk.disk = disk;

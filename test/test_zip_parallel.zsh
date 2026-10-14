@@ -158,8 +158,16 @@ fi
 # 壓縮八個大小相同的檔案時，CPU 時間與經過時間的比。一個執行緒時兩者大致相等；四個時，CPU 時間
 # 是經過時間的數倍。建置沒有執行緒路徑的地方（Windows，或 libarchive 不是打過 patch 的靜態庫）
 # 沒有可斷言的東西，這一項會明說略過，而不是通過。
+#
+# Four cores, and the better of three runs each way. With two cores the most -n 4 can show
+# is 200%, and the one writing thread and the reads are serial, so a busy machine or a slow
+# disk put a sound binary under the 160 asked for; a single timing also left -n 1 wandering
+# about its 130. A run that did use the threads shows it in at least one of three.
+# 要四個核心，且兩邊各取三次中較好的一次。只有兩核時 -n 4 最多只看得到 200%，而寫出的那個
+# 執行緒與讀取都是循序的，機器一忙或磁碟一慢，沒問題的執行檔也會低於所要求的 160；只計時一次，
+# 也讓 -n 1 在 130 上下飄。真的用到執行緒的話，三次裡至少有一次看得出來。
 cores=$( (getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1) | head -1 )
-if [ "$POSIX" = 1 ] && [ "$cores" -ge 2 ] && grep -q '^libarchive_linkage=static' "$VERSION_FILE" 2>/dev/null; then
+if [ "$POSIX" = 1 ] && [ "$cores" -ge 4 ] && grep -q '^libarchive_linkage=static' "$VERSION_FILE" 2>/dev/null; then
   ratio() {  # ratio N -> CPU time / elapsed time, in hundredths
     local TIMEFMT='%U %S %E' line
     line=$( { time "$ST" -c --zip -n $1 -f "$TMP/cpu.zip" -C "$SRC/t" text >/dev/null 2>/dev/null; } 2>&1 | tail -1 )
@@ -167,12 +175,16 @@ if [ "$POSIX" = 1 ] && [ "$cores" -ge 2 ] && grep -q '^libarchive_linkage=static
     printf "%.0f\n" $(( (${line[(w)1]} + ${line[(w)2]}) * 100.0 / (${line[(w)3]} > 0 ? ${line[(w)3]} : 0.001) ))
   }
   one=$(ratio 1); four=$(ratio 4)
+  for again in 2 3; do
+    r=$(ratio 1); [ "$r" -lt "$one" ] && one=$r
+    r=$(ratio 4); [ "$r" -gt "$four" ] && four=$r
+  done
   if [ "$one" -lt 130 ]; then ok "threads: -n 1 uses about one core ($one% of elapsed)"
   else bad "threads: -n 1 uses about one core ($one% of elapsed)"; fi
   if [ "$four" -ge 160 ]; then ok "threads: -n 4 uses more than one core ($four% of elapsed)"
   else bad "threads: -n 4 uses more than one core ($four% of elapsed)"; fi
 else
-  echo "SKIP: thread-use case (no threaded ZIP path in this build, or one core)"
+  echo "SKIP: thread-use case (no threaded ZIP path in this build, or fewer than four cores)"
 fi
 
 # --help said "-n: default 2×cores" long after the code had gone to one per core (the 2×

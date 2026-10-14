@@ -98,24 +98,42 @@ typeset -i problems=0 applied=0 already=0 obsolete=0
 # 已套用；不全在、而它移除的每一行都還在，就是未套用；其餘皆為過期。`patch` 只用來做出
 # 修改，做完再讀一次文字確認它真的做了。
 with_git() { [[ -e $ROOT/$1/.git ]] && command -v git >/dev/null 2>&1; }
+#
+# The lines are compared a hunk at a time, as one run of consecutive lines with their
+# context, not one by one anywhere in the file. One by one, a patch whose added lines all
+# occur somewhere already (`break;`, `int ret;`, a line moved within the file) read as
+# applied on untouched sources, and the build went on without it.
+# 比對以 hunk 為單位，連同前後文當成一段連續的行，而不是逐行在檔案任何位置找。逐行找的時候，
+# 新增的每一行本來就出現在檔案某處的 patch（`break;`、`int ret;`、在檔案內搬動的一行），對沒
+# 動過的原始碼會被讀成已套用，建置就在沒有它的情況下繼續。
 text_state() {   # submodule patch -> applied | missing | stale
-  local sub=$1 p=$2 line body file="" added_ok=1 removed_ok=1
-  local -i n_added=0
+  local sub=$1 p=$2 line counts file content="" before="" after="" nl=$'\n'
+  local -i n_added=0 old=0 new=0 added_ok=1 removed_ok=1
   while IFS= read -r line || [[ -n $line ]]; do
+    if (( old > 0 || new > 0 )); then   # inside a hunk / 在 hunk 之內
+      case $line in
+        '+'*) after+=${line#+}$nl; new=$(( new - 1 )); n_added=$(( n_added + 1 )) ;;
+        '-'*) before+=${line#-}$nl; old=$(( old - 1 )) ;;
+        '\'*) ;;   # "\ No newline at end of file"
+        *)    before+=${line# }$nl; after+=${line# }$nl; old=$(( old - 1 )); new=$(( new - 1 )) ;;
+      esac
+      if (( old <= 0 && new <= 0 )); then
+        [[ $content == *"$nl$after"* ]] || added_ok=0
+        [[ $content == *"$nl$before"* ]] || removed_ok=0
+      fi
+      continue
+    fi
     case $line in
-      '+++ b/'*) file=$ROOT/$sub/${line#+++ b/} ;;
-      '--- '*|'+++ '*) ;;
-      '+'*) body=${line#+}
-            [[ -n ${body//[[:space:]]/} ]] || continue
-            n_added=$(( n_added + 1 ))
-            grep -Fxq -- "$body" "$file" 2>/dev/null || added_ok=0 ;;
-      '-'*) body=${line#-}
-            [[ -n ${body//[[:space:]]/} ]] || continue
-            grep -Fxq -- "$body" "$file" 2>/dev/null || removed_ok=0 ;;
+      '+++ b/'*) file=$ROOT/$sub/${line#+++ b/}
+                 content=""; [[ -r $file ]] && content=$nl$(<"$file")$nl ;;
+      '@@ -'*)   # @@ -start[,count] +start[,count] @@ ; a count left out is 1
+                 before=""; after=""
+                 counts=${${line#@@ -}%% *}; old=1; [[ $counts == *,* ]] && old=${counts#*,}
+                 counts=${${line#*+}%% *};   new=1; [[ $counts == *,* ]] && new=${counts#*,} ;;
     esac
   done < "$p"
-  # A patch that only deletes cannot be told apart this way; call it stale so a person looks.
-  # 只刪不增的 patch 無法這樣分辨；歸為過期，交給人看。
+  # A patch that only deletes is not decided here; call it stale so a person looks.
+  # 只刪不增的 patch 不在這裡判定；歸為過期，交給人看。
   if (( n_added == 0 )); then print stale
   elif (( added_ok )); then print applied
   elif (( removed_ok )); then print missing
@@ -130,13 +148,23 @@ p_state() {   # submodule patch -> applied | missing | stale
     text_state "$1" "$2"
   fi
 }
+# What git or `patch` says is shown whenever the change did not come out as asked: "failed
+# to apply" with the reason thrown away leaves nothing to act on. On success `patch` is
+# kept quiet, as its "patching file ..." lines say nothing the line printed below does not.
+# 修改沒有照要求完成時，一律把 git 或 `patch` 說的話印出來：「套用失敗」而原因被丟掉，就沒有
+# 可以著手的東西。成功時不印 `patch` 的輸出，它那幾行「patching file ...」沒有比下面印的那一行
+# 多說什麼。
 p_apply() {
-  if with_git "$1"; then git -C "$1" apply "$2" 2>/dev/null
-  else ( cd "$1" && patch -p1 -N -i "$2" ) >/dev/null 2>&1 </dev/null; [[ $(text_state "$1" "$2") == applied ]]; fi
+  local said
+  if with_git "$1"; then git -C "$1" apply "$2"; return; fi
+  said=$( cd "$1" && patch -p1 -N -i "$2" 2>&1 </dev/null )
+  [[ $(text_state "$1" "$2") == applied ]] || { print -ru2 -- "$said"; return 1; }
 }
 p_reverse() {
-  if with_git "$1"; then git -C "$1" apply --reverse "$2" 2>/dev/null
-  else ( cd "$1" && patch -p1 -R -i "$2" ) >/dev/null 2>&1 </dev/null; [[ $(text_state "$1" "$2") == missing ]]; fi
+  local said
+  if with_git "$1"; then git -C "$1" apply --reverse "$2"; return; fi
+  said=$( cd "$1" && patch -p1 -R -i "$2" 2>&1 </dev/null )
+  [[ $(text_state "$1" "$2") == missing ]] || { print -ru2 -- "$said"; return 1; }
 }
 
 for dir in "$HERE"/*(/N); do

@@ -2456,7 +2456,28 @@ private func winStat(_ path: String) -> WinStat? {
     let nlink = UInt32((attrs[.referenceCount] as? UInt64) ?? 1)
     let volumeSerial = (attrs[.systemNumber] as? UInt64) ?? 0
     let fileIndex = (attrs[.systemFileNumber] as? UInt64) ?? 0
-    return WinStat(isDir: type == .typeDirectory, isSymlink: type == .typeSymbolicLink,
+    // attributesOfItem reports .typeSymbolicLink for a symlink whose target exists, but
+    // (measured on Swift 6.4 / windows-msvc) .typeRegular for a DANGLING one: it resolves the
+    // reparse point to classify, and a missing target falls back to "regular". That routed a
+    // dangling link into the regular-file write path, where opening the absent target made
+    // `-c` exit 1 on any tree containing one (a valid symlink was stored correctly, which hid
+    // it). GetFileAttributesW reads the reparse-point bit without following the link or needing
+    // the target -- the same proxy the extract side already uses (see winCreateSymlink) -- so
+    // the symlink is detected from that, falling back to .type. isDir is left on .type alone:
+    // add(path:) tests isSymlink before isDir, so a directory reparse point is stored as a link.
+    // attributesOfItem 對「目標存在」的 symlink 回報 .typeSymbolicLink，但（於 Swift 6.4／
+    // windows-msvc 實測）對 dangling 回報 .typeRegular：它解析 reparse point 來分類，目標不存在
+    // 時退回「regular」。這使 dangling link 被送進一般檔案寫入路徑，開啟缺失目標令任何含此類
+    // 連結的樹於 -c 時 exit 1（有效 symlink 正確存下，因而把問題遮住）。GetFileAttributesW 不
+    // 跟隨連結、不需目標即可讀出 reparse-point 位元——解出端（見 winCreateSymlink）已用同一代理
+    // ——故以它判定 symlink，再回退到 .type。isDir 維持只看 .type：add(path:) 先判 isSymlink 再
+    // 判 isDir，故目錄型 reparse point 會被存成連結。
+    let wide = Array(winUcrtPath(path).utf16) + [0]
+    let fa = wide.withUnsafeBufferPointer { GetFileAttributesW($0.baseAddress!) }
+    let isReparse = fa != INVALID_FILE_ATTRIBUTES
+        && (fa & UInt32(FILE_ATTRIBUTE_REPARSE_POINT)) != 0
+    return WinStat(isDir: type == .typeDirectory,
+                   isSymlink: type == .typeSymbolicLink || isReparse,
                    size: size, mtime: mtime, nlink: nlink,
                    volumeSerial: volumeSerial, fileIndex: fileIndex)
 }

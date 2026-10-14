@@ -60,6 +60,13 @@ fi
 # 啟動的 session 執行則失敗，測資裡的成員數是預期的兩倍。
 export COPYFILE_DISABLE=1
 
+# Windows: the symlink fixture below is dangling (../elsewhere), which needs
+# winsymlinks:native -- nativestrict cannot make a symlink to a missing target.
+# Windows：下方 symlink 夾具是 dangling（../elsewhere），需 winsymlinks:native——
+# nativestrict 無法對不存在的目標建 symlink。
+IS_WIN=0
+case "$(uname -s)" in MSYS*|MINGW*|CYGWIN*) IS_WIN=1; export MSYS=winsymlinks:native ;; esac
+
 TMP="$(mktemp -d)"
 trap 'chmod -R u+w "$TMP" 2>/dev/null; rm -rf "$TMP"' EXIT
 
@@ -123,6 +130,13 @@ extract link          "$TMP/link.tar"   fail sub/ok.txt
 extract link-nostrict "$TMP/link.tar"   zero sub/ok.txt --no-strict
 if [ "$(id -u)" = 0 ]; then
   echo "SKIP: read-only directory cases (root ignores the permission bits)"
+elif (( IS_WIN )); then
+  # chmod 555 does not stop the owner writing on Windows (NTFS does not enforce the
+  # POSIX mode against the owner), so nothing is skipped, -x exits 0, and the case
+  # has no premise here -- the same reason it is skipped for root.
+  # Windows 上 chmod 555 擋不住 owner 寫入（NTFS 不對 owner 強制 POSIX mode），於是沒有
+  # 成員被略過、-x 回傳 0，本案例前提不成立——與 root 被 skip 的理由相同。
+  echo "SKIP: read-only directory cases (Windows does not enforce POSIX mode against the owner)"
 else
   PREP=make_ro extract perm          "$TMP/perm.tar" fail ok.txt
   PREP=make_ro extract perm-nostrict "$TMP/perm.tar" zero ok.txt --no-strict

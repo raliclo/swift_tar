@@ -35,6 +35,19 @@ if [ -z "${ST:-}" ]; then
 fi
 [ -x "$ST" ] || { echo "error: build first — missing $ST" >&2; exit 1; }
 
+# Windows: the fixtures below create symlinks, one of them dangling (f20_dangling),
+# which needs winsymlinks:native -- nativestrict cannot make a symlink to a target
+# that does not exist. And Windows has no filesystem FIFO, so the mkfifo fixture is
+# skipped there rather than aborting the whole run under set -e. The FIFO case tests
+# a POSIX-only property (ReadAhead must not block on a FIFO, via O_NONBLOCK), which
+# does not apply on the Windows -c path at all.
+# Windows：下方夾具會建 symlink，其中一個是 dangling（f20_dangling），需
+# winsymlinks:native——nativestrict 無法對不存在的目標建 symlink。且 Windows 無檔案系統
+# FIFO，故 mkfifo 夾具在該平台改為 skip，而非在 set -e 下中止整個測試。FIFO 案例驗的是
+# POSIX 專屬性質（ReadAhead 以 O_NONBLOCK 確保不卡在 FIFO），在 Windows 的 -c 路徑根本不適用。
+IS_WIN=0
+case "$(uname -s)" in MSYS*|MINGW*|CYGWIN*) IS_WIN=1; export MSYS=winsymlinks:native ;; esac
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -96,7 +109,10 @@ head -c 9000000 /dev/urandom > "$SRC/d2/large.bin"
 ln -s f1.bin "$SRC/d4/f10_link"
 ln -s /nonexistent "$SRC/d4/f20_dangling"
 ln "$SRC/d5/f1.bin" "$SRC/d5/f15_hard"
-mkfifo "$SRC/d6/f12_fifo"
+# mkfifo via `if` so a platform without FIFOs (Windows) skips rather than aborting
+# under set -e. / 以 if 包住 mkfifo，使無 FIFO 的平台（Windows）skip 而非在 set -e 下中止。
+have_fifo=0
+if mkfifo "$SRC/d6/f12_fifo" 2>/dev/null; then have_fifo=1; fi
 print -r -- skipme > "$SRC/d7/f13.skip"
 
 WANT=$(manifest "$SRC")
@@ -106,8 +122,12 @@ mkdir -p "$TMP/x1"; "$ST" -x -f "$TMP/a.tar" -C "$TMP/x1" >/dev/null 2>&1 || tru
 [ "$(manifest "$TMP/x1/src")" = "$WANT" ] && ok "tree: every file holds its own bytes" \
   || bad "tree: every file holds its own bytes"
 [ -L "$TMP/x1/src/d4/f10_link" ] && ok "tree: a symlink stays a symlink" || bad "tree: a symlink stays a symlink"
-[ -p "$TMP/x1/src/d6/f12_fifo" ] && ok "tree: a FIFO is archived as a FIFO, without blocking" \
-  || bad "tree: a FIFO is archived as a FIFO, without blocking"
+if (( have_fifo )); then
+  [ -p "$TMP/x1/src/d6/f12_fifo" ] && ok "tree: a FIFO is archived as a FIFO, without blocking" \
+    || bad "tree: a FIFO is archived as a FIFO, without blocking"
+else
+  echo "SKIP: FIFO case — no mkfifo on this platform / 此平台無 mkfifo"
+fi
 
 # The same archive twice: the order and bytes do not depend on which reads finished first.
 # 同一封存建兩次：順序與位元組不取決於哪個讀取先完成。

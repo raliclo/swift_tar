@@ -3832,3 +3832,18 @@ compiled with `${CC:-clang}`; (8) the tar probe writes inside a 0700 directory m
 `3,52`. **Not verified: 1 (Windows-only code), 2 and the no-clang-on-PATH case of 7 (Linux-only
 code) -- none of it is compiled on this machine.** No speed was measured for 6; its bytes are
 identical to the build before it in five cases.
+
+### 第 5 項帶來的回歸：新增檔案的 patch 被判為過期 ▸ 🟢 已修 / A regression from item 5: a patch creating a file read as stale ▸ fixed
+
+以 hunk 比對之後，`--- /dev/null`、`@@ -0,0 +1,N @@` 的 patch 在檔案尚未存在時兩項都比不到，
+於是 `--check` 回報「既套不上也反套不上」，沒有 git 的原始碼包會在建置前停下（舊腳本回報未套用）。
+目前三份 patch 都沒有新增檔案，所以尚未實際觸發。修法：沒有舊行、而目標檔不存在的 hunk，「舊狀態
+成立」。`test/test_patch_drop.zsh` 新增 3 項，對未修的腳本 3 項皆失敗，修後 19/0（macOS）。
+**未在 Linux guest 的 busybox `patch` 下驗。**
+
+With hunks compared as text, a `--- /dev/null` / `@@ -0,0 +1,N @@` patch matched neither state
+while its file did not exist, so `--check` said "neither applies nor reverses" and a drop without
+git stopped before building (the old script said "not applied"). None of the three patches creates
+a file, so it had not fired. Fix: a hunk with no old lines on a file not yet there counts as the
+old state. Three new checks in `test/test_patch_drop.zsh` fail on the unfixed script; 19/0 after
+(macOS). **Not run under the Linux guest's busybox `patch`.**

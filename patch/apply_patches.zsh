@@ -108,7 +108,7 @@ with_git() { [[ -e $ROOT/$1/.git ]] && command -v git >/dev/null 2>&1; }
 # 動過的原始碼會被讀成已套用，建置就在沒有它的情況下繼續。
 text_state() {   # submodule patch -> applied | missing | stale
   local sub=$1 p=$2 line counts file content="" before="" after="" nl=$'\n'
-  local -i n_added=0 old=0 new=0 added_ok=1 removed_ok=1
+  local -i n_added=0 old=0 old0=0 new=0 added_ok=1 removed_ok=1
   while IFS= read -r line || [[ -n $line ]]; do
     if (( old > 0 || new > 0 )); then   # inside a hunk / 在 hunk 之內
       case $line in
@@ -119,7 +119,12 @@ text_state() {   # submodule patch -> applied | missing | stale
       esac
       if (( old <= 0 && new <= 0 )); then
         [[ $content == *"$nl$after"* ]] || added_ok=0
-        [[ $content == *"$nl$before"* ]] || removed_ok=0
+        # A hunk with no old lines on a file not yet there creates that file: the absence
+        # is the old state. Matched as text, the empty file never held it and read as stale.
+        # 沒有舊行、而檔案還不存在的 hunk 會建立該檔案：檔案不存在就是舊狀態。當成文字比對時，
+        # 空的內容永遠比不到，於是被讀成過期。
+        if (( old0 == 0 )) && [[ ! -e $file ]]; then :
+        elif [[ $content != *"$nl$before"* ]]; then removed_ok=0; fi
       fi
       continue
     fi
@@ -128,7 +133,7 @@ text_state() {   # submodule patch -> applied | missing | stale
                  content=""; [[ -r $file ]] && content=$nl$(<"$file")$nl ;;
       '@@ -'*)   # @@ -start[,count] +start[,count] @@ ; a count left out is 1
                  before=""; after=""
-                 counts=${${line#@@ -}%% *}; old=1; [[ $counts == *,* ]] && old=${counts#*,}
+                 counts=${${line#@@ -}%% *}; old=1; [[ $counts == *,* ]] && old=${counts#*,}; old0=$old
                  counts=${${line#*+}%% *};   new=1; [[ $counts == *,* ]] && new=${counts#*,} ;;
     esac
   done < "$p"

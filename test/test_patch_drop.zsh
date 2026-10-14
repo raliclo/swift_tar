@@ -169,6 +169,30 @@ else
   echo "SKIP: failed-apply case (root can write anywhere)"
 fi
 
+# A patch that creates a file. Its hunk is `@@ -0,0 +1,N @@` and the file is not there yet,
+# so there is no old text to find; from f5b5499 until this test that read as stale ("neither
+# applies nor reverses") and a drop needing such a patch stopped before building.
+# 新增檔案的 patch。它的 hunk 是 `@@ -0,0 +1,N @@`，檔案還不存在，所以沒有舊文字可找；從
+# f5b5499 到這項測試之前，這被讀成過期（「既套不上也反套不上」），需要這種 patch 的原始碼包
+# 會在建置前停下來。
+NEW="$TMP/new"
+mkdir -p "$NEW/patch/demo" "$NEW/demo"
+cp "$ROOT/patch/apply_patches.zsh" "$NEW/patch/"
+print -l 'int a;' > "$NEW/demo/a.c"
+print -rl -- '--- /dev/null' '+++ b/b.c' '@@ -0,0 +1,2 @@' '+int x;' '+int y;' \
+  > "$NEW/patch/demo/0001-new-file.patch"
+nrun() { ( cd "$NEW" && ./patch/apply_patches.zsh "$@" ) > "$NEW/out" 2>&1; }
+rc=0; nrun --check || rc=$?
+grep -q '未套用' "$NEW/out" && ! grep -q 'neither applies' "$NEW/out" && [ "$rc" = 1 ] \
+  && ok "a patch creating a file is reported not applied, not stale" \
+  || bad "a patch creating a file is reported not applied, not stale (rc $rc; $(tr '\n' '|' < "$NEW/out"))"
+rc=0; nrun || rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$NEW/demo/b.c" 2>/dev/null)" = "$(print -l 'int x;' 'int y;')" ] \
+  && ok "and applying it creates the file" \
+  || bad "and applying it creates the file (rc $rc; $(tr '\n' '|' < "$NEW/out"))"
+rc=0; nrun --check || rc=$?
+[ "$rc" = 0 ] && ok "after which --check exits 0" || bad "after which --check exits 0 (got $rc)"
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" = 0 ]

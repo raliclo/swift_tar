@@ -6797,7 +6797,10 @@ struct SwiftTarMain {
             runSelfTest(debug: rawOptions.contains("-debug"))
         }
         if rawOptions.contains("--version") {
-            print("swift_tar \(swiftTarBuildVersion)")
+            // The release number and build id first, the provenance stamp last: release.zsh
+            // reads the number from the second word and the id from the parentheses.
+            // 版本號與 build id 在前、來源戳記在後：release.zsh 從第二個字讀版本號、從括號讀 id。
+            print("swift_tar \(swiftTarReleaseVersion) (\(swiftTarBuildID)) \(swiftTarBuildVersion)")
             exit(0)
         }
         // Hand-rolled crypto must be checkable against the specs' own vectors.

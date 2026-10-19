@@ -134,6 +134,47 @@ Windows ZIP 包含靜態連結的執行檔、Swift runtime DLL、`version.txt`�
 `zs.lib`、`zstd_static.lib`、headers 與
 CMake build tree 屬於開發產物，並非 runtime dependency，因此不放入 release。
 
+## 安裝正式版
+
+正式版是公開版（不含 LZFSE），每個平台一份 `.tar.zst`，放在
+[GitHub Releases](https://github.com/raliclo/swift_tar/releases)，旁邊各附一個 `.sha256`。
+`swift_tar --version` 會印出版本號、build id（在 tag 上建的執行檔是 `v0.1.0 / <commit>`）
+與來源戳記。
+
+```sh
+# macOS（Apple silicon）——這個 repo 本身就是 tap；`brew trust` 不能省
+brew tap raliclo/swift_tar https://github.com/raliclo/swift_tar
+brew trust raliclo/swift_tar
+brew install raliclo/swift_tar/swift_tar
+
+# Windows（x86-64）——bucket 在上層的 lzfse2 repo
+scoop bucket add raliclo https://github.com/raliclo/lzfse2
+scoop install raliclo/swift_tar
+
+# Linux（x86-64 或 aarch64）——解開後把 swift_tar 放上 PATH；需要 libbz2.so.1.0
+sha256sum -c swift_tar-0.1.0-linux-x86_64.tar.zst.sha256
+zstd -dc swift_tar-0.1.0-linux-x86_64.tar.zst | tar -xf -
+```
+
+### 發布正式版
+
+`VERSION` 記著下一個正式版要帶的版本號。順序是：預演、打 tag、在 tag 上建置、收集、發布。
+
+1. 在四個節點（macOS arm64、Windows x86-64、Linux x86-64、Linux aarch64）各自建公開版並跑
+   `./release.zsh`，然後把封存丟掉。這一步要在打 tag 之前做：封存建好之後才移動 tag，
+   每一份都會作廢。
+2. 把 commit 打上 `v<VERSION>` 並推送 tag；各節點 fetch tag。
+3. 在每個節點上再建一次公開版並跑 `./release.zsh`。它拒絕：工作區不乾淨、執行檔的
+   build id 不是這個 checkout 的、完整版、以及已存在的封存；並以解開、執行、完成一次
+   `.tar.gz` 往返、確認 LZFSE 被拒絕來驗證。
+4. 把四份封存與它們的 `.sha256` 收到 Mac 的 `dist/`。
+5. `./publish.zsh <VERSION>` 只說會做什麼；`./publish.zsh <VERSION> --publish` 建立 GitHub
+   Release、從公開網址把每個資產下載回來比對，並改寫 `Formula/swift_tar.rb` 與上層 repo 的
+   `bucket/swift_tar.json`。兩者都要提交。
+
+`test/test_release.zsh` 涵蓋 build id、`release.zsh` 的每一道拒絕、套件檔的改寫，以及
+`publish.zsh` 前段的拒絕，全程不發布。
+
 ## 使用方式
 
 ```
@@ -772,6 +813,12 @@ build.zsh           會偵測平台的進入點 → 下方對應的建置腳本
 compile_tar.zsh     macOS 建置腳本 → release/swift_tar
 compile_tar-linux.zsh  Linux 建置腳本 → release/swift_tar
 platform.zsh        供 source：決定平台後綴的唯一來源
+VERSION             下一個正式版要帶的版本號
+build_id.zsh        供 source：決定 --version 所印 build id 的唯一來源
+release.zsh         把這個平台的公開版打包成 dist/ 裡的 .tar.zst
+publish.zsh         打 tag、發布四份封存、改寫 brew 與 scoop 的檔案
+publish_rewrite.zsh 供 source：publish.zsh 改寫套件檔的部分
+Formula/swift_tar.rb  Homebrew formula（這個 repo 本身就是 tap）
 version-mac.txt / version-linux.txt / version-win.txt   各平台的建置版本戳與連結來源
 build_libarchive.zsh / build_libarchive-win.zsh  靜態 ZIP 後端建置
 libarchive_zip_bridge.c  macOS/Windows 共用 ZIP C ABI

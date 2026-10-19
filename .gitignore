@@ -26,6 +26,8 @@ swift_tar-build*
 tmp_review_codecs
 
 # compiled binaries — never commit post-compile artifacts
+# release archives made by release.zsh; they are published as GitHub Release assets
+/dist/
 /release/
 /verifications/rgb1/rgb1_sampler
 /verifications/rgb1/swift_tar_DOE

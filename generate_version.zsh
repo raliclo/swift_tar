@@ -32,6 +32,21 @@ build_version=$(date +%Y%m%d-%H%M%S)
 . "$SCRIPT_DIR/platform.zsh"
 version_file="$SCRIPT_DIR/version-$(swift_tar_platform).txt"
 
+# The release number and the build id, printed beside the stamp. The number is VERSION's one
+# line (the version a release will carry, edited before tagging); the id comes from build_id.zsh,
+# which release.zsh also asks, so the two cannot disagree about its shape. Read before anything
+# is written, so a malformed VERSION or a refused id stops the build instead of stamping a guess.
+# 版本號與 build id，印在戳記旁邊。版本號是 VERSION 的那一行（出貨時要帶的版本，打 tag 前修改）；
+# id 由 build_id.zsh 決定，release.zsh 問的也是它，所以兩者不會對形狀有不同意見。在寫出任何東西
+# 之前先讀，VERSION 格式不對或 id 被拒時，建置就停下，而不是蓋上一個猜的值。
+release_version=$(<"$SCRIPT_DIR/VERSION") || exit 1
+if [[ $release_version != <->.<->.<-> ]]; then
+    print -ru2 -- "VERSION must hold one X.Y.Z line, it holds [$release_version] / VERSION 必須是一行 X.Y.Z，實際是 [$release_version]"
+    exit 1
+fi
+. "$SCRIPT_DIR/build_id.zsh"
+build_id=$(swift_tar_build_id "$SCRIPT_DIR") || exit 1
+
 # Refresh the build stamp and keep every other line as the builders left it.
 # This used to enumerate the nine zlib/zstd/libarchive keys by name, which meant
 # any key a builder added later was silently dropped on the next build — the
@@ -200,5 +215,9 @@ else
     mv "$version_file.tmp" "$version_file"
 fi
 
-printf 'let swiftTarBuildVersion = "%s"\n' "$build_version" > "$output_swift"
-echo "[INFO] swift_tar version: $build_version / swift_tar 版本：$build_version"
+{
+    printf 'let swiftTarBuildVersion = "%s"\n' "$build_version"
+    printf 'let swiftTarReleaseVersion = "%s"\n' "$release_version"
+    printf 'let swiftTarBuildID = "%s"\n' "$build_id"
+} > "$output_swift"
+echo "[INFO] swift_tar version: $release_version ($build_id) $build_version / swift_tar 版本：$release_version（$build_id）$build_version"

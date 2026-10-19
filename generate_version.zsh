@@ -66,6 +66,36 @@ fi
 current_rest=$(print -r -- "$current_rest" | grep -vE '^lzfse2(_commit)?=' || [ $? -eq 1 ])
 current_rest=${current_rest:+$current_rest$'\n'}$lzfse_line
 
+# swift_tar.swift／rgb1.swift／crypto.swift 是編進執行檔的 first-party 原始碼，但原本不是
+# 版本戳的輸入，於是 --version 分不出「同一組函式庫、原始碼不同」的兩個執行檔——2026-10-14
+# 記錄為 version-stamp finding（todo/todo.md）。使用者 2026-10-19 決定：把原始碼雜湊也納入
+# key，改一行原始碼就鑄新戳記。雜湊這三個檔（lzfse-cli.swift 已由 lzfse2_commit 涵蓋），以
+# `git hash-object --stdin` 取工作區內容的雜湊——取工作區而非已提交，是為了連未提交的編輯
+# 都算進去（finding 的重現正是「改一行、尚未提交、再建」要看到戳記改變）。--stdin 不套
+# autocrlf 濾鏡，Windows 與 WSL 對同一內容給相同雜湊（實測 2026-10-19）。
+# 代價已知並接受：改任一 .swift 都會動 version-*.txt——d868dc3 當初要消除的 churn 有一部分
+# 回來了，但只在原始碼真的改變時，不再是每次建置。非 git checkout（QEMU guest）時 git
+# hash-object 失敗，退回 unknown，與 lzfse2_commit 的退路同形。
+#
+# swift_tar.swift, rgb1.swift and crypto.swift are the first-party sources compiled into the
+# binary but were not inputs to the stamp, so --version could not tell two binaries with the
+# same library set but different sources apart (the 2026-10-14 version-stamp finding in
+# todo/todo.md). The user decided on 2026-10-19 to key the stamp on the sources too: a one-line
+# source change mints a new stamp. Hash the three files (lzfse-cli.swift is already covered by
+# lzfse2_commit) by their working-tree content via `git hash-object --stdin` -- working tree,
+# not committed, so an uncommitted edit counts too (the finding's repro changes a line without
+# committing and expects the stamp to move). --stdin applies no autocrlf filter, so Windows and
+# WSL produce the same hash for the same content (measured 2026-10-19). The accepted cost: any
+# .swift edit now churns version-*.txt -- part of what d868dc3 removed is back, but only when
+# the sources actually change, no longer on every build. Outside a git checkout (the QEMU
+# guest) git hash-object fails and this falls back to unknown, the same shape as lzfse2_commit.
+source_hash=$(cat -- "$SCRIPT_DIR/swift_tar.swift" "$SCRIPT_DIR/rgb1.swift" "$SCRIPT_DIR/crypto.swift" \
+    | git -C "$SCRIPT_DIR" hash-object --stdin 2>/dev/null || true)
+[[ -n $source_hash ]] || source_hash=unknown
+source_line="swift_tar_source=$source_hash"
+current_rest=$(print -r -- "$current_rest" | grep -v '^swift_tar_source=' || [ $? -eq 1 ])
+current_rest=${current_rest:+$current_rest$'\n'}$source_line
+
 # 若除了時間戳以外，這份來源資訊與 git 中已記錄的完全相同，就沿用已記錄的時間戳，並把
 # 檔案寫回與 git 相同的內容——不產生新的戳記。
 #

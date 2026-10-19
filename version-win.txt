@@ -1,4 +1,4 @@
-swift_tar_version=20261014-170048
+swift_tar_version=20261019-095650
 zlib_version=v1.3.2
 zlib_commit=da607da739fa6047df13e66a2af6b8bec7c2a498
 zlib_linkage=static
@@ -9,3 +9,4 @@ libarchive_version=v3.7.5-2103-gb8189c9b
 libarchive_commit=b8189c9b34cd7a88eb09989c349b368f99d0787a
 libarchive_linkage=static
 lzfse2_commit=151b814eefc948aeabab1317aca3eaa4c69b1496
+swift_tar_source=92c06a759c94773959cb38e3c8788d7f8c321f04

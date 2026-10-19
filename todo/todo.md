@@ -206,12 +206,14 @@
 > at 192/0, because every executable line of the fix is inside `#if os(Windows)`. macOS was
 > re-measured on a binary rebuilt from the fix commit itself: 200/0.
 >
-> **One item open as that work closed: the version stamp.** Confirming which binary a
+> **One item opened as that work closed, and was closed 2026-10-19: the version stamp.**
+> Confirming which binary a
 > measurement belonged to turned out to be the hard part of this round, and
 > `swift_tar --version` cannot answer it -- the stamp keys on the linked-library set, not on
 > the sources, so a pre-fix and a post-fix binary report the same string on both Windows and
 > macOS. It is a consequence of a deliberate design, so it is recorded with the measurements
-> and left for a decision rather than changed. Run
+> and left for a decision rather than changed. The user decided on 2026-10-19 to key the stamp
+> on the sources too; `generate_version.zsh` now hashes the three first-party sources. Run
 > `grep -n '^## .*🔴' todo/todo.md` rather than trusting this paragraph.
 >
 > **2026-10-14 當日開啟並結案：Windows 上的子秒 mtime。** `4d24b8d` code review 的 6 項今日
@@ -234,10 +236,12 @@
 > 時間。WSL 維持 192/0，因為修正的每一行可執行碼都在 `#if os(Windows)` 之內。macOS 已改以
 > 修正那一筆 commit 本身重建的執行檔重新量過：200/0。
 >
-> **該項結案時另有 1 項開啟：版本戳。** 本輪最難的部分其實是「確認某次量測屬於哪一個執行
+> **該項結案時另有 1 項開啟，並於 2026-10-19 結案：版本戳。** 本輪最難的部分其實是「確認某次
+> 量測屬於哪一個執行
 > 檔」，而 `swift_tar --version` 答不出來——戳記以連結的函式庫集合為 key，不以原始碼為 key，
 > 故修正前與修正後的執行檔在 Windows 與 macOS 上都回報同一個字串。它是一個刻意設計的後果，
-> 因此連同實測一起記錄、留待決定，而非逕行更動。請跑
+> 因此連同實測一起記錄、留待決定，而非逕行更動。使用者 2026-10-19 決定戳記也納入原始碼：
+> `generate_version.zsh` 現在雜湊三個 first-party 原始碼。請跑
 > `grep -n '^## .*🔴' todo/todo.md`，不要相信本段。
 
 Tracked issues that are known, reproduced, and deliberately not fixed yet.
@@ -247,7 +251,7 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## 2026-10-14 版本戳追蹤的是函式庫集合而非原始碼，`--version` 分不出新舊執行檔 ▸ 🔴 已記錄，待決定（非缺陷，是刻意設計的後果）/ The version stamp keys on the library set, not the sources, so `--version` cannot tell two binaries apart
+## 2026-10-14 版本戳追蹤的是函式庫集合而非原始碼，`--version` 分不出新舊執行檔 ▸ ✅ 已修 2026-10-19（使用者決定：戳記納入 first-party 原始碼的雜湊）/ The version stamp keys on the library set, not the sources, so `--version` cannot tell two binaries apart ▸ fixed 2026-10-19 (user chose to key the stamp on the sources)
 
 `generate_version.zsh:128-130`：當 `version-*.txt` 中**非** `swift_tar_version=` 的那些行
 （即 zlib／zstd／libarchive／lzfse2 的版本與 commit）以集合比較與 git 中已提交的相同時，
@@ -292,6 +296,41 @@ running a suite against a binary 14 minutes older than the source, which would h
 false pass for findings 1-4, and it was mtimes that caught it, not the version string. Neither
 session changed it, since it would alter a deliberate design; the decision is the user's --
 either key the stamp on the sources too, or document how to confirm a binary is current.
+
+### 修法（2026-10-19，使用者選「戳記納入原始碼雜湊」）/ The fix, 2026-10-19
+
+`generate_version.zsh` 在 `current_rest`（即 version-*.txt 中除 `swift_tar_version=` 外、用來
+決定是否沿用戳記的那組鍵）多加一行 `swift_tar_source=<hash>`。`hash` 是 `cat swift_tar.swift
+rgb1.swift crypto.swift | git hash-object --stdin` 的工作區內容雜湊。於是原始碼一改、`hash`
+一變、集合比較不再與已提交相同，就鑄新戳記；原始碼未改則照舊沿用——churn 只在原始碼真的
+改變時發生，不是每次建置，d868dc3 的代價沒有整個回來。
+
+**為何是三個檔而非 finding 文字寫的只有 `swift_tar.swift`**：compile_tar-win.zsh:233 與
+compile_tar-linux.zsh:436 實際編入的 first-party 原始碼是 `swift_tar.swift rgb1.swift
+crypto.swift` 三個；只雜湊其一會把 rgb1／crypto 的改動留成同一個盲點，正是本 finding 的毛病。
+lzfse-cli.swift 已由 `lzfse2_commit` 涵蓋，不重複。
+
+**取工作區而非已提交**：finding 的重現是「改一行、尚未提交、再建」要看到戳記改變，故雜湊
+working-tree 內容；`--stdin` 不套 autocrlf 濾鏡，Windows 與 WSL 對同一內容給相同雜湊（實測
+`92c06a759c94773959cb38e3c8788d7f8c321f04`）。非 git checkout（QEMU guest）時 hash-object 失敗，
+退回 `swift_tar_source=unknown`，與 `lzfse2_commit` 的退路同形。
+
+**重現已消失**：建置、`--version`、改一行 `swift_tar.swift`、再建置、再 `--version`——兩次不同。
+重新產生此雜湊：`cat swift_tar.swift rgb1.swift crypto.swift | git hash-object --stdin`。
+
+`generate_version.zsh` adds one line, `swift_tar_source=<hash>`, to `current_rest` (the
+non-`swift_tar_version=` keys that decide whether the stamp is reused). The hash is the
+working-tree content of the three first-party sources, `cat swift_tar.swift rgb1.swift
+crypto.swift | git hash-object --stdin`. A source change moves the hash, so the set no longer
+matches what is committed and a new stamp is minted; an unchanged source still reuses -- churn
+happens only when the sources actually change, not on every build, so d868dc3's cost does not
+fully return. Three files, not just `swift_tar.swift` as the finding wrote: compile_tar-win.zsh:233
+and compile_tar-linux.zsh:436 compile all three, and hashing one would leave rgb1/crypto as the
+same blind spot this finding is about; lzfse-cli.swift is already covered by `lzfse2_commit`.
+Working tree, not committed, because the repro edits a line without committing; `--stdin` applies
+no autocrlf filter, so Windows and WSL agree. Outside a git checkout it falls back to
+`swift_tar_source=unknown`, the shape of `lzfse2_commit`'s fallback. Regenerate the hash with
+`cat swift_tar.swift rgb1.swift crypto.swift | git hash-object --stdin`.
 
 ## 2026-10-14 子秒 mtime 在 Windows 上兩端皆未實作，5 條檢查失敗 ▸ ✅ 已修 2026-10-14（Windows 與 WSL 皆驗）/ Sub-second mtime was unimplemented on Windows on both sides: fixed and verified on Windows and WSL
 

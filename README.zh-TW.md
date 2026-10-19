@@ -162,7 +162,10 @@ zstd -dc swift_tar-0.1.0-linux-x86_64.tar.zst | tar -xf -
 
 1. 在四個節點（macOS arm64、Windows x86-64、Linux x86-64、Linux aarch64）各自建公開版並跑
    `./release.zsh`，然後把封存丟掉。這一步要在打 tag 之前做：封存建好之後才移動 tag，
-   每一份都會作廢。
+   每一份都會作廢。公開版的建置指令：macOS 是 `./compile_tar.zsh --no-lzfse`、Windows 是
+   `EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh`、Linux 是
+   `SWIFT_STATIC_STDLIB=1 EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh`——Linux 必須把 Swift
+   runtime 連進執行檔，它才能在別台機器上執行。
 2. 把 commit 打上 `v<VERSION>` 並推送 tag；各節點 fetch tag。
 3. 在每個節點上再建一次公開版並跑 `./release.zsh`。它拒絕：工作區不乾淨、執行檔的
    build id 不是這個 checkout 的、完整版、以及已存在的封存；並以解開、執行、完成一次

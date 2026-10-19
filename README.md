@@ -186,7 +186,10 @@ tag, build at the tag, collect, publish.
 
 1. On each of the four nodes (macOS arm64, Windows x86-64, Linux x86-64, Linux
    aarch64), build the public build and run `./release.zsh`, then throw the
-   archive away. Do this before tagging: a tag moved after archives were built
+   archive away. The public build is `./compile_tar.zsh --no-lzfse` on macOS,
+   `EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh` on Windows, and
+   `SWIFT_STATIC_STDLIB=1 EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh` on Linux, where
+   the Swift runtime has to be linked in for the binary to run on other machines. Do this before tagging: a tag moved after archives were built
    invalidates every one of them.
 2. Tag the commit `v<VERSION>` and push the tag; each node fetches tags.
 3. On each node: build the public build again and run `./release.zsh`. It

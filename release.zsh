@@ -7,13 +7,14 @@
 #    ./release.zsh --help    print this and do nothing / 印出這段說明，什麼都不做
 #
 #  Run it on each node, after building the public build there (no LZFSE):
-#  macOS ./compile_tar.zsh --no-lzfse, Linux EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh,
-#  Windows EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh. An archive is made only where its
-#  binary was built, so the version inside it can be checked by running it. Collecting the
-#  archives and publishing them is publish.zsh's job, not this one's.
+#  macOS ./compile_tar.zsh --no-lzfse, Windows EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh,
+#  Linux SWIFT_STATIC_STDLIB=1 EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh (Swift runtime inside).
+#  An archive is made only where its binary was built, so the version inside it can be checked
+#  by running it. Collecting and publishing the archives is publish.zsh's job, not this one's.
 #  在每個節點上、先建好公開版（不含 LZFSE）之後各跑一次：macOS ./compile_tar.zsh --no-lzfse、
-#  Linux EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh、Windows EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh。
-#  封存只在建出其執行檔的地方產生，這樣裡面的版本才能靠執行它來檢查。收集與發布是 publish.zsh 的事。
+#  Windows EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh、Linux SWIFT_STATIC_STDLIB=1 EXCLUDE_LZFSE=1
+#  ./compile_tar-linux.zsh（Swift runtime 連進執行檔）。封存只在建出其執行檔的地方產生，這樣裡面的
+#  版本才能靠執行它來檢查。收集與發布是 publish.zsh 的事。
 # =====================================================================
 # Modelled on csv2's release.zsh (/Volumes/LinuxCS/sos/csv2), including the refusals it learned
 # the hard way: the version comes from the binary, never from a constant here; the build id is
@@ -27,7 +28,7 @@ setopt no_unset pipe_fail errexit
 
 case ${1:-} in
   '') ;;
-  -h|--help) sed -n '3,16p' ${0:A} | sed 's/^# \{0,2\}//'; exit 0 ;;
+  -h|--help) sed -n '3,17p' ${0:A} | sed 's/^# \{0,2\}//'; exit 0 ;;
   *) print -ru2 -- "release.zsh takes no argument (got: $1); see --help / release.zsh 不收引數（收到：$1），請見 --help"; exit 2 ;;
 esac
 
@@ -121,6 +122,21 @@ grep -qx 'lzfse2=excluded' "$VERSION_FILE" || die "$VERSION_FILE does not say lz
 lz_hits=$(LC_ALL=C grep -a -c -E 'bvx3|other3' "$BIN" || true)
 [[ $lz_hits == 0 ]] || die "the binary still contains bvx3/other3 strings ($lz_hits lines); not the public build" \
                            "執行檔仍含有 bvx3／other3 字串（$lz_hits 行）；不是公開版"
+
+# On Linux the Swift runtime must be inside the binary (SWIFT_STATIC_STDLIB=1): the shared one is
+# found through an RPATH to the building machine's toolchain, which no other machine has. Asked
+# of the version file and then of the binary, as above.
+# Linux 上 Swift runtime 必須在執行檔裡（SWIFT_STATIC_STDLIB=1）：共享的那份是經由指向建置機器
+# toolchain 的 RPATH 找到的，別的機器沒有。與上面一樣，先問 version 檔，再問執行檔。
+if [[ $OS == linux ]]; then
+  grep -qx 'swift_stdlib_linkage=static' "$VERSION_FILE" || die "$VERSION_FILE does not say swift_stdlib_linkage=static; build with SWIFT_STATIC_STDLIB=1" \
+                                                                "$VERSION_FILE 沒有寫 swift_stdlib_linkage=static；請以 SWIFT_STATIC_STDLIB=1 建置"
+  command -v readelf >/dev/null 2>&1 || die "readelf is not on PATH; the binary's libraries cannot be checked" \
+                                            "PATH 上沒有 readelf；無法檢查執行檔依賴的函式庫"
+  needed=$(readelf -d "$BIN" | grep NEEDED | grep -E 'libswift|libFoundation|libdispatch|libBlocksRuntime' || true)
+  [[ -z $needed ]] || die "the binary still needs the shared Swift runtime: ${needed//$'\n'/ }" \
+                          "執行檔仍需要共享的 Swift runtime：${needed//$'\n'/ }"
+fi
 
 command -v zstd >/dev/null 2>&1 || die "zstd is not on PATH; releases are .tar.zst and this node cannot make one" \
                                        "zstd 不在 PATH 上；正式版是 .tar.zst，這個節點做不出來"

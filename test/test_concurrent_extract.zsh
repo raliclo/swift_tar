@@ -41,6 +41,8 @@ fi
 [ -x "$ST" ] || { echo "error: build first — missing $ST" >&2; exit 1; }
 ROUNDS=${ROUNDS:-10}
 SHARDS=${SHARDS:-8}
+IS_WIN=0
+case "$(uname -s)" in MSYS*|MINGW*|CYGWIN*) IS_WIN=1 ;; esac
 # The reference tar must not be swift_tar itself, which is what `tar` is on the Buildroot
 # guest; see test_blind_findings.zsh. bsdtar is present there.
 # 參考 tar 不能是 swift_tar 自己，而 Buildroot guest 上的 `tar` 正是；見
@@ -176,8 +178,18 @@ done
 (( dir_ok )) && ok "preserve: directories get their archived mtimes from the last shard" \
   || bad "preserve: directories get their archived mtimes from the last shard"
 check_mode "-p" "$TMP/plain" -p
-[ "$(mode_of "$OUT/a/1/x/f1.bin")" = 640 ] && ok "-p: a file keeps its mode (640)" \
-  || bad "-p: a file keeps its mode (640) (got $(mode_of "$OUT/a/1/x/f1.bin"))"
+# The concurrency above ran with -p; only the mode-equality assertion is platform-specific.
+# NTFS does not enforce POSIX group/other bits against the owner, so the archived 0640 comes
+# back as 0644 here -- the same reason test_same_permissions skips entirely on Windows and
+# test_strict skips its read-only cases. 上面已以 -p 跑過併發；只有 mode 相等這條與平台有關。
+# NTFS 不對 owner 強制 POSIX 的 group／other 位，封存的 0640 在此解成 0644——與
+# test_same_permissions 整支、test_strict 唯讀案例在 Windows 被跳過同因。
+if (( IS_WIN )); then
+  echo "SKIP: -p mode bits (Windows does not enforce POSIX group bits against the owner)"
+else
+  [ "$(mode_of "$OUT/a/1/x/f1.bin")" = 640 ] && ok "-p: a file keeps its mode (640)" \
+    || bad "-p: a file keeps its mode (640) (got $(mode_of "$OUT/a/1/x/f1.bin"))"
+fi
 check_mode "zstd archives, --zstd-parallel --touch" "$TMP/zstd" --zstd-parallel --touch
 
 echo "-----------------------------------------"

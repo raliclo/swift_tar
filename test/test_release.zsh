@@ -90,6 +90,11 @@ else
   print -l 'swift_tar_version=20260101-000000' 'zlib_linkage=static' 'lzfse2=excluded' > "$R/version-$PLAT.txt"
   print -l '/release/' '/dist/' > "$R/.gitignore"
   ( cd "$R" && quiet_git init -q && quiet_git add . && quiet_git commit -qm rel )
+  # Without an attribute on a staged file, the pax-header check below cannot fail. Measured: it
+  # passed against the release.zsh that still wrote them.
+  # 被打包的檔案若沒有屬性，下面的 pax 標頭檢查就不可能失敗。實測：它對仍會寫出 pax 標頭的
+  # release.zsh 也通過了。
+  [ "$OS" = macos ] && xattr -w com.example.swift_tar_test 1 "$R/README.md"
   # make_fake <version> <id> [accept-anything]: answers --version, and does a gzip round trip
   # through the system tar; any other option fails unless asked to accept it. The LZFSE flag is
   # never written out here, because release.zsh searches the binary for it.
@@ -119,6 +124,14 @@ else
     listing=$(zstd -dq -c "$R/dist/$STEM.tar.zst" | tar -tf - | sed 's:/$::' | sort | tr '\n' ' ')
     check "release.zsh: one directory holding the binary, version.txt and the licences" "$listing" \
       "$STEM $STEM/README.md $STEM/README.zh-TW.md $STEM/swift_tar $STEM/swift_tar-LICENSE.txt $STEM/version.txt $STEM/zlib-LICENSE.txt "
+    # No pax headers: on macOS they carried com.apple.provenance on every file, which other
+    # tars report on extraction. The fixture's README.md is given an attribute on macOS (see
+    # the setup), so a regression shows there; elsewhere this passes either way.
+    # 沒有 pax 標頭：在 macOS 上它們讓每個檔案都帶著 com.apple.provenance，別的 tar 解開時會回報。
+    # 在 macOS 上夾具的 README.md 會被加上一個屬性（見設定處），所以回歸會在那裡現形；其他平台這項
+    # 怎樣都會通過。
+    pax=$(zstd -dq -c "$R/dist/$STEM.tar.zst" | LC_ALL=C grep -a -c 'PaxHeader' || true)
+    check "release.zsh: no pax headers (xattrs, ACLs, file flags) in the archive" "$pax" 0
   fi
   rel
   check "release.zsh: an existing archive is not overwritten" "$rc" 1

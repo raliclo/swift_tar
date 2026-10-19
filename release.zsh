@@ -169,8 +169,16 @@ fi
 # Relative names from inside dist/: on Windows zstd and tar are native programs that cannot
 # open an MSYS-style absolute path.
 # 從 dist/ 裡以相對名稱操作：Windows 上 zstd 與 tar 是原生程式，開不了 MSYS 形式的絕對路徑。
+# macOS's bsdtar stores extended attributes, ACLs and file flags as pax headers by default; the
+# first rehearsal (2026-10-20) carried com.apple.provenance on every file, which other tars
+# report as unknown keywords on extraction. Those flags are bsdtar's, so macOS only.
+# macOS 的 bsdtar 預設把 xattr、ACL 與 file flags 存成 pax 標頭；第一次預演（2026-10-20）每個檔案
+# 都帶著 com.apple.provenance，別的 tar 解開時會報不認得的關鍵字。這些旗標是 bsdtar 的，所以只在
+# macOS 上加。
+typeset -a TAR_OPTS=()
+[[ $OS == macos ]] && TAR_OPTS=(--no-mac-metadata --no-xattrs --no-acls --no-fflags)
 PACKED=$ARCHIVE
-( cd -- "$DIST" && tar -cf - "$STEM" | zstd -19 -q -o "$STEM.tar.zst" )
+( cd -- "$DIST" && COPYFILE_DISABLE=1 tar "${TAR_OPTS[@]}" -cf - "$STEM" | zstd -19 -q -o "$STEM.tar.zst" )
 rm -rf -- "$STAGE"
 
 # ---------------------------------------------------------------------

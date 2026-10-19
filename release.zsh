@@ -170,16 +170,20 @@ for lib in ${(k)LICENSE_OF}; do
 done
 if [[ $OS == windows ]]; then
   # The Swift runtime DLLs ride along, as in package_win.zsh, so the archive runs on a machine
-  # without Swift. swiftc is .../Toolchains/<ver>/usr/bin/swiftc.exe: the root is five up.
-  # Swift runtime DLL 一併放入，與 package_win.zsh 相同，讓封存在沒裝 Swift 的機器上也能執行。swiftc
-  # 位於 .../Toolchains/<ver>/usr/bin/swiftc.exe：根目錄在其上五層。
-  (( $+commands[swiftc] )) || die "swiftc not found on PATH; the runtime DLLs are found from it" \
-                                  "PATH 上找不到 swiftc；runtime DLL 要靠它找"
-  swift_root=${${commands[swiftc]}:A:h:h:h:h:h}
-  rt_dll=( ${swift_root}/Runtimes/**/swiftCore.dll(N) )
-  (( $#rt_dll == 1 )) || die "expected one Swift runtime under $swift_root/Runtimes, found ${#rt_dll}" \
-                             "預期 $swift_root/Runtimes 下有一份 Swift runtime，實際找到 ${#rt_dll} 份"
-  cp -- ${rt_dll[1]:h}/*.dll "$STAGE/"
+  # without Swift. Chosen the way compile_tar-win.zsh chooses the runtime it builds against: the
+  # newest under %LOCALAPPDATA%\Programs\Swift\Runtimes by zsh's numeric glob order, so during an
+  # upgrade, when two sit side by side (6.4.0 and 6.4.1 did on 2026-10-19), the archive carries
+  # the one the binary was built for rather than failing or taking the older.
+  # Swift runtime DLL 一併放入，與 package_win.zsh 相同，讓封存在沒裝 Swift 的機器上也能執行。選法
+  # 與 compile_tar-win.zsh 選它建置所用的 runtime 相同：%LOCALAPPDATA%\Programs\Swift\Runtimes 下依 zsh
+  # 數字 glob 排序最新的那份。升級期間兩份並存時（2026-10-19 的 6.4.0 與 6.4.1 就是），封存帶的是執行
+  # 檔所對應的那份，而不是失敗或拿到較舊的。
+  swift_root="$(cygpath -u "${LOCALAPPDATA:-$HOME/AppData/Local}")/Programs/Swift"
+  found=("$swift_root"/Runtimes/*/usr/bin(/Nn))
+  rt_bin=${found[-1]:-}
+  [[ -n $rt_bin && -f $rt_bin/swiftCore.dll ]] || die "no Swift runtime with swiftCore.dll under $swift_root/Runtimes" \
+                                                      "$swift_root/Runtimes 下找不到含 swiftCore.dll 的 Swift runtime"
+  cp -- "$rt_bin"/*.dll "$STAGE/"
 fi
 
 # Relative names from inside dist/: on Windows zstd and tar are native programs that cannot

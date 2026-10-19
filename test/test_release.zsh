@@ -47,6 +47,16 @@ mkdir -p "$B"
 ( cd "$B" && quiet_git init -q && print a > a.txt && print v > version-mac.txt && quiet_git add . && quiet_git commit -qm one )
 short=$(cd "$B" && git rev-parse --short=8 HEAD)
 check "build id, untagged: the 8-character commit" "$(swift_tar_build_id "$B")" "$short"
+# A chpwd hook that prints, as an interactive shell may have: build_id.zsh's directory changes
+# must not run it, or its output joins the captured `git status` and a clean tree reads dirty.
+# 一個會印東西的 chpwd hook，互動 shell 可能就有：build_id.zsh 切換目錄時不得執行它，否則它的輸出會
+# 混進擷取到的 `git status`，乾淨的工作區會被讀成 dirty。
+# Both shapes: a chpwd hook, and `cd` itself redefined as a function (the shape that was met).
+# 兩種形狀都測：chpwd hook，以及 `cd` 本身被重新定義成函式（實際遇到的是這一種）。
+chpwd() { print -r -- "hook: $PWD" }
+cd() { builtin cd "$@" && print -r -- "listing: $PWD" }
+check "build id: a printing chpwd hook or cd function does not make a clean tree dirty" "$(swift_tar_build_id "$B")" "$short"
+unfunction chpwd cd
 ( cd "$B" && quiet_git tag -a v0.1.0 -m v0.1.0 )
 check "build id, at a tag: the tag and the commit" "$(swift_tar_build_id "$B")" "v0.1.0 / $short"
 print changed >> "$B/version-mac.txt"

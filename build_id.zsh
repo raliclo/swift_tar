@@ -41,18 +41,25 @@ swift_tar_build_id() {   # swift_tar_build_id <repo-dir>
   # for Windows cannot change to them, while asking from inside the directory needs no path.
   # 在子 shell 裡 cd 而不用 `git -C`：Windows 上 zsh 的路徑是 MSYS 形式 /c/...，git for Windows
   # 切換不過去；從目錄裡面問就不需要路徑。
-  if ! (cd "$dir" 2>/dev/null && git rev-parse --is-inside-work-tree >/dev/null 2>&1); then
+  # `builtin cd -q`: neither a cd function nor a chpwd hook runs. Sourced into an interactive
+  # shell whose `cd` is a function that lists the new directory, a plain cd put that listing
+  # into the captured `git status`, and the id came out `-dirty` on a clean tree (2026-10-20);
+  # `cd -q` alone still called the function.
+  # `builtin cd -q`：cd 函式與 chpwd hook 都不會執行。被 source 進一個 `cd` 是「切換後列出目錄」
+  # 函式的互動 shell 時，一般的 cd 會把那份清單混進擷取到的 `git status`，乾淨的工作區因此得到
+  # `-dirty`（2026-10-20）；只用 `cd -q` 仍會呼叫那個函式。
+  if ! (builtin cd -q "$dir" 2>/dev/null && git rev-parse --is-inside-work-tree >/dev/null 2>&1); then
     print -r -- "${SWIFT_TAR_BUILD_ID:-unknown}"
     return 0
   fi
-  described=$(cd "$dir" && git describe --tags --always --abbrev=8 2>/dev/null) || described=""
-  short=$(cd "$dir" && git rev-parse --short=8 HEAD 2>/dev/null) || short=""
+  described=$(builtin cd -q "$dir" && git describe --tags --always --abbrev=8 2>/dev/null) || described=""
+  short=$(builtin cd -q "$dir" && git rev-parse --short=8 HEAD 2>/dev/null) || short=""
   if [[ -z $described || -z $short ]]; then
     print -ru2 -- "swift_tar_build_id: $dir is a git checkout but git gave no commit; the question was malformed, not the tree"
     print -ru2 -- "swift_tar_build_id：$dir 是 git checkout，git 卻沒給出 commit；問錯的是提問方式，不是那棵樹"
     return 1
   fi
-  dirty=$(cd "$dir" && git status --porcelain --untracked-files=no -- . ':(exclude)version-*.txt') || return 1
+  dirty=$(builtin cd -q "$dir" && git status --porcelain --untracked-files=no -- . ':(exclude)version-*.txt') || return 1
   # `v0.1.0-3-g26cc4fd1` already carries the hash; only a bare tag needs it added.
   # `v0.1.0-3-g26cc4fd1` 本來就帶雜湊；只有純 tag 需要補上。
   if [[ $described == *"$short"* ]]; then id=$described; else id="$described / $short"; fi

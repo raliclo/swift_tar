@@ -57,7 +57,12 @@ echo "=== swift_tar Windows build toolchain installer ==="
 # 裝著最新 Swift 的機器上，依 PATH 判斷 swiftc「未安裝」，舊的檢查會把它重裝一次。安裝目錄才是
 # 事實；PATH 只是每個行程各自持有、年齡不定的副本。
 swift_root="$(cygpath -u "${LOCALAPPDATA:-$HOME/AppData/Local}")/Programs/Swift"
-newest_swiftc() { print -l "$swift_root"/Toolchains/*/usr/bin/swiftc.exe(N) | sort -V | tail -1 }
+# Newest by zsh's numeric glob order, (n), not `sort -V`: an external sort is whichever one PATH
+# finds first, and C:\Windows\System32\sort.exe rejects -V (see compile_tar-win.zsh).
+# 以 zsh 的數字 glob 排序 (n) 取最新，而非 `sort -V`：外部 sort 是 PATH 先找到的那一個，而
+# C:\Windows\System32\sort.exe 不接受 -V（見 compile_tar-win.zsh）。
+newest() { local -a f; f=($~1(Nn)); print -r -- "${f[-1]:-}" }
+newest_swiftc() { newest "$swift_root/Toolchains/*/usr/bin/swiftc.exe" }
 if [[ -n $(newest_swiftc) ]]; then
     printf '[OK] Swift installed: %s\n' "$(newest_swiftc)"
     printf '[UPGRADE] winget upgrade Swift.Toolchain (does nothing if already newest)...\n'
@@ -78,8 +83,8 @@ fi
 swift_tc=$(newest_swiftc)
 [[ -n $swift_tc ]] || { printf '[FAIL] no Swift toolchain under %s after install\n' "$swift_root" >&2; exit 1 }
 swift_tc=${swift_tc:h}
-swift_rt=$(print -l "$swift_root"/Runtimes/*/usr/bin(/N) | sort -V | tail -1)
-swift_sdk=$(print -l "$swift_root"/Platforms/*/Windows.platform/Developer/SDKs/Windows.sdk(/N) | sort -V | tail -1)
+swift_rt=$(newest "$swift_root/Runtimes/*/usr/bin")
+swift_sdk=$(newest "$swift_root/Platforms/*/Windows.platform/Developer/SDKs/Windows.sdk")
 # Run it with its own runtime and SDK, not the inherited ones, for the reason above.
 # 以它自己的 runtime 與 SDK 執行，而非繼承來的，理由同上。
 printf '[OK] newest: %s\n' "$(PATH="$swift_tc:$swift_rt:$PATH" SDKROOT="$(cygpath -w "$swift_sdk")" swiftc --version | head -1)"

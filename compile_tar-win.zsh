@@ -95,6 +95,26 @@ if ! (( $+commands[cl] )); then
     # 觀察到的是 `PATH`，但 `Path` 同樣常見，而區分大小寫的查找會無聲地跳過它：其餘
     # 變數都正常匯入，建置卻在稍後以「cl.exe still not on PATH」失敗，該訊息指向的是
     # vcvars，而非那個漏掉一行的解析器。
+    #
+    # Only the directories vcvars ADDED go in front. vcvars' PATH is its own directories plus the
+    # whole Windows PATH in Windows order, and prepending all of it (as this did until
+    # 2026-10-19) reordered everything after the MSVC entries: C:\Windows\System32 came ahead of
+    # /usr/bin, so `sort` became Windows' sort.exe and `find` Windows' find.exe for the rest of
+    # the build, and with the 20261019 zsh port the tools bundled with zsh (grep, mv, sort...)
+    # exited 127 with no message inside every nested zsh -- build_libarchive-win.zsh's grep among
+    # them, after archive.lib had built. vcvars reports the PATH it started from as
+    # __VSCMD_PREINIT_PATH, so the added part is whatever is not in it; without that variable
+    # (an older VS) this falls back to prepending all of it, as before.
+    # 只把 vcvars「新增」的目錄放到前面。vcvars 的 PATH 是它自己的目錄加上整條依 Windows 順序
+    # 排列的 PATH，全部前置（2026-10-19 前的作法）會把 MSVC 項目之後的一切重新排序：
+    # C:\Windows\System32 排到 /usr/bin 前面，於是建置剩下的部分裡 `sort` 成了 Windows 的
+    # sort.exe、`find` 成了 Windows 的 find.exe；而在 20261019 版 zsh port 下，zsh 自帶的工具
+    # （grep、mv、sort……）在每個巢狀 zsh 裡都無聲地以 127 結束——包括 build_libarchive-win.zsh 在
+    # archive.lib 建好之後的 grep。vcvars 以 __VSCMD_PREINIT_PATH 回報它起始時的 PATH，所以新增的
+    # 部分就是不在其中的項目；沒有這個變數時（較舊的 VS）退回原本的全部前置。
+    preinit=${${(M)${(f)vcenv}:#__VSCMD_PREINIT_PATH=*}#*=}
+    preinit=${preinit%$'\r'}
+    preinit_parts=("${(@s.;.)preinit}")
     while IFS= read -r line; do
         line=${line%$'\r'}
         name=${line%%=*}
@@ -104,13 +124,13 @@ if ! (( $+commands[cl] )); then
             *) continue ;;
         esac
         if [[ ${name:u} == PATH ]]; then
-            # Convert the Windows PATH to POSIX form and prepend it, keeping the
-            # existing PATH so zsh, git and the scoop tools stay reachable.
-            # 將 Windows PATH 轉為 POSIX 形式並前置，同時保留原有 PATH，使 zsh、git
-            # 與 scoop 工具仍可取用。
+            # Convert the added directories to POSIX form and prepend them, keeping the
+            # existing PATH, in its order, behind them.
+            # 把新增的目錄轉為 POSIX 形式並前置，原有 PATH 依原順序留在後面。
             converted=""
             for part in ${(s.;.)value}; do
                 [[ -n $part ]] || continue
+                [[ -n $preinit && ${preinit_parts[(Ie)$part]} -ne 0 ]] && continue
                 [[ $part == [A-Za-z]:* ]] && part="/${part[1]:l}/${${part:3}//\\//}"
                 converted="$converted:$part"
             done
@@ -143,7 +163,12 @@ fi
 # So resolve the newest installed toolchain, runtime and SDK here and point PATH/SDKROOT at them
 # rather than trusting the inherited environment. PATH entries go through cygpath -u because zsh
 # searches POSIX paths; SDKROOT stays a Windows path because swiftc hands it to the Windows SDK
-# machinery. sort -V so 6.4.1 beats 6.4.0 and a future 6.10 beats 6.9 (lexical would not).
+# machinery. The newest is picked by zsh's numeric glob order, (n): 6.4.1 after 6.4.0, a future
+# 6.10 after 6.9. This first used `print -l ... | sort -V | tail -1`, which broke the same evening:
+# by this point the vcvars PATH has been put in front, so `sort` was C:\Windows\System32\sort.exe,
+# which rejects -V, and the result was empty ("-VThe system cannot find the file specified") --
+# it had only worked while an older zsh port shipped a GNU sort.exe ahead of System32. A glob
+# qualifier runs no external command, so PATH order cannot change it.
 #
 # Swift 在 Windows 安裝於 %LOCALAPPDATA%\Programs\Swift，各有帶版號的 Toolchains／Runtimes／
 # Platforms，安裝器把這些路徑寫進使用者 PATH 與 SDKROOT。2026-10-19 Swift 在 session 中途由
@@ -159,12 +184,16 @@ fi
 #
 # 故在此解析最新安裝的 toolchain／runtime／SDK 並據以設定 PATH／SDKROOT，不信任繼承來的環境。
 # PATH 用 cygpath -u（zsh 搜尋 POSIX 路徑），SDKROOT 維持 Windows 路徑（swiftc 交給 Windows SDK
-# 機制）。sort -V 使 6.4.1 勝過 6.4.0、未來的 6.10 勝過 6.9（字典序不會）。
+# 機制）。最新版以 zsh 的數字 glob 排序 (n) 選出：6.4.1 在 6.4.0 之後、未來的 6.10 在 6.9 之後。
+# 原本寫成 `print -l ... | sort -V | tail -1`，當晚就壞了：執行到這裡時 vcvars 的 PATH 已被放到
+# 前面，`sort` 成了 C:\Windows\System32\sort.exe，它不接受 -V，結果是空字串（「-VThe system
+# cannot find the file specified」）——先前能用，只因舊版 zsh port 有個 GNU sort.exe 排在 System32
+# 之前。glob 限定詞不執行任何外部指令，PATH 順序改變不了它。
 swift_root="$(cygpath -u "${LOCALAPPDATA:-$HOME/AppData/Local}")/Programs/Swift"
 if [[ -d $swift_root ]]; then
-    swift_tc=$(print -l "$swift_root"/Toolchains/*/usr/bin(/N) | sort -V | tail -1)
-    swift_rt=$(print -l "$swift_root"/Runtimes/*/usr/bin(/N) | sort -V | tail -1)
-    swift_sdk=$(print -l "$swift_root"/Platforms/*/Windows.platform/Developer/SDKs/Windows.sdk(/N) | sort -V | tail -1)
+    found=("$swift_root"/Toolchains/*/usr/bin(/Nn)); swift_tc=${found[-1]:-}
+    found=("$swift_root"/Runtimes/*/usr/bin(/Nn)); swift_rt=${found[-1]:-}
+    found=("$swift_root"/Platforms/*/Windows.platform/Developer/SDKs/Windows.sdk(/Nn)); swift_sdk=${found[-1]:-}
     [[ -n $swift_tc ]] && export PATH="$swift_tc${swift_rt:+:$swift_rt}:$PATH"
     [[ -n $swift_sdk ]] && export SDKROOT="$(cygpath -w "$swift_sdk")"
     [[ -n $swift_tc ]] && note "Swift: $swift_tc${SDKROOT:+ (SDKROOT $SDKROOT)}"

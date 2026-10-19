@@ -1,8 +1,8 @@
 #!/usr/bin/env zsh
-# build_zlib-win.zsh -- sync the pinned zlib submodule and rebuild its Windows
-# static library, then record the exact dependency version for packaging.
-# build_zlib-win.zsh -- 同步固定版本的 zlib submodule、重建 Windows 靜態庫，
-# 並記錄封裝所需的精確相依版本。
+# build_zlib-win.zsh -- check the zlib submodule is at its pin (checking it out if absent) and
+# rebuild its Windows static library, then record the exact dependency version for packaging.
+# build_zlib-win.zsh -- 確認 zlib submodule 停在釘選的 commit（未 checkout 則 checkout）、重建
+# Windows 靜態庫，並記錄封裝所需的精確相依版本。
 #
 #   zsh ./build_zlib-win.zsh          clean-rebuild the static zlib
 #                                     乾淨重建靜態 zlib
@@ -19,7 +19,9 @@ fi
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"
 
-git submodule update --init zlib
+# Never moves a checked-out submodule; see submodule_pins.zsh. / 絕不移動已 checkout 的子模組；見 submodule_pins.zsh。
+. ./submodule_pins.zsh
+ensure_submodule_pins zlib || exit 1
 
 # A dependency update can change CMake target/output names. This helper is
 # intentionally separate from normal builds, so prefer a clean dependency

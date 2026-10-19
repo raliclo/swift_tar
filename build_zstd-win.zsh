@@ -1,8 +1,8 @@
 #!/usr/bin/env zsh
-# build_zstd-win.zsh -- sync the pinned zstd submodule and rebuild its Windows
-# static library, then record the exact dependency version for packaging.
-# build_zstd-win.zsh -- 同步固定版本的 zstd submodule、重建 Windows 靜態庫，
-# 並記錄封裝所需的精確相依版本。
+# build_zstd-win.zsh -- check the zstd submodule is at its pin (checking it out if absent) and
+# rebuild its Windows static library, then record the exact dependency version for packaging.
+# build_zstd-win.zsh -- 確認 zstd submodule 停在釘選的 commit（未 checkout 則 checkout）、重建
+# Windows 靜態庫，並記錄封裝所需的精確相依版本。
 #
 #   zsh ./build_zstd-win.zsh          clean-rebuild the static libzstd
 #                                     乾淨重建靜態 libzstd
@@ -19,7 +19,9 @@ fi
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"
 
-git submodule update --init zstd
+# Never moves a checked-out submodule; see submodule_pins.zsh. / 絕不移動已 checkout 的子模組；見 submodule_pins.zsh。
+. ./submodule_pins.zsh
+ensure_submodule_pins zstd || exit 1
 
 # A dependency update can change CMake target/output names. This helper is
 # intentionally separate from normal builds, so prefer a clean dependency

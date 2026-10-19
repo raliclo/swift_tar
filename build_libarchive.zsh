@@ -28,7 +28,9 @@ cd "$SCRIPT_DIR"
 in_git=0
 if command -v git >/dev/null 2>&1 && [ -e .git ]; then in_git=1; fi
 if [ "$in_git" = 1 ]; then
-    git submodule update --init libarchive
+    # Never moves a checked-out submodule; see submodule_pins.zsh. / 絕不移動已 checkout 的子模組；見 submodule_pins.zsh。
+    . ./submodule_pins.zsh
+    ensure_submodule_pins libarchive || exit 1
 elif [ -f libarchive/CMakeLists.txt ]; then
     echo "[NOTICE] not a git checkout: building libarchive/ as shipped, at whatever commit that is" >&2
     echo "[注意] 不是 git checkout：依送來的 libarchive/ 原樣建置，不論它是哪個 commit" >&2

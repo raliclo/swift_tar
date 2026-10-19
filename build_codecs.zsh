@@ -88,7 +88,9 @@ esac
 in_git=0
 if command -v git >/dev/null 2>&1 && [ -e .git ]; then in_git=1; fi
 if [ "$in_git" = 1 ]; then
-    git submodule update --init zlib xz lz4 zstd
+    # Never moves a checked-out submodule; see submodule_pins.zsh. / 絕不移動已 checkout 的子模組；見 submodule_pins.zsh。
+    . ./submodule_pins.zsh
+    ensure_submodule_pins zlib xz lz4 zstd || exit 1
 else
     for d in zlib xz lz4/build/cmake zstd/build/cmake; do
         if [ ! -f "$d/CMakeLists.txt" ]; then

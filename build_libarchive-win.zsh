@@ -17,7 +17,9 @@ fi
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$SCRIPT_DIR"
 
-git submodule update --init libarchive zlib
+# Never moves a checked-out submodule; see submodule_pins.zsh. / 絕不移動已 checkout 的子模組；見 submodule_pins.zsh。
+. ./submodule_pins.zsh
+ensure_submodule_pins libarchive zlib || exit 1
 
 if [ ! -f zlib/build/Release/zs.lib ]; then
     echo "[FAIL] zlib/build/Release/zs.lib not found; run zsh ./build_zlib-win.zsh" >&2
@@ -71,7 +73,11 @@ cmake --build "$build_dir" --config Release --target archive_static --parallel
 archive_lib="$build_dir/libarchive/Release/archive.lib"
 if [ ! -f "$archive_lib" ]; then
     echo "[FAIL] $archive_lib not found / 找不到 libarchive 靜態庫" >&2
-    find "$build_dir" -name '*.lib' 2>/dev/null >&2 || true
+    # A zsh glob, not `find`: after the vcvars PATH is in front, `find` is C:\Windows\System32\find.exe,
+    # a text search, so this listing printed nothing just when it was needed (its error went to
+    # 2>/dev/null). / 用 zsh glob 而非 `find`：vcvars 的 PATH 放到前面後，`find` 是
+    # C:\Windows\System32\find.exe（文字搜尋），於是這份清單偏偏在需要時什麼都不印（錯誤被 2>/dev/null 吞掉）。
+    print -rl -- "$build_dir"/**/*.lib(N) >&2
     exit 1
 fi
 

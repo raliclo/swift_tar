@@ -113,10 +113,16 @@ current_rest=${current_rest:+$current_rest$'\n'}$lzfse_line
 # hash, of the five other files. / 清單先存進變數。若直接寫成 ${(f)$(...)}，巢狀的命令替換會先被
 # 切字再以空格接回，(f) 看到的已無換行，三個 patch 路徑成了一個引數、cat 對它失敗——而管線仍印
 # 出一個雜湊，只涵蓋另外五個檔。
-patch_list=$(print -l -- "$SCRIPT_DIR"/patch/*/*.patch(N) | LC_ALL=C sort)
+# Later the same evening the `LC_ALL=C sort` went too: on Windows this runs after the vcvars PATH
+# has been put in front, where `sort` is C:\Windows\System32\sort.exe -- not GNU sort, and its
+# order is not byte order. The glob is now ordered by zsh itself under a local LC_ALL=C, with no
+# external command and no list to split. / 當晚稍後連 `LC_ALL=C sort` 也拿掉了：Windows 上本段在
+# vcvars 的 PATH 被放到前面之後才執行，此時 `sort` 是 C:\Windows\System32\sort.exe——不是 GNU sort，
+# 排序也不是位元組順序。現在由 zsh 自己在 local LC_ALL=C 下排序 glob，不經外部指令，也沒有清單要切。
+() { local LC_ALL=C; patch_files=("$SCRIPT_DIR"/patch/*/*.patch(N)) }
 stamp_inputs=("$SCRIPT_DIR/swift_tar.swift" "$SCRIPT_DIR/rgb1.swift" "$SCRIPT_DIR/crypto.swift"
               "$SCRIPT_DIR/libarchive_zip_bridge.c" "$SCRIPT_DIR/libarchive_zip_bridge.h"
-              ${(f)patch_list})
+              "${patch_files[@]}")
 source_hash=$(cat -- "${stamp_inputs[@]}" \
     | git -C "$SCRIPT_DIR" hash-object --stdin 2>/dev/null || true)
 [[ -n $source_hash ]] || source_hash=unknown

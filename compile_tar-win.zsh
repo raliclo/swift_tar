@@ -123,6 +123,37 @@ if ! (( $+commands[cl] )); then
     (( $+commands[cl] )) || die "cl.exe still not on PATH after loading vcvars64"
 fi
 
+# ---- Swift toolchain: the newest installed, not whatever PATH records ----
+# Swift on Windows installs under %LOCALAPPDATA%\Programs\Swift with a versioned Toolchains,
+# Runtimes and Platforms directory each, and the installer writes those exact paths into the
+# user PATH and SDKROOT. A point-release bump REPLACES the directories but does not rewrite
+# PATH or SDKROOT. On 2026-10-19 Swift went 6.4.0 -> 6.4.1 mid-session: PATH still named the
+# gone 6.4.0/6.3.3 bins so swiftc was unresolvable, SDKROOT still named the gone 6.4.0 SDK, and
+# the binary built minutes earlier could not load its runtime DLLs -- every test exited 127
+# with "error while loading shared libraries: api-ms-win-crt-locale-l1-1-0.dll". So resolve the
+# newest installed toolchain, runtime and SDK here and point PATH/SDKROOT at them rather than
+# trusting either to be current. PATH entries go through cygpath -u because zsh searches POSIX
+# paths; SDKROOT stays a Windows path because swiftc hands it to the Windows SDK machinery.
+# sort -V so 6.4.1 beats 6.4.0 and a future 6.10 beats 6.9 (a lexical sort would not).
+# Swift 在 Windows 安裝於 %LOCALAPPDATA%\Programs\Swift，各有帶版號的 Toolchains／Runtimes／
+# Platforms，安裝器把這些路徑寫進使用者 PATH 與 SDKROOT。點版本更新會換掉目錄卻不改 PATH／
+# SDKROOT：2026-10-19 Swift 在 session 中途由 6.4.0 升到 6.4.1，PATH 仍指向已刪的 6.4.0／6.3.3
+# bin 使 swiftc 找不到，SDKROOT 仍指向已刪的 6.4.0 SDK，數分鐘前建好的 binary 載不動 runtime
+# DLL——每個測試以 127 結束並印 api-ms-win-crt-locale-l1-1-0.dll 載入失敗。故在此解析最新安裝的
+# toolchain／runtime／SDK 並據以設定 PATH／SDKROOT。PATH 用 cygpath -u（zsh 搜尋 POSIX 路徑），
+# SDKROOT 維持 Windows 路徑（swiftc 交給 Windows SDK 機制）。sort -V 使 6.4.1 勝過 6.4.0、未來
+# 的 6.10 勝過 6.9（字典序不會）。
+swift_root="$(cygpath -u "${LOCALAPPDATA:-$HOME/AppData/Local}")/Programs/Swift"
+if [[ -d $swift_root ]]; then
+    swift_tc=$(print -l "$swift_root"/Toolchains/*/usr/bin(/N) | sort -V | tail -1)
+    swift_rt=$(print -l "$swift_root"/Runtimes/*/usr/bin(/N) | sort -V | tail -1)
+    swift_sdk=$(print -l "$swift_root"/Platforms/*/Windows.platform/Developer/SDKs/Windows.sdk(/N) | sort -V | tail -1)
+    [[ -n $swift_tc ]] && export PATH="$swift_tc${swift_rt:+:$swift_rt}:$PATH"
+    [[ -n $swift_sdk ]] && export SDKROOT="$(cygpath -w "$swift_sdk")"
+    [[ -n $swift_tc ]] && note "Swift: $swift_tc${SDKROOT:+ (SDKROOT $SDKROOT)}"
+fi
+(( $+commands[swiftc] )) || die "swiftc not found. Install the Swift for Windows toolchain, or run: zsh ./build_tool_install-win.zsh / 找不到 swiftc；請安裝 Windows 版 Swift 工具鏈"
+
 # ---- preconditions / 前置條件 ----
 # LZFSE 引擎的來源，以及「不含它」這個選項。
 #

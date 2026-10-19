@@ -89,7 +89,35 @@ current_rest=${current_rest:+$current_rest$'\n'}$lzfse_line
 # .swift edit now churns version-*.txt -- part of what d868dc3 removed is back, but only when
 # the sources actually change, no longer on every build. Outside a git checkout (the QEMU
 # guest) git hash-object fails and this falls back to unknown, the same shape as lzfse2_commit.
-source_hash=$(cat -- "$SCRIPT_DIR/swift_tar.swift" "$SCRIPT_DIR/rgb1.swift" "$SCRIPT_DIR/crypto.swift" \
+#
+# 同日稍後更正：上面「這三個檔」並不完整。libarchive_zip_bridge.c／.h 也是編進執行檔的
+# first-party 原始碼（三個平台都編譯並連結它），patch/ 底下的修補也會在 build_libarchive.zsh
+# 裡套進 vendored libarchive——而 libarchive_commit 只記 submodule 的 commit，記不到修補。發現
+# 經過：修好 bridge 讀 ZIP 名稱的 bug、重建後 --version 仍是舊戳記，正是本 finding 原本的形狀。
+# 現在雜湊三個 .swift、bridge 的 .c 與 .h、以及每個 patch/*/*.patch。修補以 LC_ALL=C 排序，使
+# Windows 與 WSL 的 locale 排序差異不會改變串接順序；只串接內容、不含路徑，所以兩個平台的
+# 前綴不同也不影響雜湊。
+#
+# Correction later the same day: "the three files" above was incomplete. libarchive_zip_bridge.c
+# and .h are first-party sources compiled into the binary too (all three platforms build and link
+# them), and the patches under patch/ are applied to the vendored libarchive in
+# build_libarchive.zsh -- libarchive_commit records the submodule's commit, not the patches on
+# top. Found when a fix to the bridge's ZIP name lookup rebuilt with the old stamp, which is this
+# finding's original shape. Hashed now: the three .swift files, the bridge .c and .h, and every
+# patch/*/*.patch. The patches are ordered with LC_ALL=C so a Windows/WSL locale difference in
+# collation cannot reorder the concatenation; only contents are concatenated, not paths, so the
+# two platforms' different prefixes do not enter the hash.
+# The list goes through a variable first. Written inline as ${(f)$(...)}, the nested command
+# substitution is split into words and joined back with spaces before (f) sees it, so the three
+# patch paths arrived as one argument and cat failed on it -- while the pipeline still printed a
+# hash, of the five other files. / 清單先存進變數。若直接寫成 ${(f)$(...)}，巢狀的命令替換會先被
+# 切字再以空格接回，(f) 看到的已無換行，三個 patch 路徑成了一個引數、cat 對它失敗——而管線仍印
+# 出一個雜湊，只涵蓋另外五個檔。
+patch_list=$(print -l -- "$SCRIPT_DIR"/patch/*/*.patch(N) | LC_ALL=C sort)
+stamp_inputs=("$SCRIPT_DIR/swift_tar.swift" "$SCRIPT_DIR/rgb1.swift" "$SCRIPT_DIR/crypto.swift"
+              "$SCRIPT_DIR/libarchive_zip_bridge.c" "$SCRIPT_DIR/libarchive_zip_bridge.h"
+              ${(f)patch_list})
+source_hash=$(cat -- "${stamp_inputs[@]}" \
     | git -C "$SCRIPT_DIR" hash-object --stdin 2>/dev/null || true)
 [[ -n $source_hash ]] || source_hash=unknown
 source_line="swift_tar_source=$source_hash"

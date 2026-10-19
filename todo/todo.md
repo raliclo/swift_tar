@@ -251,6 +251,50 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
+## 2026-10-19 晚：codec 升級、建置腳本無聲改回子模組、vcvars 打亂 PATH、zsh port 的 127 與變慢 ▸ ✅ 已修 2026-10-19 / Evening: codec bump, build scripts silently reverting submodules, vcvars reordering PATH, the zsh port's 127s and slowdown
+
+**起因**：multissh 的 sync_all 把 swift_tar 底下四個子模組移到各自分支最新，使用者決定 swift_tar
+採用、驗證後才提交：libarchive b8189c9→7f149b1（+61，三個 patch 仍套得上）、lz4 664c914→779b355
+（dev 分支，+128）、lzfse2 151b814→5515fe6（+7，lzfse-cli.swift 沒變）、xz b355a31→299eb5c（+2）。
+
+**一、一整套「驗證」是假的**：只 checkout 新 commit、尚未暫存就建置，WSL 得 692/0——但
+build_codecs.zsh 與 build_libarchive.zsh 無條件執行 `git submodule update --init`，把子模組無聲地
+放回索引記錄的舊 commit，建置與測試全跑在舊 codec 上。露出破綻的只有 version-linux.txt 仍寫著
+舊 commit（版本戳加原始碼雜湊的效益之一：紀錄與實際不符時看得見）。sync_all.zsh --update 之後
+接著建置也是同一個陷阱，它印出的步驟甚至要人「確認 version 檔的 codec 版本變了」。
+修法（使用者決定「停下並說明」）：新增 submodule_pins.zsh 的 ensure_submodule_pins，五支建置
+腳本改用它——未 checkout 照舊 init；在記錄的 commit 不動；在別處就停下，列出兩個 commit 與
+「git add 以建置新的／git submodule update 以回到舊的」。「記錄」指索引中的 gitlink，所以暫存
+即可建置、不必先提交。sync_all.zsh 的步驟加上「先暫存」。test/test_submodule_pins.zsh 6 項，
+其中一項是「子模組沒有被移回去」。實測：把 zlib 移到前一個 commit 執行 build_zlib-win.zsh →
+rc 1、zlib 仍在原處；還原後正常建置。
+
+**二、vcvars 把整條 Windows PATH 放到前面**：compile_tar-win.zsh 原本把 vcvars 的 PATH 全部前置，
+而那是 MSVC 目錄加上依 Windows 順序的整條 PATH，於是 C:\Windows\System32 可能排到 /usr/bin 前面：
+`sort` 成了 Windows 的 sort.exe（不認 -V，早上加的 Swift 偵測 `sort -V | tail -1` 得到空字串、建置
+以 127 結束），`find` 成了 find.exe（build_libarchive-win.zsh 失敗分支的 .lib 清單因此什麼都不印，
+錯誤又被 2>/dev/null 吞掉）。改為只前置 vcvars 新增的目錄（與 __VSCMD_PREINIT_PATH 比對；本機為
+8 個），Swift 偵測與 build_tool_install-win.zsh 改用 zsh 的數字 glob 排序 (n)，generate_version.zsh
+的 patch 清單改由 zsh 在 local LC_ALL=C 下排序，.lib 清單改用 zsh glob。在 zsh v3 上舊寫法在本機
+碰巧可用（Windows PATH 恰好把 zsh 的 usr/bin 排在 System32 前），但那取決於每台機器的 PATH 順序；
+新寫法不依賴它。
+
+**三、zsh port**：20261019v1 經 scoop 的 current junction 啟動時，經 PATH 找到的外部指令全部無聲回
+127——`uname -s` 為空，測試會挑錯執行檔、關掉 Windows 守門。v2 修了 junction，卻讓命令替換每次
+約 2.7 秒（app 根目錄成了 '/'，組出 //head 被當 UNC 路徑逾時），並且在「前置整條 vcvars PATH 後
+的巢狀 zsh」裡自帶工具回 127。v3（d7a6183e2）兩者皆修：命令替換 0.028 秒。為此新增
+test/test_00_tools.zsh：37 個外部工具以已知答案比對，失敗時印出 whence -p；平台取自 $OSTYPE，
+不依賴 uname。實測：v1 經 current 35 FAIL（每項指向 current）、版本目錄 37/0、v3 37/0 且 2 秒、
+WSL 37/0。
+
+**驗證（新 codec）**：WSL 729/0（含 test_00 的 37；子模組前後都在新 commit，version-linux.txt 記到
+新 commit）。Windows：建置通過、version-win.txt 記到 libarchive 7f149b1；全套見下一行。
+
+Windows 全套（新 codec，zsh v3，Swift 6.4.1）：**682 通過、0 失敗**（= 早上的 639 + test_00 的 37 +
+test_submodule_pins 的 6）；子模組跑完後仍全在新 commit。WSL 的 729 跑在 test_submodule_pins 寫成之前，
+該支在 WSL 另跑為 6/0。multissh（Multissh-Win）以同一組 codec 跑 codec matrix（含繁中、café-naïve、
+emoji 檔名）與 1.4 GB 傳輸矩陣，Windows↔WSL 皆通過。
+
 ## 2026-10-19 Windows 全套測試第一次整套跑：4 支失敗（1 個真 bug、3 個測試環境問題），以及中途的 Swift 6.4.0→6.4.1 ▸ ✅ 已修 2026-10-19 / The first whole-suite run on Windows: 4 files failed (one real bug, three test-environment problems), and Swift 6.4.0 -> 6.4.1 mid-run
 
 **怎麼發現的**：先前 Windows 只驗過個別測試（test_blind_findings、readahead、strict）；「⏸ 暫緩

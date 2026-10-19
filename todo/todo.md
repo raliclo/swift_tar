@@ -251,6 +251,68 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
+## 2026-10-19 Windows 全套測試第一次整套跑：4 支失敗（1 個真 bug、3 個測試環境問題），以及中途的 Swift 6.4.0→6.4.1 ▸ ✅ 已修 2026-10-19 / The first whole-suite run on Windows: 4 files failed (one real bug, three test-environment problems), and Swift 6.4.0 -> 6.4.1 mid-run
+
+**怎麼發現的**：先前 Windows 只驗過個別測試（test_blind_findings、readahead、strict）；「⏸ 暫緩
+（2026-10-09）：本 session 的改動尚未在 Windows 建置驗證」條目裡「Windows is still unverified」說的
+正是這塊。2026-10-19 第一次把 `test/test_*.zsh` 全部在 Windows
+跑完，得 **627 通過、14 失敗**，分布在 4 支。WSL 同一份原始碼為 692/0，所以都是 Windows 特有。
+逐支隔離重跑後確定都是確定性的，不是負載造成的 flake（第一輪曾與 WSL 全測同時跑）。
+
+| 測試 | 修前 | 成因 | 修法 | 修後 |
+| --- | --- | --- | --- | --- |
+| test_zip_sorted | 13/4 | **真 bug**：bridge 讀 ZIP 時 `archive_entry_pathname()` 走 ANSI 字碼頁，非 ASCII 名稱回 NULL，`-t` 對 `t/中文/檔.txt` 印空行。封存檔裡的 UTF-8 位元組是對的，解出走寬字元路徑也是對的——壞的是清單與訊息 | libarchive_zip_bridge.c 讀取迴圈改為先 `archive_entry_pathname_utf8()`（同檔另兩處本來就這樣寫） | 17/0 |
+| test_patch_drop | 12/7 | 6 條：本 zsh 與 Git for Windows 的 `patch.exe` 是兩個 MSYS runtime，`/tmp` 對應到不同的實體目錄，mktemp 底下的 patch 路徑——連 C:/ 形式——`patch` 都找不到。1 條：唯讀前提（chmod 444/555）在 NTFS 不成立 | apply_patches.zsh 改由 zsh 開檔、以 stdin 餵 `patch`；唯讀案例在 Windows 跳過（與 root 同） | 18/0 |
+| test_zip_parallel | 63/2 | Git 的 `unzip` 同樣看不到 zsh `/tmp` 下的檔，以 9（找不到 zip）結束——不是對封存檔的判定 | 在 `$TMP` 內以相對路徑呼叫 | 65/0 |
+| test_concurrent_extract | 16/1 | `-p` 斷言 mode 為 0640；NTFS 不對 owner 強制 group 位，解出為 0644 | 只跳過該斷言，`-p` 的併發輪次照跑 | 16/0 |
+
+**為何 `/c/...` 路徑沒事、`/tmp` 有事**：兩個 runtime 對 `/c/` 的對應相同（都是 `C:\`），對根目錄相對的
+`/tmp` 不同——本 zsh 的根在 scoop 的 Git portable 目錄底下，Program Files 的 Git 則把 `/tmp` 掛到
+`%TEMP%`。`cygpath` 也是 Program Files Git 的，所以照它的 mount 翻譯同樣是錯的。實際建置的 patch 在
+repo 路徑底下，因此一直沒事；只有測試用 mktemp 時才分岔。工作目錄以真實 Windows 路徑傳給子行程，
+所以相對路徑與 stdin 都不受影響（實測：絕對路徑與 C:/ 形式皆 No such file，相對與 stdin 皆成功）。
+與 memory 裡「別在兩個 shell 之間傳 temp 路徑」同一件事，這次是在測試本身裡發生。
+
+**中途的 Swift 升級**：10:09 Swift 由 6.4.0 自動升到 6.4.1（6.4.0、6.3.3 目錄被刪），09:58 建好的
+`swift_tar.exe` 從此載不動 runtime DLL，每個測試以 127 結束並印
+`api-ms-win-crt-locale-l1-1-0.dll: cannot open shared object file`——一度被誤讀成測試失敗。安裝器其實
+**有**把 HKCU 的 PATH 與 SDKROOT 改寫為 6.4.1；過期的是已開著的 session 所繼承的環境快照。
+處理：compile_tar-win.zsh 改為自行解析最新安裝的 toolchain／runtime／SDK（不信任繼承的環境）；
+build_tool_install-win.zsh 改以安裝目錄判斷是否已裝、`winget upgrade`、修 HKCU PATH（`reg add`，因
+`setx` 在 1024 字元截斷而這條 PATH 有 1269 字元；寫前備份、寫後讀回比對）並以 `setx SDKROOT` 廣播；
+新增 build_tool_install-wsl.zsh，WSL 由 6.4 升到 6.4.1（gpg 驗章）。**第一版裝錯了平台**：它照
+swift.org 安裝頁寫死一份 Ubuntu 清單，把 26.04 送去用 ubuntu24.04 build；本機 Multissh-Win session
+發現已安裝檔案的 sha256 與官方 ubuntu26.04 tarball 不同，而 `ubuntu2604` 的 URL 實際回 HTTP 200。
+改為以 HEAD 探測本機 VERSION_ID 的 tarball（只回退到不比本機新的版本），並把來源 tarball 名稱寫入
+`/usr/local/swift/.installed-from`（版本相同但平台不同時也重裝），12:42 重裝為原生 26.04 build。
+原本的 6.4 在 `/usr/local/swift.bak.20261019115434`，誤裝的 24.04 build 在
+`/usr/local/swift.bak.20261019124239`；兩者確認不再需要後可刪。另一個當下沒記下原因的失敗：一次背景
+重裝以 exit 1 結束卻沒有任何輸出，前景重跑正常——此後安裝輸出一律存到 `/root/swift_install.log`。系統 PATH（HKLM）仍有兩條已失效的 6.3.3 項目，需提權才能
+刪；已不存在的目錄每次查找都會被略過，無害，故只回報。
+
+**全套（修後，2026-10-19，Swift 6.4.1）**：Windows **639 通過、0 失敗**（23 支；test_exclude、
+test_same_permissions、test_touch_alias 以 `exit $((failures != 0))` 回報、沒有數字，rc 皆 0；
+test_linux_libarchive_source 在 Windows 自行跳過）。WSL **692 通過、0 失敗**（Swift 6.4.1
+ubuntu26.04 build；與修前同數，表示修正沒有改到 POSIX 這一側）。重跑：逐一 `zsh test/test_*.zsh`，加總每支最後
+一行的 `PASS: n  FAIL: m`（樹中沒有 runner；本輪用的是 scratchpad 裡的一次性加總腳本）。在本
+session 這種升級前就開著的環境裡，要先把 `.../Swift/Runtimes/<最新>/usr/bin` 放到 PATH 前面。
+
+How it was found: Windows had only been verified test by test; the first whole-suite run on
+2026-10-19 read 627 pass / 14 fail across four files, against 692/0 on WSL from the same source.
+Each was rerun in isolation and is deterministic. One is a real bug -- the bridge listed a ZIP's
+non-ASCII member names as empty on Windows because the narrow `archive_entry_pathname()` goes
+through the ANSI code page (the archive's bytes and extraction were both correct). Two are this
+zsh and Git for Windows' `patch`/`unzip` being different MSYS runtimes whose `/tmp` maps to
+different directories, so an absolute mktemp path -- even its C:/ form, translated by the other
+runtime's cygpath -- did not exist for them; `/c/...` agrees in both, which is why real builds
+were never affected. Fixed by stdin for `patch` and a relative name for `unzip`. The rest assume
+POSIX mode bits NTFS does not enforce for the owner, and now skip that one assertion on Windows.
+Midway Swift auto-upgraded 6.4.0 -> 6.4.1, the binary built minutes earlier stopped loading its
+runtime, and every test exited 127; the installer had updated HKCU, and what was stale was the
+open session's inherited environment. The build now resolves the newest Swift itself, the
+Windows installer upgrades and repairs HKCU PATH/SDKROOT, and a new WSL installer took WSL to
+6.4.1. Two dead 6.3.3 entries remain in the system PATH (harmless; need elevation).
+
 ## 2026-10-14 版本戳追蹤的是函式庫集合而非原始碼，`--version` 分不出新舊執行檔 ▸ ✅ 已修 2026-10-19（使用者決定：戳記納入 first-party 原始碼的雜湊）/ The version stamp keys on the library set, not the sources, so `--version` cannot tell two binaries apart ▸ fixed 2026-10-19 (user chose to key the stamp on the sources)
 
 `generate_version.zsh:128-130`：當 `version-*.txt` 中**非** `swift_tar_version=` 的那些行
@@ -331,6 +393,36 @@ Working tree, not committed, because the repro edits a line without committing; 
 no autocrlf filter, so Windows and WSL agree. Outside a git checkout it falls back to
 `swift_tar_source=unknown`, the shape of `lzfse2_commit`'s fallback. Regenerate the hash with
 `cat swift_tar.swift rgb1.swift crypto.swift | git hash-object --stdin`.
+
+### 同日更正：「三個檔」不完整 / Correction the same day: "three files" was incomplete
+
+上面「為何是三個檔」那段是錯的，保留以記錄一個看似完整的盤點長什麼樣。`libarchive_zip_bridge.c`／`.h`
+也是編進執行檔的 first-party 原始碼（compile_tar-win.zsh 以 `cl` 編、compile_tar-linux.zsh 與
+compile_tar.zsh 各自編譯並連結），`patch/libarchive/*.patch` 也會在 build_libarchive.zsh 裡套進
+vendored libarchive——而 `libarchive_commit` 只記 submodule 的 commit，記不到修補。我只看了
+`swiftc` 那一行就下了結論。**發現經過**：修好 bridge 讀 ZIP 名稱的 bug（見下方 2026-10-19 條目）後
+重建，`--version` 仍是舊戳記 `20261019-095650`——正是本 finding 原本的形狀，出現在剛修好它的
+同一天。
+
+現在雜湊 8 個輸入：三個 `.swift`、bridge 的 `.c` 與 `.h`、每個 `patch/*/*.patch`（以 `LC_ALL=C`
+排序，只串接內容不含路徑）。Windows 與 WSL 實測同為 `82c439a4f57a9d7eb0989c6ed4c6448c7e756e08`；
+重建後戳記前進為 `20261019-120541`。寫這段時還踩到一次：`${(f)$(...)}` 內嵌時，巢狀命令替換
+先被切字再以空格接回，三個 patch 成了一個引數、`cat` 失敗，而管線仍印出一個只涵蓋 5 個檔的
+雜湊。改為先存變數再 `${(f)var}`。
+
+重新產生（zsh）：
+`cat swift_tar.swift rgb1.swift crypto.swift libarchive_zip_bridge.c libarchive_zip_bridge.h ${(f)"$(print -l patch/*/*.patch | LC_ALL=C sort)"} | git hash-object --stdin`
+
+The "three files" paragraph above is wrong and kept to show what a complete-looking inventory
+looks like. `libarchive_zip_bridge.c`/`.h` are first-party sources compiled into the binary too,
+and `patch/libarchive/*.patch` are applied to the vendored libarchive in build_libarchive.zsh,
+which `libarchive_commit` (the submodule's commit) cannot see. Only the `swiftc` line had been
+read. Found when the bridge's ZIP name fix (entry below) rebuilt with the old stamp
+`20261019-095650` -- this finding's own shape, on the day it was fixed. Eight inputs are hashed
+now; Windows and WSL agree on `82c439a4f57a9d7eb0989c6ed4c6448c7e756e08`, and the rebuilt stamp is
+`20261019-120541`. Writing it also hit `${(f)$(...)}` inline: the nested substitution was split
+and re-joined with spaces, the three patches became one argument, `cat` failed, and the pipeline
+still printed a hash -- of the other five files.
 
 ## 2026-10-14 子秒 mtime 在 Windows 上兩端皆未實作，5 條檢查失敗 ▸ ✅ 已修 2026-10-14（Windows 與 WSL 皆驗）/ Sub-second mtime was unimplemented on Windows on both sides: fixed and verified on Windows and WSL
 
@@ -1345,7 +1437,9 @@ bzip2 仍是 sysroot 的共享庫——所以 2026-10-12 的 lz4 與 libarchive 
 | 連結器警告 `LOAD segment with RWX permissions` | 見下方 🔴 條目 | 連結時加 `-z separate-code`，區段成為 R／E／RW，警告消失 |
 
 Windows is still unverified, including the submodule bumps and the 2026-10-13 changes to
-how `-test` picks its standard tar and checks that a subprocess can run. Linux: the
+how `-test` picks its standard tar and checks that a subprocess can run. *(2026-10-19: true when
+written; the whole suite has since been run on Windows -- see the 2026-10-19 whole-suite entry
+near the top. 寫下時為真；2026-10-19 已在 Windows 跑完整套，見頂部附近的 2026-10-19 條目。)* Linux: the
 Swift 6 build succeeds with no diagnostics from the compiler or the linker; libarchive
 and the four submodule codecs are static, patched in the guest; all 19 suites, the crypto
 self-test and `-test` pass. Every first-round failure other than the FIFO came from how

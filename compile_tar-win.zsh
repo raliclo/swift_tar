@@ -125,24 +125,41 @@ fi
 
 # ---- Swift toolchain: the newest installed, not whatever PATH records ----
 # Swift on Windows installs under %LOCALAPPDATA%\Programs\Swift with a versioned Toolchains,
-# Runtimes and Platforms directory each, and the installer writes those exact paths into the
-# user PATH and SDKROOT. A point-release bump REPLACES the directories but does not rewrite
-# PATH or SDKROOT. On 2026-10-19 Swift went 6.4.0 -> 6.4.1 mid-session: PATH still named the
-# gone 6.4.0/6.3.3 bins so swiftc was unresolvable, SDKROOT still named the gone 6.4.0 SDK, and
-# the binary built minutes earlier could not load its runtime DLLs -- every test exited 127
-# with "error while loading shared libraries: api-ms-win-crt-locale-l1-1-0.dll". So resolve the
-# newest installed toolchain, runtime and SDK here and point PATH/SDKROOT at them rather than
-# trusting either to be current. PATH entries go through cygpath -u because zsh searches POSIX
-# paths; SDKROOT stays a Windows path because swiftc hands it to the Windows SDK machinery.
-# sort -V so 6.4.1 beats 6.4.0 and a future 6.10 beats 6.9 (a lexical sort would not).
+# Runtimes and Platforms directory each, and the installer writes those paths into the user
+# PATH and SDKROOT. On 2026-10-19 Swift went 6.4.0 -> 6.4.1 mid-session: the shell's PATH still
+# named the gone 6.4.0 bins so swiftc was unresolvable, its SDKROOT still named the gone 6.4.0
+# SDK, and the binary built minutes earlier could not load its runtime DLLs -- every test
+# exited 127 with "error while loading shared libraries: api-ms-win-crt-locale-l1-1-0.dll".
+#
+# Correction, same day: the first version of this comment said "a point-release bump replaces
+# the directories but does not rewrite PATH or SDKROOT". Wrong. Reading the registry afterwards
+# (reg query HKCU\Environment) showed the installer HAD rewritten both to 6.4.1, and that no
+# 6.4.0 entry existed anywhere. What was stale was the environment the already-running session
+# inherited when it started, before the upgrade -- every shell it spawned copied that snapshot.
+# A fresh terminal sees 6.4.1. The resolution below is still right for the real cause: any
+# process older than the upgrade (an IDE, a terminal, an agent session) carries the old PATH
+# and SDKROOT, and nothing tells it to reload them.
+#
+# So resolve the newest installed toolchain, runtime and SDK here and point PATH/SDKROOT at them
+# rather than trusting the inherited environment. PATH entries go through cygpath -u because zsh
+# searches POSIX paths; SDKROOT stays a Windows path because swiftc hands it to the Windows SDK
+# machinery. sort -V so 6.4.1 beats 6.4.0 and a future 6.10 beats 6.9 (lexical would not).
+#
 # Swift 在 Windows 安裝於 %LOCALAPPDATA%\Programs\Swift，各有帶版號的 Toolchains／Runtimes／
-# Platforms，安裝器把這些路徑寫進使用者 PATH 與 SDKROOT。點版本更新會換掉目錄卻不改 PATH／
-# SDKROOT：2026-10-19 Swift 在 session 中途由 6.4.0 升到 6.4.1，PATH 仍指向已刪的 6.4.0／6.3.3
-# bin 使 swiftc 找不到，SDKROOT 仍指向已刪的 6.4.0 SDK，數分鐘前建好的 binary 載不動 runtime
-# DLL——每個測試以 127 結束並印 api-ms-win-crt-locale-l1-1-0.dll 載入失敗。故在此解析最新安裝的
-# toolchain／runtime／SDK 並據以設定 PATH／SDKROOT。PATH 用 cygpath -u（zsh 搜尋 POSIX 路徑），
-# SDKROOT 維持 Windows 路徑（swiftc 交給 Windows SDK 機制）。sort -V 使 6.4.1 勝過 6.4.0、未來
-# 的 6.10 勝過 6.9（字典序不會）。
+# Platforms，安裝器把這些路徑寫進使用者 PATH 與 SDKROOT。2026-10-19 Swift 在 session 中途由
+# 6.4.0 升到 6.4.1：shell 的 PATH 仍指向已刪的 6.4.0 bin 使 swiftc 找不到，其 SDKROOT 仍指向已刪
+# 的 6.4.0 SDK，數分鐘前建好的 binary 載不動 runtime DLL——每個測試以 127 結束並印
+# api-ms-win-crt-locale-l1-1-0.dll 載入失敗。
+#
+# 同日更正：本註解初版寫「點版本更新會換掉目錄卻不改 PATH／SDKROOT」。錯。事後讀登錄檔
+# （reg query HKCU\Environment）顯示安裝器**有**把兩者改寫為 6.4.1，且任何地方都沒有 6.4.0 的
+# 項目。過期的是那個早在升級前就啟動的 session 所繼承的環境——它衍生的每個 shell 都複製了那份
+# 快照；新開的終端機看到的是 6.4.1。下方的解析對真正的成因仍然正確：任何比升級更早的行程
+# （IDE、終端機、agent session）都帶著舊的 PATH 與 SDKROOT，且沒有東西會通知它重新載入。
+#
+# 故在此解析最新安裝的 toolchain／runtime／SDK 並據以設定 PATH／SDKROOT，不信任繼承來的環境。
+# PATH 用 cygpath -u（zsh 搜尋 POSIX 路徑），SDKROOT 維持 Windows 路徑（swiftc 交給 Windows SDK
+# 機制）。sort -V 使 6.4.1 勝過 6.4.0、未來的 6.10 勝過 6.9（字典序不會）。
 swift_root="$(cygpath -u "${LOCALAPPDATA:-$HOME/AppData/Local}")/Programs/Swift"
 if [[ -d $swift_root ]]; then
     swift_tc=$(print -l "$swift_root"/Toolchains/*/usr/bin(/N) | sort -V | tail -1)

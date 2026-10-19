@@ -26,6 +26,8 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
 fi
 
 ROOT="${0:A:h:h}"
+IS_WIN=0
+case "$(uname -s)" in MSYS*|MINGW*|CYGWIN*) IS_WIN=1 ;; esac
 pass=0; fail=0
 ok()  { echo "PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "FAIL: $1"; fail=$((fail + 1)); }
@@ -156,7 +158,13 @@ rc=0; drun --check || rc=$?
 # with its directory: the text still reads as not applied, and `patch` cannot write.
 # 套不上的 patch 要說出原因。原因原本被丟掉，只剩「套用失敗」而沒有可以著手的東西。把檔案放
 # 回去，連同它的目錄設成不可寫：文字讀起來仍是未套用，而 `patch` 寫不進去。
-if [ "$(id -u)" != 0 ]; then
+# The premise is that chmod 444/555 stops the write. It holds for neither root nor Windows: NTFS
+# does not enforce POSIX write bits against the owner, so `patch` wrote the file, the patch
+# "applied" and rc was 0 (2026-10-19) -- the reason test_strict and test_same_permissions skip
+# their read-only cases there. / 前提是 chmod 444/555 擋得住寫入。對 root 與 Windows 都不成立：
+# NTFS 不對 owner 強制 POSIX 寫入位，於是 `patch` 照樣寫入、patch「已套用」、rc 為 0
+# （2026-10-19）——與 test_strict、test_same_permissions 在 Windows 跳過唯讀案例同因。
+if [ "$(id -u)" != 0 ] && [ "$IS_WIN" = 0 ]; then
   cp "$DUP/a.c.orig" "$DUP/demo/a.c"
   chmod 444 "$DUP/demo/a.c"; chmod 555 "$DUP/demo"
   rc=0; drun || rc=$?
@@ -165,6 +173,8 @@ if [ "$(id -u)" != 0 ]; then
   [ "$rc" = 1 ] && grep -q 'failed to apply' "$DUP/out" && [ -n "$said" ] \
     && ok "a patch that fails to apply shows what patch said" \
     || bad "a patch that fails to apply shows what patch said (rc $rc; $(tr '\n' '|' < "$DUP/out"))"
+elif [ "$IS_WIN" = 1 ]; then
+  echo "SKIP: failed-apply case (Windows does not enforce POSIX write bits against the owner)"
 else
   echo "SKIP: failed-apply case (root can write anywhere)"
 fi

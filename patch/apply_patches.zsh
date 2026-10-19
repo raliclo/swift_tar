@@ -159,16 +159,32 @@ p_state() {   # submodule patch -> applied | missing | stale
 # 修改沒有照要求完成時，一律把 git 或 `patch` 說的話印出來：「套用失敗」而原因被丟掉，就沒有
 # 可以著手的東西。成功時不印 `patch` 的輸出，它那幾行「patching file ...」沒有比下面印的那一行
 # 多說什麼。
+# The patch reaches `patch` on stdin, opened by zsh, not as a path in -i. On Windows `patch` is
+# Git for Windows' MSYS build while this zsh may sit on a different MSYS root, and the two map
+# root-relative paths to different places: a patch under mktemp's /tmp was "No such file or
+# directory" to `patch` even in its C:/ form, because that form was translated by the other
+# runtime's mounts too. test_patch_drop failed 7 checks on Windows that way (2026-10-19). /c/...
+# paths agree in both runtimes, so real builds from a repo path were unaffected, but stdin takes
+# the question away entirely. It changes nothing else: stdin used to be </dev/null so a question
+# could not block, and with stdout captured here `patch` defaults its answers without a terminal
+# either way.
+# patch 經 stdin 交給 `patch`（由 zsh 開檔），而非以 -i 傳路徑。Windows 上 `patch` 是 Git for
+# Windows 的 MSYS 版，而本 zsh 可能位於另一個 MSYS 根，兩者對根目錄相對路徑的對應不同：mktemp
+# 的 /tmp 底下的 patch，對 `patch` 而言即使寫成 C:/ 形式也是「No such file or directory」，因為
+# 那個形式也是照另一個 runtime 的 mount 翻譯的。test_patch_drop 在 Windows 因此失敗 7 項
+# （2026-10-19）。/c/... 路徑在兩個 runtime 一致，所以從 repo 路徑的實際建置不受影響，但 stdin
+# 讓這個問題整個消失。其他行為不變：stdin 原本是 </dev/null，為的是問題不會卡住；而此處 stdout
+# 被擷取，`patch` 在沒有終端機時本來就取預設答案。
 p_apply() {
   local said
   if with_git "$1"; then git -C "$1" apply "$2"; return; fi
-  said=$( cd "$1" && patch -p1 -N -i "$2" 2>&1 </dev/null )
+  said=$( cd "$1" && patch -p1 -N 2>&1 <"$2" )
   [[ $(text_state "$1" "$2") == applied ]] || { print -ru2 -- "$said"; return 1; }
 }
 p_reverse() {
   local said
   if with_git "$1"; then git -C "$1" apply --reverse "$2"; return; fi
-  said=$( cd "$1" && patch -p1 -R -i "$2" 2>&1 </dev/null )
+  said=$( cd "$1" && patch -p1 -R 2>&1 <"$2" )
   [[ $(text_state "$1" "$2") == missing ]] || { print -ru2 -- "$said"; return 1; }
 }
 

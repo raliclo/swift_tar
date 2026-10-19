@@ -117,7 +117,15 @@ for codec in --zip --zip64; do
   eq "$codec: every member is in the -n 8 archive" \
      "$(find "$SRC/t" | wc -l | tr -d ' ')" "$("$ST" -t -f "$TMP/n.zip" | wc -l | tr -d ' ')"
   if command -v unzip >/dev/null 2>&1; then
-    rc=0; unzip -tq "$TMP/n.zip" >/dev/null 2>&1 || rc=$?
+    # A relative path, from inside $TMP. On Windows `unzip` is Git for Windows' MSYS build,
+    # whose /tmp is not this zsh's /tmp, so the absolute "$TMP/n.zip" named a file it could not
+    # find and it exited 9 ("zipfile not found") -- not a verdict on the archive (2026-10-19).
+    # The working directory reaches a child as a real Windows path, so a relative name means the
+    # same file to both. / 在 $TMP 裡用相對路徑。Windows 上 `unzip` 是 Git for Windows 的 MSYS
+    # 版，它的 /tmp 不是本 zsh 的 /tmp，所以絕對路徑 "$TMP/n.zip" 指向它找不到的檔案、以 9（找不到
+    # zip 檔）結束——那不是對封存檔的判定（2026-10-19）。工作目錄以真實 Windows 路徑傳給子行程，
+    # 所以相對名稱對兩邊都是同一個檔。
+    rc=0; ( cd "$TMP" && unzip -tq n.zip ) >/dev/null 2>&1 || rc=$?
     eq "$codec: unzip -t accepts the -n 8 archive" 0 "$rc"
   else
     echo "SKIP: $codec unzip -t (no unzip on this machine)"

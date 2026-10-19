@@ -1611,7 +1611,17 @@ int swift_tar_zip_read(const char *archive_path,
             set_archive_error(error_buffer, error_capacity, "archive_read_next_header", reader);
             goto cleanup;
         }
-        path = archive_entry_pathname(entry);
+        /* UTF-8 first, as at the other two name lookups in this file. On Windows the narrow
+         * archive_entry_pathname goes through the ANSI code page and returns NULL for a name it
+         * cannot represent, so `-t` of a ZIP printed an empty line for `t/中文/檔.txt` while the
+         * archive held the correct UTF-8 bytes -- and every check that compares a ZIP listing
+         * (test_zip_sorted's order and --exclude cases) failed on Windows only (2026-10-19).
+         * 先取 UTF-8，與本檔另外兩處取名稱的寫法相同。Windows 上窄字元的 archive_entry_pathname
+         * 會經 ANSI 字碼頁，對無法表示的名稱回傳 NULL，於是 ZIP 的 `-t` 對 `t/中文/檔.txt` 印出
+         * 空行，而封存檔裡其實是正確的 UTF-8 位元組——所有比對 ZIP 清單的檢查（test_zip_sorted 的
+         * 順序與 --exclude 案例）只在 Windows 失敗（2026-10-19）。 */
+        path = archive_entry_pathname_utf8(entry);
+        if (path == NULL) path = archive_entry_pathname(entry);
         if (status == ARCHIVE_FAILED || status == ARCHIVE_RETRY) {
             /* The next archive_read_next_header skips whatever data is left unread.
              * 下一次 archive_read_next_header 會自動略過尚未讀取的資料。 */

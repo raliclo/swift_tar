@@ -4334,7 +4334,9 @@ old state. Three new checks in `test/test_patch_drop.zsh` fail on the unfixed sc
 修法：選 DLL 與判斷 MSVC 移到 `win_dlls.zsh`（release.zsh source 它）。runtime 目錄先列一次、以小寫名
 對照磁碟路徑；`swift_tar_ships_msvc_runtime` 逐檔判斷。`test/test_release.zsh` 以替身 objdump（CRLF 的
 「DLL Name:」行）在 macOS 上跑：import 閉包與拼法、MSVC DLL 排最後仍算、大寫名仍算、沒有就不附
-（46/0）。**Windows 上的實測待下一次預演。**
+（46/0）。Windows 預演（`287432d`，2026-10-20）已確認：說明在封存裡、DLL 18 個、VC++ DLL 為小寫
+`msvcp140.dll`／`vcruntime140.dll`／`vcruntime140_1.dll`，最小 PATH 下 `--version`、gzip 往返、
+`--crypto-selftest` 皆 rc 0。
 
 `d0ef990`'s release.zsh decided whether to ship `licenses/msvc-redist-NOTICE.txt` with
 `(( ${#${(M)${(k)shipped}:#(vcruntime|msvcp|concrt|vccorlib)*}} ))`. Inside `(( ))` the keys are
@@ -4345,4 +4347,30 @@ returned the pattern rather than the file's name, and DLLs shipped under the imp
 upper-case spelling. Fix: the selection and the MSVC test move to `win_dlls.zsh`; the runtime
 directory is listed once and looked up by lower-case name, and `swift_tar_ships_msvc_runtime`
 tests each file. Four new checks in `test/test_release.zsh` run on macOS with a stand-in objdump
-(46/0). **Awaiting the next Windows rehearsal.**
+(46/0). Confirmed by the Windows rehearsal of `287432d` (2026-10-20): the notice is in the
+archive, 18 DLLs, the VC++ DLLs in lower case, and `--version`, a gzip round trip and
+`--crypto-selftest` all rc 0 with a minimal PATH.
+
+## test_release.zsh 在 Windows 上 3 FAIL 並中途結束 ▸ 🟢 已修 2026-10-20 / test_release.zsh failed 3 cases on Windows and stopped partway ▸ fixed
+
+Swift_tar-Win 在 `287432d` 上跑 `test/test_release.zsh`：27 PASS、3 FAIL，然後 rc 2 中途結束。兩個成因
+都在測試裡，release.zsh 本身沒問題（同一次預演四項檢查全過）。
+
+1. 原生 release.zsh 夾具的替身是 `#!/bin/sh` 腳本 `release/swift_tar`。Windows 上 release.zsh 要的是
+   import 能走到 swiftCore.dll 的 PE `swift_tar.exe` 與 Swift runtime 授權，於是「乾淨公開版會被打包」
+   等三項都以 `licenses/swift-LICENSE.txt is missing` 失敗。shell 腳本當不了 PE，這段改為在 Windows
+   上 SKIP；Windows 專屬的部分由 win_dlls 案例與 Windows 發行預演涵蓋。
+2. `grep '^  url ' f >> f`：GNU grep 拒絕附加到自己的輸入（`input file is also the output`，exit 2），
+   `set -e` 就在那裡結束腳本；macOS 的 BSD grep 允許，所以在 Mac 上看不出來。改為先寫暫存檔再 `cat >>`。
+
+macOS 上仍 46/0。**Windows 上的重跑待確認。**
+
+Swift_tar-Win ran `test/test_release.zsh` at `287432d`: 27 PASS, 3 FAIL, then it stopped with
+rc 2. Both causes are in the test; release.zsh itself passed all four rehearsal checks. (1) The
+native fixture's stand-in is a `#!/bin/sh` script, while release.zsh on Windows wants a PE
+`swift_tar.exe` reaching swiftCore.dll plus the Swift runtime licences, so three cases failed with
+`licenses/swift-LICENSE.txt is missing`. A shell script cannot be a PE, so that section is skipped
+on Windows; the Windows-only part is covered by the win_dlls cases and the Windows rehearsal.
+(2) `grep '^  url ' f >> f`: GNU grep refuses to append to its own input (exit 2) and `set -e`
+ended the script; BSD grep allows it, which hid it on macOS. It now goes through a temp file.
+Still 46/0 on macOS. **Awaiting a Windows rerun.**

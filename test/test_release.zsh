@@ -88,7 +88,15 @@ fi
 # release.zsh, in a throwaway repository with a stand-in binary.
 # release.zsh，在用完即丟的 repo 裡，以替身執行檔進行。
 # ---------------------------------------------------------------------
-if ! command -v zstd >/dev/null 2>&1; then
+# Not on Windows: there release.zsh wants a PE swift_tar.exe whose imports reach swiftCore.dll,
+# plus the Swift runtime licences, and a #!/bin/sh stand-in can be neither. The Windows-only part
+# of release.zsh is covered by the win_dlls cases below and by a release rehearsal on Windows.
+# Windows 上不跑：那裡 release.zsh 要的是 import 能走到 swiftCore.dll 的 PE swift_tar.exe 與 Swift
+# runtime 授權，#!/bin/sh 替身兩者都當不了。release.zsh 只屬 Windows 的部分由下面的 win_dlls 案例與
+# 在 Windows 上的發行預演涵蓋。
+if [ "$OS" = windows ]; then
+  echo "SKIP: release.zsh native cases (the stand-in binary is a shell script, not a PE; see win_dlls below)"
+elif ! command -v zstd >/dev/null 2>&1; then
   echo "SKIP: release.zsh cases (no zstd on PATH)"
 else
   R=$TMP/rel
@@ -293,7 +301,12 @@ check "Formula: the url, the version and the test line carry 0.2.0" "$(grep -c '
 check "Formula: a comment naming 0.1.0 as history is left alone" "$(grep -c 'history: 0.1.0 shipped first' "$P/swift_tar.rb")" 1
 rc=0; rw 0.2.0 rewrite_pair "$P/swift_tar.rb" swift_tar-0.2.0-macos-arm64.tar.zst "$H2" || rc=$?
 check "Formula: then the new archive's hash replaces the old" "$rc:$(grep -c "$H2" "$P/swift_tar.rb"):$(grep -c "$H1" "$P/swift_tar.rb")" "0:1:0"
-grep '^  url ' "$P/swift_tar.rb" >> "$P/swift_tar.rb"
+# Through a temp file: GNU grep refuses to append to its own input ("input file is also the
+# output", exit 2), which ended this script on Windows; BSD grep allows it.
+# 經由暫存檔：GNU grep 拒絕附加到自己的輸入（「input file is also the output」，exit 2），在 Windows
+# 上讓這支腳本中途結束；BSD grep 允許。
+grep '^  url ' "$P/swift_tar.rb" > "$TMP/url.line"
+cat "$TMP/url.line" >> "$P/swift_tar.rb"
 rc=0; rw 0.2.0 rewrite_pair "$P/swift_tar.rb" swift_tar-0.2.0-macos-arm64.tar.zst "$H1" || rc=$?
 check "Formula: two urls for one platform are refused" "$rc:$(grep -c 'expected one url' "$TMP/rw.out")" "1:1"
 if [ -r "$P/swift_tar.json" ]; then

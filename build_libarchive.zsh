@@ -108,6 +108,12 @@ case "$(swift_tar_platform)" in
     mac)   build_dir="build/libarchive-macos"; version_file="version-mac.txt" ;;
     linux) build_dir="build/libarchive-linux"; version_file="version-linux.txt"
            platform_flags=(-DCMAKE_POSITION_INDEPENDENT_CODE=ON) ;;
+    # The musl cross targets (compile_tar-musl.zsh) take their cmake toolchain file from
+    # SWIFT_TAR_CMAKE_TOOLCHAIN. / musl 交叉目標（compile_tar-musl.zsh）的 cmake toolchain 檔由
+    # SWIFT_TAR_CMAKE_TOOLCHAIN 傳入。
+    musl-aarch64|musl-x86_64)
+           build_dir="build/libarchive-$(swift_tar_platform)"; version_file="version-$(swift_tar_platform).txt"
+           platform_flags=(-DCMAKE_TOOLCHAIN_FILE="${SWIFT_TAR_CMAKE_TOOLCHAIN:?a musl target needs SWIFT_TAR_CMAKE_TOOLCHAIN}") ;;
     *)
         echo "[FAIL] unsupported platform / 不支援的平台：$(swift_tar_platform)" >&2
         exit 1
@@ -162,8 +168,14 @@ bridge_zlib=()
 # CC because clang may exist only under the Swift toolchain and not on PATH.
 # 用呼叫端指定的編譯器，與上面的 cmake 一致：compile_tar-linux.zsh 之所以傳入 CC，是因為 clang
 # 可能只存在於 Swift toolchain 之下，而不在 PATH 上。
+# A musl cross target writes its own object: a shared name would leave a Linux object where
+# the next macOS build links build/libarchive_zip_bridge.o.
+# musl 交叉目標寫出自己的目的檔：共用同一個名字，下一次 macOS 建置連結
+# build/libarchive_zip_bridge.o 時就會拿到 Linux 的目的檔。
+bridge_obj=build/libarchive_zip_bridge.o
+[[ $(swift_tar_platform) == musl-* ]] && bridge_obj=build/libarchive_zip_bridge-$(swift_tar_platform).o
 "${CC:-clang}" -O2 -DSWIFT_TAR_ZIP_PARALLEL -Ilibarchive/libarchive "${bridge_zlib[@]}" \
-    -c libarchive_zip_bridge.c -o build/libarchive_zip_bridge.o
+    -c libarchive_zip_bridge.c -o "$bridge_obj"
 
 # Record the pinned gitlink in this platform's provenance file, mirroring
 # build_libarchive-win.zsh without letting a Linux build overwrite macOS data.

@@ -212,7 +212,7 @@ would "gh release create $TAG -R $REPO with ${#ASSETS} assets"
 if (( DO_PUBLISH )); then
   gh release create "$TAG" -R "$REPO" --verify-tag \
     --title "swift_tar $VERSION" \
-    --notes "swift_tar $VERSION, the public build (no LZFSE). One .tar.zst per platform, each packed and verified on the machine that built its binary; check it with the .sha256 beside it. macOS: brew; Windows: scoop; Linux: extract and put swift_tar on PATH (needs libbz2.so.1.0)." \
+    --notes "swift_tar $VERSION, the public build (no LZFSE). One .tar.zst per platform with a .sha256 beside it. macOS: brew; Windows: scoop (carries its Swift runtime DLLs); Linux x86-64 and aarch64: fully static against musl, extract and put swift_tar on PATH." \
     "${ASSETS[@]}" >/dev/null
 fi
 

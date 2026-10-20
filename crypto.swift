@@ -878,6 +878,10 @@ enum TarCrypto {
 import Darwin
 #elseif canImport(Glibc)
 import Glibc
+#elseif canImport(Musl)
+// The static Linux build (compile_tar-musl.zsh) links musl, whose C module is Musl.
+// 靜態 Linux 版（compile_tar-musl.zsh）連結 musl，它的 C 模組叫 Musl。
+import Musl
 #elseif os(Windows)
 import ucrt
 import WinSDK

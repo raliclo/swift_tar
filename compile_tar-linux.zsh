@@ -36,11 +36,6 @@
 #   CODECS_STATIC     1 = zlib, liblzma, liblz4, libzstd from the submodules, 0 = the
 #                     sysroot's shared ones; unset = static when cmake and all four
 #                     source trees are present
-#   SWIFT_STATIC_STDLIB  1 = link the Swift runtime and Foundation statically, for release
-#                     archives (release.zsh requires it on Linux); unset or 0 = the shared
-#                     runtime found through an RPATH to this toolchain
-#                     1 = 靜態連結 Swift runtime 與 Foundation，給正式版封存用（Linux 上
-#                     release.zsh 要求它）；未設或 0 = 經由指向本 toolchain 的 RPATH 使用共享 runtime
 #
 # Defaults target the buildroot aarch64 appliance under
 # sos/linux_kernal_vm_interactive; on an ordinary distro both are auto-detected.
@@ -59,7 +54,7 @@ set -euo pipefail
 
 script_path="${0:A}"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-    sed -n '3,56p' "$script_path" | sed 's/^# \{0,1\}//'
+    sed -n '3,52p' "$script_path" | sed 's/^# \{0,1\}//'
     exit 0
 fi
 
@@ -453,23 +448,12 @@ else
     log_msg "注意：沒有 llvm-objcopy 或 objcopy；本次建置的 .rodata 仍可寫。"
 fi
 
-# SWIFT_STATIC_STDLIB=1 links the Swift runtime and Foundation into the binary, for release
-# archives: the default RPATH names this machine's toolchain directory, so a binary carried
-# elsewhere fails with "error while loading shared libraries" unless the same Swift sits at the
-# same path. Decided with the user on 2026-10-20 for release builds only; everyday builds keep
-# the shared runtime. record_provenance below reads back which one the binary got.
-# SWIFT_STATIC_STDLIB=1 把 Swift runtime 與 Foundation 連進執行檔，給正式版封存用：預設的 RPATH
-# 指向這台機器的 toolchain 目錄，執行檔帶到別處時，除非同一版 Swift 放在同一路徑，否則會以
-# 「error while loading shared libraries」失敗。2026-10-20 與使用者決定只用在正式版的建置；平常的
-# 建置維持共享 runtime。下方 record_provenance 會讀回執行檔實際拿到哪一種。
-STDLIB_LINK=(-Xlinker -rpath -Xlinker "$SWIFT_RUNTIME_DIR")
-[[ "${SWIFT_STATIC_STDLIB:-0}" == 1 ]] && STDLIB_LINK=(-static-stdlib)
 "${LINK_ENV[@]}" "$SWIFTC" "$OBJDIR"/*.o \
     build/libarchive_zip_bridge.o \
     "${ARCHIVE_LINK[@]}" \
     "${CODEC_LINK[@]}" \
     "${LINKER_FLAGS[@]}" \
-    "${STDLIB_LINK[@]}" \
+    -Xlinker -rpath -Xlinker "$SWIFT_RUNTIME_DIR" \
     -Xlinker -rpath -Xlinker "$SYSROOT/lib" \
     -o release/swift_tar
 
@@ -563,16 +547,9 @@ record_provenance() {
     if [[ "$CODECS_STATIC" != 1 ]]; then
         strip+='|^(zlib|lz4|xz|zstd)_(so_version|path|linkage|version|commit)='
     fi
-    strip+='|^libarchive_(so_version|path)=|^swift_stdlib_linkage='
+    strip+='|^libarchive_(so_version|path)='
     {
         grep -vE "$strip" "$version_file" || [ $? -eq 1 ]
-        # Read from the binary, not from SWIFT_STATIC_STDLIB: release.zsh trusts this line.
-        # 從執行檔讀出，不看 SWIFT_STATIC_STDLIB：release.zsh 信任的是這一行。
-        if readelf -d release/swift_tar | grep -q 'NEEDED.*libswiftCore\.so'; then
-            print -r -- swift_stdlib_linkage=dynamic
-        else
-            print -r -- swift_stdlib_linkage=static
-        fi
         [[ "$CODECS_STATIC" == 1 ]] || record_linked zlib       'libz\.so'
         record_linked bzip2      'libbz2\.so'
         [[ "$CODECS_STATIC" == 1 ]] || record_linked lz4        'liblz4\.so'

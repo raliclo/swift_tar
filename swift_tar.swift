@@ -6244,8 +6244,20 @@ func compareTrees(_ a: String, _ b: String) -> Bool {
 /// 起來（拿不到 socket、bind 被拒：沙箱不准，或 descriptor 用完）時，對 `lo` 一無所知；在那裡
 /// 回答「不行」會拒絕所有子行程，還叫使用者去啟用一個本來就啟用的介面。
 #if os(Linux)
+// glibc's headers make SOCK_STREAM and SOCK_NONBLOCK an enum, which Swift imports with a
+// rawValue; musl's (the static release, compile_tar-musl.zsh) make them plain Int32 macros,
+// where `.rawValue` does not exist and the build stopped.
+// glibc 的標頭把 SOCK_STREAM 與 SOCK_NONBLOCK 定義成 enum，Swift 匯入後帶有 rawValue；musl 的（靜態
+// 正式版，compile_tar-musl.zsh）則是單純的 Int32 巨集，沒有 `.rawValue`，建置因此停下。
+#if canImport(Glibc)
+private let sockStream = Int32(SOCK_STREAM.rawValue)
+private let sockNonblock = Int32(SOCK_NONBLOCK.rawValue)
+#else
+private let sockStream = SOCK_STREAM
+private let sockNonblock = SOCK_NONBLOCK
+#endif
 private let loopbackConnects: Bool = {
-    let listener = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+    let listener = socket(AF_INET, sockStream, 0)
     guard listener >= 0 else { return true }
     defer { close(listener) }
     var addr = sockaddr_in()
@@ -6262,7 +6274,7 @@ private let loopbackConnects: Bool = {
     // 127.0.0.1 not being an address here is the interface being down, so that one is a "no".
     // 127.0.0.1 在這裡不是一個位址，就是介面未啟用，所以這一種算「不行」。
     guard bound else { return bindErrno != EADDRNOTAVAIL }
-    let client = socket(AF_INET, Int32(SOCK_STREAM.rawValue) | Int32(SOCK_NONBLOCK.rawValue), 0)
+    let client = socket(AF_INET, sockStream | sockNonblock, 0)
     guard client >= 0 else { return true }
     defer { close(client) }
     let started = withUnsafePointer(to: &addr) {
@@ -6800,7 +6812,7 @@ struct SwiftTarMain {
             // The release number and build id first, the provenance stamp last: release.zsh
             // reads the number from the second word and the id from the parentheses.
             // 版本號與 build id 在前、來源戳記在後：release.zsh 從第二個字讀版本號、從括號讀 id。
-            print("swift_tar \(swiftTarReleaseVersion) (\(swiftTarBuildID)) \(swiftTarBuildVersion)")
+            print("\(swiftTarIdentity) \(swiftTarBuildVersion)")
             exit(0)
         }
         // Hand-rolled crypto must be checkable against the specs' own vectors.

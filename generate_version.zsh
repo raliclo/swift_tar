@@ -215,9 +215,15 @@ else
     mv "$version_file.tmp" "$version_file"
 fi
 
+# The number and the id go in as ONE literal, `swift_tar <number> (<id>)`, so the binary holds
+# that exact text: release.zsh checks a cross-built Linux binary, which the Mac cannot run, by
+# finding it there. Two separate constants did not: Swift keeps a literal of 15 bytes or less
+# inside the instructions, not as text, and `0.1.0` or an untagged `6029537d` is that short.
+# 版本號與 id 合成**一個**字面值 `swift_tar <版本> (<id>)`，讓執行檔裡有這段一字不差的文字：Mac 執行
+# 不了交叉建置的 Linux 執行檔，release.zsh 就靠在檔案裡找到它來檢查。分成兩個常數時做不到：Swift
+# 會把 15 bytes 以下的字面值放在指令裡，不是存成文字，而 `0.1.0` 或未打 tag 的 `6029537d` 正是這麼短。
 {
     printf 'let swiftTarBuildVersion = "%s"\n' "$build_version"
-    printf 'let swiftTarReleaseVersion = "%s"\n' "$release_version"
-    printf 'let swiftTarBuildID = "%s"\n' "$build_id"
+    printf 'let swiftTarIdentity = "swift_tar %s (%s)"\n' "$release_version" "$build_id"
 } > "$output_swift"
 echo "[INFO] swift_tar version: $release_version ($build_id) $build_version / swift_tar 版本：$release_version（$build_id）$build_version"

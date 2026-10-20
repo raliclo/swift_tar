@@ -174,7 +174,7 @@ brew install raliclo/swift_tar/swift_tar
 scoop bucket add raliclo https://github.com/raliclo/lzfse2
 scoop install raliclo/swift_tar
 
-# Linux (x86-64 or aarch64) — extract and put swift_tar on PATH; needs libbz2.so.1.0
+# Linux (x86-64 or aarch64) — fully static: extract and put swift_tar on PATH
 sha256sum -c swift_tar-0.1.0-linux-x86_64.tar.zst.sha256
 zstd -dc swift_tar-0.1.0-linux-x86_64.tar.zst | tar -xf -
 ```
@@ -184,19 +184,28 @@ zstd -dc swift_tar-0.1.0-linux-x86_64.tar.zst | tar -xf -
 `VERSION` holds the number the next release carries. The order is: rehearse,
 tag, build at the tag, collect, publish.
 
-1. On each of the four nodes (macOS arm64, Windows x86-64, Linux x86-64, Linux
-   aarch64), build the public build and run `./release.zsh`, then throw the
-   archive away. The public build is `./compile_tar.zsh --no-lzfse` on macOS,
-   `EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh` on Windows, and
-   `SWIFT_STATIC_STDLIB=1 EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh` on Linux, where
-   the Swift runtime has to be linked in for the binary to run on other machines. Do this before tagging: a tag moved after archives were built
-   invalidates every one of them.
+1. Rehearse every platform, then throw the archives away. Do this before
+   tagging: a tag moved after archives were built invalidates every one of them.
+   - macOS arm64, on the Mac: `./compile_tar.zsh --no-lzfse`, then `./release.zsh`.
+   - Windows x86-64, on Windows: `EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh`,
+     then `./release.zsh`. The archive carries the Swift runtime DLLs.
+   - Linux aarch64 and x86-64, both on the Mac: `./compile_tar-musl.zsh <arch>`,
+     then `SWIFT_TAR_PLATFORM=musl-<arch> ./release.zsh`. These are fully static
+     against musl (Swift's Static Linux SDK, swift.org toolchain 6.4.0), so they
+     need nothing on the target: no glibc of a given version, no libbz2, no Swift.
+     The Mac cannot run them, so `release.zsh` checks them from the file, and
+     `./verify_release.zsh <archive>` runs them on a Linux machine of that
+     architecture.
 2. Tag the commit `v<VERSION>` and push the tag; each node fetches tags.
-3. On each node: build the public build again and run `./release.zsh`. It
-   refuses a dirty tree, a binary whose build id is not this checkout's, the
-   full build, and an existing archive, and verifies by extracting, running,
-   round-tripping a `.tar.gz` and checking LZFSE is refused.
-4. Collect the four archives and their `.sha256` into `dist/` on the Mac.
+3. Build and run `release.zsh` again for every platform. It refuses a dirty tree,
+   a binary whose build id is not this checkout's, the full build, and an
+   existing archive. On macOS and Windows it verifies by extracting, running,
+   round-tripping a `.tar.gz` and checking LZFSE is refused; for Linux, run
+   `verify_release.zsh` on each architecture, which does the same with an empty
+   environment and also runs the built-in self-tests.
+4. Collect the four archives and their `.sha256` into `dist/` on the Mac
+   (`/Volumes/LinuxCS/helper/collect_release.zsh swift_tar <VERSION>` fetches the
+   Windows one).
 5. `./publish.zsh <VERSION>` says what it would do; `./publish.zsh <VERSION>
    --publish` creates the GitHub Release, downloads every asset back from the
    public URL, and rewrites `Formula/swift_tar.rb` and the parent repository's
@@ -926,7 +935,9 @@ compile_tar-linux.zsh  Linux build script → release/swift_tar
 platform.zsh        sourced: the one place the platform suffix is decided
 VERSION             the number the next release carries
 build_id.zsh        sourced: the one place the build id printed by --version is decided
+compile_tar-musl.zsh  cross-build the static Linux release (musl) on the Mac → release/linux-<arch>/swift_tar
 release.zsh         package this platform's public build into dist/ as .tar.zst
+verify_release.zsh  run a Linux release archive on a Linux machine of its architecture
 publish.zsh         tag, publish the four archives, rewrite the brew and scoop files
 publish_rewrite.zsh sourced: publish.zsh's package-file rewrite
 Formula/swift_tar.rb  Homebrew formula (this repository is its own tap)

@@ -17,6 +17,18 @@
 # 「建置端與測試端偵測結果不一致」比完全沒有偵測更糟。
 
 swift_tar_platform() {
+    # A cross build names its target here: compile_tar-musl.zsh sets SWIFT_TAR_PLATFORM to
+    # musl-aarch64 or musl-x86_64, so the codec and libarchive builds, the version file and
+    # release.zsh all use the target's name instead of the Mac's. Only those two names are
+    # accepted, for the reason given below.
+    # 交叉建置在這裡指名它的目標：compile_tar-musl.zsh 把 SWIFT_TAR_PLATFORM 設成 musl-aarch64 或
+    # musl-x86_64，讓 codec 與 libarchive 的建置、version 檔與 release.zsh 都用目標的名稱，而不是 Mac
+    # 的。只接受這兩個名稱，理由見下。
+    case ${SWIFT_TAR_PLATFORM:-} in
+        '') ;;
+        musl-aarch64|musl-x86_64) echo "$SWIFT_TAR_PLATFORM"; return 0 ;;
+        *) echo "SWIFT_TAR_PLATFORM=$SWIFT_TAR_PLATFORM is not a known cross target / 不是已知的交叉目標" >&2; return 1 ;;
+    esac
     case "$(uname -s)" in
         Darwin)               echo mac ;;
         Linux)                echo linux ;;

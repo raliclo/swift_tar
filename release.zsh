@@ -3,18 +3,17 @@
 #  release.zsh -- package THIS platform's public swift_tar build as one .tar.zst
 #  release.zsh -- 把這個平台的公開版 swift_tar 打包成一份 .tar.zst
 #
-#    ./release.zsh           package release/swift_tar[.exe] into dist/ / 打包進 dist/
-#    ./release.zsh --help    print this and do nothing / 印出這段說明，什麼都不做
+#    ./release.zsh                                  this machine's build / 這台機器的建置
+#    SWIFT_TAR_PLATFORM=musl-aarch64 ./release.zsh  a Linux build made on the Mac / Mac 上建的 Linux 版
+#    ./release.zsh --help                           print this and do nothing / 印出這段說明
 #
-#  Run it on each node, after building the public build there (no LZFSE):
-#  macOS ./compile_tar.zsh --no-lzfse, Windows EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh,
-#  Linux SWIFT_STATIC_STDLIB=1 EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh (Swift runtime inside).
-#  An archive is made only where its binary was built, so the version inside it can be checked
-#  by running it. Collecting and publishing the archives is publish.zsh's job, not this one's.
-#  在每個節點上、先建好公開版（不含 LZFSE）之後各跑一次：macOS ./compile_tar.zsh --no-lzfse、
-#  Windows EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh、Linux SWIFT_STATIC_STDLIB=1 EXCLUDE_LZFSE=1
-#  ./compile_tar-linux.zsh（Swift runtime 連進執行檔）。封存只在建出其執行檔的地方產生，這樣裡面的
-#  版本才能靠執行它來檢查。收集與發布是 publish.zsh 的事。
+#  After the public build (no LZFSE): macOS ./compile_tar.zsh --no-lzfse; Windows
+#  EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh; Linux, on the Mac, ./compile_tar-musl.zsh <arch>,
+#  checked from the file here and run on a Linux machine with ./verify_release.zsh. The
+#  others are run where they were built. Publishing is publish.zsh's job.
+#  先建公開版（不含 LZFSE）：macOS ./compile_tar.zsh --no-lzfse；Windows EXCLUDE_LZFSE=1 zsh
+#  ./compile_tar-win.zsh；Linux 在 Mac 上 ./compile_tar-musl.zsh <arch>，在這裡從檔案檢查，再到 Linux
+#  機器上以 ./verify_release.zsh 執行。其餘的在建置處執行。發布是 publish.zsh 的事。
 # =====================================================================
 # Modelled on csv2's release.zsh (/Volumes/LinuxCS/sos/csv2), including the refusals it learned
 # the hard way: the version comes from the binary, never from a constant here; the build id is
@@ -28,7 +27,7 @@ setopt no_unset pipe_fail errexit
 
 case ${1:-} in
   '') ;;
-  -h|--help) sed -n '3,17p' ${0:A} | sed 's/^# \{0,2\}//'; exit 0 ;;
+  -h|--help) sed -n '3,16p' ${0:A} | sed 's/^# \{0,2\}//'; exit 0 ;;
   *) print -ru2 -- "release.zsh takes no argument (got: $1); see --help / release.zsh 不收引數（收到：$1），請見 --help"; exit 2 ;;
 esac
 
@@ -55,36 +54,38 @@ die() {
   exit 1
 }
 
-if [[ -x release/swift_tar.exe ]]; then BIN_NAME=swift_tar.exe
-elif [[ -x release/swift_tar ]]; then BIN_NAME=swift_tar
-else die "no built binary in release/; build the public build first (see --help)" \
-         "release/ 裡沒有已建置的執行檔；請先建公開版（見 --help）"; fi
-BIN=$HERE/release/$BIN_NAME
-
-case "$(uname -s)" in
-  Darwin)                        OS=macos;   PLAT=mac ;;
-  Linux)                         OS=linux;   PLAT=linux ;;
-  MSYS*|MINGW*|CYGWIN*|Windows*) OS=windows; PLAT=win ;;
-  *) die "unknown platform $(uname -s)" "不認得的平台 $(uname -s)" ;;
+# Which build: this machine's own, or a musl cross target named by SWIFT_TAR_PLATFORM (made by
+# compile_tar-musl.zsh on the Mac; the Linux releases are those, decided 2026-10-20). A cross
+# binary cannot run here, so it is checked from the file and run later on a Linux machine of
+# its architecture with verify_release.zsh.
+# 哪一份建置：這台機器自己的，或由 SWIFT_TAR_PLATFORM 指名的 musl 交叉目標（compile_tar-musl.zsh 在
+# Mac 上建出；Linux 正式版就是這兩份，2026-10-20 決定）。交叉建置的執行檔在這裡跑不了，所以從檔案
+# 檢查，之後再以 verify_release.zsh 在同架構的 Linux 機器上執行。
+. "$HERE/platform.zsh"
+PLAT=$(swift_tar_platform) || die "unknown SWIFT_TAR_PLATFORM" "不認得的 SWIFT_TAR_PLATFORM"
+CROSS=0
+case $PLAT in
+  musl-aarch64|musl-x86_64)
+    CROSS=1; OS=linux; ARCH=${PLAT#musl-}; BIN_NAME=swift_tar ;;
+  mac) OS=macos;   ARCH=$(uname -m) ;;
+  win) OS=windows; ARCH=$(uname -m) ;;
+  linux) die "Linux releases are the static musl build made on the Mac: ./compile_tar-musl.zsh <arch>, then SWIFT_TAR_PLATFORM=musl-<arch> ./release.zsh" \
+             "Linux 正式版是在 Mac 上建的靜態 musl 版：./compile_tar-musl.zsh <arch>，再 SWIFT_TAR_PLATFORM=musl-<arch> ./release.zsh" ;;
+  *) die "unknown platform $PLAT" "不認得的平台 $PLAT" ;;
 esac
-ARCH=$(uname -m)
+if (( CROSS )); then
+  BIN=$HERE/release/linux-$ARCH/swift_tar
+  [[ -f $BIN ]] || die "no $BIN; run ./compile_tar-musl.zsh $ARCH first" "沒有 $BIN；請先執行 ./compile_tar-musl.zsh $ARCH"
+else
+  if [[ -x release/swift_tar.exe ]]; then BIN_NAME=swift_tar.exe
+  elif [[ -x release/swift_tar ]]; then BIN_NAME=swift_tar
+  else die "no built binary in release/; build the public build first (see --help)" \
+           "release/ 裡沒有已建置的執行檔；請先建公開版（見 --help）"; fi
+  BIN=$HERE/release/$BIN_NAME
+fi
 VERSION_FILE=$HERE/version-$PLAT.txt
 [[ -r $VERSION_FILE ]] || die "$VERSION_FILE is missing; the build writes it" "缺少 $VERSION_FILE；建置會寫出它"
-
-# ---------------------------------------------------------------------
-# What the binary says it is, asked by running it.
-# 執行檔說它是什麼——靠執行它問出來。
-# ---------------------------------------------------------------------
-# `swift_tar <X.Y.Z> (<build id>) <stamp>`; a native Windows program is asked from inside
-# release/ with a bare name, as it cannot open an MSYS-style absolute path.
-# `swift_tar <X.Y.Z> (<build id>) <戳記>`；原生 Windows 程式從 release/ 裡以裸檔名問，因為它開不了
-# MSYS 形式的絕對路徑。
-REPORTED=$(cd release && "./$BIN_NAME" --version | tr -d '\r')
-VERSION=${${(z)REPORTED}[2]}
-[[ $VERSION == <->.<->.<-> ]] || die "cannot read a version out of [$REPORTED]; refusing to name an archive by guessing" \
-                                     "從 [$REPORTED] 讀不出版本號；拒絕用猜的為封存命名"
-[[ $VERSION == "$(<VERSION)" ]] || die "the binary reports $VERSION but VERSION says $(<VERSION); rebuild" \
-                                       "執行檔回報 $VERSION，VERSION 卻寫 $(<VERSION)；請重新建置"
+VERSION=$(<VERSION)
 
 # The tree must be clean apart from the version files the build rewrites, or the archive's id
 # names a state other than what was packaged. Same exemption as build_id.zsh.
@@ -96,18 +97,45 @@ if [[ -e $HERE/.git ]]; then
                                                    "工作區不乾淨；由它產生的封存會帶著一個描述別的東西的 id"; }
 fi
 
-# The id the binary carries must be the one this checkout gives now. Anchored on `(<id>)`:
-# containment would let `v0.1.0-13-g...` pass as `v0.1.0`.
-# 執行檔帶的 id 必須等於這個 checkout 現在給的 id。以 `(<id>)` 錨定：用包含比對會讓 `v0.1.0-13-g...`
-# 被當成 `v0.1.0`。
+# The id the binary carries must be the one this checkout gives now.
+# 執行檔帶的 id 必須等於這個 checkout 現在給的 id。
 source "$HERE/build_id.zsh"
 EXPECTED_ID=$(swift_tar_build_id "$HERE")
 [[ $EXPECTED_ID != unknown ]] || die "no build id: not a git checkout and SWIFT_TAR_BUILD_ID is not set" \
                                      "沒有 build id：這不是 git checkout，也沒有設定 SWIFT_TAR_BUILD_ID"
 [[ $EXPECTED_ID != *-dirty ]] || die "the build id is $EXPECTED_ID; a release is built from a clean tree" \
                                      "build id 是 $EXPECTED_ID；正式版要從乾淨的工作區建置"
-[[ $REPORTED == "swift_tar $VERSION ($EXPECTED_ID) "* ]] || die "the binary reports [$REPORTED] but this checkout is ($EXPECTED_ID); rebuild before releasing" \
-                                                                "執行檔回報 [$REPORTED]，這個 checkout 卻是（$EXPECTED_ID）；發行前請重新建置"
+IDENTITY="swift_tar $VERSION ($EXPECTED_ID)"
+
+# ---------------------------------------------------------------------
+# What the binary says it is: asked by running it, or, for a cross build, found in it -- the
+# number and the id are one literal (generate_version.zsh), so the text is there verbatim.
+# 執行檔說它是什麼：靠執行它問出來；交叉建置的則在檔案裡找——版本號與 id 是同一個字面值
+# （generate_version.zsh），所以那段文字原樣在裡面。
+# ---------------------------------------------------------------------
+if (( CROSS )); then
+  hits=$(LC_ALL=C grep -a -c -F -- "$IDENTITY" "$BIN" || true)
+  [[ $hits != 0 ]] || die "$BIN does not carry [$IDENTITY]; rebuild with ./compile_tar-musl.zsh $ARCH" \
+                          "$BIN 裡沒有 [$IDENTITY]；請以 ./compile_tar-musl.zsh $ARCH 重新建置"
+  REPORTED=$IDENTITY
+  # Static, ELF, and the architecture its name will claim.
+  # 靜態、ELF，而且是它的名稱將宣稱的那個架構。
+  kind=$(file -b "$BIN")
+  [[ $kind == ELF*statically\ linked* ]] || die "$BIN is not a static ELF executable: $kind" "$BIN 不是靜態 ELF 執行檔：$kind"
+  case $ARCH in aarch64) want='*aarch64*' ;; x86_64) want='*x86-64*' ;; esac
+  [[ $kind == ${~want} ]] || die "$BIN is not $ARCH: $kind" "$BIN 不是 $ARCH：$kind"
+  grep -qx 'swift_stdlib_linkage=static' "$VERSION_FILE" && grep -q '^libc=musl-' "$VERSION_FILE" \
+    || die "$VERSION_FILE does not record a static musl build" "$VERSION_FILE 沒有記錄為靜態 musl 建置"
+else
+  # `swift_tar <X.Y.Z> (<build id>) <stamp>`; a native Windows program is asked from inside
+  # release/ with a bare name, as it cannot open an MSYS-style absolute path. Anchored on the
+  # whole identity: containment would let `v0.1.0-13-g...` pass as `v0.1.0`.
+  # `swift_tar <X.Y.Z> (<build id>) <戳記>`；原生 Windows 程式從 release/ 裡以裸檔名問，因為它開不了
+  # MSYS 形式的絕對路徑。以整段 identity 錨定：用包含比對會讓 `v0.1.0-13-g...` 被當成 `v0.1.0`。
+  REPORTED=$(cd release && "./$BIN_NAME" --version | tr -d '\r')
+  [[ $REPORTED == "$IDENTITY "* ]] || die "the binary reports [$REPORTED], expected [$IDENTITY ...] (VERSION and this checkout); rebuild before releasing" \
+                                          "執行檔回報 [$REPORTED]，預期是 [$IDENTITY ...]（VERSION 與這個 checkout）；發行前請重新建置"
+fi
 
 # The public build only. The version file says what the build compiled in; the binary is then
 # asked, and searched, because a version file is something a build writes, not the binary.
@@ -122,21 +150,6 @@ grep -qx 'lzfse2=excluded' "$VERSION_FILE" || die "$VERSION_FILE does not say lz
 lz_hits=$(LC_ALL=C grep -a -c -E 'bvx3|other3' "$BIN" || true)
 [[ $lz_hits == 0 ]] || die "the binary still contains bvx3/other3 strings ($lz_hits lines); not the public build" \
                            "執行檔仍含有 bvx3／other3 字串（$lz_hits 行）；不是公開版"
-
-# On Linux the Swift runtime must be inside the binary (SWIFT_STATIC_STDLIB=1): the shared one is
-# found through an RPATH to the building machine's toolchain, which no other machine has. Asked
-# of the version file and then of the binary, as above.
-# Linux 上 Swift runtime 必須在執行檔裡（SWIFT_STATIC_STDLIB=1）：共享的那份是經由指向建置機器
-# toolchain 的 RPATH 找到的，別的機器沒有。與上面一樣，先問 version 檔，再問執行檔。
-if [[ $OS == linux ]]; then
-  grep -qx 'swift_stdlib_linkage=static' "$VERSION_FILE" || die "$VERSION_FILE does not say swift_stdlib_linkage=static; build with SWIFT_STATIC_STDLIB=1" \
-                                                                "$VERSION_FILE 沒有寫 swift_stdlib_linkage=static；請以 SWIFT_STATIC_STDLIB=1 建置"
-  command -v readelf >/dev/null 2>&1 || die "readelf is not on PATH; the binary's libraries cannot be checked" \
-                                            "PATH 上沒有 readelf；無法檢查執行檔依賴的函式庫"
-  needed=$(readelf -d "$BIN" | grep NEEDED | grep -E 'libswift|libFoundation|libdispatch|libBlocksRuntime' || true)
-  [[ -z $needed ]] || die "the binary still needs the shared Swift runtime: ${needed//$'\n'/ }" \
-                          "執行檔仍需要共享的 Swift runtime：${needed//$'\n'/ }"
-fi
 
 command -v zstd >/dev/null 2>&1 || die "zstd is not on PATH; releases are .tar.zst and this node cannot make one" \
                                        "zstd 不在 PATH 上；正式版是 .tar.zst，這個節點做不出來"
@@ -196,7 +209,9 @@ fi
 # 都帶著 com.apple.provenance，別的 tar 解開時會報不認得的關鍵字。這些旗標是 bsdtar 的，所以只在
 # macOS 上加。
 typeset -a TAR_OPTS=()
-[[ $OS == macos ]] && TAR_OPTS=(--no-mac-metadata --no-xattrs --no-acls --no-fflags)
+# By the machine packing, not by the target: the Linux archives are packed on the Mac too.
+# 依打包的機器判斷，不依目標：Linux 封存也是在 Mac 上打包的。
+[[ $(uname -s) == Darwin ]] && TAR_OPTS=(--no-mac-metadata --no-xattrs --no-acls --no-fflags)
 PACKED=$ARCHIVE
 ( cd -- "$DIST" && COPYFILE_DISABLE=1 tar "${TAR_OPTS[@]}" -cf - "$STEM" | zstd -19 -q -o "$STEM.tar.zst" )
 rm -rf -- "$STAGE"
@@ -213,6 +228,24 @@ top=( "$CHECK"/*(N) )
                                                          "封存裡不是恰好一個 $STEM 目錄"
 [[ -x $CHECK/$STEM/$BIN_NAME ]] || die "the archive does not contain an executable $BIN_NAME" \
                                        "封存裡沒有可執行的 $BIN_NAME"
+if (( CROSS )); then
+  # It cannot run here: the extracted file must be the checked one, byte for byte, and the
+  # running is verify_release.zsh's on a Linux machine of this architecture.
+  # 它在這裡跑不了：解開的檔案必須與檢查過的那一份逐位元組相同，執行則交給同架構 Linux 機器上的
+  # verify_release.zsh。
+  cmp -s "$CHECK/$STEM/$BIN_NAME" "$BIN" || die "the extracted binary differs from $BIN" "解開後的執行檔與 $BIN 不同"
+  if command -v sha256sum >/dev/null 2>&1; then
+    ( cd -- "$DIST" && sha256sum "$STEM.tar.zst" > "$STEM.tar.zst.sha256" )
+  else
+    ( cd -- "$DIST" && printf '%s  %s\n' "$(openssl dgst -sha256 -r "$STEM.tar.zst" | cut -d' ' -f1)" "$STEM.tar.zst" > "$STEM.tar.zst.sha256" )
+  fi
+  print -r -- "$ARCHIVE"
+  cat -- "$DIST/$STEM.tar.zst.sha256"
+  print -r -- "$REPORTED"
+  print -r -- "checked from the file (static $ARCH ELF, identity inside, extracted byte-identical); NOT RUN here -- run ./verify_release.zsh $STEM.tar.zst on a linux-$ARCH machine"
+  print -r -- "已從檔案檢查（靜態 $ARCH ELF、內含 identity、解開後逐位元組相同）；這裡沒有執行——請在 linux-$ARCH 機器上執行 ./verify_release.zsh $STEM.tar.zst"
+  exit 0
+fi
 got=$(cd -- "$CHECK/$STEM" && "./$BIN_NAME" --version | tr -d '\r')
 [[ $got == "$REPORTED" ]] || die "the extracted binary reports [$got], the source one [$REPORTED]" \
                                  "解開後的執行檔回報 [$got]，來源那個回報 [$REPORTED]"

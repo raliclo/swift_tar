@@ -93,7 +93,7 @@ if ! command -v zstd >/dev/null 2>&1; then
 else
   R=$TMP/rel
   mkdir -p "$R/release" "$R/zlib"
-  cp "$ROOT/release.zsh" "$ROOT/build_id.zsh" "$R/"
+  cp "$ROOT/release.zsh" "$ROOT/build_id.zsh" "$ROOT/platform.zsh" "$R/"
   print 0.1.0 > "$R/VERSION"
   print 'licence' > "$R/LICENSE"; print 'readme' > "$R/README.md"; print 'readme' > "$R/README.zh-TW.md"
   print 'zlib licence' > "$R/zlib/LICENSE"
@@ -153,7 +153,7 @@ else
     else bad "release.zsh refuses $1 (rc $rc; $(tr '\n' '|' < "$TMP/rel.out"))"; fi
     rm -rf "$R/dist"
   }
-  make_fake 0.2.0 "$id";            rel_refuses "a binary whose version is not VERSION's" "VERSION says"
+  make_fake 0.2.0 "$id";            rel_refuses "a binary whose version is not VERSION's" "expected [swift_tar 0.1.0 ("
   make_fake 0.1.0 "v0.1.0 / 0123abcd"; rel_refuses "a binary built from another commit" "rebuild before releasing"
   make_fake 0.1.0 "$id" 0;          rel_refuses "a binary that accepts the LZFSE flag" "not the public build"
   make_fake 0.1.0 "$id"
@@ -170,6 +170,54 @@ else
   ( cd "$R" && git checkout -q -- LICENSE )
   rc=0; ( cd "$R" && ./release.zsh --nope ) >/dev/null 2>&1 || rc=$?
   check "release.zsh refuses an argument" "$rc" 2
+fi
+
+# ---------------------------------------------------------------------
+# release.zsh for a musl cross target, which it checks from the file. The stand-in is a small
+# static aarch64 C program carrying the identity text, built with the Static Linux SDK's
+# sysroot; without the SDK and the swift.org toolchain this part is skipped.
+# release.zsh 處理 musl 交叉目標，它從檔案檢查。替身是一個帶著 identity 文字的小型靜態 aarch64 C
+# 程式，用 Static Linux SDK 的 sysroot 建出；沒有 SDK 與 swift.org toolchain 時這一段略過。
+# ---------------------------------------------------------------------
+XTC=${SWIFT_TOOLCHAIN:-$HOME/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain}/usr/bin
+XSDK=( ${SWIFT_STATIC_SDK:-$HOME/Library/org.swift.swiftpm/swift-sdks/swift-6.4.0-RELEASE_static-linux-0.1.0.artifactbundle/swift-6.4.0-RELEASE_static-linux-0.1.0/swift-linux-musl}/musl-*.sdk/aarch64(N/) )
+if [ "$OS" != macos ] || [ ! -x "$XTC/clang" ] || (( ${#XSDK} != 1 )) || ! command -v zstd >/dev/null 2>&1; then
+  echo "SKIP: release.zsh cross cases (needs macOS, the swift.org toolchain, the Static Linux SDK and zstd)"
+else
+  X=$TMP/cross
+  mkdir -p "$X/release/linux-aarch64" "$X/zlib"
+  cp "$ROOT/release.zsh" "$ROOT/build_id.zsh" "$ROOT/platform.zsh" "$X/"
+  print 0.1.0 > "$X/VERSION"
+  print 'licence' > "$X/LICENSE"; print 'readme' > "$X/README.md"; print 'readme' > "$X/README.zh-TW.md"
+  print 'zlib licence' > "$X/zlib/LICENSE"
+  print -l 'swift_tar_version=20260101-000000' 'zlib_linkage=static' 'lzfse2=excluded' \
+    'swift_stdlib_linkage=static' 'libc=musl-1.2.5' > "$X/version-musl-aarch64.txt"
+  print -l '/release/' '/dist/' > "$X/.gitignore"
+  ( cd "$X" && quiet_git init -q && quiet_git add . && quiet_git commit -qm cross )
+  xid=$(swift_tar_build_id "$X")
+  xcc() {   # xcc <identity text> -- the stand-in binary
+    print -r -- "const char id[] = \"$1\"; int main(void) { return id[0] == 0; }" > "$TMP/x.c"
+    "$XTC/clang" --target=aarch64-unknown-linux-musl --sysroot="${XSDK[1]}" \
+      -resource-dir "${XSDK[1]}/usr/lib/swift/clang" -fuse-ld=lld -rtlib=compiler-rt -static \
+      "$TMP/x.c" -o "$X/release/linux-aarch64/swift_tar"
+  }
+  xrel() { rc=0; ( cd "$X" && SWIFT_TAR_PLATFORM=musl-aarch64 ./release.zsh ) > "$TMP/x.out" 2>&1 || rc=$?; }
+  XSTEM=swift_tar-0.1.0-linux-aarch64
+  xcc "swift_tar 0.1.0 ($xid)"
+  xrel
+  if [ "$rc" = 0 ] && [ -s "$X/dist/$XSTEM.tar.zst" ] && [ -s "$X/dist/$XSTEM.tar.zst.sha256" ] && grep -q 'NOT RUN here' "$TMP/x.out"; then
+    ok "release.zsh, cross: a static aarch64 binary carrying its identity is packed as $XSTEM and marked not run"
+  else
+    bad "release.zsh, cross: packs $XSTEM and marks it not run (rc $rc; $(tr '\n' '|' < "$TMP/x.out"))"
+  fi
+  rm -rf "$X/dist"
+  xcc "swift_tar 0.1.0 (0123abcd)"
+  xrel
+  if [ "$rc" = 1 ] && grep -q 'does not carry' "$TMP/x.out" && [ ! -e "$X/dist/$XSTEM.tar.zst" ]; then ok "release.zsh, cross: a binary without this checkout's identity is refused"
+  else bad "release.zsh, cross: a binary without this checkout's identity is refused (rc $rc; $(tr '\n' '|' < "$TMP/x.out"))"; fi
+  rm -rf "$X/dist"
+  rc=0; ( cd "$X" && SWIFT_TAR_PLATFORM=musl-sparc ./release.zsh ) > "$TMP/x.out" 2>&1 || rc=$?
+  check "release.zsh, cross: an unknown SWIFT_TAR_PLATFORM is refused" "$rc" 1
 fi
 
 # ---------------------------------------------------------------------

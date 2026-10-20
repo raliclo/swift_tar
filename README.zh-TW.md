@@ -151,7 +151,7 @@ brew install raliclo/swift_tar/swift_tar
 scoop bucket add raliclo https://github.com/raliclo/lzfse2
 scoop install raliclo/swift_tar
 
-# Linux（x86-64 或 aarch64）——解開後把 swift_tar 放上 PATH；需要 libbz2.so.1.0
+# Linux（x86-64 或 aarch64）——完全靜態：解開後把 swift_tar 放上 PATH
 sha256sum -c swift_tar-0.1.0-linux-x86_64.tar.zst.sha256
 zstd -dc swift_tar-0.1.0-linux-x86_64.tar.zst | tar -xf -
 ```
@@ -160,17 +160,23 @@ zstd -dc swift_tar-0.1.0-linux-x86_64.tar.zst | tar -xf -
 
 `VERSION` 記著下一個正式版要帶的版本號。順序是：預演、打 tag、在 tag 上建置、收集、發布。
 
-1. 在四個節點（macOS arm64、Windows x86-64、Linux x86-64、Linux aarch64）各自建公開版並跑
-   `./release.zsh`，然後把封存丟掉。這一步要在打 tag 之前做：封存建好之後才移動 tag，
-   每一份都會作廢。公開版的建置指令：macOS 是 `./compile_tar.zsh --no-lzfse`、Windows 是
-   `EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh`、Linux 是
-   `SWIFT_STATIC_STDLIB=1 EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh`——Linux 必須把 Swift
-   runtime 連進執行檔，它才能在別台機器上執行。
+1. 每個平台都先預演一次，再把封存丟掉。這一步要在打 tag 之前做：封存建好之後才移動 tag，
+   每一份都會作廢。
+   - macOS arm64，在 Mac 上：`./compile_tar.zsh --no-lzfse`，再 `./release.zsh`。
+   - Windows x86-64，在 Windows 上：`EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh`，再
+     `./release.zsh`。封存會帶著 Swift runtime DLL。
+   - Linux aarch64 與 x86-64，都在 Mac 上：`./compile_tar-musl.zsh <arch>`，再
+     `SWIFT_TAR_PLATFORM=musl-<arch> ./release.zsh`。這兩份對 musl 完全靜態連結（Swift 的
+     Static Linux SDK、swift.org toolchain 6.4.0），所以目標機器上什麼都不需要：不需要某個
+     版本的 glibc、不需要 libbz2、不需要 Swift。Mac 跑不了它們，所以 `release.zsh` 從檔案
+     檢查，再由 `./verify_release.zsh <封存>` 在同架構的 Linux 機器上執行。
 2. 把 commit 打上 `v<VERSION>` 並推送 tag；各節點 fetch tag。
-3. 在每個節點上再建一次公開版並跑 `./release.zsh`。它拒絕：工作區不乾淨、執行檔的
-   build id 不是這個 checkout 的、完整版、以及已存在的封存；並以解開、執行、完成一次
-   `.tar.gz` 往返、確認 LZFSE 被拒絕來驗證。
-4. 把四份封存與它們的 `.sha256` 收到 Mac 的 `dist/`。
+3. 每個平台再建一次並跑 `release.zsh`。它拒絕：工作區不乾淨、執行檔的 build id 不是這個
+   checkout 的、完整版、以及已存在的封存。macOS 與 Windows 上它以解開、執行、完成一次
+   `.tar.gz` 往返、確認 LZFSE 被拒絕來驗證；Linux 則在每種架構上跑 `verify_release.zsh`，
+   它在空環境下做同樣的事，並執行內建的自我測試。
+4. 把四份封存與它們的 `.sha256` 收到 Mac 的 `dist/`
+   （`/Volumes/LinuxCS/helper/collect_release.zsh swift_tar <VERSION>` 會取回 Windows 那份）。
 5. `./publish.zsh <VERSION>` 只說會做什麼；`./publish.zsh <VERSION> --publish` 建立 GitHub
    Release、從公開網址把每個資產下載回來比對，並改寫 `Formula/swift_tar.rb` 與上層 repo 的
    `bucket/swift_tar.json`。兩者都要提交。
@@ -818,7 +824,9 @@ compile_tar-linux.zsh  Linux 建置腳本 → release/swift_tar
 platform.zsh        供 source：決定平台後綴的唯一來源
 VERSION             下一個正式版要帶的版本號
 build_id.zsh        供 source：決定 --version 所印 build id 的唯一來源
+compile_tar-musl.zsh  在 Mac 上交叉建置靜態的 Linux 正式版（musl）→ release/linux-<arch>/swift_tar
 release.zsh         把這個平台的公開版打包成 dist/ 裡的 .tar.zst
+verify_release.zsh  在同架構的 Linux 機器上執行一份 Linux 正式版封存
 publish.zsh         打 tag、發布四份封存、改寫 brew 與 scoop 的檔案
 publish_rewrite.zsh 供 source：publish.zsh 改寫套件檔的部分
 Formula/swift_tar.rb  Homebrew formula（這個 repo 本身就是 tap）

@@ -237,6 +237,33 @@ else
 fi
 
 # ---------------------------------------------------------------------
+# win_dlls.zsh: which runtime DLLs the Windows archive carries, with a stand-in objdump that
+# prints <pe>.imports as llvm-objdump's "DLL Name:" lines (CRLF, as on Windows).
+# win_dlls.zsh：Windows 封存帶哪些 runtime DLL。替身 objdump 把 <pe>.imports 印成 llvm-objdump 的
+# 「DLL Name:」行（CRLF，與 Windows 上相同）。
+# ---------------------------------------------------------------------
+source "$ROOT/win_dlls.zsh"
+W=$TMP/win
+mkdir -p "$W/rt"
+for d in swiftCore.dll Foundation.dll FoundationXML.dll msvcp140.dll vcruntime140.dll concrt140.dll; do : > "$W/rt/$d"; done
+: > "$W/swift_tar.exe"
+print -l KERNEL32.dll swiftCore.dll Foundation.dll > "$W/swift_tar.exe.imports"
+print -l swiftCore.dll MSVCP140.dll api-ms-win-crt-runtime-l1-1-0.dll > "$W/rt/Foundation.dll.imports"
+print -l VCRUNTIME140.dll KERNEL32.dll > "$W/rt/swiftCore.dll.imports"
+print -l libxml2.dll concrt140.dll > "$W/rt/FoundationXML.dll.imports"
+print -l '#!/bin/zsh' '[[ -r $2.imports ]] || exit 0' \
+  'while IFS= read -r l; do printf "    DLL Name: %s\r\n" "$l"; done < "$2.imports"' > "$W/objdump"
+chmod 755 "$W/objdump"
+got=$(swift_tar_win_dlls "$W/objdump" "$W/swift_tar.exe" "$W/rt" | sed "s:^$W/rt/::" | sort | tr '\n' ' ')
+check "win_dlls: only the import closure ships, under the directory's own spelling" "$got" \
+  "Foundation.dll msvcp140.dll swiftCore.dll vcruntime140.dll "
+# The notice decision must not depend on order (2026-10-20: it shipped only when an MSVC DLL came
+# first). / 附說明與否不得取決於順序（2026-10-20：只有 MSVC DLL 排第一時才附）。
+rc=0; swift_tar_ships_msvc_runtime "$W/rt/Foundation.dll" "$W/rt/swiftCore.dll" "$W/rt/msvcp140.dll" || rc=$?; check "win_dlls: an MSVC DLL that comes last still counts" "$rc" 0
+rc=0; swift_tar_ships_msvc_runtime "$W/rt/Foundation.dll" "$W/rt/VCRUNTIME140.DLL" || rc=$?; check "win_dlls: an upper-case MSVC name counts" "$rc" 0
+rc=0; swift_tar_ships_msvc_runtime "$W/rt/Foundation.dll" "$W/rt/swiftCore.dll" || rc=$?; check "win_dlls: no MSVC DLL, no notice" "$rc" 1
+
+# ---------------------------------------------------------------------
 # publish_rewrite.zsh on copies of the real package files.
 # publish_rewrite.zsh，在真實套件檔的複本上跑。
 # ---------------------------------------------------------------------

@@ -829,6 +829,7 @@ release.zsh         把這個平台的公開版打包成 dist/ 裡的 .tar.zst
 verify_release.zsh  在同架構的 Linux 機器上執行一份 Linux 正式版封存
 publish.zsh         打 tag、發布四份封存、改寫 brew 與 scoop 的檔案
 publish_rewrite.zsh 供 source：publish.zsh 改寫套件檔的部分
+win_dlls.zsh        供 source：release.zsh 挑選 Windows 要附的 runtime DLL
 Formula/swift_tar.rb  Homebrew formula（這個 repo 本身就是 tap）
 version-mac.txt / version-win.txt / version-musl-<arch>.txt   各平台的建置版本戳與連結來源（glibc 開發建置的 version-linux.txt 不入版控）
 licenses/           隨 Linux 與 Windows 封存出貨的第三方授權（見 licenses/README.md）

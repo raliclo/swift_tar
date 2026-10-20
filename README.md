@@ -941,6 +941,7 @@ release.zsh         package this platform's public build into dist/ as .tar.zst
 verify_release.zsh  run a Linux release archive on a Linux machine of its architecture
 publish.zsh         tag, publish the four archives, rewrite the brew and scoop files
 publish_rewrite.zsh sourced: publish.zsh's package-file rewrite
+win_dlls.zsh        sourced: release.zsh's choice of the Windows runtime DLLs to ship
 Formula/swift_tar.rb  Homebrew formula (this repository is its own tap)
 version-mac.txt / version-win.txt / version-musl-<arch>.txt   per-platform build stamp + linkage provenance (version-linux.txt, from a glibc development build, is not committed)
 licenses/           third-party licences shipped in the Linux and Windows archives (see licenses/README.md)

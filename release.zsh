@@ -23,7 +23,7 @@
 # build id 以錨定比對，不以包含比對；既有的封存絕不覆寫；封存以解開並執行來驗證，不以存在來驗證。
 
 emulate -L zsh
-setopt no_unset pipe_fail errexit extended_glob
+setopt no_unset pipe_fail errexit
 
 case ${1:-} in
   '') ;;
@@ -231,26 +231,23 @@ if [[ $OS == windows ]]; then
   for t in llvm-objdump objdump; do command -v $t >/dev/null 2>&1 && { objdump_bin=$t; break; }; done
   [[ -n $objdump_bin ]] || die "neither llvm-objdump nor objdump is on PATH; the DLLs to ship are read from the PE imports" \
                                "PATH 上沒有 llvm-objdump 或 objdump；要帶哪些 DLL 是從 PE import 讀出來的"
-  typeset -A shipped=()
-  typeset -a queue=("$BIN")
-  while (( $#queue )); do
-    pe=${queue[1]}; shift queue
-    for dll in ${(f)"$("$objdump_bin" -p "$pe" | sed -n 's/^[[:space:]]*DLL Name:[[:space:]]*//p' | tr -d '\r')"}; do
-      hit=("$rt_bin"/(#i)${(b)dll}(N.))
-      (( $#hit )) || continue
-      [[ -n ${shipped[${dll:l}]-} ]] && continue
-      shipped[${dll:l}]=${hit[1]}
-      queue+=("${hit[1]}")
-    done
-  done
-  [[ -n ${shipped[swiftcore.dll]-} ]] || die "the PE imports of $BIN never reach swiftCore.dll in $rt_bin" \
-                                             "$BIN 的 PE import 一路下來都沒有用到 $rt_bin 裡的 swiftCore.dll"
-  cp -- "${(@v)shipped}" "$STAGE/"
+  source "$HERE/win_dlls.zsh"
+  typeset -a dlls=(${(f)"$(swift_tar_win_dlls "$objdump_bin" "$BIN" "$rt_bin")"})
+  has_core=0
+  for f in $dlls; do [[ ${f:t:l} == swiftcore.dll ]] && has_core=1; done
+  (( has_core )) || die "the PE imports of $BIN never reach swiftCore.dll in $rt_bin" \
+                        "$BIN 的 PE import 一路下來都沒有用到 $rt_bin 裡的 swiftCore.dll"
+  cp -- "${dlls[@]}" "$STAGE/"
   # The Microsoft Visual C++ runtime DLLs that ride along are Microsoft's redistributable code,
   # not open source; licenses/msvc-redist-NOTICE.txt names them and the terms they ship under.
+  # The first version decided this inside (( )) from a hash's keys joined into one string, so the
+  # notice shipped only when an MSVC DLL came first in hash order; in Swift_tar-Win's rehearsal
+  # on 2026-10-20 it did not. swift_tar_ships_msvc_runtime tests each file.
   # 隨附的 Microsoft Visual C++ runtime DLL 是微軟的可再散布程式碼，不是開源軟體；
-  # licenses/msvc-redist-NOTICE.txt 列出它們與所依據的條款。
-  if (( ${#${(M)${(k)shipped}:#(vcruntime|msvcp|concrt|vccorlib)*}} )); then
+  # licenses/msvc-redist-NOTICE.txt 列出它們與所依據的條款。第一版在 (( )) 裡以接成一個字串的 hash
+  # 鍵判斷，於是只有 MSVC DLL 排在 hash 順序第一時才附上說明；2026-10-20 Swift_tar-Win 的預演裡它
+  # 沒有排第一。swift_tar_ships_msvc_runtime 逐檔判斷。
+  if swift_tar_ships_msvc_runtime "${dlls[@]}"; then
     [[ -r licenses/msvc-redist-NOTICE.txt ]] || die "licenses/msvc-redist-NOTICE.txt is missing; Visual C++ runtime DLLs ship" \
                                                     "缺少 licenses/msvc-redist-NOTICE.txt；Visual C++ runtime DLL 會隨附"
     cp -- licenses/msvc-redist-NOTICE.txt "$STAGE/"

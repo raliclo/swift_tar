@@ -4321,3 +4321,28 @@ git stopped before building (the old script said "not applied"). None of the thr
 a file, so it had not fired. Fix: a hunk with no old lines on a file not yet there counts as the
 old state. Three new checks in `test/test_patch_drop.zsh` fail on the unfixed script; 19/0 after
 (macOS). **Not run under the Linux guest's busybox `patch`.**
+
+## Windows 封存沒附上 VC++ runtime 說明，且 DLL 以 import 表的大寫拼法出貨 ▸ 🟢 已修 2026-10-20 / The Windows archive left out the VC++ runtime notice and shipped DLLs under the import table's upper-case names ▸ fixed
+
+`d0ef990` 的 release.zsh 以 `(( ${#${(M)${(k)shipped}:#(vcruntime|msvcp|concrt|vccorlib)*}} ))` 判斷
+要不要附 `licenses/msvc-redist-NOTICE.txt`。在 `(( ))` 裡，`${(k)shipped}` 被接成**一個**字串，`(M):#`
+測的是整串，於是只有 MSVC DLL 恰好排在 hash 順序第一個時才為真。Swift_tar-Win 的預演（2026-10-20）
+帶了 MSVCP140／VCRUNTIME140／VCRUNTIME140_1，說明卻沒附上；xtrace 顯示 `((  0  ))`。同一處的
+`"$rt_bin"/(#i)${(b)dll}(N.)` 沒有萬用字元，zsh 回傳的是 pattern 本身而非磁碟上的檔名，所以 DLL
+以 import 表的大寫拼法出貨。
+
+修法：選 DLL 與判斷 MSVC 移到 `win_dlls.zsh`（release.zsh source 它）。runtime 目錄先列一次、以小寫名
+對照磁碟路徑；`swift_tar_ships_msvc_runtime` 逐檔判斷。`test/test_release.zsh` 以替身 objdump（CRLF 的
+「DLL Name:」行）在 macOS 上跑：import 閉包與拼法、MSVC DLL 排最後仍算、大寫名仍算、沒有就不附
+（46/0）。**Windows 上的實測待下一次預演。**
+
+`d0ef990`'s release.zsh decided whether to ship `licenses/msvc-redist-NOTICE.txt` with
+`(( ${#${(M)${(k)shipped}:#(vcruntime|msvcp|concrt|vccorlib)*}} ))`. Inside `(( ))` the keys are
+joined into one string, so the test was true only when an MSVC DLL came first in hash order.
+Swift_tar-Win's rehearsal shipped MSVCP140/VCRUNTIME140/VCRUNTIME140_1 without the notice
+(xtrace: `((  0  ))`). The same block's `"$rt_bin"/(#i)${(b)dll}(N.)` has no wildcard, so zsh
+returned the pattern rather than the file's name, and DLLs shipped under the import table's
+upper-case spelling. Fix: the selection and the MSVC test move to `win_dlls.zsh`; the runtime
+directory is listed once and looked up by lower-case name, and `swift_tar_ships_msvc_runtime`
+tests each file. Four new checks in `test/test_release.zsh` run on macOS with a stand-in objdump
+(46/0). **Awaiting the next Windows rehearsal.**

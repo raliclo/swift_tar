@@ -315,7 +315,11 @@ if [ -r "$P/swift_tar.json" ]; then
   check "scoop: the autoupdate template keeps its literal \$version" "$(grep -c 'v$version/swift_tar-$version-windows-x86_64' "$P/swift_tar.json")" 1
   rc=0; rw 0.2.0 rewrite_pair "$P/swift_tar.json" swift_tar-0.2.0-windows-x86_64.tar.zst "$H2" || rc=$?
   check "scoop: the Windows hash is rewritten, the template left alone" "$rc:$(grep -c "$H2" "$P/swift_tar.json")" "0:1"
-  extract=$(grep '"extract_dir": "swift_tar-0' "$P/swift_tar.json" | sed 's/.*"extract_dir": "//; s/".*//')
+  # sed alone, not grep | sed: with no match grep exits 1 and pipefail ended the script here,
+  # instead of failing this one case (seen on Windows with a stale parent manifest).
+  # 只用 sed，不用 grep | sed：沒有比對到時 grep exit 1，pipefail 會在這裡結束腳本，而不是只讓這一項
+  # 失敗（在 Windows 上以過舊的上層套件檔遇到）。
+  extract=$(sed -n 's/.*"extract_dir": "\(swift_tar-0[^"]*\)".*/\1/p' "$P/swift_tar.json")
   check "scoop: extract_dir names the archive's directory" "$extract" swift_tar-0.2.0-windows-x86_64
 fi
 

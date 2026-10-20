@@ -4363,7 +4363,11 @@ Swift_tar-Win 在 `287432d` 上跑 `test/test_release.zsh`：27 PASS、3 FAIL，
 2. `grep '^  url ' f >> f`：GNU grep 拒絕附加到自己的輸入（`input file is also the output`，exit 2），
    `set -e` 就在那裡結束腳本；macOS 的 BSD grep 允許，所以在 Mac 上看不出來。改為先寫暫存檔再 `cat >>`。
 
-macOS 上仍 46/0。**Windows 上的重跑待確認。**
+macOS 上仍 46/0。Windows 上重跑（`f240a6a`，2026-10-20）：rc 0，27 PASS／0 FAIL／2 SKIP（原生夾具、
+交叉夾具），一路跑到 publish.zsh 三項。scoop 案例讀的是上層的 `bucket/swift_tar.json`，上層工作副本
+過舊時那幾項會失敗——那是 checkout 的狀態，不是測試的錯；但第 318 行的 `grep | sed` 沒比對到時會讓
+pipefail 中途結束腳本，已改為只用 `sed -n …p`，過舊的套件檔只讓該項失敗、其餘照跑（Mac 上以過舊的套件檔
+實測：41／5，publish.zsh 三項仍執行）。
 
 Swift_tar-Win ran `test/test_release.zsh` at `287432d`: 27 PASS, 3 FAIL, then it stopped with
 rc 2. Both causes are in the test; release.zsh itself passed all four rehearsal checks. (1) The
@@ -4373,4 +4377,9 @@ native fixture's stand-in is a `#!/bin/sh` script, while release.zsh on Windows 
 on Windows; the Windows-only part is covered by the win_dlls cases and the Windows rehearsal.
 (2) `grep '^  url ' f >> f`: GNU grep refuses to append to its own input (exit 2) and `set -e`
 ended the script; BSD grep allows it, which hid it on macOS. It now goes through a temp file.
-Still 46/0 on macOS. **Awaiting a Windows rerun.**
+Still 46/0 on macOS. Rerun on Windows at `f240a6a` (2026-10-20): rc 0, 27 PASS / 0 FAIL /
+2 SKIP (the native and cross fixtures), through the three publish.zsh checks. The scoop cases read
+the parent's `bucket/swift_tar.json`, and fail when that checkout is stale; that is the checkout's
+state, not a test bug. But the `grep | sed` at line 318 matched nothing then, and pipefail ended
+the script; it is now `sed -n …p` alone, so a stale manifest fails only those cases (measured on
+the Mac with a stale manifest: 41/5, the three publish.zsh checks still ran).

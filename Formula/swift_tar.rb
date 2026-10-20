@@ -38,7 +38,7 @@ class SwiftTar < Formula
   license "GPL-3.0-only"
 
   url "https://github.com/raliclo/swift_tar/releases/download/v0.1.0/swift_tar-0.1.0-macos-arm64.tar.zst"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "db2d88b2d7bc2e1f809cf3c7cf3c2dbe7c833913670d5a38eb7308c6429bbf88"
 
   depends_on arch: :arm64
   depends_on :macos

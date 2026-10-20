@@ -1,0 +1,23 @@
+Microsoft Visual C++ runtime -- notice / 說明
+
+The Windows archive carries Microsoft Visual C++ runtime DLLs that the Swift runtime loads, for
+example vcruntime140.dll, vcruntime140_1.dll, msvcp140.dll and concrt140.dll. They come from the
+Swift for Windows runtime directory (%LOCALAPPDATA%\Programs\Swift\Runtimes\<version>\usr\bin),
+which ships them beside the Swift DLLs. As of swift_tar 0.1.0 they are version 14.42.34433.0.
+
+These files are Microsoft Visual C++ Redistributable code, Copyright (c) Microsoft Corporation.
+They are not open-source software and are not covered by swift_tar's licence (GPL-3.0-only) or by
+any other licence in this archive. They are redistributed under the "Distributable Code" terms of
+the Microsoft Software License Terms for Microsoft Visual Studio, and every other right in them is
+Microsoft's. The current terms and the official redistributable installer are at
+https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist
+
+Windows 封存附帶 Swift runtime 會載入的 Microsoft Visual C++ runtime DLL，例如 vcruntime140.dll、
+vcruntime140_1.dll、msvcp140.dll、concrt140.dll。它們取自 Swift for Windows 的 runtime 目錄
+（%LOCALAPPDATA%\Programs\Swift\Runtimes\<版本>\usr\bin），該目錄把它們與 Swift DLL 放在一起。
+swift_tar 0.1.0 時的版本為 14.42.34433.0。
+
+這些檔案是 Microsoft Visual C++ 可再散布程式碼，Copyright (c) Microsoft Corporation。它們不是開源
+軟體，不適用 swift_tar 的授權（GPL-3.0-only），也不適用本封存內任何其他授權。它們依 Microsoft
+Visual Studio 軟體授權條款中「可散布程式碼」（Distributable Code）的規定再散布，其餘權利皆屬
+Microsoft。最新條款與官方可再散布安裝程式見上方網址。

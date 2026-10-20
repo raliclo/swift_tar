@@ -214,7 +214,8 @@ else
   # Every third-party licence in licenses/ ships in a Linux archive: the static musl binary links
   # all of them in (licenses/README.md).
   # licenses/ 裡的每一份第三方授權都隨 Linux 封存出貨：靜態 musl 執行檔把它們全部連入（licenses/README.md）。
-  want=$(cd "$ROOT/licenses" && print -l *.txt | sort | tr '\n' ' ')
+  # msvc-redist-NOTICE.txt is Windows-only (Visual C++ runtime DLLs). / 只屬 Windows。
+  want=$(cd "$ROOT/licenses" && print -l *.txt | grep -v -x 'msvc-redist-NOTICE.txt' | sort | tr '\n' ' ')
   got=$(zstd -dq -c "$X/dist/$XSTEM.tar.zst" | tar -tf - | sed -n "s:^$XSTEM/::p" | grep -E -v '^(swift_tar|version\.txt|README.*|swift_tar-LICENSE\.txt|zlib-LICENSE\.txt)?$' | sort | tr '\n' ' ')
   check "release.zsh, cross: the archive carries every licence in licenses/" "$got" "$want"
   rm -rf "$X/dist"

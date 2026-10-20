@@ -23,7 +23,7 @@
 # build id 以錨定比對，不以包含比對；既有的封存絕不覆寫；封存以解開並執行來驗證，不以存在來驗證。
 
 emulate -L zsh
-setopt no_unset pipe_fail errexit
+setopt no_unset pipe_fail errexit extended_glob
 
 case ${1:-} in
   '') ;;
@@ -218,7 +218,43 @@ if [[ $OS == windows ]]; then
   rt_bin=${found[-1]:-}
   [[ -n $rt_bin && -f $rt_bin/swiftCore.dll ]] || die "no Swift runtime with swiftCore.dll under $swift_root/Runtimes" \
                                                       "$swift_root/Runtimes 下找不到含 swiftCore.dll 的 Swift runtime"
-  cp -- "$rt_bin"/*.dll "$STAGE/"
+  # Only the DLLs the binary actually loads: follow its PE imports, then theirs, and take each
+  # one found in the runtime directory. That directory also holds FoundationNetworking,
+  # FoundationXML and others swift_tar never loads, which carry curl, libxml2 and more whose
+  # licences would then have to ship too. Imports not found there (KERNEL32, the UCRT api-ms-*
+  # sets) are the system's.
+  # 只帶執行檔實際會載入的 DLL：順著它的 PE import，再順著那些 DLL 的 import，在 runtime 目錄裡找到
+  # 的才帶。那個目錄還有 FoundationNetworking、FoundationXML 等 swift_tar 從不載入的 DLL，它們內含
+  # curl、libxml2 等，帶了就得一併附上那些授權。在那裡找不到的 import（KERNEL32、UCRT 的 api-ms-*）
+  # 屬於系統。
+  objdump_bin=""
+  for t in llvm-objdump objdump; do command -v $t >/dev/null 2>&1 && { objdump_bin=$t; break; }; done
+  [[ -n $objdump_bin ]] || die "neither llvm-objdump nor objdump is on PATH; the DLLs to ship are read from the PE imports" \
+                               "PATH 上沒有 llvm-objdump 或 objdump；要帶哪些 DLL 是從 PE import 讀出來的"
+  typeset -A shipped=()
+  typeset -a queue=("$BIN")
+  while (( $#queue )); do
+    pe=${queue[1]}; shift queue
+    for dll in ${(f)"$("$objdump_bin" -p "$pe" | sed -n 's/^[[:space:]]*DLL Name:[[:space:]]*//p' | tr -d '\r')"}; do
+      hit=("$rt_bin"/(#i)${(b)dll}(N.))
+      (( $#hit )) || continue
+      [[ -n ${shipped[${dll:l}]-} ]] && continue
+      shipped[${dll:l}]=${hit[1]}
+      queue+=("${hit[1]}")
+    done
+  done
+  [[ -n ${shipped[swiftcore.dll]-} ]] || die "the PE imports of $BIN never reach swiftCore.dll in $rt_bin" \
+                                             "$BIN 的 PE import 一路下來都沒有用到 $rt_bin 裡的 swiftCore.dll"
+  cp -- "${(@v)shipped}" "$STAGE/"
+  # The Microsoft Visual C++ runtime DLLs that ride along are Microsoft's redistributable code,
+  # not open source; licenses/msvc-redist-NOTICE.txt names them and the terms they ship under.
+  # 隨附的 Microsoft Visual C++ runtime DLL 是微軟的可再散布程式碼，不是開源軟體；
+  # licenses/msvc-redist-NOTICE.txt 列出它們與所依據的條款。
+  if (( ${#${(M)${(k)shipped}:#(vcruntime|msvcp|concrt|vccorlib)*}} )); then
+    [[ -r licenses/msvc-redist-NOTICE.txt ]] || die "licenses/msvc-redist-NOTICE.txt is missing; Visual C++ runtime DLLs ship" \
+                                                    "缺少 licenses/msvc-redist-NOTICE.txt；Visual C++ runtime DLL 會隨附"
+    cp -- licenses/msvc-redist-NOTICE.txt "$STAGE/"
+  fi
 fi
 
 # Relative names from inside dist/: on Windows zstd and tar are native programs that cannot

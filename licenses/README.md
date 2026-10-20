@@ -18,8 +18,15 @@ repo. zlib, zstd, libarchive, xz and lz4 take their licences from their own subm
   Foundation (with ICU), libdispatch, musl, musl-fts, libc++/libc++abi/libunwind/compiler-rt and
   bzip2. Confirmed on 2026-10-20 from a `-Xlinker -Map` link map; the SDK's mimalloc, curl,
   libxml2 and BoringSSL are not linked, so they are not here.
-- **Windows**：Swift runtime 那一組（下表標 W），因為封存附帶 Swift runtime DLL。
-  **Windows**: the Swift runtime set (marked W), because the archive carries the Swift runtime DLLs.
+- **Windows**：Swift runtime 那一組（下表標 W），因為封存附帶 Swift runtime DLL。`release.zsh` 只帶
+  `swift_tar.exe` 經 PE import 一路實際載入的 DLL，所以 FoundationNetworking、FoundationXML（內含 curl、
+  libxml2）不出貨，它們的授權也不需要。隨附的 Microsoft Visual C++ runtime DLL 不是開源軟體，
+  沒有授權檔可放，改以 `msvc-redist-NOTICE.txt` 說明其來源與所依據的微軟條款。
+  **Windows**: the Swift runtime set (marked W), because the archive carries the Swift runtime
+  DLLs. `release.zsh` ships only the DLLs `swift_tar.exe` loads through its PE imports, so
+  FoundationNetworking and FoundationXML (with curl and libxml2 inside) do not ship and need no
+  licence. The Microsoft Visual C++ runtime DLLs that do ship are not open source and have no
+  licence file; `msvc-redist-NOTICE.txt` names them and the Microsoft terms they ship under.
 - **macOS**：沒有。執行檔動態連結系統的 Swift runtime 與 libbz2。
   **macOS**: none; the binary links the system's Swift runtime and libbz2 dynamically.
 
@@ -39,6 +46,7 @@ repo. zlib, zstd, libarchive, xz and lz4 take their licences from their own subm
 | musl-COPYRIGHT.txt | musl libc | 1.2.5 | MIT | L | git.musl-libc.org `COPYRIGHT` @ v1.2.5 |
 | musl-fts-COPYING.txt | musl-fts | 1.2.7 | BSD-3-Clause | L | github.com/void-linux/musl-fts `COPYING` @ v1.2.7 |
 | bzip2-LICENSE.txt | libbz2 | 1.0.8 | bzip2-1.0.6 | L | sourceware.org/git bzip2 `LICENSE` @ bzip2-1.0.8 |
+| msvc-redist-NOTICE.txt | Microsoft Visual C++ runtime DLLs | 14.42.34433.0 | Microsoft 專有、可再散布 / proprietary, redistributable | W | 本 repo 撰寫的說明 / a notice written here |
 
 版本取自 SDK 的 `sbom.spdx.json` 與 swift-foundation-icu 的 `uvernum.h`。換 Swift 或 SDK 版本時，
 請依新版本重新取這些檔案，並更新上表。

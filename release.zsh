@@ -181,6 +181,28 @@ for lib in ${(k)LICENSE_OF}; do
                                       "缺少 ${LICENSE_OF[$lib]}；$lib 已連結進來，它的授權必須隨附"
   cp -- "${LICENSE_OF[$lib]}" "$STAGE/$lib-${LICENSE_OF[$lib]:t}.txt"
 done
+# Third-party licences kept in licenses/ (see licenses/README.md for versions and sources): the
+# Swift runtime set wherever that runtime ships with the binary -- linked in on Linux, DLLs beside
+# it on Windows -- and on Linux also the rest of what the static musl SDK links in. macOS uses the
+# system's Swift and libbz2, so it takes none.
+# licenses/ 裡的第三方授權（版本與來源見 licenses/README.md）：凡 Swift runtime 隨執行檔出貨之處
+# ——Linux 連入、Windows 以 DLL 附在旁邊——都帶 runtime 那一組；Linux 另帶靜態 musl SDK 連入的其餘
+# 元件。macOS 用系統的 Swift 與 libbz2，所以不帶。
+typeset -a SWIFT_RUNTIME_LICENSES=(swift-LICENSE swift-experimental-string-processing-LICENSE
+  swift-corelibs-foundation-LICENSE swift-foundation-LICENSE swift-foundation-icu-LICENSE
+  icu-LICENSE swift-corelibs-libdispatch-LICENSE)
+typeset -a THIRD_PARTY=()
+if (( CROSS )); then
+  THIRD_PARTY=($SWIFT_RUNTIME_LICENSES musl-COPYRIGHT musl-fts-COPYING bzip2-LICENSE
+               llvm-libcxx-LICENSE llvm-libcxxabi-LICENSE llvm-libunwind-LICENSE llvm-compiler-rt-LICENSE)
+elif [[ $OS == windows ]]; then
+  THIRD_PARTY=($SWIFT_RUNTIME_LICENSES)
+fi
+for name in $THIRD_PARTY; do
+  [[ -r licenses/$name.txt ]] || die "licenses/$name.txt is missing; it ships with every $OS archive" \
+                                     "缺少 licenses/$name.txt；每份 $OS 封存都必須附上它"
+  cp -- "licenses/$name.txt" "$STAGE/$name.txt"
+done
 if [[ $OS == windows ]]; then
   # The Swift runtime DLLs ride along, as in package_win.zsh, so the archive runs on a machine
   # without Swift. Chosen the way compile_tar-win.zsh chooses the runtime it builds against: the

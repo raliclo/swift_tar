@@ -190,6 +190,7 @@ else
   print 0.1.0 > "$X/VERSION"
   print 'licence' > "$X/LICENSE"; print 'readme' > "$X/README.md"; print 'readme' > "$X/README.zh-TW.md"
   print 'zlib licence' > "$X/zlib/LICENSE"
+  cp -R "$ROOT/licenses" "$X/"
   print -l 'swift_tar_version=20260101-000000' 'zlib_linkage=static' 'lzfse2=excluded' \
     'swift_stdlib_linkage=static' 'libc=musl-1.2.5' > "$X/version-musl-aarch64.txt"
   print -l '/release/' '/dist/' > "$X/.gitignore"
@@ -210,6 +211,20 @@ else
   else
     bad "release.zsh, cross: packs $XSTEM and marks it not run (rc $rc; $(tr '\n' '|' < "$TMP/x.out"))"
   fi
+  # Every third-party licence in licenses/ ships in a Linux archive: the static musl binary links
+  # all of them in (licenses/README.md).
+  # licenses/ 裡的每一份第三方授權都隨 Linux 封存出貨：靜態 musl 執行檔把它們全部連入（licenses/README.md）。
+  want=$(cd "$ROOT/licenses" && print -l *.txt | sort | tr '\n' ' ')
+  got=$(zstd -dq -c "$X/dist/$XSTEM.tar.zst" | tar -tf - | sed -n "s:^$XSTEM/::p" | grep -E -v '^(swift_tar|version\.txt|README.*|swift_tar-LICENSE\.txt|zlib-LICENSE\.txt)?$' | sort | tr '\n' ' ')
+  check "release.zsh, cross: the archive carries every licence in licenses/" "$got" "$want"
+  rm -rf "$X/dist"
+  # A licence missing from a committed tree is refused, and nothing is left in dist/.
+  # 已提交的樹裡少了一份授權就拒絕，dist/ 也不留東西。
+  ( cd "$X" && quiet_git rm -q licenses/musl-COPYRIGHT.txt && quiet_git commit -qm 'drop musl licence' )
+  xcc "swift_tar 0.1.0 ($(swift_tar_build_id "$X"))"
+  xrel
+  if [ "$rc" = 1 ] && grep -q 'licenses/musl-COPYRIGHT.txt is missing' "$TMP/x.out" && [ ! -e "$X/dist/$XSTEM.tar.zst" ]; then ok "release.zsh, cross: a missing licence file is refused"
+  else bad "release.zsh, cross: a missing licence file is refused (rc $rc; $(tr '\n' '|' < "$TMP/x.out"))"; fi
   rm -rf "$X/dist"
   xcc "swift_tar 0.1.0 (0123abcd)"
   xrel

@@ -1,4 +1,4 @@
-swift_tar_version=20261020-074937
+swift_tar_version=20261020-102103
 zlib_version=v1.3.2
 zlib_commit=da607da739fa6047df13e66a2af6b8bec7c2a498
 zlib_linkage=static
@@ -14,7 +14,7 @@ zstd_linkage=static
 libarchive_version=v3.7.5-2164-g7f149b10
 libarchive_commit=7f149b1076f27449a6cfcb92e5046aea8590f833
 libarchive_linkage=static
-lzfse2_commit=5515fe6cc46c6e1af979a619ce7ca1273782dbf7
+lzfse2=excluded
 swift_tar_source=9c01c486b18421cb410f6ba6f24b913c979e22b1
 bzip2_dylib_version=1.0.8
 bzip2_path=/usr/lib/libbz2.1.0.dylib

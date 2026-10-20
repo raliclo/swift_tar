@@ -142,8 +142,9 @@ existing zlib/zstd libraries. Build-version generation preserves the `zlib_*`, `
 provenance fields in `version-win.txt`, and the packaging step copies that file
 into the Windows ZIP as `version.txt` for release verification.
 
-The stamp file is suffixed by platform — `version-mac.txt`, `version-linux.txt`,
-`version-win.txt` — because it records which libraries *this* build linked
+The stamp file is suffixed by platform — `version-mac.txt`, `version-win.txt`,
+`version-musl-<arch>.txt`, and an uncommitted `version-linux.txt` from a glibc development
+build — because it records which libraries *this* build linked
 against. A single shared file meant whichever platform built last overwrote the
 other's provenance.
 
@@ -941,7 +942,8 @@ verify_release.zsh  run a Linux release archive on a Linux machine of its archit
 publish.zsh         tag, publish the four archives, rewrite the brew and scoop files
 publish_rewrite.zsh sourced: publish.zsh's package-file rewrite
 Formula/swift_tar.rb  Homebrew formula (this repository is its own tap)
-version-mac.txt / version-linux.txt / version-win.txt   per-platform build stamp + linkage provenance
+version-mac.txt / version-win.txt / version-musl-<arch>.txt   per-platform build stamp + linkage provenance (version-linux.txt, from a glibc development build, is not committed)
+licenses/           third-party licences shipped in the Linux and Windows archives (see licenses/README.md)
 build_libarchive.zsh / build_libarchive-win.zsh  static ZIP backend builds
 libarchive_zip_bridge.c  shared macOS/Windows ZIP C ABI
 build_zlib-win.zsh  sync/rebuild the pinned Windows static zlib dependency

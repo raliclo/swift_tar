@@ -119,8 +119,8 @@ gitlink、重建靜態庫（`zs.lib`／`zstd_static.lib`），並將精確的 ta
 provenance 欄位，封裝步驟也會將該檔案以 `version.txt` 之名放入 Windows ZIP，供
 release 驗證。
 
-版本戳檔案依平台加後綴——`version-mac.txt`、`version-linux.txt`、
-`version-win.txt`——因為它記錄的是*本次*建置實際連結到哪些函式庫。共用單一檔案時，
+版本戳檔案依平台加後綴——`version-mac.txt`、`version-win.txt`、`version-musl-<arch>.txt`，
+以及不入版控、由 glibc 開發建置產生的 `version-linux.txt`——因為它記錄的是*本次*建置實際連結到哪些函式庫。共用單一檔案時，
 最後建置的那個平台會覆寫掉另一個平台的 provenance。
 
 其餘外部 codec（bzip2、xz、lz4、lzip）仍需要對應的 Scoop CLI 工具；
@@ -830,7 +830,8 @@ verify_release.zsh  在同架構的 Linux 機器上執行一份 Linux 正式版�
 publish.zsh         打 tag、發布四份封存、改寫 brew 與 scoop 的檔案
 publish_rewrite.zsh 供 source：publish.zsh 改寫套件檔的部分
 Formula/swift_tar.rb  Homebrew formula（這個 repo 本身就是 tap）
-version-mac.txt / version-linux.txt / version-win.txt   各平台的建置版本戳與連結來源
+version-mac.txt / version-win.txt / version-musl-<arch>.txt   各平台的建置版本戳與連結來源（glibc 開發建置的 version-linux.txt 不入版控）
+licenses/           隨 Linux 與 Windows 封存出貨的第三方授權（見 licenses/README.md）
 build_libarchive.zsh / build_libarchive-win.zsh  靜態 ZIP 後端建置
 libarchive_zip_bridge.c  macOS/Windows 共用 ZIP C ABI
 build_zlib-win.zsh  同步／重建 Windows 固定版本的 zlib 靜態相依套件

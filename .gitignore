@@ -29,6 +29,9 @@ tmp_review_codecs
 # release archives made by release.zsh; they are published as GitHub Release assets
 /dist/
 /release/
+# glibc 開發建置（compile_tar-linux.zsh）的版本戳；正式 Linux 版是 musl，記在 version-musl-<arch>.txt
+# stamp of the glibc development build (compile_tar-linux.zsh); Linux releases are musl and use version-musl-<arch>.txt
+/version-linux.txt
 /verifications/rgb1/rgb1_sampler
 /verifications/rgb1/swift_tar_DOE
 /rgb1/P6-DOE

@@ -3932,7 +3932,16 @@ final class TarWriter {
     private static func shortReason(_ error: Error) -> String {
         let ns = error as NSError
         if let u = ns.userInfo[NSUnderlyingErrorKey] as? NSError, u.domain == NSPOSIXErrorDomain {
+            #if os(Windows)
+            // The MSVC CRT deprecates strerror; strerror_s is its replacement.
+            // MSVC CRT 已棄用 strerror，改用其替代品 strerror_s。
+            var buf = [CChar](repeating: 0, count: 256)
+            if strerror_s(&buf, buf.count, Int32(u.code)) == 0 {
+                return buf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+            }
+            #else
             return String(cString: strerror(Int32(u.code)))
+            #endif
         }
         return ns.localizedDescription
     }

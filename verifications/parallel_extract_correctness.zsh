@@ -43,7 +43,11 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
 fi
 
 HERE=${0:A:h}
-ST=${SWIFT_TAR:-$HERE/../release/swift_tar}
+# Windows builds end in .exe. / Windows 的建置產物帶 .exe。
+case "$(uname -s)" in
+  CYGWIN*|MSYS*|MINGW*) ST=${SWIFT_TAR:-$HERE/../release/swift_tar.exe} ;;
+  *)                    ST=${SWIFT_TAR:-$HERE/../release/swift_tar} ;;
+esac
 BSDTAR=${BSDTAR:-/usr/bin/tar}
 NVALUES=(${=SWIFT_TAR_N:-1 2 8 16})
 REPEATS=${REPEATS:-3}

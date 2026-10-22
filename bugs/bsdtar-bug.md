@@ -299,13 +299,27 @@ Two fixtures, 7 sibling files each: `mmm -> nowhere` (dangling, `lstat` works), 
 |---|---|---|
 | bsdtar 3.5.3 `-h` | **0** | **stored as a symlink** (`lrwx ./mmm -> nowhere`), silently |
 | gtar 1.35 `-h` | 1 / 2 | dropped, reported |
-| swift_tar `-h` | 0 | skipped, reported |
+| swift_tar `-h` | 0 | skipped, reported — **changed later the same day**, see below |
 
 All 7 siblings survive in every case. A third behaviour worth recording: **bsdtar's
 `-h` falls back to `lstat` and stores the link itself, with no message and exit 0.**
 `-h` asked it to dereference; it archived a symlink entry instead and said nothing.
 That is not data loss, but an archive built with `-h` is documented to contain no
 symlink entries at all, and a caller relying on that gets one anyway.
+
+> **The swift_tar row above is the pre-fix behaviour.** Later on 2026-10-22 the two
+> `--dereference cannot follow it` sites were changed to store the link itself as
+> bsdtar does, so the member is no longer dropped; unlike bsdtar it still reports
+> what it did. The entry in that row is now `stored as a link, reported`, exit 0.
+> bsdtar's measurement here is what prompted the change: dropping a member to signal
+> "I could not dereference this" loses more than it communicates. bsdtar's own
+> silence was not copied.
+>
+> **上表 swift_tar 那一列是修正前的行為。** 2026-10-22 當日稍後，兩處
+> `--dereference cannot follow it` 已改為比照 bsdtar 存下連結本身，成員不再被丟掉；與
+> bsdtar 不同的是它仍會回報自己做了什麼。該列現在應為「存成連結、有回報」、退出 0。
+> 促成這項改動的正是此處對 bsdtar 的量測：用「丟掉一個成員」來表示「我無法解參照」，
+> 失去的比傳達的多。但 bsdtar 的沉默沒有一併照抄。
 
 全部 7 個兄弟項目在每一種情況下都存活。第三個值得記下的行為：**bsdtar 的 `-h` 會退回
 `lstat` 並存下連結本身，沒有任何訊息、退出 0。** `-h` 要求它解參照，它卻存了一個 symlink

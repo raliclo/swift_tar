@@ -4436,10 +4436,6 @@ final class TarWriter {
         // 詳見 winStatFollowing。
         var readPath = incomingReadPath
         if dereference, st.isSymlink {
-            guard let target = winStatFollowing(incomingReadPath) else {
-                eprint("swift_tar: skipping '\(name)': --dereference cannot follow it / 略過 '\(name)'：--dereference 無法跟隨")
-                return
-            }
             // A resolved hop moves only the read side; `path` still names the member, so a
             // DIRECTORY reached through an LX hop is now descended into under its own name --
             // the recursion below passes the pair on. Until 2026-10-22 it was skipped outright,
@@ -4452,8 +4448,27 @@ final class TarWriter {
             // 因為名稱與讀取路徑是同一個字串，改走解析後的路徑會讓其下每個成員都被改名。以 LX
             // 連結 `dlink -> realdir` 實測：修正前 3 個成員，修正後 5 個，與 GNU tar 相同——它把
             // 從 `realdir` 讀到的內容存在 `./dlink/` 之下。
-            st = target.st
-            readPath = target.readPath
+            if let target = winStatFollowing(incomingReadPath) {
+                st = target.st
+                readPath = target.readPath
+            } else {
+                // -h cannot be honoured for this link, so store the LINK ITSELF rather than
+                // dropping the member. st is still the winStat of the link, so falling through
+                // reaches the `st.isSymlink` branch below and writes a typeflag '2' entry with
+                // its target string. Until 2026-10-22 this reported a skip and returned, which
+                // lost the entry outright: the one thing -h is allowed to fail at is
+                // dereferencing, not keeping the name in the archive. bsdtar does the same
+                // fallback (measured on macOS 2026-10-22) but says nothing; this reports it,
+                // because an archive built with -h is documented to hold no symlink entries and
+                // a caller that gets one needs to know why.
+                // 這個連結無法滿足 -h，於是存下「連結本身」而非丟掉該成員。st 仍是該連結的
+                // winStat，故往下落會抵達下方的 `st.isSymlink` 分支，寫出一個帶目標字串的
+                // typeflag '2' 項目。2026-10-22 之前這裡是回報略過並 return，等於整個項目消失：
+                // -h 唯一被允許失敗的是「解參照」，不是「把名稱留在封存裡」。bsdtar 有同樣的
+                // 後援（2026-10-22 於 macOS 實測）但不作聲；此處會回報，因為以 -h 建立的封存按
+                // 文件不含任何 symlink 項目，拿到一個的呼叫者需要知道原因。
+                eprint("swift_tar: '\(name)': --dereference cannot follow it, storing the link itself / '\(name)'：--dereference 無法跟隨，改存連結本身")
+            }
         }
         // 迴圈偵測：同 POSIX 分支，只看目前遞迴堆疊上的祖先。
         // Cycle detection: as in the POSIX branch, ancestors on the current stack only.
@@ -4587,16 +4602,22 @@ final class TarWriter {
         // 連結當成它的目標處理——不需要為此新增任何分支。
         // stat in follow mode resolves the final component, so S_IFLNK never appears and
         // the switch below treats a link as its target without a new branch.
-        let statRC = dereference ? stat(readPath, &st) : lstat(readPath, &st)
+        var statRC = dereference ? stat(readPath, &st) : lstat(readPath, &st)
+        // 跟隨模式下，跟不上的連結會使 stat 失敗，而 lstat 能好好地存下它。此時存下「連結
+        // 本身」而非丟掉該成員：lstat 已把 st 填成該連結自己的狀態，故往下落會抵達
+        // `case S_IFLNK` 並寫出帶目標字串的項目。2026-10-22 之前這裡是回報略過並 return，
+        // 等於整個項目消失——-h 唯一被允許失敗的是「解參照」，不是「把名稱留在封存裡」。
+        // In follow mode a link we cannot follow makes stat fail where lstat succeeds. Store
+        // the LINK ITSELF rather than dropping the member: lstat has already filled st with the
+        // link's own status, so falling through reaches `case S_IFLNK` and writes an entry with
+        // its target string. Until 2026-10-22 this reported a skip and returned, losing the
+        // entry outright -- the one thing -h is allowed to fail at is dereferencing, not keeping
+        // the name in the archive.
+        if statRC != 0, dereference, lstat(readPath, &st) == 0 {
+            eprint("swift_tar: '\(name)': --dereference cannot follow it, storing the link itself / '\(name)'：--dereference 無法跟隨，改存連結本身")
+            statRC = 0
+        }
         guard statRC == 0 else {
-            // 跟隨模式下，斷掉的連結會使 stat 失敗，而 lstat 模式能好好地存下它。
-            // 回報並略過，不讓整次建立因一個斷鏈而中止。
-            // In follow mode a broken link makes stat fail where lstat would have stored it
-            // happily. Report and skip rather than abandoning the whole create.
-            if dereference, lstat(readPath, &st) == 0 {
-                eprint("swift_tar: skipping '\(name)': --dereference cannot follow it / 略過 '\(name)'：--dereference 無法跟隨")
-                return
-            }
             throw TarError.io("cannot stat '\(path)' / 無法讀取 '\(path)' 的檔案資訊")
         }
         // 迴圈偵測只在跟隨模式需要，且只對目錄——檔案再怎麼重複收錄都會終止。

@@ -739,7 +739,7 @@ would not predict.
 | `--encrypt` | (`-c` only) Encrypt with ChaCha20-Poly1305; prompts for a passphrase |
 | `--keyfile <path>` | Use the file's bytes as key material instead of a passphrase (create and read; required when stdin is not a terminal). **On create it turns encryption on by itself** — `-c --keyfile k.bin -f out.enc src/` encrypts; you do not also need `--encrypt`. |
 | `--force`   | (`-x` only) Allow a member to overwrite one written earlier in the *same* extraction; without it that case is refused |
-| `-h`, `--dereference` | (`-c`, `-r`, `-u`) Follow symlinks: store what each one points to rather than the link itself. A broken link is reported and skipped, because the `stat` this uses fails where the default `lstat` would have stored the link happily. A link back to a directory already on the current path is a cycle; it is reported and skipped rather than expanded. Two links reaching the same directory by different routes are **not** a cycle and are both archived. |
+| `-h`, `--dereference` | (`-c`, `-r`, `-u`) Follow symlinks: store what each one points to rather than the link itself. A link that cannot be followed — broken, or with an unstattable target — is reported and **stored as a link**, so no member goes missing; before 2026-10-22 it was dropped. A link back to a directory already on the current path is a cycle; it is reported and skipped rather than expanded. Two links reaching the same directory by different routes are **not** a cycle and are both archived. See [What `--dereference` archives](#what---dereference-archives). |
 | `--exclude <pattern>` | (`-c`, `-r`, `-u`) Skip members matching the glob, repeatable; `--exclude=PATTERN` is accepted too. Matched as bsdtar does, which was measured rather than assumed: `*` crosses `/`, a pattern holding no `/` is also tried against every path component, and a pattern matching a directory takes its whole subtree. An excluded directory is **never descended into**, so this steps around an unreadable subtree rather than merely omitting it from the listing. |
 | `--help`    | Help. **`-h` used to mean this.** It now means `--dereference`, matching GNU tar and bsdtar; help is `--help`, which is GNU's spelling and what bsdtar has always used. |
 | `--version` | Show the fixed build-date version (`yyyyMMdd-HHmmss`) |
@@ -807,10 +807,53 @@ src/link -> ../real          # real/ holds inside.txt
 
 Two consequences on extraction, neither of which needs a flag:
 
-- The archive contains **no symlink entries at all**, so extracting it produces
-  plain files and directories.
+- The archive contains **no symlink entries for any link that was followed**, so
+  extracting those produces plain files and directories. A link `-h` could **not**
+  follow is the exception: it is stored as a link, and reported on stderr when it
+  happens. See below.
 - The guard that refuses to write through a symlink planted by an earlier entry
-  never comes into play, because there is no such entry to plant.
+  still applies, unchanged. Before 2026-10-22 this section said the guard "never
+  comes into play, because there is no such entry to plant" — true then, because an
+  unfollowable link was dropped from the archive altogether, and **wrong now**. The
+  guard was never removed, so nothing became less safe; what changed is that the
+  reason given here no longer holds, and a security property should not rest on an
+  entry type merely happening to be absent.
+
+**A link `-h` cannot follow is stored as a link, not dropped.** A dangling link, or
+one whose target cannot be `stat`ed, keeps its entry with its target string, and the
+run says so:
+
+```
+swift_tar: './mmm': --dereference cannot follow it, storing the link itself
+```
+
+Until 2026-10-22 the entry was reported and **dropped**, so `-c -h` could silently
+return an archive missing a member and still exit 0. Measured on a directory holding
+`aaa.txt`, a dangling link `mmm`, and `zzz.txt`: three members before the fix, four
+after. The one thing `-h` is allowed to fail at is dereferencing — not keeping the
+name in the archive. `bsdtar` falls back the same way (measured on macOS, `bsdtar
+3.5.3`) but says nothing; GNU tar drops the entry and exits non-zero.
+
+**`-h` 跟不上的連結會存成連結，不會被丟掉。** 斷掉的連結，或目標 `stat` 不到的連結，會保留
+自己的項目與目標字串，並在執行時說明：
+
+```
+swift_tar: './mmm': --dereference cannot follow it, storing the link itself
+```
+
+2026-10-22 之前該項目會被回報並**丟掉**，於是 `-c -h` 可能靜默交出一個少了成員的封存、
+而且仍以 0 結束。以一個含 `aaa.txt`、斷鏈 `mmm`、`zzz.txt` 的目錄實測：修正前 3 個成員，
+修正後 4 個。`-h` 唯一被允許失敗的是「解參照」——不是「把名稱留在封存裡」。`bsdtar` 有同樣
+的後援（於 macOS、`bsdtar 3.5.3` 實測）但不作聲；GNU tar 則丟掉該項目並以非零結束。
+
+**Still dropped, deliberately:** a link `-h` detects as a **cycle** (reported as
+`--dereference would loop here`), and a device node or socket (`skipping special
+file`). Both are design decisions rather than oversights — the first cannot be
+expanded, and the second cannot be meaningfully restored.
+
+**仍刻意丟掉者：** 被 `-h` 判定為**迴圈**的連結（回報 `--dereference would loop here`），
+以及裝置節點與 socket（`skipping special file`）。兩者皆為設計決定而非疏漏——前者無法展開，
+後者無法由封存有意義地重建。
 
 The cost is duplication: several links pointing at one directory each store its
 contents again, and a link out of the tree pulls that content into the archive.

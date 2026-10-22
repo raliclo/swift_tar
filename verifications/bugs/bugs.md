@@ -51,17 +51,14 @@ code page, so there is no terminal setting that makes the listing readable.
 
 **Consequence for verification scripts.** Comparing `-tf` output between swift_tar
 and bsdtar byte-for-byte can never pass on Windows for a non-ASCII entry, and the
-failure says nothing about the archive. `tar_interop_matrix.zsh` originally did
-exactly this and reported `FAIL bsdtar lists the same names as swift_tar` against
-an archive bsdtar extracts perfectly. It now compares listings for ASCII names
-only — that is where name *shape* lives, trailing slashes and prefixes and
+failure says nothing about the archive. `tar_interop_matrix.zsh` therefore
+compares listings for ASCII names only — that is where name *shape* lives, trailing slashes and prefixes and
 separators — and asserts the non-ASCII half where it is meaningful: extract with
 bsdtar and check the name that lands on disk.
 
 **對驗證腳本的影響。** 在 Windows 上逐位元組比對 swift_tar 與 bsdtar 的 `-tf` 輸出，對非
-ASCII 項目永遠不可能通過，而該失敗完全無法說明封存的狀況。`tar_interop_matrix.zsh` 原本
-正是這麼做，對一個 bsdtar 能完美解出的封存回報
-`FAIL bsdtar lists the same names as swift_tar`。現已改為僅就 ASCII 名稱比對列表——名稱的
+ASCII 項目永遠不可能通過，而該失敗完全無法說明封存的狀況。因此 `tar_interop_matrix.zsh`
+僅就 ASCII 名稱比對列表——名稱的
 **形狀**（尾隨斜線、prefix、分隔符）就在那裡——非 ASCII 的部分則在有意義之處斷言：以
 bsdtar 解出，檢查落地的檔名。
 
@@ -86,16 +83,13 @@ accident; bsdtar consults the code page and is wrong.
 pax 記錄依規範即為 UTF-8，故該記錄正是宣告名稱編碼的東西。若只拿到裸 ustar 位元組，
 GNU tar 原樣通過而恰好正確，bsdtar 參考碼頁因而出錯。
 
-**This is why swift_tar now emits a `path` record for any name containing a byte
-≥ 0x80**, not only for names too long for the ustar fields. Before that change
-`bsdtar_compat.zsh` carried this as a Windows XFAIL with the note "not yet
-diagnosed — which side normalises the name". Neither side normalised anything;
-the record was simply absent.
+**This is why swift_tar emits a `path` record for any name containing a byte
+≥ 0x80**, not only for names too long for the ustar fields. Neither side
+normalises the name; without the record, bsdtar simply has no declared encoding.
 
-**這正是 swift_tar 現在對任何含有 ≥ 0x80 位元組的名稱都寫出 `path` 記錄的原因**，而不僅
-限於長度塞不進 ustar 欄位的名稱。在該修正之前，`bsdtar_compat.zsh` 將此列為 Windows
-XFAIL，並註明「尚未診斷——究竟是哪一端對檔名做了正規化」。兩端都沒有做任何正規化，只是
-缺少那筆記錄而已。
+**這正是 swift_tar 對任何含有 ≥ 0x80 位元組的名稱都寫出 `path` 記錄的原因**，而不僅
+限於長度塞不進 ustar 欄位的名稱。兩端都沒有對檔名做任何正規化；少了那筆記錄，bsdtar
+就沒有被宣告的編碼可依。
 
 ---
 
@@ -119,20 +113,14 @@ Anything keying on the exit code sees success.
 stderr 一則警告、離開碼 0，而封存中的項目名稱已永久遺失。任何以離開碼判定的流程都會看到
 成功。
 
-**Relevant to swift_tar because it was once used as counter-evidence.** A note in
-`todo/todo.md` originally justified a swift_tar ZIP fix with "bsdtar writes the
-same name without complaint, so it was never a libarchive limitation." That was
-wrong twice over: the comparison had actually run GNU tar (which has no ZIP writer
-at all and quietly produced a *tar* file named `.zip`), and the real bsdtar fails
-here too. swift_tar's original behaviour — refusing outright, exit 1 — was the
-safer of the two; it now sets `hdrcharset=UTF-8` and stores the name intact, which
-is better than either.
+**Do not use it as a reference for swift_tar's ZIP output.** A comparison that
+runs a bare `tar` in Git Bash runs GNU tar, which has no ZIP writer at all and
+quietly produces a *tar* file named `.zip`; the real bsdtar destroys the name as
+shown above. swift_tar stores the name intact.
 
-**與 swift_tar 相關，是因為它一度被當成反證。** `todo/todo.md` 中原有一則說明，以「bsdtar
-寫同一個名稱毫無問題，故此事從來不是 libarchive 的限制」來佐證某項 swift_tar 的 ZIP 修正。
-那是雙重錯誤：該比較實際執行的是 GNU tar（它根本沒有 ZIP writer，只是安靜地產生了一個名為
-`.zip` 的 *tar* 檔），而真正的 bsdtar 在此同樣會失敗。swift_tar 原本的行為——直接拒絕、
-離開碼 1——反而是兩者中較安全的；它現在設定 `hdrcharset=UTF-8` 並完整存下名稱，比兩者都好。
+**不要拿它當 swift_tar ZIP 輸出的參照。** 在 Git Bash 中執行裸 `tar` 的比較，實際執行的是
+GNU tar——它根本沒有 ZIP writer，只會安靜地產生一個名為 `.zip` 的 *tar* 檔；而真正的
+bsdtar 會如上所示毀掉名稱。swift_tar 會完整存下名稱。
 
 ---
 
@@ -145,9 +133,9 @@ generalisation from it is wrong in both directions.
 這一項不是比對工具的缺陷，而是執行我們建置流程的那個工具的缺陷。記於此處是因為其失敗
 訊息很吵、與成因毫無相似之處，而由它得出的直覺推論在兩個方向上都是錯的。
 
-Converting `compile_tar-win.bat` to LF produced:
+An LF-only `compile_tar-win.bat` produces:
 
-將 `compile_tar-win.bat` 轉為 LF 後產生：
+僅用 LF 的 `compile_tar-win.bat` 會產生：
 
 ```
 'in.bat' is not recognized as an internal or external command,
@@ -235,12 +223,11 @@ extracted name is correct.
 
 ## 5. bsdtar 3.8.4 writes outside the extraction directory through a planted symlink / bsdtar 3.8.4 會經由植入的 symlink 寫到解出目錄之外
 
-Found in round 42 while testing swift_tar's own defences. An archive carrying two
-entries — a symlink `portal -> ../../..`, then a regular member
+An archive carrying two entries — a symlink `portal -> ../../..`, then a regular member
 `portal/pwned.txt` — makes the extractor resolve the second path through the
 first, landing the write three directories above the target:
 
-於 round 42 測試 swift_tar 自身防禦時發現。一個攜帶兩個項目的封存——symlink
+一個攜帶兩個項目的封存——symlink
 `portal -> ../../..`，接著一般成員 `portal/pwned.txt`——會讓解出端經由前者解析後者的
 路徑，使寫入落在目標之上三層：
 
@@ -249,32 +236,30 @@ extract into jail/a/b, archive contains portal -> ../../.. and portal/pwned.txt
 
   GNU tar 1.35    rc=2, refuses          nothing escapes
   bsdtar 3.8.4    rc=0, no message       pwned.txt written outside the target
-  swift_tar       rc=0, entry skipped    nothing escapes   (since 2026-08-18)
+  swift_tar       rc=0, entry skipped    nothing escapes
 ```
 
 Neither member name contains `..` once the link is resolved, so a check that only
-sanitises names passes both. swift_tar had the same hole and now refuses the
-second entry; **bsdtar still has it.**
+sanitises names passes both. swift_tar refuses the second entry; **bsdtar 3.8.4
+does not.**
 
-在連結解析後，兩個成員名稱皆不含 `..`，故僅清理名稱的檢查會讓兩者通過。swift_tar 原有
-同一個破口，現已拒絕第二個項目；**bsdtar 仍然存在此問題。**
+在連結解析後，兩個成員名稱皆不含 `..`，故僅清理名稱的檢查會讓兩者通過。swift_tar 拒絕
+第二個項目；**bsdtar 3.8.4 不會。**
 
 Relevant when bsdtar is used as a reference: matching it is not evidence of
 safety here, because GNU tar — the other implementation this project claims
-interoperability with — declines the same archive. That asymmetry is what settled
-the question when swift_tar's own behaviour was under review.
+interoperability with — declines the same archive.
 
 以 bsdtar 作為參照時需留意：在此與它一致並不構成安全性的證據，因為 GNU tar——本專案同樣
-宣稱互通的另一個實作——會拒絕同一個封存。當初判定 swift_tar 自身行為時，正是這個不對稱
-定了案。
+宣稱互通的另一個實作——會拒絕同一個封存。
 
-**Update, round 44: the hole is wider than a plain symlink header.** The same
+**The hole is wider than a plain symlink header.** The same
 write-through works when the portal is created through either override mechanism
 — a pax `linkpath` record, or a GNU `K` long-link entry. bsdtar escapes on both;
 swift_tar refuses both, because its guard runs at write time rather than while
 parsing a name, so it covers parse paths it was never specifically written for.
 
-**round 44 補充：此破口比單純的 symlink 標頭更廣。** 當 portal 改由任一種覆寫機制建立
+**此破口比單純的 symlink 標頭更廣。** 當 portal 改由任一種覆寫機制建立
 ——pax 的 `linkpath` 記錄，或 GNU 的 `K` 長連結項目——同樣的穿透寫入依然成立。bsdtar 兩者
 皆逃逸；swift_tar 兩者皆拒絕，因為其守門在寫入時執行，而非在解析名稱時，故能涵蓋它從未
 被特別設計去防的解析路徑。
@@ -283,12 +268,12 @@ parsing a name, so it covers parse paths it was never specifically written for.
 
 ## 6. bsdtar silently discards a file entry that a later entry needs to be a directory / 靜默丟棄「後續項目需要它是目錄」的檔案項目
 
-Found in round 47. An archive can name `thing` as a regular file and then
+An archive can name `thing` as a regular file and then
 `thing/inner.txt`, which requires `thing` to be a directory. The two cannot both
 exist. What the tools do about it depends on the order, and in one order bsdtar
 resolves it by destroying data without saying anything:
 
-於 round 47 發現。封存可先將 `thing` 命名為一般檔案，接著出現 `thing/inner.txt`，後者要求
+封存可先將 `thing` 命名為一般檔案，接著出現 `thing/inner.txt`，後者要求
 `thing` 必須是目錄。兩者無法並存。各工具的處置取決於順序，而在其中一種順序下，bsdtar 以
 「摧毀資料且不出聲」的方式化解：
 

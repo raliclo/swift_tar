@@ -40,7 +40,7 @@ behaviour is back. Keeping the change here makes "is it still there?" a command.
 這樣安全的理由是:**每一次建置都先套用再還原**,不存在「還原之後某次增量編譯偷偷用到未
 修正原始碼」的空隙。
 
-實測(2026-09-06):自乾淨工作區跑 `./build.zsh` → 建置過程印出「已套用」→ 結束後
+實測:自乾淨工作區跑 `./build.zsh` → 建置過程印出「已套用」→ 結束後
 `git -C libarchive status --porcelain` 為 0 行 → 而產出的 ZIP 仍存 NFC,三項正規化斷言
 全過。**原始碼已還原,產物仍帶修正。**
 
@@ -59,8 +59,7 @@ still stores NFC.
 套用後**不還原**。
 
 狀態不交給 `patch -R --dry-run` 判斷：Apple 的 patch 2.0 遇到「反向 patch 對上未 patch 的原始碼」
-會改為正向套用並以 0 結束，於是沒動過的原始碼被回報為已套用，接著的 `--revert` 把檔案改寫了
-（2026-10-13，發生在暫存副本上）。只刪不增的 patch 無法用文字比對分辨，會被歸為過期交給人看。
+會改為正向套用並以 0 結束，於是沒動過的原始碼會被回報為已套用，接著的 `--revert` 會改寫檔案。只刪不增的 patch 無法用文字比對分辨，會被歸為過期交給人看。
 
 Without git the script reads the state from the patch text itself -- applied when every
 added line is in the file, missing when not all are while every removed line still is,
@@ -153,7 +152,7 @@ forces: a forced apply produces something nobody verified and it looks like succ
 實測(本樹,APFS):先建 `caf\xc3\xa9.txt`(NFC)再建 `cafe\xcc\x81.txt`(NFD),磁碟上
 只剩**一個**檔案,名稱是 NFC 那一種。**libarchive 轉換了一個檔案系統並未轉換的名稱。**
 
-**後果**:在此 patch 之前,同一支 swift_tar 的兩條路徑對同一個檔案給出不同的名稱——
+**後果**:沒有此 patch 時,同一支 swift_tar 的兩條路徑對同一個檔案給出不同的名稱——
 
 ```
 磁碟      63 61 66 c3 a9        NFC
@@ -164,7 +163,7 @@ zip       63 61 66 65 cc 81     NFD   （經 libarchive)
 macOS 本機看不出差別(APFS 兩種寫法都找得到同一個檔),但封存的用途是離開這台機器,而
 **ext4 對正規化是敏感的**:這種 ZIP 解到 Linux 上會得到一個與原始檔名不同的檔案。
 
-**為什麼不在 bridge 端解**:試過三種做法都無效——以 `set_pathname_utf8` 從 `pathname`
+**為什麼不在 bridge 端解**:bridge 端的做法無效——以 `set_pathname_utf8` 從 `pathname`
 設回、停用 `hdrcharset=UTF-8`、改從 `sourcepath` 取值,存出來的名稱都仍是 NFD。能清掉
 該旗標的 `SCONV_SET_OPT_NORMALIZATION_C` 是內部 API,只有 tar reader 用得到。細節見
 `todo/todo.md`。
@@ -176,8 +175,8 @@ patch,並在 `todo/todo.md` 把該條目結案。
 Disables the two Apple-only NFD normalisation sites in libarchive, whose justifying comment
 describes HFS+ behaviour that APFS does not have. Without it, swift_tar's tar and ZIP paths
 name the same file differently, and the ZIP form is the lossy one once the archive reaches a
-normalisation-sensitive filesystem. Three bridge-level fixes were tried first and none
-worked; the option that would clear the flag is internal to libarchive.
+normalisation-sensitive filesystem. Bridge-level fixes do not work; the option that would
+clear the flag is internal to libarchive.
 
 ### `libarchive/0002-zip-store-fifo.patch`
 
@@ -187,14 +186,13 @@ worked; the option that would clear the flag is internal to libarchive.
 - `archive_read_support_format_zip.c`:原本把**每個** FIFO 項目都轉成一般檔案;改為只在項目
   帶有資料(串流位元、壓縮後或壓縮前大小非 0)時才轉換,不帶資料的保留為 FIFO。
 
-**為什麼**:使用者要求 ZIP 往返要和 tar 一樣保留 FIFO(2026-10-09)。在此之前 `-c --zip` 遇到
-FIFO 會印出 `zip format cannot archive named pipes` 並略過,仍以 0 結束;同一棵樹以任何 tar
-codec 往返都會保留它。
+**為什麼**:讓 ZIP 往返和 tar 一樣保留 FIFO。未修改的 libarchive ZIP 寫出端不接受 FIFO,
+而同一棵樹以任何 tar codec 往返都會保留它。
 
 讀取端的轉換是上游刻意的變通:Info-ZIP 從管線讀取時,會把**管線本身**的 stat 當成項目型別
 記錄下來,而那個項目帶有管線讀到的資料。這份 patch 保留該變通,只排除「不帶任何資料」的
 項目——那不可能是 Info-ZIP 讀管線的結果,**唯一的例外是 Info-ZIP 讀到一條空管線**,那種
-項目現在會解成 FIFO 而非空檔案。已接受此邊界情形。
+項目會解成 FIFO 而非空檔案。已接受此邊界情形。
 
 **相容性**:Info-ZIP `unzip` 與原版 libarchive(實測系統 bsdtar 3.5.3 / libarchive 3.7.4)
 都會把這種項目解成空的一般檔案。只有 swift_tar 解回 FIFO。
@@ -207,7 +205,7 @@ Lets the ZIP writer store a FIFO as a zero-length entry with its Unix mode, and 
 reader keep a FIFO entry a FIFO when it carries no data, instead of turning every FIFO entry
 into a regular file. The upstream conversion works around Info-ZIP recording a pipe it read
 from; such entries carry data and are still converted. The one edge case is an Info-ZIP
-entry from an empty pipe, which now extracts as a FIFO. Info-ZIP `unzip` and stock bsdtar
+entry from an empty pipe, which extracts as a FIFO. Info-ZIP `unzip` and stock bsdtar
 extract these entries as empty regular files.
 
 ### `libarchive/0003-zip-write-deflated.patch`
@@ -219,7 +217,7 @@ raw deflate 串流。它把串流原樣寫出,並記下呼叫端給的 CRC-32 �
 寫出端自己邊壓邊算的。另加一個旗標 `entry_deflated`,讓 `finish_entry` 不再對沒用到的
 壓縮器做 `Z_FINISH`(否則會多寫出一個空的 deflate 區塊)。
 
-**為什麼**:使用者要求 ZIP 以多核心壓縮(2026-10-14)。libarchive 的 ZIP 寫出端是在寫出每個
+**為什麼**:讓 ZIP 以多核心壓縮。libarchive 的 ZIP 寫出端是在寫出每個
 成員時才 deflate,只用一個執行緒。ZIP 的每個成員各是一條獨立的 deflate 串流,所以可以由
 工作執行緒先壓好,寫出端只負責依序放進去;但 libarchive 沒有「接收已壓縮資料」的入口,
 `archive_write_data` 一律會再壓一次。這份 patch 就是那個入口。
@@ -227,7 +225,7 @@ raw deflate 串流。它把串流原樣寫出,並記下呼叫端給的 CRC-32 �
 **位元組不變**:呼叫端(`libarchive_zip_bridge.c`)用同一份 zlib、同樣的參數(raw deflate、
 window 15、memLevel 8、預設策略、等級 6)壓縮,得到的串流與寫出端自己壓的相同。實測
 claw-code:`-n 1`(走原本的路徑)與 `-n 2`、`4`、`8`、`10`、`16` 的 sha256 全部相同,也與
-加入這份 patch 之前的執行檔相同。
+不帶這份 patch 的執行檔相同。
 
 **宣告不放進 `archive.h`**:改 `archive.h` 會讓每次建置把整個 libarchive 重新編譯一遍(建置是
 「套用 → 建置 → 還原」)。所以原型寫在 `.c` 檔內、函式定義之前,bridge 自己也宣告一次。
@@ -245,7 +243,7 @@ entry's data as a finished raw deflate stream plus its CRC-32 and uncompressed l
 a flag that stops `finish_entry` from flushing the unused compressor. It is what lets the
 bridge compress members on worker threads; libarchive's writer deflates on one thread and
 has no entry point for data that is already compressed. With the same zlib and settings the
-archive is byte-identical (measured across `-n 1` to `16`, and against the binary from
-before the patch). The prototype lives in the `.c` file, not `archive.h`, so that a build
+archive is byte-identical (measured across `-n 1` to `16`, and against a binary built
+without the patch). The prototype lives in the `.c` file, not `archive.h`, so that a build
 does not recompile the whole library. Builds without the patch (Windows, a sysroot's shared
 libarchive on Linux) do not define `SWIFT_TAR_ZIP_PARALLEL` and compress on one thread.

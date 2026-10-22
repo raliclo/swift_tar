@@ -30,7 +30,7 @@ scripts.
 ROUNDS=1 ./encrypt_mbps_win.zsh ../../claw-code
 ```
 
-The current Windows run is dated 2026-08-18 and used `release/swift_tar.exe`
+The recorded Windows run is dated 2026-08-18 and used `release/swift_tar.exe`
 version `20260818-074043` on MINGW64_NT-10.0-26200 with `claw-code` at 1.40 GB
 logical input. It passed `--crypto-selftest` (**44 PASS / 0 FAIL**) and the
 throughput script's correctness checks. Full tree `diff -r` is available with
@@ -51,11 +51,6 @@ table by hand; diff it against that file after each run.
 decrypted output was verified byte-identical to the original archive; wrong-key
 and tampered-ciphertext inputs were rejected.
 
-This block previously described the 2026-08-06 run at build `20260805-193735`
-and carried its numbers (plain tar `178 / 147 / 99 / 81`, zstd `198 / 181 / 106
-/ 97`), two builds and twelve days behind the output file it links to. Create
-throughput in particular was understated by more than 2x.
-
 ### Windows correctness smoke test
 
 `encrypt_windows_correctness.zsh` keeps a reusable Windows/MSYS correctness test
@@ -66,31 +61,18 @@ for the release executable. It writes
 ./encrypt_windows_correctness.zsh
 ```
 
-The 2026-08-06 run used `release/swift_tar.exe` version `20260805-193735` on
-MSYS_NT-10.0-26200. It passed `--crypto-selftest` (**44 PASS / 0 FAIL**) and the
+The recorded run used `release/swift_tar.exe` version `20260816-045456` on
+MINGW64_NT-10.0-26200. It passed `--crypto-selftest` (**44 PASS / 0 FAIL**) and the
 CLI subset (**6 PASS / 0 FAIL**): encrypted create/extract round-trips for
 plain tar, gzip and zstd, byte-for-byte `--encrypt-only` / `--decrypt-only`,
 wrong-key rejection, and tamper rejection.
 
-### RSS regression found and fixed (2026-08-03)
+### Memory bound of the encryption layer
 
-The first run exposed a real defect in the new layer, not just a measurement:
-encrypting the 1.3 GB corpus peaked at **1454 MB RSS** while the unencrypted
-create used 20 MB. Both classic causes from the TGZ investigation below were
-present in `crypto.swift`:
-
-- `decryptStream` used the accumulate-then-`removeFirst` buffer pattern, which
-  retains its backing store and grows to the size of the whole stream. It now
-  reads exactly the bytes each call needs, keeping only the sniffed prefix.
-- Neither the encrypt nor the decrypt loop wrapped its per-chunk work in
-  `autoreleasepool`, so Foundation's `FileHandle` reads piled up.
-
-| Phase | Unbounded | Bounded serial | Bounded parallel |
-| --- | ---: | ---: | ---: |
-| plain tar create + encrypt | 1454 MB | 42 MB | **198 MB** |
-| extract + decrypt | 1475 MB | 39 MB | **184 MB** |
-| `--encrypt-only` | 1438 MB | 24 MB | **228 MB** |
-| `--decrypt-only` | 1460 MB | 20 MB | **190 MB** |
+`decryptStream` reads exactly the bytes each call needs, keeping only the
+sniffed prefix, and both the encrypt and decrypt loops wrap their per-chunk
+work in `autoreleasepool`, so neither grows with the stream (the same two
+patterns as in the TGZ section below).
 
 The parallel pipeline deliberately holds up to `-n` 4 MiB chunks. Its semaphore
 slot is released only after a result is written in order, so memory is bounded
@@ -113,13 +95,9 @@ against that file after each run.
 runs at **647 MB/s** with 109 MB peak RSS. The decrypted output is verified
 byte-identical to the original.
 
-The zstd row previously read `1542 / 1231 / 396 / 460`, which reversed the
-result: it made zstd the fastest creator and the slowest extractor, where the
-committed measurement has it the other way round. The whole table had been
-copied out of a run that predates the one linked above and was never refreshed
-against it. Note also that the zstd rows here were measured before
-`--zstd-level 9` was pinned in `1cac313` (2026-08-16), so re-running
-`encrypt_mbps_rss.zsh` today will not reproduce them.
+The zstd rows were not measured at the current default level
+(`--zstd-level 9`), so re-running `encrypt_mbps_rss.zsh` will not reproduce
+them.
 
 Size overhead is **48 bytes of header plus 21 bytes per 4 MiB chunk** — 7125
 bytes on a 1.4 GB archive (0.0005%).
@@ -132,8 +110,8 @@ keyfile baseline.
 
 Each chunk is sealed independently — its nonce and AAD derive only from the
 chunk index — so the layer uses the same ordered concurrent pipeline and the
-same `-n` budget as the codecs. **The container format did not change**, so
-archives written before and after this change are mutually readable.
+same `-n` budget as the codecs. **The container format does not depend on
+`-n`**, so an archive encrypted at one `-n` decrypts at any other.
 
 Section B2 of [`encrypt_mbps_rss_output.txt`](encrypt_mbps_rss_output.txt), same
 run as the tables above. Do not edit by hand.
@@ -152,20 +130,16 @@ speed-up over `-n 1` — and the default (`2 × cores` = 20) sits at the plateau
 so it needs no tuning. RSS grows linearly with in-flight chunks (~4 MiB each),
 the same trade-off the codecs make.
 
-Two figures in this section deserve a note. The `--encrypt-only` rate quoted
-above (**659 MB/s**) is section B's, and it coincides exactly with the `-n 8`
-row here rather than with the default `-n 20` row — the two sections are not
-measured at the same in-flight count, so quoting one as "the" encrypt rate is
-what made the earlier text self-contradictory. And this table itself was
-previously copied from a run other than the linked output file: it gave the
-`-n 20` decrypt rate as 738 MB/s where the committed file records 771.
+The `--encrypt-only` rate quoted above (**659 MB/s**) is section B's, and it
+coincides with the `-n 8` row here rather than with the default `-n 20` row —
+the two sections are not measured at the same in-flight count, so neither is
+"the" encrypt rate on its own.
 
 > **Methodology**: the sweep interleaves settings — every round runs the whole
 > sweep and the best time per setting is reported. Running all rounds of one
-> `-n` before the next lets the CPU heat up monotonically; an earlier version of
-> this script did exactly that and reported a sharp collapse at high `-n`
-> (`-n 20` at 146 MB/s) that reversing the order proved to be purely thermal.
-> Each phase now deletes its archives as soon as it is done, and the script
+> `-n` before the next lets the CPU heat up monotonically, which shows up as a
+> purely thermal collapse at high `-n`.
+> Each phase deletes its archives as soon as it is done, and the script
 > refuses to start without room for them.
 
 > **Status**: macOS throughput/RSS numbers are verified on Apple M4. Windows
@@ -185,16 +159,12 @@ table to the file for its platform:
 [`-win.txt`](rgb1_container_mbps_output-win.txt).
 
 The corpus is a real sampled 1080p video frame (`sample_consecutive/f000.rgb1`,
-6,221,676 B). It was previously a synthetic 1024×1024 image built from a
-repeating 4 KiB block, which every codec with a window of 4 KiB or more matched
-outright — that table reported zstd at a ratio of 0.001 where a real frame gives
-about 0.44, and it was re-randomised each run so no two records were comparable.
+6,221,676 B).
 
 > **Recording is opt-in.** Without `--record` this is purely a correctness test
-> and the committed tables are left untouched. Every run used to overwrite them,
-> so a record could be replaced by a run nobody meant to publish — including one
-> taken under machine load, whose times all came in ~8% slower with the sizes
-> unchanged. Record deliberately, on an idle machine.
+> and the committed tables are left untouched. A run taken under machine load
+> comes in uniformly slower with the sizes unchanged, so record deliberately,
+> on an idle machine.
 
 ```sh
 ../test/test_swift_tar_rgb1.zsh              # verify only / 僅驗證
@@ -212,20 +182,17 @@ runs three rounds and writes `zip_claw_code_mbps_rss_output.txt`.
 ROUNDS=3 ./zip_claw_code_mbps_rss.zsh ../../claw-code
 ```
 
-## Create-side `-C` compatibility (2026-07-18)
+## Create-side `-C` compatibility
 
-`swift_tar -c` previously parsed `-C` but only passed it to extraction, so a
-system-tar-style command such as `swift_tar -c --zstd -f out.tar.zst -C
-<parent> <leaf>` tried to stat `<leaf>` in the invocation directory and failed.
-Create now opens the archive first, changes the input working directory, and
-restores the original directory afterward. This preserves the expected
-relative `-f` location while keeping parent paths and `..` out of entry names.
+`swift_tar -c` honours `-C` as system tar does: in
+`swift_tar -c --zstd -f out.tar.zst -C <parent> <leaf>`, create opens the
+archive first, changes the input working directory, and restores the original
+directory afterward. A relative `-f` therefore lands in the invocation
+directory, and parent paths and `..` stay out of entry names. `swift_tar -test`
+checks this (`create-side -C: native ZSTD round-trip`).
 
 Windows build `swift_tar 20260718-171714` was verified with:
 
-- `swift_tar -test -debug`: all seven checks passed, including plain/gzip
-  system-tar interoperability, native ZSTD create-side `-C`, and both Windows
-  extraction write backends.
 - An isolated `-C ../source leaf` native-ZSTD round-trip: archive output stayed
   in the invocation directory; entries were only `leaf/` and
   `leaf/README.md`; external `zstd` plus Windows system tar listed the same
@@ -243,9 +210,7 @@ Windows build `swift_tar 20260718-171714` was verified with:
 **Question**: Does swift_tar's `-n` flag (in-flight chunk concurrency for
 chunk-parallel gzip) control TGZ encode/decode peak RSS? `zshrc.zsh`'s `getar()`
 never passes `-n`, so TGZ benchmark runs use the default `inflight = cores*2`
-(20 on the 10-core R45-Mac test machine). This was raised while investigating
-why TGZ showed the highest peak RSS of any format in `OPTIMIZATION.md`
-(~2.5–3.3GB for a 1.3GB corpus, versus a few hundred MB for LZFSE formats).
+(20 on the 10-core R45-Mac test machine).
 
 **Usage**:
 
@@ -257,59 +222,44 @@ swift_tar/verifications/tgz_inflight_rss.zsh <path-to-corpus>
 always overwritten with the latest run's stdout. Sweeps use the real
 `claw-code` corpus (~1.3GB) on the R45-Mac test machine.
 
-### Root cause found and fixed (2026-07-12)
+### What keeps memory bounded
 
-Before the fix, encode (~2.1–2.6GB) and decode (~2.5–3.0GB) peak RSS were both
-roughly corpus-sized and insensitive to `-n`. This is the signature of
-Foundation `FileHandle.read` autorelease accumulation in tight CLI loops.
-`lzfse-cli.swift` already wrapped its read loops in `autoreleasepool`, while
-`swift_tar.swift` had no such pools.
+Two patterns would otherwise make peak RSS roughly corpus-sized and insensitive
+to `-n`:
 
-The hot read/write loops were wrapped in `autoreleasepool`: the
-`TarWriter.add` file-read loop, `ParallelChunkSink.dispatch` worker,
-`gzipDecodeStream`, `TarReader.readExactly`, extract write loop, and trailing
-drain loop. It was verified with `swift_tar -test -debug` (4/4 at that phase),
-a full `claw-code` round-trip (`diff -rq` clean), and system-tar readability.
-
-### Root cause #2 found and fixed (2026-07-12, phase 2)
-
-After phase 1, RSS was still roughly corpus-sized (~1.3GB). Live `heap`
-profiling during encode showed a single ~1.06GB malloc node caused by the
-`Data` append + `removeFirst` pattern: `removeFirst` retains the backing store
-while `append` keeps extending it, so one buffer grows to the size of the
-entire tar stream. Two sites had this pattern:
-
-- `ParallelChunkSink.buffer` (encode): rewritten to fill a staging `Data` to
-  exactly `chunkSize`, hand the complete object to a worker, and start a fresh
-  buffer for the next chunk.
-- `TarReader.pending` (decode): rewritten with an explicit consumed offset and
-  `subdata` compaction, keeping the backing store bounded.
+- Foundation `FileHandle.read` autorelease accumulation in tight CLI loops. The
+  hot read/write loops run inside `autoreleasepool`: the `TarWriter.add`
+  file-read loop, `ParallelChunkSink.dispatch` worker, `gzipDecodeStream`,
+  `TarReader.readExactly`, the extract write loop, and the trailing drain loop.
+- The `Data` append + `removeFirst` pattern, where `removeFirst` retains the
+  backing store while `append` keeps extending it, so one buffer grows to the
+  size of the entire tar stream. `ParallelChunkSink.buffer` (encode) fills a
+  staging `Data` to exactly `chunkSize`, hands the complete object to a worker,
+  and starts a fresh buffer for the next chunk; `TarReader.pending` (decode)
+  keeps an explicit consumed offset with `subdata` compaction.
 
 ### macOS results summary
 
 > **Status**: verified on the R45-Mac machine only. See the Windows section for
 > Windows-specific results.
 
-| Side | Pre-fix | Phase 1 (`autoreleasepool`) | Phase 2 (buffer patterns) |
-| --- | --- | --- | --- |
-| Encode | ~2.1–2.6GB, flat | ~1.0–1.4GB, flat | **90MB (`n=4`) → 300MB (`n=40`); default `n=20` = 219MB** |
-| Decode | ~2.5–3.0GB | ~1.2–1.4GB, flat | **~50MB, flat across `-n`** |
+| Side | Peak RSS |
+| --- | --- |
+| Encode | **90MB (`n=4`) → 300MB (`n=40`); default `n=20` = 219MB** |
+| Decode | **~50MB, flat across `-n`** |
 
-No phase introduced a time regression: encode remained 4.3–7.6s and decode
-2.8–3.9s. Encode RSS now exposes the true linear `-n` relationship
-(in-flight chunks × ~8MiB per chunk) that the leaks previously masked.
+Encode takes 4.3–7.6s and decode 2.8–3.9s. Encode RSS follows a linear `-n`
+relationship (in-flight chunks × ~8MiB per chunk).
 
-### Windows verification: improvement reproduced
+### Windows verification
 
 **Raw output**:
 [`tgz_inflight_rss_win_output.txt`](tgz_inflight_rss_win_output.txt)
 
-The Windows RSS fix was first developed while gzip still ran through an
-external CLI process. Per-chunk Foundation `Thread` writers were replaced with
-dedicated `DispatchQueue` pipe pumps, and synchronous `readData(ofLength:)`
-reads bounded each loop iteration's `Data` lifetime. The later native-zlib
-change bypasses that process backend for gzip, while the pipe fix remains in
-use for the other external codecs.
+On Windows, gzip runs through statically linked zlib 1.3.2 (the pinned
+submodule). The other external codecs go through dedicated `DispatchQueue` pipe
+pumps, with synchronous `readData(ofLength:)` reads bounding each loop
+iteration's `Data` lifetime.
 
 A full `-n 4..40` sweep on the same `claw-code` corpus confirms bounded memory
 across the full range:
@@ -327,16 +277,12 @@ across the full range:
 | 36 | 195.8MB | 44.0MB |
 | 40 | 208.0MB | 44.1MB |
 
-Before the Windows-specific fix, encode used 2.5–2.7GB and decode used
-2.50–2.55GB. Encode now exposes the expected linear `-n` relationship, while
-decode remains flat around 43–45MB.
+Encode follows the expected linear `-n` relationship, while decode stays flat
+around 43–45MB.
 
-Native zlib resolves the separate encode-speed gap. The Windows build now
-statically links the pinned zlib 1.3.2 submodule instead of spawning one
-external `gzip.exe` per chunk. Across the sweep, encode fell from 27–47s to
-7.2–15.6s; at the normal parallel plateau (`-n 12..40`) it is 7.2–7.8s,
-closely matching the macOS 4.3–7.6s range. Decode improved from 17–19s to
-9.7–11.0s, but remains slower than macOS's 2.8–3.9s. Windows extraction and
+Across the sweep, encode takes 7.2–15.6s; at the normal parallel plateau
+(`-n 12..40`) it is 7.2–7.8s, closely matching the macOS 4.3–7.6s range.
+Decode takes 9.7–11.0s, slower than macOS's 2.8–3.9s. Windows extraction and
 file-I/O overhead therefore remains a separate optimization target.
 
 ### Filename-extension compatibility
@@ -348,25 +294,25 @@ and `swift_tar -x` both succeeded. Use `.tgz` or `.tar.gz` for this output.
 
 ### Practical takeaway
 
-- On macOS, TGZ memory usage is now comparable to or below the LZFSE formats.
+- On macOS, TGZ memory usage is comparable to or below the LZFSE formats.
   Default `-n` needs no tuning; lower `-n` can still trade encode speed for
   memory (`n=4` = 90MB at +75% time).
 - On Windows, native zlib keeps TGZ encode RSS at 56–208MB (`-n 4–40`, linear)
   and decode RSS at about 43–45MB flat.
-- Static zlib removes per-chunk `gzip.exe` spawning: parallel encode is now
-  7.2–7.8s. Decode improves to 9.7–11.0s and remains a Windows-specific
-  optimization target.
-- The current `swift_tar -test -debug` passes all seven checks, including
-  create-side `-C`, native ZSTD, both Windows write backends and bidirectional
-  system-tar interoperability.
+- With static zlib, parallel encode takes 7.2–7.8s. Decode takes 9.7–11.0s and
+  remains a Windows-specific optimization target.
+- `swift_tar -test -debug` covers create-side `-C`, native ZSTD, both Windows
+  write backends and bidirectional system-tar interoperability.
 
-## Extraction: where the time goes, and whether `-n` does anything (2026-08-11)
+## Extraction: where the time goes
 
 `verifications/extract_write_path.zsh` → `extract_write_path_output.txt`
 
 macOS 27.0.0 arm64, 10 cores (4P+6E), APFS, 256 MiB per corpus, swift_tar
 20260810-170353 vs bsdtar 3.5.3. Three independent runs; the ratios below
-reproduced as 1.7/1.9/1.7, 1.1/0.9/1.1, 0.6/0.6/0.6.
+reproduced as 1.7/1.9/1.7, 1.1/0.9/1.1, 0.6/0.6/0.6. The `swift -x` figures in
+this section are the serial write path; small files go through the parallel
+write path measured in the next section.
 
 ### 1. Extraction cost is per-file, and swift_tar WINS on small files
 
@@ -385,9 +331,8 @@ Two things fall out of this table:
 - **Extraction gets relatively BETTER as files get smaller.** swift_tar loses
   on a handful of huge files and wins on thousands of small ones.
 
-The second point contradicts the hypothesis that motivated this script
-(per-file overhead in Foundation). It is bsdtar whose per-file cost dominates
-here: 2456ms for 8192 files versus swift_tar's 1545ms.
+It is bsdtar whose per-file cost dominates here: 2456ms for 8192 files versus
+swift_tar's 1545ms.
 
 **Practical consequence:** whether swift_tar or bsdtar is faster depends
 entirely on the archive's shape. For a Swift toolchain tarball (few, large
@@ -403,53 +348,15 @@ files) bsdtar wins. For a source tree or a rootfs, swift_tar wins.
 | many | 8192 | 214ms | 1644ms | 1430ms | 226ms | 2929ms | 2703ms |
 
 Decoding 256 MiB costs ~200ms and is essentially the same for both tools.
-Everything else is file I/O.
+Everything else is file I/O, and it is **syscall-bound, not CPU-bound**
+(`sys` ≫ `user`).
 
-### 3. Extraction is single-threaded, and `-n` has no effect on it
+For few large files the write path is 87 of 207ms — a handful of large
+sequential writes with nothing to parallelise. The gap to bsdtar there is in
+the read/decode plumbing feeding the writes: `-t` is 120ms vs bsdtar's 32ms on
+the `few` corpus.
 
-| operation | wall | user | sys | CPU/wall |
-|---|---|---|---|---|
-| swift -x (default -n) | 1650ms | 280ms | 1390ms | **1.01** |
-| swift -x -n 1 | 1560ms | 270ms | 1310ms | **1.01** |
-| swift -x -n 8 | 1540ms | 270ms | 1300ms | **1.02** |
-| swift -t (decode only) | 210ms | 170ms | 40ms | 1.00 |
-| bsdtar -x | 2450ms | 240ms | 2190ms | 0.99 |
-
-CPU/wall of 1.0 means one core, all three times. **`-n` changes nothing on the
-extract path** — 1650 / 1560 / 1540ms is run-to-run noise, not scaling.
-
-This matches the source: the `FileWriterPool` that batches small-file writes
-across threads is inside `#if os(Windows)` (`swift_tar.swift:2432`). macOS and
-Linux take the `#else` branch, a sequential `createFile` → `FileHandle` →
-`write` → `close` loop.
-
-Note also `sys` ≫ `user` (1390 vs 280ms): extraction is **syscall-bound, not
-CPU-bound**. Adding compute threads cannot help something that is waiting on
-the filesystem.
-
-### Would a parallel write path on macOS/Linux be worth building?
-
-From the numbers above, honestly: **it would help the case that is already
-winning, and not the case that is losing.**
-
-- **Many small files** — the write path is 1430 of 1644ms, and it is
-  syscall-bound, so overlapping it across cores has real headroom. But
-  swift_tar is already 1.6x faster than bsdtar here. This buys a bigger lead,
-  not a fix.
-- **Few large files** — the write path is 87 of 207ms, and it is a handful of
-  large sequential writes. There is nothing to parallelise, and this is
-  precisely the case where swift_tar trails bsdtar (1.9x). **Parallel writing
-  would not close that gap.**
-
-So the gap on large files is somewhere else — in the read/decode plumbing
-feeding the writes, not in the writes. `-t` is 120ms vs bsdtar's 32ms on the
-`few` corpus, which is where that 1.9x actually comes from and where a fix
-would have to start.
-
-On **compression** the question does not arise: creation is already 4–10x
-faster than bsdtar across every corpus tested.
-
-### 4. `--gzip` really does emit one member per 4 MiB — and `gzip -l` cannot see it
+### 3. `--gzip` really does emit one member per 4 MiB — and `gzip -l` cannot see it
 
 | archive | members | uncompressed per member |
 |---|---|---|
@@ -467,49 +374,46 @@ output is always two lines regardless of member count — a single-member and a
 A corollary worth remembering: for the same reason, `gzip -l` reports the
 wrong uncompressed size for any multi-member archive.
 
-## Parallel extraction on macOS and Linux (2026-08-11)
+## Parallel extraction on macOS and Linux
 
 `verifications/parallel_extract_correctness.zsh` → `parallel_extract_correctness_output.txt`
 
-The `FileWriterPool` that batches small-file writes across threads was
-`#if os(Windows)` only. It now runs on every platform, with a POSIX writer
-(`posixWriteFile`) alongside the existing `winWriteFile`.
+The `FileWriterPool` that batches small-file writes across threads runs on
+every platform, with a POSIX writer (`posixWriteFile`) alongside
+`winWriteFile`.
 
-### What changed
+### How the POSIX writer works
 
-- **One open per file instead of three.** The inline path did `createFile`,
-  then `FileHandle(forWritingAtPath:)`, then `setAttributes` for mtime.
-  `posixWriteFile` does a single `open` and then `fchmod`/`futimens` on that
-  same descriptor.
+- **One open per file.** `posixWriteFile` does a single `open` and then
+  `fchmod`/`futimens` on that same descriptor.
 - **`fchmod`, not a later path-based `chmod`.** Cheaper, and correct: a
   path-based call after the fact would race with any other worker that has
   since replaced the file at that name. The mode cannot come from `open`'s
   mode argument either — that is masked by umask and only honoured on
   creation, so 0755 would land as `0755 & ~umask`.
-- **The ordering barriers are now platform-independent**, because the hazard
-  was never the filesystem — it is the queue. A queued write to a name must
+- **The ordering barriers are platform-independent**, because the hazard is
+  not the filesystem — it is the queue. A queued write to a name must
   land before a symlink replaces it, `link(2)` needs its target to exist, and
   a duplicate path must let the LAST entry win.
 
 ### Result: extraction of 8192 small files (256 MiB total)
 
-| | before | after |
-|---|---|---|
-| wall | 1528ms | **631ms** |
-| write path (`-x` minus `-t`) | 1345ms | **397ms** |
-| CPU/wall | 1.01 | **6.40** |
-| vs bsdtar (2405ms) | 1.6x faster | **3.8x faster** |
+| | swift_tar |
+|---|---|
+| wall | **631ms** |
+| write path (`-x` minus `-t`) | **397ms** |
+| CPU/wall | **6.40** |
+| vs bsdtar (2405ms) | **3.8x faster** |
 
-512 files of 512 KiB: 227ms → 133ms.
+512 files of 512 KiB: 133ms.
 
-**Large files are unchanged, by design and in measurement.** Anything above
-`smallFileMax` (4 MiB) still streams inline, because the pool buffers each
-file whole and its memory ceiling is inflight × smallFileMax. Five runs of
-8 × 32 MiB: 169-185ms before, 169-174ms after.
+**Large files stream inline, by design.** Anything above `smallFileMax`
+(4 MiB) bypasses the pool, because the pool buffers each file whole and its
+memory ceiling is inflight × smallFileMax. Five runs of 8 × 32 MiB: 169-174ms.
 
-That also means this does **not** close the gap on few-large-file archives,
-where swift_tar still trails bsdtar. That gap is in the read/decode plumbing,
-not the writes — `-t` alone is 120ms against bsdtar's 32ms.
+So the pool does **not** affect few-large-file archives, where swift_tar
+trails bsdtar. That gap is in the read/decode plumbing, not the writes — `-t`
+alone is 120ms against bsdtar's 32ms.
 
 ### Correctness
 
@@ -527,36 +431,28 @@ not fail every run, so a single pass proves nothing.
 | duplicate path: last entry wins | PASS | PASS |
 | unwritable destination fails loudly | PASS | PASS |
 
-### Four harness bugs this shook out, all of which faked a product failure
+### Harness constraints
 
-Worth recording, because each produced a confident wrong answer:
+Each of these would make the harness fake a product failure:
 
-1. **`tar -rf` on the guest** silently produced a ONE-member archive (busybox
-   has no append), so the duplicate-path case compared against an input that
-   did not contain a duplicate — and reported 8/8 failures. Now built with
-   swift_tar's own `-r`, and the member count is asserted before the case runs.
-2. **No `stat` on the guest.** The permission and hardlink cases read empty
-   strings and failed, while the full fingerprint comparison — which also
-   covers modes — passed. A measurement tool that disagrees with itself is the
-   tool's bug. Now uses zsh's `zsh/stat`.
+1. **busybox `tar` on the guest has no append**, so `tar -rf` silently produces
+   a one-member archive. The duplicate-path input is built with swift_tar's own
+   `-r`, and the member count is asserted before the case runs.
+2. **No `stat` on the guest.** The script uses zsh's `zsh/stat`.
 3. **`07777` is decimal 7777 in zsh.** zsh does not treat a leading zero as
-   octal, so the permission mask silently turned 0754 into 0140. Use `8#7777`.
+   octal; the permission mask is written `8#7777`.
 4. **No `diff` on the guest**, and `diff | while read` puts the loop in a
-   subshell so appends to the report vanish. The report printed bare "DIFF"
-   headers with nothing under them — losing the only evidence a failure
-   produces. Now compared in zsh.
+   subshell so appends to the report vanish. Trees are compared in zsh.
 
-A fifth, in the perf harness: two concurrent runs sharing one scratch
-directory produced a 512 MiB extraction "taking" 8ms. Both scripts now use
-`mktemp -d`.
+Both this script and `extract_write_path.zsh` use `mktemp -d`, so concurrent
+runs do not share a scratch directory.
 
-## QoS class and what `Thread.qualityOfService` does not do (2026-08-13)
+## QoS class and what `Thread.qualityOfService` does not do
 
 `qos-DOE.swift` — run bare for usage; `--skip-timing` for the exact part alone.
 Raw output in `qos-DOE_output.txt`.
 
-Written because the RGB1 bench reported speed-ups that exceeded the core count,
-and pinning QoS was one of the hypotheses. It settles what each API does:
+What each API does:
 
 | api | changes `qos_class_self()` |
 | --- | --- |
@@ -581,46 +477,43 @@ The class is not cosmetic. Interleaved over 5 rounds, same loop:
 
 Two consequences for this repo. A benchmark that sets the property on the main
 thread and assumes it took effect is comparing threads it believes are equal but
-are not — `swift_tar_DOE` did exactly that until it moved to the pthread call.
-And `taskpolicy -c background` is not a mild hint: it is a two-orders-of-magnitude
+are not — which is why `swift_tar_DOE` uses the pthread call. And `taskpolicy -c background` is not a mild hint: it is a two-orders-of-magnitude
 penalty, so it must never wrap a timed run.
 
 > **Note on why the timing section is interleaved.** Running each class to
-> completion in turn gave `pthread_set(userInitiated)` 196.1 ms in one position
-> and 32.0 ms in another — the same call, 6x apart, because a ten-second
-> `background` arm leaves the machine in a different state than it found it.
-> Sequential sweeps of anything scheduler- or thermal-sensitive are not
+> completion in turn makes the same call's time depend on its position, because
+> a ten-second `background` arm leaves the machine in a different state than it
+> found it. Sequential sweeps of anything scheduler- or thermal-sensitive are not
 > trustworthy; the arms are interleaved and the median reported.
 
 ---
 
-## Per-platform performance data → `profile/` (2026-09-06)
+## Per-platform performance data → `profile/`
 
 [`verifications/profile/`](profile/README.md) holds the timing data for each
-platform and the script that produces it. The section above measured extraction
-on macOS alone; the folder exists because the answer turned out to depend on
-which platform you ask.
+platform and the script that produces it. Extraction speed relative to bsdtar
+depends on the platform.
 
-Same script, same three shapes, both platforms, minima of five interleaved reps:
+Same script, same three shapes, both platforms, minima of interleaved reps
+(swift_tar / bsdtar):
 
 | shape | macOS | Linux (QEMU aarch64) |
 |---|---|---|
-| 20 × 8 MB | 70 / 76 ms = **0.92×** | 38 / 26 ms = **1.46×** |
-| 200 × 800 KB | 47 / 61 ms = **0.77×** | 31 / 25 ms = **1.24×** |
-| 2000 × 80 KB | 85 / 156 ms = **0.54×** | 50 / 35 ms = **1.43×** |
+| 20 × 8 MB | 59 / 54 ms = **1.09×** | 38 / 26 ms = **1.46×** |
+| 200 × 800 KB | 43 / 57 ms = **0.75×** | 31 / 25 ms = **1.24×** |
+| 2000 × 80 KB | 67 / 151 ms = **0.44×** | 50 / 35 ms = **1.43×** |
 
-The extract gap the FAQ tracked as an open question is **real and Linux-only**.
-On macOS swift_tar is now the faster of the two on all three shapes, which
-extends the finding above — it no longer merely wins on small files, it wins
-across the range, by more as the corpus fragments.
+The extract gap is **Linux-specific**: there swift_tar is 1.24–1.46× slower on
+every shape. On macOS swift_tar is clearly faster on the fragmented shapes, by
+more as the corpus fragments, and close to parity on 20 × 8 MB.
 
 Two things in that folder's README are worth knowing before measuring anything
-here: sampling profilers do not work against a 0.17 s target (four approaches
-tried, at most 52 samples), and the reference tar must be chosen by asking it
+here: sampling profilers do not work against a 0.17 s target (at most 52
+samples), and the reference tar must be chosen by asking it
 what it is — `/usr/bin/tar` in the Linux VM *is* swift_tar, so choosing by
 filename compares it with itself and reports a flawless 1.00×.
 
-## Chunk size: what 4 / 8 / 16 MiB trade (2026-09-27)
+## Chunk size: what 4 / 8 / 16 MiB trade
 
 `chunk_size_tradeoff.zsh` → `chunk_size_tradeoff.txt`
 
@@ -632,8 +525,8 @@ constant (checking each replacement took), and builds each variant with
 `compile_tar.zsh`'s swiftc arguments against the existing `build/` artefacts.
 It does not touch the work tree, does not call `generate_version.zsh` (which
 writes `version-mac.txt`), and does not replace the installed binary.
-`--source REV` builds from a git revision, so another session's uncommitted
-changes cannot leak into the variants.
+`--source REV` builds from a git revision, so uncommitted changes in the work
+tree cannot leak into the variants.
 
 The variant equal to the shipped value is built exactly like the others, so the
 constant is the only difference between them; the installed binary is measured
@@ -652,9 +545,8 @@ RAM disk, decode via `--cat`.
 size does not depend on load and repeated across two runs to the printed
 0.1 MiB. Speed did
 not: the control, identical in value to 4 MiB, itself deviated by up to 5.8% in
-this run, and an earlier unsaved run's −10% decode at 16 MiB came out at −5.1%
-here — not reproduced, so not used. The only consistent speed signal is the
-direction: larger chunks, slower ZSTD decode and plain tar.
+this run. The only consistent speed signal is the direction: larger chunks,
+slower ZSTD decode and plain tar.
 
 **Keep 4 MiB.** A larger chunk buys at most 4% of ZSTD size and no speed. TGZ
 is untouched either way — gzip's window is 32 KiB, so the chunk never reaches it.
@@ -663,12 +555,12 @@ is untouched either way — gzip's window is 32 KiB, so the chunk never reaches 
 at a fixed chunk size, varied through `--zstd-level` — and the two must not be
 cited for each other.
 
-## ZIP: what compressing members on `-n` threads buys (2026-10-14)
+## ZIP: what compressing members on `-n` threads buys
 
 `zip_parallel_speed.zsh` → `zip_parallel_speed.csv2`, `zip_parallel_speed_output.txt`
 
-Since `79fa438` each ZIP member is deflated by one thread and the members are
-written in order; `-n` is how many are compressed at once, one per core by
+Each ZIP member is deflated by one thread and the members are written in
+order; `-n` is how many are compressed at once, one per core by
 default. The script packs one tree with every `-n`, three interleaved rounds,
 keeps each case's fastest round, and hashes the output: `record` exits 1 when
 any two sorted swift_tar cases differ in sha256, because speed bought by
@@ -689,15 +581,15 @@ claw-code (1.3 GB, about 5,400 files):
   one file, so the largest members bound the run.
 * **`-n` above the core count is slower** (`-n 16`: 7.6 s on the M4, 9.9 s in
   the guest) and holds more memory.
-* **`-n 1` is the old path.** A build of the same sources without the threaded
-  path took 29.8 s against 30.4 s.
+* **`-n 1` matches a build without the threaded path**: 30.4 s against 29.8 s
+  for the same sources built without it.
 * **Other tools on the same machine are single-threaded:** Info-ZIP `zip -r -6`
   33.1 s and `bsdtar --format zip` 32.8 s on the M4; `bsdtar` 28.4 s in the
   guest.
 * **Sorting does not cost time.** On the M4 `--zip-unsorted` was slower than the
   default in all three rounds (7.8 to 8.6 s against 7.3 to 7.5 s); in the guest
   the two swapped places from round to round (9.1 to 10.0 s against 8.8 to
-  10.1 s). Why the M4 differs was not looked into.
+  10.1 s).
 
 Limits of this run: the M4 carried a load average of 4 to 6 from other work, so
 its absolute times are upper bounds; the M4's corpus was the tree

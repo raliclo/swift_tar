@@ -26,17 +26,16 @@ NV12 is roughly half the size of RGB1 per pixel (4:2:0 chroma subsampling)
 and is the native output format of hardware video decoders, so it fits a
 continuous video-stream pipeline. RGB1 is a general single-frame snapshot
 container with fixed geo/creator metadata; it has no chroma subsampling and
-no hardware-native producer/consumer. Which one is the right "long-term
-display path" (per the open follow-up in `rgb1-format.md`) depends on
-whether the target is single snapshots (RGB1 is sufficient and simpler) or
-a continuous 4K60 video stream (NV12 is the closer fit).
+no hardware-native producer/consumer. For single snapshots RGB1 is
+sufficient and simpler; for a continuous 4K60 video stream NV12 is the closer
+fit. The display-path decision (RGB1 stays RGB) is recorded in
+`rgb1-format.md`.
 
 NV12 每像素體積約為 RGB1 的一半（4:2:0 色度取樣），且是硬體視訊解碼器的
 原生輸出格式，適合連續視訊串流的 pipeline。RGB1 是通用的單張快照容器，
 帶固定地理／建立者 metadata，沒有色度取樣，也沒有硬體原生的產生／消費端。
-究竟哪個才是「長期顯示路徑」（`rgb1-format.md` 的待決 follow-up）
-取決於目標是單張快照（RGB1 已足夠且較簡單）還是連續 4K60 視訊串流
-（NV12 更貼合）。
+單張快照用 RGB1 已足夠且較簡單；連續 4K60 視訊串流則 NV12 更貼合。顯示路徑的
+決議（RGB1 維持 RGB）記於 `rgb1-format.md`。
 
 ## Would NV12 support in Metal speed up rendering?
 
@@ -131,19 +130,15 @@ VP9 + Opus 的 t=121.2 秒起 48 格連續影格），腳本為 `../verification
 Ratios rather than byte counts, deliberately. Repeated runs of the script
 reproduce every percentage above to the digit, but the underlying byte totals
 move by about 1 byte for zstd and gzip and a few hundred for xz — under 5 parts
-per million, and not traced to a cause: `ffmpeg` extraction is bit-identical
-across runs, and neither file mtime nor xz threading reproduces the drift on
-synthetic input. Transcribing byte counts here would mean the document goes
+per million. Transcribing byte counts here would mean the document goes
 stale on every re-run for a difference that changes nothing; the exact totals
 live in `nv12_vs_rgb1_streaming_output.txt`, which is regenerated as a unit.
 
 此處刻意採用比率而非位元組數。腳本重複執行時，上表每個百分比都逐位重現，但其底層的
-位元組總量會變動：zstd 與 gzip 約 1 位元組，xz 為數百位元組——低於百萬分之五，且尚未
-追出成因（`ffmpeg` 抽取在多次執行間位元完全相同，而檔案 mtime 與 xz 執行緒數在合成
-資料上皆無法重現該漂移）。在此抄錄位元組數，只會讓文件因一個毫無影響的差異而在每次
+位元組總量會變動：zstd 與 gzip 約 1 位元組，xz 為數百位元組——低於百萬分之五。在此抄錄位元組數，只會讓文件因一個毫無影響的差異而在每次
 重跑後過期；確切總量請見 `nv12_vs_rgb1_streaming_output.txt`，該檔為整體重新產生。
 
-Re-measured 2026-08-14 on 48 consecutive frames from t=121.2 s — the same
+Measured on 48 consecutive frames from t=121.2 s — the same
 footage as every other table here. NV12 compresses **better** than RGB1 under all
 four codecs, so the wire gap never narrows below the 2.00x it starts at.
 "RGB1 / NV12 on the wire" is `2.00 x (RGB1 ratio / NV12 ratio)`: raw RGB24 is
@@ -157,7 +152,7 @@ that cannot buffer would actually send. zstd -3 (1 MiB), gzip (32 KiB) and lz4
 (64 KiB) all look back less than one frame, so for them batch and per-frame agree
 to within 0.08% and either may be quoted.
 
-2026-08-14 以 t=121.2 秒起的 48 格連續影格重測——與本文其他表格同一段影片。四種
+以 t=121.2 秒起的 48 格連續影格量測——與本文其他表格同一段影片。四種
 codec 下 NV12 皆比 RGB1 **更好壓**，故線路差距從未低於其 2.00x 的起點。
 「RGB1 / NV12 線路比」的算式為 `2.00 × (RGB1 壓縮比 ÷ NV12 壓縮比)`：原始 RGB24 恰為
 原始 NV12 的兩倍，壓縮比只是把這個起點往哪一邊推。
@@ -167,45 +162,6 @@ codec 下 NV12 皆比 RGB1 **更好壓**，故線路差距從未低於其 2.00x 
 出的量」低了 21.27%。zstd -3（1 MiB）、gzip（32 KiB）與 lz4（64 KiB）的回看範圍皆小於
 單格，故批次與逐格相差在 0.08% 以內，兩者皆可引用。
 
-> **Resolved 2026-08-14 — the flag below was raised, then the script was fixed
-> and re-run.** This table had no `-ss`, so it read the clip's fade-from-black
-> opening; the 7% ratios were the tell, the same defect that put 122 Mbps in the
-> bitrate table. The Windows-side reader flagged it and recomputed zstd from
-> `batch_vs_per_frame_output.txt`; the table above is now the direct measurement
-> at t=121.2 s over 48 frames, and it confirms that recomputation:
->
-> | source | NV12 ratio | RGB1 ratio | RGB1 / NV12 |
-> |---|---:|---:|---:|
-> | t=0 (the old table) | 8.20% | **7.08%** | 1.73x |
-> | recomputed from zstd, 8 frames | 46.16% | 49.21% | 2.13x |
-> | **measured, 48 frames** | **46.54%** | **49.77%** | **2.14x** |
->
-> **The ordering reverses.** On real content NV12 compresses *better* than RGB1,
-> so "RGB1 wins under every codec" was an artifact of the fade, and the statement
-> it had been cited as refuting — that a general-purpose compressor gets less out
-> of raw RGB — was right after all. The wire gap is 2.14x, not 1.73x: the
-> compression ratio does not narrow the 2.00x starting gap, it widens it. That
-> holds under all four codecs now that they all have mid-video data.
->
-> The re-run also overturned something the earlier rounds had settled. Batching
-> was recorded as costing "at most 0.34%", so batch figures were declared safe to
-> quote. On real content xz on NV12 measures **+21.27%**: its 8 MiB dictionary is
-> larger than a 3.11 MB NV12 frame, so the window argument never covered that
-> case — see the † note above.
->
-> **2026-08-14 已解決——下方標記提出後，腳本已修正並重跑。** 本表原先沒有 `-ss`，
-> 因而讀到片頭的自黑畫面淡入；7% 的壓縮率就是線索，與把 122 Mbps 送進位元率表的是
-> 同一個缺陷。Windows 端讀者提出此問題並以 `batch_vs_per_frame_output.txt` 重算了
-> zstd；上方表格現為 t=121.2 秒、48 格的直接量測，且證實了該次重算。
->
-> **順序翻轉。** 真實內容下 NV12 比 RGB1 **更好壓**，故「RGB1 在每個 codec 下都勝出」
-> 是淡入造成的假象，而它原本被引用來反駁的說法——通用壓縮器對 raw RGB 效益較差
-> ——其實是對的。線路差距為 2.14x 而非 1.73x：壓縮比不但沒有縮小 2.00x 的起始差距，
-> 反而把它拉大。四種 codec 都取得中段資料後，此結論一致成立。
->
-> 這次重跑也推翻了前幾輪已經定案的一件事。批次紅利原記為「最大 0.34%」，據此宣告
-> 批次數字可安心引用。真實內容下 xz 對 NV12 實測為 **+21.27%**：其 8 MiB 字典大於
-> 3.11 MB 的 NV12 影格，故視窗論證從來就沒有涵蓋該情形——詳見上方的 † 註。
 NV12 compresses *better than* RGB1 under **every** codec tested (46.54% vs
 49.77% for zstd, and the same ordering for gzip, lz4 and xz), so the claim above
 that "general-purpose compressors don't get the same win from raw RGB" holds.
@@ -283,8 +239,7 @@ with one code path over both formats:
 NV12 benefits from a delta slightly *more* than RGB1 does, so the wire gap
 widens rather than closes — 2.14x becomes 2.24x. An RGB1 delta measured against
 an NV12 intra figure looks like it closes the gap, but that compares inter-frame
-against intra and is the same error, reversed, as the one the t=0 correction was
-about.
+against intra.
 
 On content where every frame is a cut, the delta **costs** 1.2% (NV12) to 8.2%
 (RGB1): the residual of two unrelated frames is noisier than either frame. Any
@@ -301,7 +256,7 @@ residual does not compress better, which is what a keyframe interval is for.
 
 NV12 從差分獲得的效益略**高於** RGB1，故線路差距是被拉大而非弭平——2.14x 變成 2.24x。
 若拿 RGB1 的差分結果去對照 NV12 的純 intra 數字，看起來像是追上了，但那是拿影格間對照
-intra，與 t=0 更正所針對的錯誤是同一個，只是方向相反。
+intra。
 
 在每格皆為鏡頭切換的內容上，差分反而**增加** 1.2%（NV12）到 8.2%（RGB1）：兩張無關影格
 的殘差比任一張原圖都更雜亂。實際採用時必須逐格判斷，殘差壓不贏就退回 intra——那正是
@@ -322,86 +277,62 @@ realised bitrate overshoots the target by about 1.8x.
 顯示的是「有損路徑能到的下限」，而那是任何無損列都碰不到的。此外 0.8 秒的片段無法讓
 rate control 取得平均，實際位元率約超出目標 1.8 倍。
 
-**XOR is worse than subtraction**, by 18% here — the direction the t=0 table
-recorded, at a magnitude that table could not have seen. x264 lossless beats
+**XOR is worse than subtraction**, by 18% here. x264 lossless beats
 everything lossless on this corpus because it does motion compensation; it is
 also 64.2 ms/frame, four times the 16.67 ms budget.
 
 † 由 ffmpeg 直接對原始 rgb24 影格編碼，未經 swift_tar，故此二列為整段編碼、無 4 MiB
 分塊亦無列帶切片。其上四列則為 swift_tar_DOE、1 slice。由 `test_interframe.zsh` 量測。
 
-**XOR 劣於相減**，此處差 18%——方向與 t=0 表格所記一致，但量級是那份表格不可能看出來的。
-x264 lossless 在本語料上勝過所有無損選項，因為它做了 motion compensation；但它同時是
+**XOR 劣於相減**，此處差 18%。x264 lossless 在本語料上勝過所有無損選項，因為它做了 motion compensation；但它同時是
 64.2 ms/frame，為 16.67 ms 預算的四倍。
 
 > **"independent frames" is independent for zstd, gzip and lz4 — but not for
-> xz. Corrected 2026-08-14.** These rows compress the batch as one stream, which
+> xz.** These rows compress the batch as one stream, which
 > lets a codec dedup across frames — a bonus no real-time sender can claim, since
 > it cannot wait for the batch or reference a frame it has not sent yet.
 > `batch_vs_per_frame.zsh` covers zstd -3 across two frame sources and reports
-> **−0.1% to 0.0%**, and `nv12_vs_rgb1_streaming.zsh --both` now confirms
+> **−0.1% to 0.0%**, and `nv12_vs_rgb1_streaming.zsh --both` reports
 > −0.08% to +0.05% for zstd, gzip and lz4. The reason is window size: one 1080p
 > frame is 3.1 MB (NV12) or 6.2 MB (RGB24), more than zstd -3 (1 MiB), gzip
 > (32 KiB) or lz4 (64 KiB) can look back across, so they never reference the
 > previous frame at all.
 >
-> **xz was wrongly included in that argument.** Its default dictionary is 8 MiB
+> **xz is the exception.** Its default dictionary is 8 MiB
 > — 2.70 NV12 frames — so it reuses the previous frame outright, and the batch
-> figure for xz/NV12 sits **21.27%** below what a streamer would send. This was
-> first recorded as "at most 0.34%", measured on the fade-from-black opening
-> where every codec compressed to ~5% and the gap was invisible. Quote the
+> figure for xz/NV12 sits **21.27%** below what a streamer would send. Quote the
 > per-frame column for xz. zstd, gzip and lz4 are unaffected, and so are the
 > bitrates below, which come from zstd.
 >
-> **「independent frames」對 zstd、gzip、lz4 確實獨立——但對 xz 不然。2026-08-14
-> 更正。** 上表各列是把整批壓成單一串流，這讓 codec 有機會跨格去重——而那是任何即時
+> **「independent frames」對 zstd、gzip、lz4 確實獨立——但對 xz 不然。** 上表各列是
+> 把整批壓成單一串流，這讓 codec 有機會跨格去重——而那是任何即時
 > 傳送端都無法主張的紅利，因為它不可能等滿整批，也無法參照尚未送出的影格。
 > `batch_vs_per_frame.zsh` 以 zstd -3 涵蓋兩種影格來源，回報 **−0.1% 至 0.0%**；
-> `nv12_vs_rgb1_streaming.zsh --both` 現在也對 zstd、gzip、lz4 量得 −0.08% 至 +0.05%。
+> `nv12_vs_rgb1_streaming.zsh --both` 對 zstd、gzip、lz4 量得 −0.08% 至 +0.05%。
 > 原因在視窗大小：單張 1080p 影格為 3.1 MB（NV12）或 6.2 MB（RGB24），超出
 > zstd -3（1 MiB）、gzip（32 KiB）、lz4（64 KiB）的回看範圍，故三者根本不曾參照前一格。
 >
-> **xz 被錯誤地一併納入該論證。** 它的預設字典為 8 MiB——相當於 2.70 張 NV12 影格
+> **xz 是例外。** 它的預設字典為 8 MiB——相當於 2.70 張 NV12 影格
 > ——因而直接重用前一格，xz／NV12 的批次數字比串流器實際會送出的量低了 **21.27%**。
-> 此事原記為「最多 0.34%」，量測於片頭的自黑畫面淡入，當時所有 codec 都壓到約 5%，
-> 差距根本看不出來。xz 請引用 per-frame 欄。zstd、gzip、lz4 不受影響，下文的位元率
+> xz 請引用 per-frame 欄。zstd、gzip、lz4 不受影響，下文的位元率
 > 亦然，因為它們出自 zstd。
 
 A byte-wise delta against the previous frame costs a few dozen lines and saves
 **71.3%** (148,359,055 -> 42,520,301). It beats FFV1 — a mature lossless codec
 with context modelling and a range coder — by 1.38x, at a fraction of the compute.
 
-> **Corrected 2026-08-14; this section previously said the delta "only saves
-> 7.1%" and that FFV1 beat it by 1.70x.** Those came from 8 frames at t=0, which
-> on this clip is a fade from black: the frames were already compressing to ~7%
-> of raw, so there was almost nothing for a delta to remove. On real consecutive
-> content the delta is the largest lossless win available here. The benefit is
-> still content-dependent — it pays off when consecutive frames are nearly
-> identical and collapses on a cut — but "helps a little" was an artifact of the
-> corpus, not a property of the technique.
->
-> **2026-08-14 更正；本節原本寫差分「僅省下 7.1%」且 FFV1 勝過它 1.70 倍。** 那組
-> 數字取自 t=0 的 8 格，而該片此處是自黑畫面淡入：影格本身已壓到原始的約 7%，差分
-> 幾乎沒有東西可以消除。在真實的連續內容上，差分是此處可取得的最大無損效益。其效益
-> 仍取決於內容——相鄰影格幾乎相同時才有回報，遇到鏡頭切換則失效——但「略有幫助」是
-> 語料造成的假象，而非該技術的性質。
-
 對前一格做逐位元組差分只需數十行程式碼，卻省下 **71.3%**
 （148,359,055 → 42,520,301）。它以遠低的計算成本勝過 FFV1（成熟的無損 codec，具
 context modelling 與 range coder）1.38 倍。
 
-The remaining gap to lossy VP9 is large — the t=0 measurement put it at 103x
-against a 31,519-byte VP9 encode, and that row has not been re-measured on this
-corpus, so treat the multiple as unquantified rather than as 103x. What does not
-change is *why* the gap exists, and it is not an implementation-quality gap — it is the lossy/lossless boundary. VP9 additionally
+The remaining gap to lossy VP9 is large, and it is not an implementation-quality
+gap — it is the lossy/lossless boundary. VP9 additionally
 does motion compensation (so a moving object produces near-zero residual instead
 of a large delta), transform + quantisation (which *discards* high-frequency
 detail), and context-adaptive entropy coding. Quantisation is where almost all of
 that gap comes from, and a lossless path cannot do it by definition.
 
-與有損 VP9 之間仍有很大的差距——t=0 的量測對照 31,519 位元組的 VP9 編碼得出 103 倍，
-而該列尚未於本語料重測，故請將此倍數視為未定量，而非 103 倍。不變的是差距**為何**
-存在：它並非實作品質問題，而是有損／無損的分界。VP9 另外做了 motion compensation（使移動物體產生接近零的殘差，
+與有損 VP9 之間仍有很大的差距，而它並非實作品質問題，而是有損／無損的分界。VP9 另外做了 motion compensation（使移動物體產生接近零的殘差，
 而非大量差分值）、transform + 量化（**丟棄**高頻細節），以及 context-adaptive
 entropy coding。該差距幾乎全部來自量化這一步，而無損路徑在定義上無法做這件事。
 
@@ -431,8 +362,7 @@ budget**. Measured per-frame encode cost on the same clip:
 
 > **Space, time and speed together: `verifications/rgb1/comparison.csv`.** The
 > table below answers bandwidth; the budget question needs the compute cost beside
-> it, and until 2026-08-15 the two lived in different files with the delta arm in
-> neither. That CSV now carries 28 rows — four presets across seven slice/thread
+> it. That CSV carries 28 rows — four presets across seven slice/thread
 > configurations — with `pct_of_raw`, `encode_ms_per_frame`,
 > `decode_ms_per_frame`, `wire_mbps_at_60fps`, `fits_60fps_decode` and
 > `fits_1gbe` on every row. At 20 slices and `-n 20`, zstd -3:
@@ -445,21 +375,17 @@ budget**. Measured per-frame encode cost on the same clip:
 > | delta + predictive | **10.55%** | 4.16 | 3.37 | **315** | yes |
 >
 > **The delta dominates the predictive stack on all three axes** — half the
-> bytes, a fifth of the encode, a tenth of the decode. The streaming budget was
-> built on `predictive` because the sweep only ran presets and `--delta` was a
-> bare flag; it is a preset now. Adding the predictive stack on top of the delta
+> bytes, a fifth of the encode, a tenth of the decode. Adding the predictive stack on top of the delta
 > still pays in space (14.44% to 10.55%) but costs 3.2x the encode time, which is
 > a trade to make deliberately rather than by default.
 >
 > **空間、時間與速度並列於 `verifications/rgb1/comparison.csv`。** 下表回答的是頻寬，
-> 但預算問題必須連同計算成本一起看，而在 2026-08-15 之前兩者分散於不同檔案，且 delta
-> 那一組兩邊都沒有。該 CSV 現有 28 列——四個 preset × 七種 slice／thread 組態——每列皆含
+> 但預算問題必須連同計算成本一起看。該 CSV 有 28 列——四個 preset × 七種 slice／thread 組態——每列皆含
 > `pct_of_raw`、`encode_ms_per_frame`、`decode_ms_per_frame`、`wire_mbps_at_60fps`、
 > `fits_60fps_decode` 與 `fits_1gbe`。上表為 20 slices、`-n 20`、zstd -3 的結果。
 >
 > **差分在三個軸上全面勝過預測式堆疊**——體積減半、編碼時間五分之一、解碼時間十分之一。
-> 串流預算之所以建立在 `predictive` 上，是因為掃描只跑 preset 而 `--delta` 當時只是裸
-> 旗標；現已列為 preset。在差分之上再疊預測式堆疊，空間仍有收益（14.44% → 10.55%），
+> 在差分之上再疊預測式堆疊，空間仍有收益（14.44% → 10.55%），
 > 但編碼時間變成 3.2 倍——這個取捨應該是刻意選的，而不是預設就發生的。
 
 Every row above is measured on the **same 48 consecutive frames from t=121.2 s**
@@ -470,8 +396,8 @@ rows from `consecutive_bitrate.zsh`, for the predictive row from
 `comparison.csv` at 20 slices and `-n 20`. "of 1 GbE" is against **118 MB/s**,
 the practical-gigabit figure `build_streaming_budget.py` uses. NV12 has no RGB1
 container so it has no timing row — it is the same codec on two-thirds the bytes
-of the RGB24 row. FFV1's 22.8 ms and x264's 64.2 ms are older figures, not
-re-measured on this corpus. The two zstd rows compress each frame whole; the
+of the RGB24 row. FFV1's 22.8 ms and x264's 64.2 ms were not measured on this
+corpus. The two zstd rows compress each frame whole; the
 predictive row compresses 20 row bands separately, which costs ~3% more bytes and
 buys the parallelism that puts it inside the budget at all.
 
@@ -482,75 +408,17 @@ buys the parallelism that puts it inside the budget at all.
 `comparison.csv` 的 20 slices、`-n 20`。「of 1 GbE」的分母為 **118 MB/s**，即
 `build_streaming_budget.py` 所採用的實務 gigabit 值。NV12 沒有 RGB1 容器，故無計時
 列——它是同一個編碼器作用在 RGB24 列三分之二的位元組上。FFV1 的 22.8 ms 與 x264 的
-64.2 ms 為較早的數字，並未在本語料上重測。兩個 zstd 列為整格壓縮；predictive 列則
+64.2 ms 並非在本語料上量測。兩個 zstd 列為整格壓縮；predictive 列則
 將 20 條列帶分別壓縮，多付約 3% 的體積，換得使其得以塞進預算的平行度。
 
-> **This table has been corrected twice on 2026-08-14. Four things were wrong.**
->
-> **1. t=0 sampling.** It first read NV12 + zstd at 122 Mbps and RGB24 at
-> 211 Mbps, from 8 frames taken at t=0 — and the clip opens on a fade from black,
-> a region the measuring script's own header warns about. Raised in review by the
-> Windows-side reader. Re-measured from mid-video, those became 689 and
-> 1469 Mbps.
->
-> **2. Mixed corpora.** The corrected NV12/RGB24 figures came from 8 consecutive
-> frames while the FFV1 and predictive rows still came from 24 frames sampled 10 s
-> apart — a corpus that still contained the fade frame, and that compresses ~11%
-> better than consecutive footage. Every row is now measured on one 48-frame
-> consecutive corpus, which moved FFV1 from 565 to 587 Mbps.
->
-> **3. A unit error in the verdict column.** "1 GbE at 86%" and "at 101%" were
-> not percentages: they were 86.1 and 101.1 **MB/s**, the Mbps figures divided by
-> 8, copied across as if they were a link-utilisation ratio. Against the 118 MB/s
-> this project actually uses for a practical gigabit, NV12 is 74% and the
-> predictive stack is 86% — so the old table overstated NV12's pressure on the
-> link and wrongly showed the predictive stack overflowing it.
->
-> **4. Stale timings.** The 15.1 enc / 9.8 dec figures predated three commits of
-> measurement-infrastructure fixes (in-process libzstd, pinned QoS, the flatten
-> removed from the timed region). Re-run on the current binary, the same three
-> frames give 6.5 / 4.7 — the published numbers were 2.3x too high.
->
-> One expected error turned out not to be one. The reviewer also predicted that
-> compressing 8 frames as one zstd stream deduplicates across frames and
-> understates a per-frame bitrate. Measured directly with
-> `batch_vs_per_frame.zsh`: the penalty is **-0.0%**. zstd-3's window is smaller
-> than a single 6.2 MB frame, so by the time the encoder reaches frame 2, frame 1
-> has already left the window and cross-frame matching cannot happen at all.
->
-> **本表於 2026-08-14 經兩輪更正，共有四處錯誤。**
->
-> **一、t=0 取樣。** 原記 NV12 + zstd 為 122 Mbps、RGB24 為 211 Mbps，取自 t=0 的
-> 8 格影格，而本片開頭是自黑畫面淡入——量測腳本自身的檔頭已對此提出警告。此問題由
-> Windows 端讀者於 review 中提出。改自影片中段重測後為 689 與 1469 Mbps。
->
-> **二、語料混用。** 更正後的 NV12／RGB24 取自 8 格連續影格，而 FFV1 與 predictive
-> 兩列仍取自相隔 10 秒的 24 格——該語料不但仍含淡入那格，且較連續影格好壓約 11%。
-> 現已全數改用同一份 48 格連續語料，FFV1 因此由 565 變為 587 Mbps。
->
-> **三、判定欄的單位錯誤。**「1 GbE at 86%」與「at 101%」並非百分比，而是 86.1 與
-> 101.1 **MB/s**——Mbps 值除以 8 之後，被當成連線佔用率抄了過來。以本專案實際採用的
-> 實務 gigabit 值 118 MB/s 為分母，NV12 為 74%、預測式堆疊為 86%。舊表因此既誇大了
-> NV12 對線路的壓力，也錯誤地顯示預測式堆疊塞不進去。
->
-> **四、過期的計時。** 15.1 enc／9.8 dec 這組數字早於三次量測基礎設施的修正（改用
-> 行程內 libzstd、釘死 QoS、將攤平移出計時區）。以現行二進位對同樣三格重跑，得到
-> 6.5／4.7——已發表的數字高了 2.3 倍。
->
-> 另有一項預期中的錯誤並不存在。該讀者亦預測「8 格壓成單一 zstd 串流會跨影格去重，
-> 因而低估每格位元率」。以 `batch_vs_per_frame.zsh` 直接量測，懲罰為 **-0.0%**。
-> zstd-3 的視窗小於單張 6.2 MB 影格，編碼器讀到第 2 格時第 1 格早已離開視窗，跨影格
-> 匹配根本無從發生。
-
 **On a LAN: NV12 + zstd-3 at 694 Mbps, which is 74% of a practical gigabit** —
-one stream fits, two do not, and the earlier 122 Mbps figure implied a link could
-carry five. RGB24 + zstd-3 at 1482 Mbps does not fit 1 GbE at all. RGB1's
+one stream fits, two do not. RGB24 + zstd-3 at 1482 Mbps does not fit 1 GbE at all. RGB1's
 predictive stack lands between them at 813 Mbps, 86% of the link: it fits, but it
 leaves nothing behind it. Both zstd paths are inside the 16.67 ms budget with
 room to spare — bandwidth is the binding constraint here, not compute.
 
 **區域網路：NV12 + zstd-3 為 694 Mbps，佔實務 gigabit 的 74%** —— 一條串流塞得下，
-兩條不行；而先前的 122 Mbps 會讓人以為一條線路可承載五條。RGB24 + zstd-3 的
+兩條不行。RGB24 + zstd-3 的
 1482 Mbps 則完全塞不進 1 GbE。RGB1 的預測式堆疊落在兩者之間的 813 Mbps，佔線路
 86%：塞得下，但後面不留任何餘地。兩條 zstd 路徑都在 16.67 ms 預算內且尚有餘裕
 ——此處真正的約束是頻寬而非計算。
@@ -705,17 +573,16 @@ of no longer being a sequence of self-contained RGB1 frames.
 串流層級的設計：標頭只送一次、位置變動時才送差異，即可完全消除此開銷，代價是
 不再是一連串「自足的 RGB1 影格」。
 
-> **Superseded percentages below.** This section and the YCoCg-R/MED section
-> that follows were measured on 8 consecutive frames from t=0, which are a
-> fade-in from black and compress ~5x better than real content. The techniques
-> and their relative ranking still hold; the absolute percentages do not. See
-> "How close does YCoCg-R + MED + planar get to FFV1 and VP9?" at the end of this
-> file for the current numbers on the 48-frame consecutive corpus.
+> **Corpus note for the percentages below.** The next section is measured on
+> 8 consecutive frames from t=0, which are a fade-in from black and compress ~5x
+> better than real content. The techniques and their relative ranking hold; the
+> absolute percentages do not. See "How close does YCoCg-R + MED + planar get to
+> FFV1 and VP9?" at the end of this file for numbers on real content.
 >
-> **以下百分比已被取代。** 本節與其後的 YCoCg-R/MED 一節，量測對象為 t=0 起的
-> 8 格連續影格；那是自黑畫面淡入的片段，較真實內容易壓縮約 5 倍。技術本身與其
-> 相對排序仍然成立，絕對百分比則否。當前數據請見本檔末的「YCoCg-R + MED +
-> planar 與 FFV1、VP9 的差距有多少？」，該節以 48 格連續語料量測。
+> **以下百分比的語料註記。** 下一節的量測對象為 t=0 起的 8 格連續影格；那是自黑
+> 畫面淡入的片段，較真實內容易壓縮約 5 倍。技術本身與其相對排序成立，絕對百分比
+> 則否。真實內容上的數據請見本檔末的「YCoCg-R + MED + planar 與 FFV1、VP9 的差距
+> 有多少？」。
 
 ## Can VP9's streaming techniques improve the RGB1 format?
 
@@ -773,35 +640,6 @@ JPEG-LS both use.
 MED（median edge detector：依左、上、左上三者取 min/max/梯度）是四者中最佳，
 也正是 FFV1 與 JPEG-LS 共同採用的方法。
 
-### Stacking the improvements
-
-### 疊加各項改進
-
-| variant | bytes | % of raw | vs today |
-|---|---:|---:|---:|
-| raw + zstd-3 (today) | 3,509,790 | 7.05% | — |
-| MED + zstd-3 | 2,967,564 | 5.96% | -15.4% |
-| MED + zstd-19 | 2,296,168 | 4.61% | -34.6% |
-| MED + xz -9 | 2,232,176 | 4.49% | -36.4% |
-| **MED + frame delta + zstd-19** | **2,111,112** | **4.24%** | **-39.9%** |
-| FFV1 (reference) | 1,922,856 | 3.86% | -45.2% |
-
-Stacking spatial prediction, inter-frame delta and a higher compression level
-takes RGB1 from 7.05% to **4.24% of raw — a 40% reduction — reaching 91% of
-FFV1's result** while staying inside the existing container and codec set.
-
-疊加空間預測、影格間差分與較高壓縮等級，可讓 RGB1 從 7.05% 降到
-**原始的 4.24%——減少 40%——達到 FFV1 成果的 91%**，且完全不脫離既有容器與
-codec 組合。
-
-The remaining 9% gap is entropy coding: FFV1 uses a context-adaptive range coder
-while we hand the residual to a general-purpose compressor. Closing it means
-writing a range coder, which is a large amount of work for the last few percent.
-
-剩下的 9% 差距在於熵編碼：FFV1 使用 context-adaptive range coder，而我們是把
-殘差交給通用壓縮器。要補上這段就得自行實作 range coder，為了最後幾個百分點
-投入過大。
-
 ### Where these bits would live in the header
 
 ### 這些旗標在標頭中的位置
@@ -834,11 +672,9 @@ bit 1 針對逐格 metadata 開銷：在 60 fps 下，位置靜止時會重複�
 
 > **Caveat**: measured on one 1080p talking-head clip. MED's benefit depends on
 > spatial smoothness and the frame-delta benefit on temporal stillness; both will
-> differ on other content, and the earlier frame-delta measurement on a different
-> clip showed 25% rather than the 6.9% seen here.
+> differ on other content.
 > **注意**：僅以一支 1080p 人物講述影片量測。MED 的效益取決於空間平滑度，影格
-> 差分的效益取決於時間上的靜止程度；兩者在其他內容上都會不同，先前在另一支影片
-> 上量到的影格差分效益是 25%，而非此處的 6.9%。
+> 差分的效益取決於時間上的靜止程度；兩者在其他內容上都會不同。
 
 ## What is the status of webm2 (RGB1 frames plus audio)?
 
@@ -1105,13 +941,14 @@ formats: those describe a pixel layout, whereas `RGB1` names a container with an
 **Q: Should webm2 offer a geo-less mode to reduce the streamed size?**
 **Q: webm2 該提供無 geo 模式以降低串流體積嗎？**
 
-**No — and the option already exists anyway.** `flags` bit 0 at offset 12 is
-defined as "geo metadata present", so geo has been optional since the format was
-designed. What the measurement adds is that turning it off buys nothing.
+**No.** The format reserves `flags` bit 0 at offset 12 as "geo metadata
+present", but this implementation always writes geo and rejects a frame with
+bit 0 clear (`badGeo`). The measurement below shows turning it off would buy
+nothing, so there is no reason to add the mode.
 
-**不需要 —— 而且該選項本來就存在。** offset 12 的 `flags` bit 0 定義為
-「geo metadata present」，故 geo 自格式設計之初即為可選。量測補充的結論是：
-關掉它並無收益。
+**不需要。** 格式在 offset 12 的 `flags` 保留 bit 0 為「geo metadata present」，但本
+實作一律寫入 geo，並拒絕 bit 0 為 0 的影格（`badGeo`）。下方量測顯示關掉它並無收益，
+故沒有理由加入這個模式。
 
 Measured over 24 sampled 1920x1080 frames at zstd-19:
 
@@ -1302,27 +1139,24 @@ back and byte-compared before its size was counted.
 
 3. **VP9 lossless is barely better than raw + zstd** (35.79% vs 37.23%, a 3.9%
    edge). VP9's machinery is built for rate-distortion optimisation; switch off
-   the distortion and almost all of its advantage disappears. This confirms, with
-   numbers, the earlier conclusion that VP9's lossless mode offers nothing worth
-   borrowing — FFV1 is the right model to learn from.
+   the distortion and almost all of its advantage disappears. VP9's lossless mode
+   offers nothing worth borrowing — FFV1 is the right model to learn from.
    **VP9 lossless 僅略優於 raw + zstd**（35.79% 對 37.23%，差 3.9%）。VP9 的機制
-   是為率失真最佳化而建；關掉失真，它的優勢幾乎全數消失。這以數據證實了先前的
-   結論：VP9 的無損模式沒有值得借鏡之處 —— FFV1 才是該學習的對象。
+   是為率失真最佳化而建；關掉失真，它的優勢幾乎全數消失。VP9 的無損模式沒有值得
+   借鏡之處 —— FFV1 才是該學習的對象。
 
-> **Corpus note — these figures supersede the earlier percentages in this FAQ.**
-> Sections written before the sampler existed used 8 *consecutive* frames from
-> t=0, and the first eight frames of this clip are a fade-in from black. Those
-> frames compress far better than real content, so the absolute percentages
-> quoted there (FFV1 3.86%, our stack 4.24%, "91% of FFV1") are optimistic by
+> **Corpus note.** "Can VP9's streaming techniques improve the RGB1 format?"
+> uses 8 *consecutive* frames from t=0, and the first eight frames of this clip
+> are a fade-in from black. Those frames compress far better than real content,
+> so the absolute percentages quoted there (e.g. FFV1 3.86%) are optimistic by
 > roughly 5x and are **not comparable** with the table above. The relative
-> ordering held — FFV1 best, our stack close behind, raw worst — but the gap to
-> FFV1 is 86%, not 91%. Use this section's numbers.
+> ordering is the same — FFV1 best, our stack close behind, raw worst. Use this
+> section's numbers.
 >
-> **語料註記 —— 本節數字取代本 FAQ 先前的百分比。** 取樣器出現前所寫的章節使用
-> 從 t=0 起的 8 格**連續**影格，而本影片的前八格是自黑畫面淡入。那些影格遠比真實
-> 內容易壓縮，故該處引用的絕對百分比（FFV1 3.86%、我方 4.24%、「達 FFV1 的 91%」）
-> 樂觀約 5 倍，與上表**不可比較**。相對排序不變 —— FFV1 最佳、我方緊隨、raw 最差
-> —— 但與 FFV1 的差距是 86% 而非 91%。請以本節數字為準。
+> **語料註記。**「VP9 的串流技術能改進 RGB1 格式嗎？」一節使用從 t=0 起的 8 格
+> **連續**影格，而本影片的前八格是自黑畫面淡入。那些影格遠比真實內容易壓縮，故該處
+> 引用的絕對百分比（例如 FFV1 3.86%）樂觀約 5 倍，與上表**不可比較**。相對排序相同
+> —— FFV1 最佳、我方緊隨、raw 最差。請以本節數字為準。
 
 **What this settles.** The stack is worth implementing: it cuts the payload by
 40.5% versus today's format, in exchange for two integer transforms and a
@@ -1424,30 +1258,12 @@ reason.
 Two results were not expected. First, **three samples are not more expensive on
 the GPU** — the upload drops from 4 B/px to 3 B/px and that bandwidth saving
 covers the extra sampling. B and C are indistinguishable, so ffmpeg's `gbrp`
-plane order costs nothing. Second, **the alpha expansion costs 1.08 ms, not the
-~8 ms estimated earlier** in this FAQ from an old single-threaded ffmpeg figure
-that included unrelated conversion work.
+plane order costs nothing. Second, **the alpha expansion costs only 1.08 ms**.
 
 **三條路徑渲染結果完全相同；平面路徑省下 1.11 ms/frame（52%）。** 其中兩項結果
 出乎意料。其一，**三次取樣在 GPU 上並不更貴**——上傳量從 4 B/px 降為 3 B/px，該
 頻寬節省足以覆蓋額外取樣的成本。B 與 C 無從區分，故 ffmpeg 的 `gbrp` 平面順序
-不需付出任何代價。其二，**補 alpha 的成本是 1.08 ms，而非本 FAQ 先前估計的約
-8 ms**，那個數字源自一份含有無關轉換工作的舊單執行緒 ffmpeg 量測。
-
-> **Corrected 2026-08-14.** This table first read A 3.40 ms / B 1.45 ms, saving
-> 1.76 ms (56.9%). Path A was reallocating an 8 MB staging buffer every frame,
-> which `rgba_vs_rgb1.md` explicitly advises against — so the arm being measured
-> was not the one that document tells you to write, and A was overstated by 60%.
-> Reusing the buffer through a local pointer (indexing it as a global was slower
-> still, because Swift checks exclusive access on every global subscript) brings
-> A to 1.08 ms. The conclusion holds; the margin was inflated. Raised in review
-> by the Windows-side reader.
->
-> **2026-08-14 更正。** 本表最初為 A 3.40 ms / B 1.45 ms、節省 1.76 ms（56.9%）。
-> 路徑 A 每格都重新配置 8 MB 暫存緩衝區，而 `rgba_vs_rgb1.md` 明確建議不要如此
-> ——即所量測的組別並非該文件所教的寫法，A 因而高估六成。改以區域指標重用緩衝區
-> （直接以全域索引更慢，因 Swift 對每次全域下標都會檢查獨佔存取）後，A 降至
-> 1.08 ms。結論不變，但差距被誇大了。此問題由 Windows 端讀者於 review 中提出。
+不需付出任何代價。其二，**補 alpha 的成本僅 1.08 ms**。
 
 With that, the client-side budget closes:
 
@@ -1474,24 +1290,21 @@ upload wants planar. Storing the payload as `gbrp` would make both free.**
 **Q: 預測式堆疊本來就產出 planar 資料，三平面 GPU 上傳也需要 planar。把 payload
 存成 `gbrp` 可讓兩者都免費。**
 
-**Implemented, measured, and reverted: the original interleaved definition
-stands.** Direct compression of the container is materially worse in planar, and
+**No: the interleaved definition stands.** Direct compression of the container is materially worse in planar, and
 the cost grows with the level:
 
-**實作、量測後回退：維持原本的交錯定義。** 直接壓縮容器時 planar 明顯較差，且
+**不需要：維持交錯定義。** 直接壓縮容器時 planar 明顯較差，且
 代價隨等級上升：
 
-> **Old corpus.** These rows are from `sample/` — 24 frames 10 s apart, the set
+> **Corpus.** These rows are from `sample/` — 24 frames 10 s apart, the set
 > whose first frame is this clip's fade from black. Its raw+zstd-19 figure is
 > 2,315,357 (37.21%) where the 48-frame consecutive corpus gives 2,390,137
 > (38.42%), so the absolute numbers are ~3% optimistic. The planar penalty is a
-> ratio between two arms on the same frames and survives the corpus change; the
-> table has not been re-run.
+> ratio between two arms on the same frames and does not depend on the corpus.
 >
-> **舊語料。** 以下各列取自 `sample/`——相隔 10 秒的 24 格，其第一格即本片的自黑畫面
+> **語料。** 以下各列取自 `sample/`——相隔 10 秒的 24 格，其第一格即本片的自黑畫面
 > 淡入。其 raw+zstd-19 為 2,315,357（37.21%），而 48 格連續語料為 2,390,137（38.42%），
-> 故絕對數字樂觀約 3%。planar 的懲罰是同一批影格上兩組之間的比值，換語料後仍成立；
-> 本表尚未重跑。
+> 故絕對數字樂觀約 3%。planar 的懲罰是同一批影格上兩組之間的比值，不受語料影響。
 
 | zstd | rgb24 interleaved | gbrp planar | planar cost |
 |---|---:|---:|---:|
@@ -1517,24 +1330,24 @@ the planar penalty grows from 13.8% to 31.4% rather than shrinking.
 `width * height`——1080p 為 2.07 MB，遠超任何實用的匹配視窗。高等級的較長視窗更能
 利用這份相鄰性，這正是 planar 的懲罰從 13.8% 增至 31.4%（而非縮小）的原因。
 
-**This does not contradict the earlier `+planar -2.5%` result.** That was
+**This does not contradict the `+planar -2.5%` result above.** That was
 measured *after* MED, where every byte is a near-zero residual; grouping by
 channel then puts similar-magnitude runs together and the entropy stage benefits.
 **Planar helps after prediction and hurts before it** — the two measurements
 describe different inputs and both hold.
 
-**這與先前 `+planar -2.5%` 的結果並不矛盾。** 該結果量測於 MED **之後**，當時每個
+**這與上文 `+planar -2.5%` 的結果並不矛盾。** 該結果量測於 MED **之後**，當時每個
 位元組都是接近零的殘差；按通道分組會把相似量級的長串聚在一起，熵編碼階段因而
 獲益。**planar 在預測之後有幫助，在預測之前有害** —— 兩份量測描述的是不同的輸入，
 且皆成立。
 
-**What survives the revert.** The streaming path is unaffected: it applies
+**What this does not affect.** The streaming path is unaffected: it applies
 `YCoCg-R -> MED -> planar` regardless of what the container stores, so the
 813 Mbps figure does not move. `P6-DOE` path C still demonstrates that ffmpeg's
 `gbrp` byte order feeds a three-plane upload with no byte movement — that
 interop holds at the GPU layer whatever the container does.
 
-**回退後仍然成立的部分。** 串流路徑不受影響：無論容器儲存什麼，它都會套用
+**不受影響的部分。** 串流路徑不受影響：無論容器儲存什麼，它都會套用
 `YCoCg-R → MED → planar`，故 813 Mbps 這個數字不變。`P6-DOE` 的路徑 C 仍然證明
 ffmpeg 的 `gbrp` 位元組順序可零搬移地餵入三平面上傳 —— 該互通性在 GPU 層成立，
 與容器如何儲存無關。

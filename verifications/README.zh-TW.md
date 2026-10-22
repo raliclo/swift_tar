@@ -28,7 +28,7 @@ MB/s；peak working set 仍由既有 Windows RSS 腳本負責。
 ROUNDS=1 ./encrypt_mbps_win.zsh ../../claw-code
 ```
 
-目前的 Windows 執行日期為 2026-08-18，使用 MINGW64_NT-10.0-26200 上的
+已記錄的 Windows 執行日期為 2026-08-18，使用 MINGW64_NT-10.0-26200 上的
 `release/swift_tar.exe` 版本 `20260818-074043`，語料為 logical input 1.40 GB
 的 `claw-code`。結果為 `--crypto-selftest` **44 PASS / 0 FAIL**，throughput
 腳本的正確性檢查亦全數通過。完整 tree `diff -r` 可用 `VERIFY_TREE=1` 開啟，
@@ -47,10 +47,6 @@ ROUNDS=1 ./encrypt_mbps_win.zsh ../../claw-code
 `--encrypt-only` 為 **263 MB/s**，`--decrypt-only` 為 **289 MB/s**。解密輸出
 已驗證與原封存位元組一致；錯誤金鑰與竄改密文皆被拒絕。
 
-本段先前描述的是 2026-08-06、build `20260805-193735` 的執行，並帶著該次的數字
-（純 tar `178 / 147 / 99 / 81`、zstd `198 / 181 / 106 / 97`），比它所連結的輸出檔
-落後兩個 build、十二天。其中建立吞吐量被低估超過兩倍。
-
 ### Windows 正確性 smoke test
 
 `encrypt_windows_correctness.zsh` 保留一個可重用的 Windows/MSYS 正確性測試，
@@ -61,28 +57,16 @@ ROUNDS=1 ./encrypt_mbps_win.zsh ../../claw-code
 ./encrypt_windows_correctness.zsh
 ```
 
-2026-08-06 的執行使用 MSYS_NT-10.0-26200 上的 `release/swift_tar.exe`
-版本 `20260805-193735`。結果為 `--crypto-selftest` **44 PASS / 0 FAIL**，
+已記錄的執行使用 MINGW64_NT-10.0-26200 上的 `release/swift_tar.exe`
+版本 `20260816-045456`。結果為 `--crypto-selftest` **44 PASS / 0 FAIL**，
 CLI 子集 **6 PASS / 0 FAIL**：plain tar、gzip、zstd 的加密建立／解出往返、
 `--encrypt-only`／`--decrypt-only` 位元組一致、錯誤金鑰拒絕與竄改拒絕。
 
-### 發現並修正的 RSS 缺陷（2026-08-03）
+### 加密層的記憶體上限
 
-首次執行暴露的是新加密層的真實缺陷，而非量測誤差：加密 1.3 GB 語料時
-peak RSS 達 **1454 MB**，未加密的建立僅 20 MB。下方 TGZ 調查中的兩個典型成因
-在 `crypto.swift` 裡都出現了：
-
-- `decryptStream` 使用「累積後 `removeFirst`」的緩衝區模式，其底層儲存會被保留
-  並長成整個串流的大小。現已改為每次只讀取所需的位元組，僅保留已嗅探的前綴。
-- 加密與解密迴圈都未以 `autoreleasepool` 包住每個 chunk 的工作，導致
-  Foundation `FileHandle` 讀取不斷堆積。
-
-| 階段 | 無界 | 有界單執行緒 | 有界平行 |
-| --- | ---: | ---: | ---: |
-| 純 tar 建立 + 加密 | 1454 MB | 42 MB | **198 MB** |
-| 解出 + 解密 | 1475 MB | 39 MB | **184 MB** |
-| `--encrypt-only` | 1438 MB | 24 MB | **228 MB** |
-| `--decrypt-only` | 1460 MB | 20 MB | **190 MB** |
+`decryptStream` 每次只讀取所需的位元組，僅保留已嗅探的前綴；加密與解密迴圈都以
+`autoreleasepool` 包住每個 chunk 的工作，因此兩者都不會隨串流成長（與下方 TGZ 一節
+是同樣兩個模式）。
 
 平行管線依設計最多保留 `-n` 個 4 MiB chunk。每個 semaphore 額度只在結果按序
 寫出後歸還，因此記憶體由設定的在途數量限制，而不會隨 1.4 GB 串流大小成長。
@@ -102,10 +86,8 @@ peak RSS 達 **1454 MB**，未加密的建立僅 20 MB。下方 TGZ 調查中的
 `--encrypt-only` 為 **659 MB/s**、peak RSS 181 MB；`--decrypt-only` 為
 **647 MB/s**、peak RSS 109 MB。解密輸出已驗證與原檔位元組一致。
 
-zstd 那列先前寫的是 `1542 / 1231 / 396 / 460`，那把結果**反轉**了：它使 zstd 成為
-最快的建立者與最慢的解出者，而入版量測正好相反。整張表抄自一次早於上方所連結輸出檔
-的執行，之後從未對齊。另注意此處的 zstd 各列量於 `--zstd-level 9` 被 `1cac313`
-（2026-08-16）釘住**之前**，故今日重跑 `encrypt_mbps_rss.zsh` 不會重現這些數字。
+此處的 zstd 各列並非以目前的預設等級（`--zstd-level 9`）量測，故重跑
+`encrypt_mbps_rss.zsh` 不會重現這些數字。
 
 大小開銷為 **48 bytes 標頭加上每 4 MiB chunk 21 bytes**——1.4 GB 封存為 7125
 bytes（0.0005%）。
@@ -116,8 +98,8 @@ peak RSS 51.48 MB；keyfile baseline 則為 6.13 MB。
 ### 加密層的 `-n` 擴展
 
 每個 chunk 各自獨立封裝——其 nonce 與 AAD 僅由 chunk 索引決定——因此本層使用
-與 codec 相同的保序併發管線與同一組 `-n` 預算。**容器格式並未改變**，此變更
-前後寫出的封存可互相讀取。
+與 codec 相同的保序併發管線與同一組 `-n` 預算。**容器格式與 `-n` 無關**，以某個
+`-n` 加密的封存可用任何其他 `-n` 解密。
 
 下表取自 [`encrypt_mbps_rss_output.txt`](encrypt_mbps_rss_output.txt) 的 B2 節，
 與上方各表同一次執行。**請勿手動編輯。**
@@ -135,17 +117,14 @@ peak RSS 51.48 MB；keyfile baseline 則為 6.13 MB。
 ——而預設值（`2 × 核心數` = 20）正位於平原區，無需另行調整。RSS 隨在途 chunk
 數（每個約 4 MiB）線性成長，與 codec 的取捨相同。
 
-本節有兩個數字需要說明。上文引用的 `--encrypt-only` 速率（**659 MB/s**）取自 B 節，
-它恰好等於此處 `-n 8` 那列而非預設的 `-n 20` 那列——兩節並非在相同在途數量下量測，
-把其中之一稱為「該」加密速率，正是先前文字自相矛盾的原因。此外本表先前也抄自
-所連結輸出檔以外的另一次執行：它把 `-n 20` 的解密速率寫成 738 MB/s，而入版檔案
-記錄的是 771。
+上文引用的 `--encrypt-only` 速率（**659 MB/s**）取自 B 節，它恰好等於此處 `-n 8`
+那列而非預設的 `-n 20` 那列——兩節並非在相同在途數量下量測，故任一者單獨都不是
+「該」加密速率。
 
 > **方法論**：此 sweep 採交錯執行——每一輪跑完整個 sweep，並回報各設定的最佳
-> 時間。若把某個 `-n` 的所有輪次跑完才換下一個，CPU 會單調升溫；本腳本早期版本
-> 正是如此，並回報高 `-n` 大幅崩跌（`-n 20` 僅 146 MB/s），而反序執行證明那
-> 純粹是溫度造成的。各階段現在一完成即刪除自己的封存，且空間不足時腳本會拒絕
-> 開始。
+> 時間。若把某個 `-n` 的所有輪次跑完才換下一個，CPU 會單調升溫，在高 `-n` 呈現
+> 純粹由溫度造成的崩跌。
+> 各階段一完成即刪除自己的封存，且空間不足時腳本會拒絕開始。
 
 > **狀態**：macOS 吞吐量／RSS 數字已於 Apple M4 驗證。Windows throughput
 > MB/s 另由 `encrypt_mbps_win.zsh` 驗證；Windows peak working set 則由既有
@@ -162,14 +141,10 @@ peak RSS 51.48 MB；keyfile baseline 則為 6.13 MB。
 [`-win.txt`](rgb1_container_mbps_output-win.txt)。
 
 語料為真實取樣的 1080p 視訊影格（`sample_consecutive/f000.rgb1`，6,221,676 B）。
-先前為合成的 1024×1024 影像，由重複的 4 KiB 區塊組成，任何視窗達 4 KiB 以上的
-codec 都會直接匹配——該表把 zstd 記為壓縮比 0.001，而真實影格約為 0.44；且該區塊
-每次執行都重新隨機，故任兩份紀錄都無從比較。
 
 > **寫入紀錄採選擇性加入。** 未加 `--record` 時這純粹是一支正確性測試，不會動到
-> 入版的表格。先前每次執行都會覆寫，於是紀錄可能被一次無意發佈的執行取代——包括在
-> 機器負載下取得、所有時間一致慢約 8% 而體積不變的那一次。請在機器閒置時，有意識地
-> 寫入紀錄。
+> 入版的表格。在機器負載下取得的執行，時間會一致變慢而體積不變，故請在機器閒置時，
+> 有意識地寫入紀錄。
 
 ```sh
 ../test/test_swift_tar_rgb1.zsh              # 僅驗證 / verify only
@@ -186,18 +161,16 @@ decode，逐輪回報十進位 logical-input MB/s 與程序 peak RSS，並比較
 ROUNDS=3 ./zip_claw_code_mbps_rss.zsh ../../claw-code
 ```
 
-## 建立端 `-C` 相容性（2026-07-18）
+## 建立端 `-C` 相容性
 
-`swift_tar -c` 過去雖會解析 `-C`，卻只在解出流程使用，因此系統 tar 常見的
-`swift_tar -c --zstd -f out.tar.zst -C <parent> <leaf>` 會錯誤地從原始呼叫
-目錄尋找 `<leaf>`。修正後會先開啟封存輸出，再切換輸入工作目錄，結束時還原
-原目錄；因此相對 `-f` 仍建立在呼叫目錄，entry name 也不會帶入 parent path
-或 `..`。
+`swift_tar -c` 與系統 tar 一樣遵循 `-C`：執行
+`swift_tar -c --zstd -f out.tar.zst -C <parent> <leaf>` 時，會先開啟封存輸出，
+再切換輸入工作目錄，結束時還原原目錄；因此相對 `-f` 建立在呼叫目錄，entry name
+也不會帶入 parent path 或 `..`。`swift_tar -test` 會檢查此項
+（`create-side -C: native ZSTD round-trip`）。
 
 Windows build `swift_tar 20260718-171714` 已完成以下驗證：
 
-- `swift_tar -test -debug` 七項全數通過，涵蓋 plain／gzip 系統 tar 互通、
-  native ZSTD 建立端 `-C`，以及兩種 Windows 解出寫入後端。
 - 隔離的 `-C ../source leaf` native-ZSTD round-trip：archive 留在 invocation
   directory；entry 僅有 `leaf/` 與 `leaf/README.md`；外部 `zstd` 加 Windows
   系統 tar 列出相同項目；解出內容逐 byte 相同。
@@ -212,9 +185,7 @@ Windows build `swift_tar 20260718-171714` 已完成以下驗證：
 **問題**：swift_tar 的 `-n` 旗標（chunk-parallel gzip 的在途 chunk 並行數）
 是否控制 TGZ encode／decode 的 peak RSS？`zshrc.zsh` 的 `getar()` 沒有傳入
 `-n`，因此 TGZ benchmark 使用預設值 `inflight = cores*2`（R45-Mac 測試機
-為 10 核心，因此預設是 20）。提出此問題的背景是 TGZ 在
-`OPTIMIZATION.md` 中曾是 peak RSS 最高的格式：1.3GB 語料約使用
-2.5–3.3GB，其他 LZFSE 格式則只需要數百 MB。
+為 10 核心，因此預設是 20）。
 
 **使用方式**：
 
@@ -226,55 +197,41 @@ swift_tar/verifications/tgz_inflight_rss.zsh <path-to-corpus>
 腳本每次執行都會用最新 stdout 覆寫此檔案。測試使用 R45-Mac 機器上的真實
 `claw-code` 語料（約 1.3GB）。
 
-### 找到並修正第一個根因（2026-07-12）
+### 記憶體為何有界
 
-修正前 encode（約 2.1–2.6GB）與 decode（約 2.5–3.0GB）的 peak RSS 都
-接近語料大小，且不受 `-n` 影響。這是 Foundation `FileHandle.read` 在 CLI
-緊密迴圈中累積 autorelease 物件的典型特徵。`lzfse-cli.swift` 的讀取迴圈
-本來就包在 `autoreleasepool` 中，`swift_tar.swift` 當時則完全沒有使用。
+以下兩種模式若存在，會讓 peak RSS 接近語料大小且不受 `-n` 影響：
 
-修正方式是將熱讀寫迴圈包入 `autoreleasepool`，包括 `TarWriter.add` 讀檔
-迴圈、`ParallelChunkSink.dispatch` worker、`gzipDecodeStream`、
-`TarReader.readExactly`、解出寫檔迴圈與尾端 drain 迴圈。該階段以
-`swift_tar -test -debug`（當時 4/4）、完整 `claw-code` round-trip
-（`diff -rq` 無差異）及系統 tar 可讀性完成驗證。
-
-### 找到並修正第二個根因（2026-07-12，phase 2）
-
-完成 phase 1 後，RSS 仍接近整份語料大小（約 1.3GB）。在 encode 執行中以
-`heap` 分析，發現單筆約 1.06GB 的 malloc 節點，來源是 `Data` 的 append +
-`removeFirst` 模式：`removeFirst` 保留 backing store，而 `append` 持續延長
-同一儲存區，最終讓單一 buffer 成長到整條 tar stream 的大小。共有兩處：
-
-- `ParallelChunkSink.buffer`（encode）：改為將 staging `Data` 填滿至
-  `chunkSize` 後，把完整物件交給 worker，下一個 chunk 使用全新 buffer。
-- `TarReader.pending`（decode）：改用明確的已消耗 offset，並以 `subdata`
-  壓實，使 backing store 維持有界。
+- Foundation `FileHandle.read` 在 CLI 緊密迴圈中累積 autorelease 物件。熱讀寫
+  迴圈皆在 `autoreleasepool` 之內：`TarWriter.add` 讀檔迴圈、
+  `ParallelChunkSink.dispatch` worker、`gzipDecodeStream`、
+  `TarReader.readExactly`、解出寫檔迴圈與尾端 drain 迴圈。
+- `Data` 的 append + `removeFirst` 模式：`removeFirst` 保留 backing store，而
+  `append` 持續延長同一儲存區，最終讓單一 buffer 成長到整條 tar stream 的大小。
+  `ParallelChunkSink.buffer`（encode）將 staging `Data` 填滿至 `chunkSize` 後，
+  把完整物件交給 worker，下一個 chunk 使用全新 buffer；`TarReader.pending`
+  （decode）以明確的已消耗 offset 搭配 `subdata` 壓實。
 
 ### macOS 結果摘要
 
 > **狀態**：僅在 R45-Mac 測試機完成驗證。Windows 的平台特定結果請參考
 > 下一節。
 
-| 方向 | 修正前 | Phase 1（`autoreleasepool`） | Phase 2（buffer 模式） |
-| --- | --- | --- | --- |
-| Encode | 約 2.1–2.6GB，打平 | 約 1.0–1.4GB，打平 | **90MB（`n=4`）→ 300MB（`n=40`）；預設 `n=20` = 219MB** |
-| Decode | 約 2.5–3.0GB | 約 1.2–1.4GB，打平 | **約 50MB，不受 `-n` 影響** |
+| 方向 | Peak RSS |
+| --- | --- |
+| Encode | **90MB（`n=4`）→ 300MB（`n=40`）；預設 `n=20` = 219MB** |
+| Decode | **約 50MB，不受 `-n` 影響** |
 
-各階段均未產生時間退步：encode 維持 4.3–7.6 秒，decode 維持 2.8–3.9 秒。
-encode RSS 現在才顯示真正的 `-n` 線性關係（在途 chunk 數 × 每個 chunk
-約 8MiB）；先前此關係被記憶體累積問題掩蓋。
+encode 為 4.3–7.6 秒，decode 為 2.8–3.9 秒。encode RSS 呈 `-n` 線性關係
+（在途 chunk 數 × 每個 chunk 約 8MiB）。
 
-### Windows 驗證：已重現改善
+### Windows 驗證
 
 **原始輸出**：
 [`tgz_inflight_rss_win_output.txt`](tgz_inflight_rss_win_output.txt)
 
-Windows RSS 修正最初是在 gzip 仍透過外部 CLI 程序執行時完成。每個 chunk
-的 Foundation `Thread` writer 改為專用 `DispatchQueue` pipe pump，並改用
-同步 `readData(ofLength:)`，限制每輪 `Data` 的生命週期。後續 native-zlib
-修改讓 gzip 不再經過 process backend；pipe 修正則繼續供其他外部 codec
-使用。
+Windows 上 gzip 經由靜態連結的 zlib 1.3.2（固定版本的 submodule）執行。其他外部
+codec 經由專用的 `DispatchQueue` pipe pump，並以同步 `readData(ofLength:)` 限制
+每輪 `Data` 的生命週期。
 
 同一份 `claw-code` 語料的完整 `-n 4..40` 掃描，確認整個範圍都維持有界
 記憶體：
@@ -292,15 +249,11 @@ Windows RSS 修正最初是在 gzip 仍透過外部 CLI 程序執行時完成。
 | 36 | 195.8MB | 44.0MB |
 | 40 | 208.0MB | 44.1MB |
 
-Windows 特定修正前，encode 使用 2.5–2.7GB、decode 使用 2.50–2.55GB。
-修正後 encode 呈現預期的線性 `-n` 關係，decode 則穩定維持約 43–45MB。
+encode 呈現預期的線性 `-n` 關係，decode 則穩定維持約 43–45MB。
 
-Native zlib 解決了另一條 encode 速度軸線。Windows build 現在靜態連結固定
-版本的 zlib 1.3.2 submodule，不再為每個 chunk 啟動一次外部 `gzip.exe`。
-完整掃描中 encode 從 27–47 秒降至 7.2–15.6 秒；正常平行平台區
-（`-n 12..40`）為 7.2–7.8 秒，已接近 macOS 的 4.3–7.6 秒。Decode 從
-17–19 秒改善至 9.7–11.0 秒，但仍慢於 macOS 的 2.8–3.9 秒，因此 Windows
-解出與檔案 I/O 成本仍是另一個最佳化目標。
+完整掃描中 encode 為 7.2–15.6 秒；正常平行平台區（`-n 12..40`）為 7.2–7.8 秒，
+接近 macOS 的 4.3–7.6 秒。Decode 為 9.7–11.0 秒，慢於 macOS 的 2.8–3.9 秒，
+因此 Windows 解出與檔案 I/O 成本仍是另一個最佳化目標。
 
 ### 副檔名相容性
 
@@ -311,23 +264,24 @@ Native zlib 解決了另一條 encode 速度軸線。Windows build 現在靜態�
 
 ### 實務結論
 
-- 在 macOS 上，TGZ 的記憶體用量已與 LZFSE 格式相當或更低。預設 `-n`
+- 在 macOS 上，TGZ 的記憶體用量與 LZFSE 格式相當或更低。預設 `-n`
   不需調整；需要時仍可降低 `-n`，以 encode 速度換取更低記憶體
   （`n=4` = 90MB，時間增加 75%）。
 - 在 Windows 上，native zlib 將 TGZ encode RSS 維持在 56–208MB
   （`-n 4–40`，線性），decode RSS 約 43–45MB，且不受 `-n` 影響。
-- 靜態 zlib 消除每個 chunk 啟動 `gzip.exe` 的成本：平行 encode 現為
-  7.2–7.8 秒；decode 改善至 9.7–11.0 秒，仍是 Windows 特定的最佳化目標。
-- 目前的 `swift_tar -test -debug` 七項檢查全數通過，包含建立端 `-C`、
-  native ZSTD、兩種 Windows 寫入後端與系統 tar 雙向互通。
+- 使用靜態 zlib 時，平行 encode 為 7.2–7.8 秒；decode 為 9.7–11.0 秒，仍是
+  Windows 特定的最佳化目標。
+- `swift_tar -test -debug` 涵蓋建立端 `-C`、native ZSTD、兩種 Windows 寫入
+  後端與系統 tar 雙向互通。
 
-## 解壓：時間花在哪裡，以及 `-n` 到底有沒有作用（2026-08-11）
+## 解壓：時間花在哪裡
 
 `verifications/extract_write_path.zsh` → `extract_write_path_output.txt`
 
 macOS 27.0.0 arm64、10 核（4P+6E）、APFS，每組語料 256 MiB，
 swift_tar 20260810-170353 對 bsdtar 3.5.3。三次獨立執行，下列比值分別重現為
-1.7/1.9/1.7、1.1/0.9/1.1、0.6/0.6/0.6。
+1.7/1.9/1.7、1.1/0.9/1.1、0.6/0.6/0.6。本節的 `swift -x` 數字是序列寫檔路徑；
+小檔走的是下一節量測的平行寫檔路徑。
 
 ### 1. 解壓成本在「每個檔案」，而 swift_tar 在小檔上勝出
 
@@ -344,8 +298,7 @@ swift_tar 20260810-170353 對 bsdtar 3.5.3。三次獨立執行，下列比值�
 - **建立封存在每一組語料都比 bsdtar 快 4–10 倍。** 分塊平行 gzip 確實在做事。
 - **檔案越小，swift_tar 的相對表現越好。** 它輸在少量巨檔，贏在數千個小檔。
 
-第二點**推翻了寫這支腳本的原始假設**（Foundation 的每檔開銷）。此處反而是
-bsdtar 的每檔成本佔主導：8192 個檔要 2456ms，swift_tar 只要 1545ms。
+此處是 bsdtar 的每檔成本佔主導：8192 個檔要 2456ms，swift_tar 只要 1545ms。
 
 **實務結論：誰比較快完全取決於封存的形狀。** Swift toolchain 那種「少量大檔」
 的封存，bsdtar 勝；原始碼樹或 rootfs 這種形狀，swift_tar 勝。
@@ -359,53 +312,14 @@ bsdtar 的每檔成本佔主導：8192 個檔要 2456ms，swift_tar 只要 1545m
 | few  | 8    | 120ms | 207ms  | 87ms   | 32ms  | 265ms  | 233ms  |
 | many | 8192 | 214ms | 1644ms | 1430ms | 226ms | 2929ms | 2703ms |
 
-解碼 256 MiB 約 200ms，兩個工具幾乎相同。其餘全部是檔案 I/O。
+解碼 256 MiB 約 200ms，兩個工具幾乎相同。其餘全部是檔案 I/O，而且是
+**syscall-bound 而非 CPU-bound**（`sys` 遠大於 `user`）。
 
-### 3. 解壓是單執行緒，`-n` 對它毫無作用（**本節結論已於 2026-08-11 被推翻，見下方〈macOS 與 Linux 的平行解壓〉**）
+少量大檔時，寫檔路徑只佔 207ms 中的 87ms——少數幾次大型循序寫入，沒有東西可以
+平行化。該處與 bsdtar 的差距在餵給寫入端的讀取／解碼管線：`few` 語料的 `-t` 是
+120ms 對 bsdtar 的 32ms。
 
-> **這一節描述的是修改之前的狀態。** 其結論「`-n` 在解壓路徑上什麼都沒改變」與
-> 「`FileWriterPool` 位於 `#if os(Windows)` 之內」在寫成時為真，之後皆已不成立：
-> `FileWriterPool` 現在在所有平台上執行，CPU/wall 由 1.01 升至 **6.40**。保留本節
-> 是因為下方那一節是對它的翻轉，而翻轉唯有與被翻轉者並陳才讀得懂——但**不要**引用
-> 本節的數字。本檔中文版一度缺少那一整節，於是此處成為全文最後的說法，讀者因而得到
-> 一個確定的錯誤結論；那正是補上該節的原因。
-
-| 操作 | wall | user | sys | CPU/wall |
-|---|---|---|---|---|
-| swift -x（預設 -n） | 1650ms | 280ms | 1390ms | **1.01** |
-| swift -x -n 1 | 1560ms | 270ms | 1310ms | **1.01** |
-| swift -x -n 8 | 1540ms | 270ms | 1300ms | **1.02** |
-| swift -t（僅解碼） | 210ms | 170ms | 40ms | 1.00 |
-| bsdtar -x | 2450ms | 240ms | 2190ms | 0.99 |
-
-CPU/wall 為 1.0 代表只用了一個核心，三次皆然。**`-n` 在解壓路徑上什麼都沒改變**
-——1650 / 1560 / 1540ms 是執行間的雜訊，不是 scaling。
-
-這與原始碼一致：把小檔寫入跨執行緒批次化的 `FileWriterPool` 位於
-`#if os(Windows)` 之內（`swift_tar.swift:2432`）。macOS 與 Linux 走 `#else`
-分支，是一條 `createFile` → `FileHandle` → `write` → `close` 的序列迴圈。
-
-另外注意 `sys` 遠大於 `user`（1390 對 280ms）：解壓是 **syscall-bound 而非
-CPU-bound**。對一個在等檔案系統的工作增加運算執行緒沒有幫助。
-
-### 在 macOS/Linux 實作平行寫檔值得嗎？
-
-依上述數字，誠實的答案是：**它會改善「已經在贏」的情境，而非「正在輸」的情境。**
-
-- **大量小檔** —— 寫檔路徑佔 1644ms 中的 1430ms，且是 syscall-bound，跨核心
-  重疊確實有空間。但 swift_tar 在此已經比 bsdtar 快 1.6 倍。這是擴大領先，
-  不是修補缺陷。
-- **少量大檔** —— 寫檔路徑只佔 207ms 中的 87ms，而且是少數幾次大型循序寫入，
-  沒有東西可以平行化。而這正是 swift_tar 落後的情境（1.9 倍）。
-  **平行寫檔補不上這個差距。**
-
-所以大檔的差距在別的地方——在餵給寫入端的讀取／解碼管線，而非寫入本身。
-`few` 語料的 `-t` 是 120ms 對 bsdtar 的 32ms，那 1.9 倍就是從這裡來的，
-要修也得從這裡開始。
-
-**壓縮**則不存在這個問題：建立封存在所有測試語料上都已比 bsdtar 快 4–10 倍。
-
-### 4. `--gzip` 確實每 4 MiB 一個成員——而 `gzip -l` 看不到
+### 3. `--gzip` 確實每 4 MiB 一個成員——而 `gzip -l` 看不到
 
 | 封存 | 成員數 | 每成員解壓後大小 |
 |---|---|---|
@@ -422,45 +336,41 @@ CPU-bound**。對一個在等檔案系統的工作增加運算執行緒沒有幫
 順帶一提的推論：基於同樣的原因，`gzip -l` 對任何多成員封存回報的解壓後大小
 都是錯的。
 
-## macOS 與 Linux 的平行解壓（2026-08-11）
+## macOS 與 Linux 的平行解壓
 
 `verifications/parallel_extract_correctness.zsh` → `parallel_extract_correctness_output.txt`
 
-把小檔寫入跨執行緒批次化的 `FileWriterPool` 原本僅存在於 `#if os(Windows)` 之內。
-它現在在所有平台上執行，並在既有的 `winWriteFile` 之外加上 POSIX 寫入器
-（`posixWriteFile`）。
+把小檔寫入跨執行緒批次化的 `FileWriterPool` 在所有平台上執行，並在 `winWriteFile`
+之外有 POSIX 寫入器（`posixWriteFile`）。
 
-### 改了什麼
+### POSIX 寫入器如何運作
 
-- **每個檔案開一次，而非三次。** 原本的內聯路徑做 `createFile`、再
-  `FileHandle(forWritingAtPath:)`、再以 `setAttributes` 設 mtime。
-  `posixWriteFile` 只做一次 `open`，然後對同一個 descriptor 呼叫
-  `fchmod`／`futimens`。
+- **每個檔案只開一次。** `posixWriteFile` 只做一次 `open`，然後對同一個
+  descriptor 呼叫 `fchmod`／`futimens`。
 - **用 `fchmod` 而非事後以路徑呼叫 `chmod`。** 較便宜，而且正確：事後的路徑呼叫
   會與「此後把該名稱下的檔案換掉的其他 worker」形成競態。mode 也不能交給 `open`
   的 mode 參數——那會被 umask 遮罩且僅在建立時生效，於是 0755 會落成
   `0755 & ~umask`。
-- **保序屏障現已與平台無關**，因為危害從來不在檔案系統，而在佇列本身：對某名稱的
+- **保序屏障與平台無關**，因為危害不在檔案系統，而在佇列本身：對某名稱的
   排隊寫入必須在 symlink 取代它之前落地、`link(2)` 需要其目標已存在，而重複路徑
   必須由**最後**一個項目勝出。
 
 ### 結果：解出 8192 個小檔（合計 256 MiB）
 
-| | 之前 | 之後 |
-|---|---|---|
-| wall | 1528ms | **631ms** |
-| 寫入路徑（`-x` 減去 `-t`） | 1345ms | **397ms** |
-| CPU/wall | 1.01 | **6.40** |
-| 對比 bsdtar（2405ms） | 快 1.6 倍 | **快 3.8 倍** |
+| | swift_tar |
+|---|---|
+| wall | **631ms** |
+| 寫入路徑（`-x` 減去 `-t`） | **397ms** |
+| CPU/wall | **6.40** |
+| 對比 bsdtar（2405ms） | **快 3.8 倍** |
 
-512 個 512 KiB 的檔案：227ms → 133ms。
+512 個 512 KiB 的檔案：133ms。
 
-**大型檔案依設計不受影響，實測亦然。** 超過 `smallFileMax`（4 MiB）者仍走內聯串流，
-因為該 pool 會整檔緩衝，其記憶體上限為 inflight × smallFileMax。8 × 32 MiB 跑五輪：
-之前 169–185ms，之後 169–174ms。
+**大型檔案依設計走內聯串流。** 超過 `smallFileMax`（4 MiB）者不進 pool，因為該 pool
+會整檔緩衝，其記憶體上限為 inflight × smallFileMax。8 × 32 MiB 跑五輪：169–174ms。
 
-這也表示本項**並未**縮小「少量大檔」封存的差距——該情形下 swift_tar 仍落後 bsdtar。
-那個差距在讀取／解碼的管路，不在寫入：單看 `-t` 是 120ms，對比 bsdtar 的 32ms。
+因此 pool **不影響**「少量大檔」封存——該情形下 swift_tar 落後 bsdtar。那個差距在
+讀取／解碼的管路，不在寫入：單看 `-t` 是 120ms，對比 bsdtar 的 32ms。
 
 ### 正確性
 
@@ -478,32 +388,26 @@ CPU-bound**。對一個在等檔案系統的工作增加運算執行緒沒有幫
 | 重複路徑：最後一個項目勝出 | PASS | PASS |
 | 不可寫的目的地會大聲失敗 | PASS | PASS |
 
-### 這件事順帶抖出四個測試框架的臭蟲，每一個都偽裝成產品失敗
+### 測試框架的限制
 
-值得記錄，因為每一個都給出了「有自信的錯誤答案」：
+以下每一項都會讓測試框架偽造出產品失敗：
 
-1. **guest 上的 `tar -rf`** 靜默產生了只有**一個**成員的封存（busybox 沒有 append），
-   於是重複路徑那一案比對的輸入根本不含重複項——並回報 8/8 失敗。現改以 swift_tar
-   自己的 `-r` 建立，且在該案執行前先斷言成員數。
-2. **guest 上沒有 `stat`。** 權限與 hardlink 兩案讀到空字串而失敗，然而同樣涵蓋 mode
-   的完整指紋比對卻通過了。**一個與自己矛盾的量測工具，錯的是工具。** 現改用 zsh 的
-   `zsh/stat`。
-3. **`07777` 在 zsh 中是十進位的 7777。** zsh 不把前導零視為八進位，於是權限遮罩
-   靜默地把 0754 變成 0140。應寫 `8#7777`。
+1. **guest 上 busybox 的 `tar` 沒有 append**，`tar -rf` 會靜默產生只有一個成員的封存。
+   重複路徑的輸入以 swift_tar 自己的 `-r` 建立，且在該案執行前先斷言成員數。
+2. **guest 上沒有 `stat`。** 腳本使用 zsh 的 `zsh/stat`。
+3. **`07777` 在 zsh 中是十進位的 7777。** zsh 不把前導零視為八進位；權限遮罩寫成
+   `8#7777`。
 4. **guest 上沒有 `diff`**，而 `diff | while read` 會把迴圈放進子 shell，於是對報告的
-   附加內容全部消失。報告印出光禿的「DIFF」標題而其下空無一物——失去了失敗所能產生的
-   唯一證據。現改以 zsh 比對。
+   附加內容全部消失。檔案樹以 zsh 比對。
 
-第五個出現在效能測試框架：兩個並行執行共用同一個 scratch 目錄，於是一次 512 MiB 的
-解出「只花了」8ms。兩支腳本現在都改用 `mktemp -d`。
+本腳本與 `extract_write_path.zsh` 都使用 `mktemp -d`，故並行執行不會共用 scratch 目錄。
 
-## QoS class 與 `Thread.qualityOfService` 做不到的事（2026-08-13）
+## QoS class 與 `Thread.qualityOfService` 做不到的事
 
 `qos-DOE.swift` —— 不帶旗標執行即印出用法；`--skip-timing` 僅執行精確部分。
 原始輸出見 `qos-DOE_output.txt`。
 
-之所以寫這支程式，是因為 RGB1 量測回報了超過核心數的加速比，而「釘死 QoS」是當時
-的假設之一。它釐清了各 API 的實際行為：
+各 API 的實際行為：
 
 | api | 是否改變 `qos_class_self()` |
 | --- | --- |
@@ -525,41 +429,38 @@ CPU-bound**。對一個在等檔案系統的工作增加運算執行緒沒有幫
 | background | 539.5 ms | **113.9x** |
 
 對本專案有兩項後果。其一，在主執行緒上設定該屬性並假設已生效的量測程式，是在比較
-它以為相同、實則不同的執行緒 —— `swift_tar_DOE` 在改用 pthread 呼叫之前正是如此。
+它以為相同、實則不同的執行緒 —— 這正是 `swift_tar_DOE` 使用 pthread 呼叫的原因。
 其二，`taskpolicy -c background` 不是溫和的提示，而是兩個數量級的懲罰，絕不可套用
 在計時的執行上。
 
-> **計時一節為何採交錯執行。** 各類別依序跑完的話，`pthread_set(userInitiated)`
-> 在某個位置為 196.1 ms、另一個位置為 32.0 ms —— 同一個呼叫相差 6 倍，因為跑了
-> 十秒的 `background` 組會讓機器停在與開始時不同的狀態。任何對排程或熱敏感的項目，
+> **計時一節為何採交錯執行。** 各類別依序跑完的話，同一個呼叫的時間會隨其位置而
+> 改變，因為跑了十秒的 `background` 組會讓機器停在與開始時不同的狀態。任何對排程或熱敏感的項目，
 > 循序掃描皆不可信；故各組交錯執行並回報中位數。
 
 ---
 
-## 各平台效能資料 → `profile/`（2026-09-06）
+## 各平台效能資料 → `profile/`
 
 [`verifications/profile/`](profile/README.md) 存放各平台的計時資料與產生它們的腳本。
-上方那一節只在 macOS 上量過解壓；這個資料夾之所以存在，是因為答案後來被發現**取決於
-你問的是哪個平台**。
+解壓相對於 bsdtar 的速度**取決於平台**。
 
-同一支腳本、同樣三種形狀、兩個平台，五次交錯執行取最小值：
+同一支腳本、同樣三種形狀、兩個平台，交錯執行取最小值（swift_tar / bsdtar）：
 
 | 形狀 | macOS | Linux（QEMU aarch64） |
 |---|---|---|
-| 20 × 8 MB | 70 / 76 毫秒 = **0.92×** | 38 / 26 毫秒 = **1.46×** |
-| 200 × 800 KB | 47 / 61 毫秒 = **0.77×** | 31 / 25 毫秒 = **1.24×** |
-| 2000 × 80 KB | 85 / 156 毫秒 = **0.54×** | 50 / 35 毫秒 = **1.43×** |
+| 20 × 8 MB | 59 / 54 毫秒 = **1.09×** | 38 / 26 毫秒 = **1.46×** |
+| 200 × 800 KB | 43 / 57 毫秒 = **0.75×** | 31 / 25 毫秒 = **1.24×** |
+| 2000 × 80 KB | 67 / 151 毫秒 = **0.44×** | 50 / 35 毫秒 = **1.43×** |
 
-FAQ 一直記為未決問題的那個解壓差距，**是真的，而且只在 Linux 出現**。macOS 上
-swift_tar 現在三種形狀都是較快的一方——這延伸了上方那一節的結論：它已不只是「在小檔上
-勝出」，而是整個範圍都勝出，且語料愈碎領先愈多。
+解壓差距**只在 Linux 出現**：該處 swift_tar 在每種形狀都慢 1.24–1.46 倍。macOS 上
+swift_tar 在碎檔形狀明顯較快，語料愈碎領先愈多；20 × 8 MB 則接近持平。
 
 在此處量任何東西之前，該資料夾 README 裡有兩件事值得先知道：取樣式 profiler 對一個
-0.17 秒的目標無效（試過四種做法，最多只取到 52 個樣本）；以及參照 tar 必須以「問它是
+0.17 秒的目標無效（最多只取到 52 個樣本）；以及參照 tar 必須以「問它是
 什麼」來挑選——Linux VM 的 `/usr/bin/tar` **就是 swift_tar**，依檔名挑選會讓它與自己
 比較，並回報一個完美的 1.00×。
 
-## chunk 大小：4／8／16 MiB 各付出什麼（2026-09-27）
+## chunk 大小：4／8／16 MiB 各付出什麼
 
 `chunk_size_tradeoff.zsh` → `chunk_size_tradeoff.txt`
 
@@ -568,7 +469,7 @@ swift_tar 現在三種形狀都是較快的一方——這延伸了上方那一�
 所以腳本**重建**：把原始碼複製到暫存目錄，只替換那一行常數（逐支確認替換成功），以
 `compile_tar.zsh` 的 swiftc 參數與既有的 `build/` 產物建出每一支變體。不動工作樹、不呼叫
 `generate_version.zsh`（它會寫 `version-mac.txt`）、不覆蓋已安裝的執行檔。`--source REV`
-從 git 版本建置，別的 session 的未提交改動因此不會混進變體。
+從 git 版本建置，工作樹中未提交的改動因此不會混進變體。
 
 與現值相同的那一支用與其他變體完全相同的方式建置，三者之間唯一的差異就是那個常數；另外也
 量已安裝的執行檔，檢查這個建置方式等同正式建置。
@@ -583,9 +484,8 @@ claw-code，swift_tar `f6ba52c`，5 輪交錯取最小值，輸出在 RAM disk�
 
 **大小的差異是確定的，速度的差異不是。** 壓縮後大小與負載無關，兩次執行在輸出的精度（0.1 MiB）
 內相同。速度則
-否：與 4 MiB 同值的對照組在這次執行裡自己就偏離最多 5.8%；同一天較早一次未存檔的執行量到
-16 MiB 解壓 −10%，這次是 −5.1%——沒有重現，不採用。兩次唯一一致的是方向：chunk 越大，
-ZSTD 解壓與無壓縮 tar 越慢。
+否：與 4 MiB 同值的對照組在這次執行裡自己就偏離最多 5.8%。唯一一致的速度訊號是方向：
+chunk 越大，ZSTD 解壓與無壓縮 tar 越慢。
 
 **維持 4 MiB。** 放大 chunk 只換到 ≤4% 的 ZSTD 大小，速度沒有變好。TGZ 完全不受影響——gzip
 的視窗只有 32 KiB，chunk 碰不到它。
@@ -593,11 +493,11 @@ ZSTD 解壓與無壓縮 tar 越慢。
 `zstd_decode_gap.zsh --mode chunk` 問的是另一件事（固定 chunk 大小、以 `--zstd-level` 改變
 frame 內容），兩者不可互相引用。
 
-## ZIP：以 `-n` 個執行緒壓縮成員換到什麼（2026-10-14）
+## ZIP：以 `-n` 個執行緒壓縮成員換到什麼
 
 `zip_parallel_speed.zsh` → `zip_parallel_speed.csv2`、`zip_parallel_speed_output.txt`
 
-自 `79fa438` 起，ZIP 的每個成員各自由一個執行緒壓成 deflate 串流，再依序寫出；`-n` 是同時
+ZIP 的每個成員各自由一個執行緒壓成 deflate 串流，再依序寫出；`-n` 是同時
 壓縮的成員數，預設每個核心一個。腳本以每個 `-n` 各壓同一棵樹，三輪交錯、每個項目取最快的
 一輪，並計算輸出的雜湊：任何兩個排序的 swift_tar 項目 sha256 不同時，`record` 以 1 結束——
 速度若是靠改變位元組換來的，那就是另一個結果。
@@ -614,13 +514,12 @@ claw-code（1.3 GB，約 5,400 個檔案）：
 * **2 與 4 個執行緒幾乎線性，之後趨於平坦。** M4 只有 4 個效能核心，效率核心加入後使用者
   CPU 時間從 28.6 秒升到 36 秒。同一個檔案之內也沒有平行，所以最大的幾個成員決定了下限。
 * **`-n` 超過核心數反而較慢**（`-n 16`：M4 7.6 秒、guest 9.9 秒），記憶體也更多。
-* **`-n 1` 就是原本的路徑。** 同一份原始碼不帶多執行緒路徑的建置是 29.8 秒，`-n 1` 是
-  30.4 秒。
+* **`-n 1` 與不帶多執行緒路徑的建置相當：** 同一份原始碼不帶多執行緒路徑的建置是
+  29.8 秒，`-n 1` 是 30.4 秒。
 * **同一台機器上的其他工具都是單一執行緒：** M4 上 Info-ZIP `zip -r -6` 33.1 秒、
   `bsdtar --format zip` 32.8 秒；guest 內 `bsdtar` 28.4 秒。
 * **排序不花時間。** M4 上 `--zip-unsorted` 三輪都比預設慢（7.8 到 8.6 秒，預設 7.3 到
-  7.5 秒）；guest 內兩者每一輪互有快慢（9.1 到 10.0 秒，預設 8.8 到 10.1 秒）。M4 為什麼
-  有差沒有追查。
+  7.5 秒）；guest 內兩者每一輪互有快慢（9.1 到 10.0 秒，預設 8.8 到 10.1 秒）。
 
 這次量測的限制：M4 當時有其他工作，load average 為 4 到 6，所以它的絕對時間是上限；M4 的
 語料是 `cross_platform_bytes.zsh` 跑完留下的樹（多一個檔案、改了一個），所以它的 sha256 與

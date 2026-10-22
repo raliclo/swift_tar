@@ -12,11 +12,11 @@ repo. zlib, zstd, libarchive, xz and lz4 take their licences from their own subm
 
 - **Linux（musl 靜態）**：全部。Swift Static Linux SDK 6.4.0（static-linux-0.1.0）把 Swift runtime、
   Foundation（含 ICU）、libdispatch、musl、musl-fts、libc++／libc++abi／libunwind／compiler-rt 與
-  bzip2 靜態連入。2026-10-20 以 `-Xlinker -Map` 確認實際被拉進來的封存檔；SDK 裡的 mimalloc、curl、
+  bzip2 靜態連入。實際被拉進來的封存檔以 `-Xlinker -Map` 確認；SDK 裡的 mimalloc、curl、
   libxml2、BoringSSL 沒有被連入，所以不在這裡。
   **Linux (static musl)**: all of them. The Swift Static Linux SDK links in the Swift runtime,
   Foundation (with ICU), libdispatch, musl, musl-fts, libc++/libc++abi/libunwind/compiler-rt and
-  bzip2. Confirmed on 2026-10-20 from a `-Xlinker -Map` link map; the SDK's mimalloc, curl,
+  bzip2. Confirmed from a `-Xlinker -Map` link map; the SDK's mimalloc, curl,
   libxml2 and BoringSSL are not linked, so they are not here.
 - **Windows**：Swift runtime 那一組（下表標 W），因為封存附帶 Swift runtime DLL。`release.zsh` 只帶
   `swift_tar.exe` 經 PE import 一路實際載入的 DLL，所以 FoundationNetworking、FoundationXML（內含 curl、

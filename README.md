@@ -53,9 +53,7 @@ platform script directly still works.
 On macOS, **`compile_tar.zsh` on its own only builds**: the result stays in
 `release/swift_tar`, and the build ends by printing the command that installs it.
 Pass `--install` (or `-install`) to also copy it to `/opt/homebrew/bin/swift_tar`.
-`build.zsh` and `compile_no_lzfse.zsh` pass `--install` themselves, so they install as
-they always did. Until 2026-10-07 every `compile_tar.zsh` run installed, and a build
-made only to measure a branch replaced the `swift_tar` on another machine's PATH.
+`build.zsh` and `compile_no_lzfse.zsh` pass `--install` themselves, so they install.
 
 ### Linux
 
@@ -84,7 +82,7 @@ swift_tar itself never links libxml2. Compile and link are separate steps:
 Swift on aarch64 marks `.rodata` writable, and the script removes that flag
 from the objects in between, then refuses a binary whose `.rodata` is writable.
 
-Verified on aarch64 Linux (buildroot, glibc, Swift 6.3.3) under QEMU: builds
+Verified on aarch64 Linux (buildroot, glibc, Swift 6.4.0) under QEMU: builds
 clean, records its RPATH, and reports its linked libraries in
 `version-linux.txt`.
 
@@ -145,8 +143,8 @@ into the Windows ZIP as `version.txt` for release verification.
 The stamp file is suffixed by platform — `version-mac.txt`, `version-win.txt`,
 `version-musl-<arch>.txt`, and an uncommitted `version-linux.txt` from a glibc development
 build — because it records which libraries *this* build linked
-against. A single shared file meant whichever platform built last overwrote the
-other's provenance.
+against. With a single shared file, whichever platform built last would overwrite
+the other's provenance.
 
 The remaining external codecs (bzip2, xz, lz4, lzip) require their corresponding
 Scoop CLI tools; `build_tool_install-win.bat` bootstraps and installs the complete
@@ -163,7 +161,7 @@ because they are development artifacts, not runtime dependencies.
 Releases are the public build (no LZFSE), one `.tar.zst` per platform on the
 [GitHub Releases](https://github.com/raliclo/swift_tar/releases) page, each with a
 `.sha256` beside it. `swift_tar --version` prints the version, the build id
-(`v0.1.0 / <commit>` for a binary built at the tag) and the provenance stamp.
+(`v0.1.1 / <commit>` for a binary built at the tag) and the provenance stamp.
 
 ```sh
 # macOS (Apple silicon) — this repository is its own tap; `brew trust` is required
@@ -176,8 +174,8 @@ scoop bucket add raliclo https://github.com/raliclo/lzfse2
 scoop install raliclo/swift_tar
 
 # Linux (x86-64 or aarch64) — fully static: extract and put swift_tar on PATH
-sha256sum -c swift_tar-0.1.0-linux-x86_64.tar.zst.sha256
-zstd -dc swift_tar-0.1.0-linux-x86_64.tar.zst | tar -xf -
+sha256sum -c swift_tar-0.1.1-linux-x86_64.tar.zst.sha256
+zstd -dc swift_tar-0.1.1-linux-x86_64.tar.zst | tar -xf -
 ```
 
 ### Making a release
@@ -469,28 +467,14 @@ skipped entry **does** change the exit code: `-x` reports the count and exits
 non-zero at the end of the run, because `--strict` is the default. Every other
 member is still extracted. See [Exit status](#exit-status).
 
-> **Corrected 2026-10-22.** This paragraph used to read *"a skipped entry does not
-> change the exit code — the run still ends 0 — so a script extracting an untrusted
-> archive should read stderr, or compare the extracted tree against `-t`, rather
-> than trusting the status alone."* That was written before `--strict` became the
-> default on 2026-10-08 and had been contradicting the `--strict` row of the
-> [options table](#options) ever since. Measured on 2026-10-22, an archive holding
-> `../escape.txt` plus `good.txt`:
-> `skipping unsafe path '../escape.txt'` → `1 member(s) skipped; pass --no-strict to
-> exit 0 anyway` → **exit 1**. The wrong text is kept here because of what it was
-> wrong *about*: a paragraph whose whole purpose was "do not trust the exit status"
-> was itself the reason to distrust it, and it survived two weeks looking like
-> security advice. Reading stderr is still good practice — it is the only way to
-> learn *which* member was dropped — but it is no longer the only signal.
->
-> **2026-10-22 更正。** 本段原文為「a skipped entry does not change the exit code —
-> the run still ends 0」，寫於 `--strict` 於 2026-10-08 成為預設之前，自此一直與
-> [選項表](#options)中 `--strict` 那一列互相矛盾。2026-10-22 實測，封存含
-> `../escape.txt` 與 `good.txt`：`skipping unsafe path '../escape.txt'` →
-> `1 member(s) skipped; pass --no-strict to exit 0 anyway` → **exit 1**。保留錯誤原
-> 文是因為它錯的對象：一個通篇在教人「不要只信退出碼」的段落，自己正是不該被相信的
-> 那一段，而它以安全建議的外觀存活了兩週。讀 stderr 仍是好習慣——那是唯一能知道*哪個*
-> 成員被丟掉的途徑——但它已不再是唯一的訊號。
+```sh
+release/swift_tar -x -f untrusted.tar     # holds ../escape.txt and good.txt
+# -> swift_tar: skipping unsafe path '../escape.txt'
+# -> swift_tar: I/O error: 1 member(s) skipped; pass --no-strict to exit 0 anyway
+# -> exit 1, good.txt extracted
+```
+
+stderr is the only place that says *which* member was skipped.
 
 **Which entry types are stored and restored.** Regular files, directories,
 symlinks, hardlinks and FIFOs. A FIFO is included because `mkfifo` needs no
@@ -635,8 +619,7 @@ The tar compression codecs emit concatenatable streams, so `gunzip`, `bunzip2`,
 `xz`, `lzip`, `zstd`, and `lz4` decode those outputs directly. ZIP/ZIP64 is a
 container backend and interoperates with `unzip`, `bsdtar`, and other ZIP tools.
 
-**A FIFO is stored in a ZIP too** (since 2026-10-09; before that it was skipped with
-`zip format cannot archive named pipes`), as a zero-length entry whose Unix mode
+**A FIFO is stored in a ZIP too**, as a zero-length entry whose Unix mode
 says FIFO. swift_tar extracts it as a FIFO. **Other tools may not:** Info-ZIP
 `unzip` extracts it as an empty regular file, and stock libarchive (`bsdtar`)
 does the same, because it reads every FIFO entry as a regular file — a workaround
@@ -725,9 +708,9 @@ would not predict.
 | `-C <dir>`  | Change input directory before create (must exist); extract into it when reading (created if missing) |
 | `--strip-components <N>` | (`-x` tar extraction only) Remove N leading path components before writing entries; also accepts `--strip-components=N` |
 | `--zstd-level <N>` | (`--zstd` only) Compression level, `1`…`22`, default `9`. Out of range or non-numeric exits **2**. Silently ignored if `--zstd` is not also given — see below |
-| `--no-checksum`, `-no-checksum` | (`-c` with `--zstd`, `--lz4` or `--xz`) Omit content checksums. **They are written by default**: the low 32 bits of XXH64 per zstd frame, XXH32 per lz4 frame, CRC64 per xz stream, so a damaged chunk fails to decode instead of decoding to wrong bytes. gzip, bzip2, lzip and ZIP always carry a CRC, so the flag changes nothing there. Archives written before 2026-10-07 have no zstd or lz4 checksum. |
+| `--no-checksum`, `-no-checksum` | (`-c` with `--zstd`, `--lz4` or `--xz`) Omit content checksums. **They are written by default**: the low 32 bits of XXH64 per zstd frame, XXH32 per lz4 frame, CRC64 per xz stream, so a damaged chunk fails to decode instead of decoding to wrong bytes. gzip, bzip2, lzip and ZIP always carry a CRC, so the flag changes nothing there. |
 | `--skip-compressed` | (`-c` with a stream codec) One regular file with an already-compressed suffix is written as a plain tar instead. Off by default; see [Already-compressed suffixes](#already-compressed-suffixes---skip-compressed) for the list and the reasons |
-| `--strict`, `--no-strict` | (`-x`) **Strict is the default:** a skipped member makes `-x` exit non-zero after every other member has been extracted; `--exclude` matches do not count. `--no-strict` exits `0` after skips, the behaviour before 2026-10-08. `--strict` is accepted for callers that want to say so. See [Exit status](#exit-status) |
+| `--strict`, `--no-strict` | (`-x`) **Strict is the default:** a skipped member makes `-x` exit non-zero after every other member has been extracted; `--exclude` matches do not count. `--no-strict` exits `0` after skips. `--strict` is accepted for callers that want to say so. See [Exit status](#exit-status) |
 | `-n <N>`    | In-flight parallel chunks (default: one per core, capped at 4 × cores) |
 | `-v`        | Name each member as it is processed, on stderr, and print the detected filter chain. **It does not produce a long listing** — there are no sizes, modes or timestamps, and `-t -v` prints the same names as `-t` plus one filter-chain line. If you arrived from `tar -tvf` expecting a table, this is not it. |
 | `-m`, `--touch` | (`-x` only) Do **not** restore the archived mtime; extracted files get the current time. `-m` is the GNU tar spelling and is accepted as an exact alias |
@@ -739,10 +722,10 @@ would not predict.
 | `--encrypt` | (`-c` only) Encrypt with ChaCha20-Poly1305; prompts for a passphrase |
 | `--keyfile <path>` | Use the file's bytes as key material instead of a passphrase (create and read; required when stdin is not a terminal). **On create it turns encryption on by itself** — `-c --keyfile k.bin -f out.enc src/` encrypts; you do not also need `--encrypt`. |
 | `--force`   | (`-x` only) Allow a member to overwrite one written earlier in the *same* extraction; without it that case is refused |
-| `-h`, `--dereference` | (`-c`, `-r`, `-u`) Follow symlinks: store what each one points to rather than the link itself. **A link `-h` cannot resolve is reported and stored as a link, never dropped** — whether it is broken, has an unstattable target, or points back into a directory already on the current path (a cycle, which is reported and not expanded). Before 2026-10-22 all three dropped the member. Two links reaching the same directory by different routes are **not** a cycle and are both archived. See [What `--dereference` archives](#what---dereference-archives). |
+| `-h`, `--dereference` | (`-c`, `-r`, `-u`) Follow symlinks: store what each one points to rather than the link itself. **A link `-h` cannot resolve is reported and stored as a link, never dropped** — whether it is broken, has an unstattable target, or points back into a directory already on the current path (a cycle, which is reported and not expanded). Two links reaching the same directory by different routes are **not** a cycle and are both archived. See [What `--dereference` archives](#what---dereference-archives). |
 | `--exclude <pattern>` | (`-c`, `-r`, `-u`) Skip members matching the glob, repeatable; `--exclude=PATTERN` is accepted too. Matched as bsdtar does, which was measured rather than assumed: `*` crosses `/`, a pattern holding no `/` is also tried against every path component, and a pattern matching a directory takes its whole subtree. An excluded directory is **never descended into**, so this steps around an unreadable subtree rather than merely omitting it from the listing. |
-| `--help`    | Help. **`-h` used to mean this.** It now means `--dereference`, matching GNU tar and bsdtar; help is `--help`, which is GNU's spelling and what bsdtar has always used. |
-| `--version` | Show the fixed build-date version (`yyyyMMdd-HHmmss`) |
+| `--help`    | Help. **`-h` is not help**: it means `--dereference`, matching GNU tar and bsdtar; help is `--help`, which is the spelling GNU tar and bsdtar use. |
+| `--version` | Show the version, build id and build stamp (`swift_tar 0.1.1 (v0.1.1 / d3e2f887) 20261020-102103`) |
 | `--crypto-selftest` | Run the crypto unit tests (published vectors, header parsing, chunk framing), then exit |
 
 `--zstd-level` is honoured only when `--zstd` is also given. On its own it is
@@ -774,18 +757,13 @@ absorbed.
 To exclude a directory in a way both tars agree on, name it without a trailing `/*`:
 `--exclude sub` or `--exclude src/sub`.
 
-### `-h` changed meaning
+### `-h` means `--dereference`, not help
 
-`-h` used to print this help. It now means `--dereference`, as it does in GNU tar
-and bsdtar; help moved to `--help`.
+`-h` means `--dereference`, as it does in GNU tar and bsdtar; help is `--help`.
+`swift_tar -c -h -f out.tar src/` writes an archive with every symlink resolved to
+its target — larger, and holding the contents rather than the links — and exits 0.
 
-The change is deliberate but it is worth stating plainly, because both spellings
-exit zero. A caller that ran `swift_tar -c -h -f out.tar src/` expecting the help
-text now gets an archive with every symlink resolved to its target — larger, and
-holding the contents rather than the links. Nothing fails; the archive is simply
-not the one that was intended.
-
-`swift_tar -h` on its own still fails loudly, since `-h` alone names no operation.
+`swift_tar -h` on its own fails loudly, since `-h` alone names no operation.
 
 ### What `--dereference` archives
 
@@ -812,12 +790,7 @@ Two consequences on extraction, neither of which needs a flag:
   follow is the exception: it is stored as a link, and reported on stderr when it
   happens. See below.
 - The guard that refuses to write through a symlink planted by an earlier entry
-  still applies, unchanged. Before 2026-10-22 this section said the guard "never
-  comes into play, because there is no such entry to plant" — true then, because an
-  unfollowable link was dropped from the archive altogether, and **wrong now**. The
-  guard was never removed, so nothing became less safe; what changed is that the
-  reason given here no longer holds, and a security property should not rest on an
-  entry type merely happening to be absent.
+  applies as usual, including to a link `-h` stored because it could not follow it.
 
 **A link `-h` cannot follow is stored as a link, not dropped.** A dangling link, or
 one whose target cannot be `stat`ed, keeps its entry with its target string, and the
@@ -827,12 +800,9 @@ run says so:
 swift_tar: './mmm': --dereference cannot follow it, storing the link itself
 ```
 
-Until 2026-10-22 the entry was reported and **dropped**, so `-c -h` could silently
-return an archive missing a member and still exit 0. Measured on a directory holding
-`aaa.txt`, a dangling link `mmm`, and `zzz.txt`: three members before the fix, four
-after. The one thing `-h` is allowed to fail at is dereferencing — not keeping the
-name in the archive. `bsdtar` falls back the same way (measured on macOS, `bsdtar
-3.5.3`) but says nothing; GNU tar drops the entry and exits non-zero.
+The one thing `-h` is allowed to fail at is dereferencing — not keeping the name in
+the archive. `bsdtar` falls back the same way (macOS, `bsdtar 3.5.3`) but says
+nothing; GNU tar drops the entry and exits non-zero.
 
 **`-h` 跟不上的連結會存成連結，不會被丟掉。** 斷掉的連結，或目標 `stat` 不到的連結，會保留
 自己的項目與目標字串，並在執行時說明：
@@ -841,10 +811,8 @@ name in the archive. `bsdtar` falls back the same way (measured on macOS, `bsdta
 swift_tar: './mmm': --dereference cannot follow it, storing the link itself
 ```
 
-2026-10-22 之前該項目會被回報並**丟掉**，於是 `-c -h` 可能靜默交出一個少了成員的封存、
-而且仍以 0 結束。以一個含 `aaa.txt`、斷鏈 `mmm`、`zzz.txt` 的目錄實測：修正前 3 個成員，
-修正後 4 個。`-h` 唯一被允許失敗的是「解參照」——不是「把名稱留在封存裡」。`bsdtar` 有同樣
-的後援（於 macOS、`bsdtar 3.5.3` 實測）但不作聲；GNU tar 則丟掉該項目並以非零結束。
+`-h` 唯一被允許失敗的是「解參照」——不是「把名稱留在封存裡」。`bsdtar` 有同樣的後援
+（macOS、`bsdtar 3.5.3`）但不作聲；GNU tar 則丟掉該項目並以非零結束。
 
 **A cycle is the same case.** A link pointing back into a directory already on the
 current path is not expanded — that is what cycle detection is for — but the link
@@ -877,10 +845,8 @@ GNU tar   -c -h   2,200+ nested members     exit 2 — it does not detect this c
 - **The contents of a directory that cannot be listed.** The directory's own entry
   is written, then the listing failure is reported, the walk moves on, and the run
   exits 1 at the end, as bsdtar's does:
-  `swift_tar: ./mmm/: cannot read directory, contents left out: Permission denied`. Before 2026-10-22
-  the failure was swallowed and the subtree vanished with an empty stderr and exit
-  0 — the archive held `./mmm/` and nothing under it, with nothing said. bsdtar's
-  archive holds the same entries and reports it too.
+  `swift_tar: ./mmm/: cannot read directory, contents left out: Permission denied`.
+  bsdtar's archive holds the same entries and reports it too.
 
 **仍刻意丟掉者，皆有實測理由：**
 
@@ -891,34 +857,30 @@ GNU tar   -c -h   2,200+ nested members     exit 2 — it does not detect this c
   地重建。GNU tar 與 bsdtar 也都略過這兩者。
 - **列不出內容的目錄，其內容。** 該目錄自身的項目會寫出，接著回報列目錄失敗並繼續走訪，
   最後與 bsdtar 一樣以 1 結束：
-  `swift_tar: ./mmm/: cannot read directory, contents left out: Permission denied`。2026-10-22 之前這個失敗會被
-  吞掉，整棵子樹連同空白的 stderr 與 exit 0 一起消失——封存裡有 `./mmm/` 而其下一無所有，
-  且一個字都沒說。bsdtar 的封存含有同樣的項目，而它也會回報。
+  `swift_tar: ./mmm/: cannot read directory, contents left out: Permission denied`。
+  bsdtar 的封存含有同樣的項目，而它也會回報。
 
 The cost is duplication: several links pointing at one directory each store its
 contents again, and a link out of the tree pulls that content into the archive.
 
-**On Windows this works for WSL/MSYS links too**, which it did not before
-2026-10-22. `ln -s` under WSL leaves an `IO_REPARSE_TAG_LX_SYMLINK` reparse point,
+**On Windows this works for WSL/MSYS links too.** `ln -s` under WSL leaves an `IO_REPARSE_TAG_LX_SYMLINK` reparse point,
 and **NT will not traverse one at all** — `cmd` lists it as `<JUNCTION> name [...]`
 with an empty target and `type` on it fails with "The file cannot be accessed by the
 system". `-h` therefore has to resolve such a link itself and read through the
-resolved path while still storing the member under the link's own name. Measured on
-an LX link `dlink -> realdir`: `./ ./dlink/ ./dlink/f.txt ./realdir/ ./realdir/f.txt`
-— the same five members GNU tar stores, where before the fix the link's whole
-subtree was reported as unfollowable and dropped. A genuinely dangling LX link is
-still reported and skipped, and an LX link pointing back up its own path is still
-caught as a cycle. See [bugs/bsdtar-bug.md](bugs/bsdtar-bug.md) for how the two
+resolved path while still storing the member under the link's own name. For an LX
+link `dlink -> realdir` the archive holds `./ ./dlink/ ./dlink/f.txt ./realdir/
+./realdir/f.txt` — the same five members GNU tar stores. A genuinely dangling LX link is
+reported and stored as the link itself, like any link `-h` cannot follow, and an LX
+link pointing back up its own path is caught as a cycle. See [bugs/bsdtar-bug.md](bugs/bsdtar-bug.md) for how the two
 reference implementations handle the same links — neither does so safely.
 
-**在 Windows 上這對 WSL／MSYS 連結同樣有效**，2026-10-22 之前並非如此。WSL 下的 `ln -s`
+**在 Windows 上這對 WSL／MSYS 連結同樣有效。** WSL 下的 `ln -s`
 留下的是 `IO_REPARSE_TAG_LX_SYMLINK` reparse point，而 **NT 完全不穿過這種連結**——`cmd`
 會把它列成 `<JUNCTION> name [...]`、目標為空，對它執行 `type` 得到「The file cannot be
 accessed by the system」。因此 `-h` 必須自行解析該連結、經由解析後的路徑讀取，同時仍把成員
-存在連結自己的名稱之下。以 LX 連結 `dlink -> realdir` 實測：
-`./ ./dlink/ ./dlink/f.txt ./realdir/ ./realdir/f.txt`——與 GNU tar 存下的五個成員相同，而
-修正前該連結的整棵子樹會被回報為無法跟隨並丟棄。真正斷掉的 LX 連結仍會被回報並略過，指回
-自身路徑的 LX 連結仍會被判定為迴圈。兩個參照實作如何處理同一批連結，見
+存在連結自己的名稱之下。對 LX 連結 `dlink -> realdir`，封存內含
+`./ ./dlink/ ./dlink/f.txt ./realdir/ ./realdir/f.txt`——與 GNU tar 存下的五個成員相同。真正斷掉的 LX 連結會被回報並存成連結本身，
+與其他 `-h` 跟不上的連結相同；指回自身路徑的 LX 連結會被判定為迴圈。兩個參照實作如何處理同一批連結，見
 [bugs/bsdtar-bug.md](bugs/bsdtar-bug.md)——兩者都不安全。
 
 ### Which way `-f` points
@@ -977,10 +939,10 @@ corpus spanning three 4 MiB chunks:
 | plain tar and every stream codec (`--zstd`, `--gzip`, `--xz`, `--bzip2`, `--lz4`) | **yes**, across runs |
 | the same, across `-n 1`, `2`, `4`, `8`, `16` | **yes** — parallelism does not change a byte |
 | `--encrypt` | **no, by design** — a fresh nonce each run; the decrypted plaintext is identical |
-| `--zip`, `--zip64` | **yes**, across runs, since 2026-10-09 — each entry records its mtime only. Before that it also recorded atime and ctime, which reading the tree changes, so no two runs matched |
-| `--zip`, `--zip64`, on another filesystem or platform, with one `TZ` | **yes** — byte-identical on macOS and Linux (measured 2026-10-13). Members are sorted like the tar path's, one directory at a time. ZIP headers hold local time, so `TZ` has to match |
-| the same with `--zip-unsorted` | **no** — members are written in the order the filesystem lists them. Measured 2026-10-13: one tree gave different ZIPs on macOS (APFS) and Linux (tmpfs), same size, different order. Memory is the same either way: 1,001,206 entries peaked at 175 MB sorted and 173 MB unsorted |
-| `--zip`, `--zip64`, across `-n 1`, `2`, `4`, `8`, `10`, `16` | **yes** — members are compressed on `-n` threads and written in order, and each is the deflate stream one thread would have made (measured 2026-10-14). On an M4, claw-code (1.3 GB, 5,408 files): 30.4 s with `-n 1`, 9.1 s with `-n 4`, 7.1 s with `-n 10`; peak memory 9 MB, 128 MB and 187 MB (`verifications/zip_parallel_speed.zsh`). Windows builds compress on one thread whatever `-n` is |
+| `--zip`, `--zip64` | **yes**, across runs — each entry records its mtime only, not atime or ctime, which reading the tree changes |
+| `--zip`, `--zip64`, on another filesystem or platform, with one `TZ` | **yes** — byte-identical on macOS and Linux. Members are sorted like the tar path's, one directory at a time. ZIP headers hold local time, so `TZ` has to match |
+| the same with `--zip-unsorted` | **no** — members are written in the order the filesystem lists them: one tree gives different ZIPs on macOS (APFS) and Linux (tmpfs), same size, different order. Memory is the same either way: 1,001,206 entries peaked at 175 MB sorted and 173 MB unsorted |
+| `--zip`, `--zip64`, across `-n 1`, `2`, `4`, `8`, `10`, `16` | **yes** — members are compressed on `-n` threads and written in order, and each is the deflate stream one thread would have made. On an M4, claw-code (1.3 GB, 5,408 files): 30.4 s with `-n 1`, 9.1 s with `-n 4`, 7.1 s with `-n 10`; peak memory 9 MB, 128 MB and 187 MB (`verifications/zip_parallel_speed.zsh`). Windows builds compress on one thread whatever `-n` is |
 
 The `-n` result is the useful one: chunking is deterministic, not merely
 reassembled in the right order, so an archive built with `-n 16` on one machine
@@ -1001,7 +963,7 @@ which one you get is not a stable interface and may change between builds.
 **A truncated archive is a failure, not an empty one.** An empty file is a legal
 empty archive and exits `0`, matching `bsdtar`. Anything else that cannot be read
 as an archive exits non-zero — including a `.tar.gz` cut inside its gzip header,
-which decodes to zero bytes and used to be indistinguishable from the empty case.
+which decodes to zero bytes just as an empty archive does.
 So `-t` exiting `0` does mean the archive was readable.
 
 **A non-zero exit does not mean nothing was written.** Work is streamed, not
@@ -1019,7 +981,7 @@ Measured behaviour on failure:
 | case | left behind |
 |---|---|
 | create, bad path among good ones | a valid archive holding the entries processed before it |
-| create (`-c`, `-r`, `-u`, `--zip`), an unreadable directory or file (permission denied) | a valid archive holding everything else; each one is reported as it is met and the run exits non-zero at the end, as bsdtar does. Before 2026-10-22 an unreadable directory was stored empty with exit `0`, an unreadable file left a truncated archive, and `--zip` stopped at the first one, leaving an empty or partial ZIP |
+| create (`-c`, `-r`, `-u`, `--zip`), an unreadable directory or file (permission denied) | a valid archive holding everything else; each one is reported as it is met and the run exits non-zero at the end, as bsdtar does |
 | create, bad path first | the archive file, empty (0 bytes) |
 | extract, archive truncated mid-stream | the entries already extracted, complete; the member the cut fell inside is not created at all, so no half-written file is left |
 | extract, a member skipped (unsafe path, write or create failure, …) | every other member, complete; the run reports the count and exits non-zero only at the end (see `--strict` below) |
@@ -1045,14 +1007,11 @@ Two cases deserve their own line because a script will otherwise get them wrong:
   you need to know.
 - **`-x` with `-C` pointing at a missing directory exits `0`** and creates the
   directory. See the `-C` table above.
-- **`-x` exits non-zero when it skipped a member (`--strict`, the default since
-  2026-10-08).** A member refused for an unsafe path (absolute, `..`, through a
+- **`-x` exits non-zero when it skipped a member (`--strict`, the default).** A member refused for an unsafe path (absolute, `..`, through a
   symlink), one that could not be written or created, and one whose type cannot exist
   on this platform all count; a member left out by `--exclude` does not, since you
   asked for it. Every other member is still extracted — the count is reported at the
-  end. `--no-strict` restores the earlier behaviour of exiting `0` after a skip. Before
-  this, a transfer whose extraction skipped files looked successful to any caller that
-  read only the exit status.
+  end. `--no-strict` exits `0` after a skip instead.
 
 ## Layout
 

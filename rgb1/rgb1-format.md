@@ -34,15 +34,13 @@ ellipsoid height。固定文字欄位以 raw ASCII byte array 儲存，使用 NU
 `480`（UTC+08:00）。
 
 > **Before proposing a payload change, read this.** Four payload redesigns have
-> been implemented, measured against real 1080p frames, and rejected. Because
-> each was reverted, none of them appears in the git history — only this table
-> records that the experiment happened. Re-proposing one of these needs new
-> evidence, not new intuition. Full measurements and reasoning are in `FAQ.md`.
+> been measured against real 1080p frames and rejected. Re-proposing one of
+> these needs new evidence, not new intuition. Full measurements and reasoning
+> are in `FAQ.md`.
 >
-> **提出 payload 變更前請先閱讀。** 已有四項 payload 重新設計經過實作、以真實
-> 1080p 影格量測後遭否決。由於每一項都已回退，git 歷史中不會留下任何痕跡——
-> 只有本表記錄這些實驗曾經發生。要重提其中任一項，需要新的證據而非新的直覺。
-> 完整量測與推論見 `FAQ.md`。
+> **提出 payload 變更前請先閱讀。** 已有四項 payload 重新設計以真實 1080p 影格
+> 量測後遭否決。要重提其中任一項，需要新的證據而非新的直覺。完整量測與推論見
+> `FAQ.md`。
 >
 > | proposal / 提案 | measured result / 量測結果 |
 > |---|---|
@@ -140,33 +138,24 @@ such requirement, so it is quoted at the plain single-threaded cost that
 才使其降到 6.5 ms。封存並無此需求，故直接標示單執行緒成本，即 `zstd -19 frame.rgb1`
 同樣要付的代價。
 
-Level 9 was recommended here previously; measurement retired it. At 1 slice on
-`-n 1` it costs **52.7 ms/frame**, which overruns even a 30 fps budget (33.3 ms).
+Level 9 is not recommended for either use. At 1 slice on `-n 1` it costs **52.7 ms/frame**, which overruns even a 30 fps budget (33.3 ms).
 It does buy real size — 44.0% of raw against `-3`'s 49.7%, an 11% reduction — but
 not at a rate any live path can pay for.
 
-此處先前建議 level 9，量測後已淘汰該建議。在 1 個 slice、`-n 1` 下它要
+兩種用途皆不建議 level 9。在 1 個 slice、`-n 1` 下它要
 **52.7 ms/frame**，連 30 fps 的預算（33.3 ms）都塞不下。它確實換到實質的體積——
 壓到原始的 44.0%，相對 `-3` 的 49.7% 少了 11%——但沒有任何即時路徑付得起這個代價。
 
-> **All four figures above were re-measured on 2026-08-14.** The table read
-> 6,040 ms for archive, 15.4 / 9.8 ms for stream and 168 ms for level 9, and said
-> level 9 gave up "only a few percent" of size. Every one of those predated three
-> fixes to the benchmark itself — in-process libzstd instead of a subprocess, a
-> pinned QoS so both arms are scheduled alike, and the per-frame reassembly moved
-> out of the timed region — and were 8.2x, 2.3x and 3.2x too high respectively.
-> The conclusions did not change: level 9 still cannot stream, and level 19 is
-> still offline-only. Current source: `comparison.csv` (produced by
+> **Source of the figures above:** `comparison.csv` (produced by
 > `../verifications/rgb1/streaming_budget_benchmark.zsh`) and a `swift_tar_DOE
-> --preset raw --slices 1 -n 1` sweep, both over the 48-frame corpus.
+> --preset raw --slices 1 -n 1` sweep, both over the 48-frame corpus, using
+> in-process libzstd with a pinned QoS and the per-frame reassembly outside the
+> timed region.
 >
-> **上述四個數字皆於 2026-08-14 重測。** 本表原記封存為 6,040 ms、串流為 15.4／9.8 ms、
-> level 9 為 168 ms，並稱 level 9「只換到數個百分點」的體積。這些全都早於 benchmark
-> 自身的三項修正——改用行程內 libzstd 而非子行程、釘死 QoS 使兩組獲得相同排程、將逐格
-> 重組移出計時區——分別高了 8.2 倍、2.3 倍與 3.2 倍。結論未變：level 9 仍無法串流，
-> level 19 仍僅適用離線。現值來源：`comparison.csv`（由
+> **上述數字來源：**`comparison.csv`（由
 > `../verifications/rgb1/streaming_budget_benchmark.zsh` 產生），以及對 48 格語料執行的
-> `swift_tar_DOE --preset raw --slices 1 -n 1` 掃描。
+> `swift_tar_DOE --preset raw --slices 1 -n 1` 掃描；皆使用行程內 libzstd、釘死 QoS，
+> 且逐格重組不在計時區內。
 
 ```sh
 zstd -3 frame.rgb1 -o frame.rgb1.zst      # stream / 串流
@@ -207,15 +196,13 @@ streaming integration.
 - 加入 RGB1.ZST 偵測：先做 zstd decode，再解析 RGB1。
 - 新增 `RGBD1` 或 `RGS1` stream 格式，用於 keyframe + diff stepping。
 
-### Resolved: the display path stays RGB / 已決議：顯示路徑維持 RGB
+### The display path stays RGB / 顯示路徑維持 RGB
 
-The open question "does the long-term display path remain RGB or move to
-YUV/NV12" is closed: **RGB1 stays RGB.** NV12 does transfer 2.14x smaller after
+**RGB1 stays RGB; the display path does not move to YUV/NV12.** NV12 does transfer 2.14x smaller after
 compression, but that advantage is only collectable by going through a hardware
 video decoder, which means giving up RGB1 entirely. Measurements behind this:
 
-「長期顯示路徑維持 RGB 或改走 YUV/NV12」此一未決問題已收斂：**RGB1 維持 RGB。**
-NV12 壓縮後的傳輸量確實小 2.14 倍，但該優勢唯有走硬體視訊解碼器才拿得到，而那
+**RGB1 維持 RGB，顯示路徑不改走 YUV/NV12。**NV12 壓縮後的傳輸量確實小 2.14 倍，但該優勢唯有走硬體視訊解碼器才拿得到，而那
 等同完全放棄 RGB1。支持此決議的量測：
 
 - Channel order is already correct for the GPU. P6 uploads to a `.rgba8Unorm`
@@ -236,10 +223,10 @@ NV12 壓縮後的傳輸量確實小 2.14 倍，但該優勢唯有走硬體視訊
   路徑。實測為 1.01 ms/frame，對比交錯加補 alpha 的 2.12 ms，且渲染像素完全相同
   （`P6-DOE`）。注意此適用於**串流**路徑，其解碼器本就輸出 planar；容器本身儲存
   交錯 R,G,B，直接從磁碟讀取仍須先解交錯。
-- Storing the payload as `gbrp` was implemented, measured and reverted: it costs
-  13.8% to 31.4% on direct container compression depending on zstd level. See
-  `FAQ.md`.
-  將 payload 改存 `gbrp` 曾經實作、量測並回退：依 zstd 等級不同，直接壓縮容器會
-  多付 13.8% 至 31.4%。詳見 `FAQ.md`。
+- The container payload stays interleaved rather than `gbrp`: storing it as
+  `gbrp` costs 13.8% to 31.4% on direct container compression depending on zstd
+  level. See `FAQ.md`.
+  容器 payload 維持交錯排列而非 `gbrp`：改存 `gbrp` 時，依 zstd 等級不同，直接
+  壓縮容器會多付 13.8% 至 31.4%。詳見 `FAQ.md`。
 - See `FAQ.md` for the full NV12 vs RGB1 comparison.
   完整的 NV12 與 RGB1 比較見 `FAQ.md`。

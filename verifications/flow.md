@@ -1,16 +1,13 @@
 # Cross-platform verification flow / 跨平台驗證流程
 
-Two machines work on this repository at once — macOS here, Windows there — and
-both have run blind documentation tests and fixed defects independently. Twice
-now that has produced avoidable damage: a fix verified only on Windows took ZIP
-out entirely on macOS, and a rebase of parallel README edits nearly duplicated
-two whole sections. This file exists so the order of operations is written down
-rather than re-derived each time.
+Several machines work on this repository at once, and each can run blind
+documentation tests and fix defects independently. A fix verified on one platform
+can break another, and parallel README edits can collide on rebase. This file
+writes down the order of operations so it is not re-derived each time.
 
-本程式庫同時有兩台機器在作業——此處是 macOS，另一端是 Windows——雙方都各自跑過盲測
-並修過缺陷。至今已有兩次因此造成本可避免的損害：一個僅在 Windows 驗證過的修正讓
-macOS 的 ZIP 完全失效；而平行的 README 編輯在 rebase 時幾乎複製了整整兩個章節。本檔
-的存在，是為了把操作順序寫下來，而不是每次重新推導。
+本程式庫同時有多台機器在作業，每一台都可能各自跑盲測並修缺陷。只在一個平台驗證過的
+修正可能弄壞另一個平台，平行的 README 編輯也可能在 rebase 時互相衝突。本檔把操作順序
+寫下來，而不是每次重新推導。
 
 ## The rule / 規則
 
@@ -19,13 +16,13 @@ macOS 的 ZIP 完全失效；而平行的 README 編輯在 rebase 時幾乎複�
 **先收齊所有平台的證據，最後才一次改完程式碼。**
 
 Not because batching is tidier, but because a change made after seeing one
-platform is a change made in ignorance of the other three. The ZIP outage is the
-worked example: `hdrcharset=UTF-8` was correct for Windows, fatal for macOS, and
-nobody could have known that from the Windows machine alone.
+platform is a change made in ignorance of the other three. For example, ZIP's
+`hdrcharset=UTF-8` works on Windows and breaks every ZIP write on macOS, and
+nothing on the Windows machine alone shows that.
 
 這麼做不是因為批次比較整齊，而是因為「只看過一個平台就動手」等於在對其餘三個平台
-一無所知的情況下修改。ZIP 停擺就是現成的例子：`hdrcharset=UTF-8` 對 Windows 是正確的、
-對 macOS 是致命的，而單憑 Windows 那台機器不可能得知這件事。
+一無所知的情況下修改。例如 ZIP 的 `hdrcharset=UTF-8` 在 Windows 上可行，在 macOS 上
+卻會讓所有 ZIP 寫入失敗，而單憑 Windows 那台機器看不出這件事。
 
 ## The four phases / 四個階段
 
@@ -43,35 +40,16 @@ purpose is to be ignorant of the answer.
 | WSL | via multissh | same | GNU tar 1.35; **no bsdtar installed** |
 | Linux VM on macOS | `~/projWin/VM-test/run.sh` | **not a matrix platform — see below** | — |
 
-**The WSL cell is filled, from macOS, 2026-09-05: PASS 6 / FAIL 0 / SKIP 0.**
+**WSL cell, run from macOS on 2026-09-05: PASS 6 / FAIL 0 / SKIP 0.**
 The run wrote 1036 bytes and 25 lines on the far side; the file was fetched with
 `multiscp` and its sha256 compared, matching end to end
-(`f25015e41be3afe6d43ff75284dec0cafcb43ae03918876cbab4c17dd66bc467`). That is
-the standard this section asked for — output that came back, not an exit status.
+(`f25015e41be3afe6d43ff75284dec0cafcb43ae03918876cbab4c17dd66bc467`).
 
-**The earlier diagnosis on this page was wrong, and the way it was wrong is
-worth keeping.** It read: "the cause is the transport, not the matrix … it is
-not the filesystem and not that tree — `cat /etc/hostname` fails the same way."
-`cat /etc/hostname` failing is evidence **for** the filesystem, not against it.
-A broken transport does not hand you a connection and a shell and then fail to
-read a file; it fails at connect. Getting that far and then meeting
-`Input/output error (os error 5)` on a read says the far side's filesystem is
-wedged, and `/etc` sits on the same one.
-
-That is exactly what had happened. WSL's filesystem was returning
-`Input/output error` that day on `.git/HEAD`, on `compile.zsh`, and on
-`/usr/bin/df` — a distribution's own binary. `wsl --shutdown` and a restart
-cleared every one of them. The link was never the problem, and there was nothing
-to fix in the transport before running the matrix.
-
-Re-measured 2026-09-05 over the same macOS→WSL `multissh` before running the
-matrix: `cat /etc/hostname` eight times, all rc=0; 10000 lines of stdout, all
-10000 received; 1 MiB of base64, 1416501 bytes intact; twelve commands in one
-connection, the twelfth still answering. The edge matrix records Mac→WSL and
-WSL→Mac passing on both IPv4 and IPv6.
-
-**Driving it from the Windows box is not required.** macOS reaches WSL directly;
-that suggestion answered a reachability problem that did not exist.
+macOS reaches WSL directly over `multissh`; there is no need to drive it from the
+Windows box. If a read on the far side fails with
+`Input/output error (os error 5)` after the connection and shell came up, WSL's
+filesystem is wedged — not the transport, which would fail at connect.
+`wsl --shutdown` and a restart clear it.
 
 ### How to record this cell / 如何記錄這一格
 
@@ -91,8 +69,8 @@ C=~/.multissh/harvest/wsl.conf          # 16889 is WSL; 16888 on the same addres
 shasum -a 256 ./wsl-matrix.txt          # must equal the SHA printed above
 ```
 
-`BYTES` is the check the earlier attempt lacked: a run that exits 0 having
-written zero bytes has to be treated as a failure, because zero bytes and
+`BYTES` is part of the check: a run that exits 0 having written zero bytes has
+to be treated as a failure, because zero bytes and
 "passed quietly" are the same picture. If output really is failing, this reports
 it as a wedged far side rather than as a passing matrix.
 
@@ -100,31 +78,16 @@ Confirm which daemon answered before trusting a result. Mirrored networking puts
 WSL and Windows on one address, separated only by port, so reachability alone
 proves nothing — `uname -s` must say `Linux`.
 
-**WSL 那一格已填上，2026-09-05 自 macOS 執行：PASS 6 / FAIL 0 / SKIP 0。** 該次在遠端
+**WSL 那一格，2026-09-05 自 macOS 執行：PASS 6 / FAIL 0 / SKIP 0。** 該次在遠端
 寫出 1036 位元組、25 行，再以 `multiscp` 取回並比對 sha256，兩端完全相同
-（`f25015e41be3afe6d43ff75284dec0cafcb43ae03918876cbab4c17dd66bc467`）。這正是本節原先
-要求的標準——以「輸出真的回來了」記錄，而非以離開碼。
+（`f25015e41be3afe6d43ff75284dec0cafcb43ae03918876cbab4c17dd66bc467`）。
 
-**本頁先前的診斷是錯的，而它錯的方式值得留下來。** 原文寫著「成因在傳輸層而非矩陣……
-既不是檔案系統也不限於那棵樹—— `cat /etc/hostname` 同樣失敗」。`cat /etc/hostname` 失敗
-是**支持**檔案系統這個解釋的證據，不是排除它的證據。傳輸層若壞了，不會先給你一條連線與一個
-shell、然後才讀不到檔案；它會在連線階段就失敗。走到那一步之後才遇到讀取的
-`Input/output error (os error 5)`，說的是對端的檔案系統卡住了，而 `/etc` 就在同一個上面。
-
-而實際情形正是如此。當天 WSL 的檔案系統對 `.git/HEAD`、`compile.zsh`，以及 `/usr/bin/df`
-——發行版自己的執行檔——都回 `Input/output error`。`wsl --shutdown` 後重啟，每一項都消失。
-那條連線從頭到尾都不是問題，跑矩陣之前也沒有什麼傳輸層需要先修。
-
-2026-09-05 在跑矩陣之前，以同一條 macOS→WSL `multissh` 重新量測：`cat /etc/hostname`
-連續八次全部 rc=0；10000 行 stdout 收到 10000 行；1 MiB base64 收到 1416501 位元組完整；
-單次連線內連跑十二條指令，第十二條照樣有輸出。邊矩陣亦記錄 Mac→WSL 與 WSL→Mac 在
-IPv4 與 IPv6 皆通過。
-
-**不需要改到那台 Windows 上驅動。** macOS 直接搆得到 WSL；那個建議解的是一個並不存在的
-可達性問題。
+macOS 經由 `multissh` 直接搆得到 WSL，不需要改到那台 Windows 上驅動。若連線與 shell
+都已建立、之後讀取卻遇到 `Input/output error (os error 5)`，是 WSL 的檔案系統卡住了，
+不是傳輸層——傳輸層壞了會在連線階段就失敗。`wsl --shutdown` 後重啟即可排除。
 
 記錄方式見上方程式碼區塊：**絕不以離開碼記錄一格**。讓對端把輸出寫進檔案、在**那一端**
-回報大小與摘要，取回檔案後在**這一端**比對摘要。`BYTES` 正是先前那次缺少的檢查——以 0
+回報大小與摘要，取回檔案後在**這一端**比對摘要。`BYTES` 是檢查的一部分——以 0
 結束卻寫出零位元組的執行必須當成失敗，因為「零位元組」與「安靜地通過」在畫面上是同一
 幅景象。輸出若真的壞了，這個做法會把它報成「對端卡住」，而不是報成一次通過的矩陣。
 
@@ -145,14 +108,14 @@ macOS, Windows and WSL, where those tools are the ones users actually have.
 那裡的這些工具才是使用者手上實際會有的。
 
 > **Trap, if anyone does probe that guest anyway:** `/usr/bin/tar` in it is
-> **swift_tar itself**, installed under that name — it reports
-> `swift_tar 20260813-080906`, while busybox tar sits at `/bin/tar` and bsdtar
-> 3.8.8 at `/usr/bin/bsdtar`. A matrix that picked its reference by filename
-> would have compared swift_tar against itself and reported flawless interop.
+> **swift_tar itself**, installed under that name — its `--version` reports
+> `swift_tar`, while busybox tar sits at `/bin/tar` and bsdtar 3.8.8 at
+> `/usr/bin/bsdtar`. A matrix that picked its reference by filename would
+> compare swift_tar against itself and report flawless interop.
 > This is the concrete reason the matrix identifies every candidate by what it
 > says about itself and rejects anything that is neither bsdtar nor GNU tar.
 > **若仍有人去探測該 guest，這是陷阱：** 其 `/usr/bin/tar` **就是 swift_tar 自己**，
-> 以該名稱安裝，自報為 `swift_tar 20260813-080906`；busybox tar 在 `/bin/tar`，
+> 以該名稱安裝，`--version` 自報為 `swift_tar`；busybox tar 在 `/bin/tar`，
 > bsdtar 3.8.8 在 `/usr/bin/bsdtar`。以檔名挑選參照工具的矩陣，會拿 swift_tar 與
 > 自己比對並回報完美互通。這正是矩陣以自我描述辨識每個候選者、並拒絕任何既非
 > bsdtar 亦非 GNU tar 之物的具體理由。
@@ -164,10 +127,10 @@ things about it are worth knowing before writing that command:
 
 **It boots into a root shell.** `run.sh` passes `init=/bin/sh` and does the
 setup inline: the three pseudo-filesystems, `/workspace` from `/dev/vdb`, and
-the Swift environment. That first half is lifted from LinuxCS's `/init-server`,
-which is the file that had already solved this. The second half of that file —
-building and starting `multisshd` — is deliberately not reproduced, and it also
-never spawns a console shell, so it cannot be reused as-is by a harness that
+the Swift environment. That setup matches the first half of LinuxCS's
+`/init-server`. The second half of that file — building and starting
+`multisshd` — is deliberately not reproduced, and it also never spawns a
+console shell, so it cannot be reused as-is by a harness that
 works by typing a command at one.
 
 Root is not a convenience here. Everything under `/workspace` is owned by
@@ -191,8 +154,8 @@ are trying to verify.
 有三件事值得先知道：
 
 **它會開機進入 root shell。** `run.sh` 傳入 `init=/bin/sh`，並在行內完成環境設定：
-三個虛擬檔案系統、自 `/dev/vdb` 掛載 `/workspace`，以及 Swift 環境。這前半段取自
-LinuxCS 的 `/init-server`——那個檔早已解決過同一問題。該檔的後半段（建置並啟動
+三個虛擬檔案系統、自 `/dev/vdb` 掛載 `/workspace`，以及 Swift 環境。這段設定與
+LinuxCS 的 `/init-server` 前半段相同。該檔的後半段（建置並啟動
 `multisshd`）刻意不予重現；而且它從不開啟主控台 shell，故無法被「靠輸入指令運作」的
 測試框架原樣沿用。
 
@@ -245,17 +208,16 @@ precondition the platform was never meant to meet.
 者、略過不能壓縮的 busybox，若不存在可壓縮的第三方 tar 則乾淨跳過並回報，而不是在一個
 該平台本就不預期滿足的前提上失敗。
 
-### The VM confirmed the macOS ZIP fix, independently
-### VM 獨立確認了 macOS 的 ZIP 修正
+### ZIP on a second iconv-free platform
+### 第二個無 iconv 平台上的 ZIP
 
 Its rootfs is UTF-8 only and its buildroot config states plainly
 `# UTF-8-only rootfs: do not pull in libiconv`. libarchive without iconv is
-exactly the configuration that made `hdrcharset=UTF-8` fail on macOS and took
-every ZIP write with it — and this platform arrived at that condition on its own,
-for its own reasons, years of decisions apart from the macOS build.
+exactly the configuration in which `hdrcharset=UTF-8` fails on macOS and takes
+every ZIP write with it — and this platform reaches that condition on its own,
+independently of the macOS build.
 
-Measured 2026-08-18 with `swift_tar 20260818-073727`, built in the guest from
-the same source as the macOS fix:
+Measured 2026-08-18 with `swift_tar 20260818-073727`, built in the guest:
 
 ```
 --zip                          exit 0
@@ -264,21 +226,19 @@ extract + diff -r              identical
 bsdtar 3.8.8 -tf               the same three names, the non-ASCII one intact
 ```
 
-So the fix holds on a second platform that reached the iconv-free condition
-independently. That is worth more than the macOS result on its own: one platform
-passing could mean the fix matched that platform's quirk, two means it matched
-the actual mechanism.
+So swift_tar's ZIP writing holds on a second platform that reaches the
+iconv-free condition independently. One platform passing could mean the code
+matches that platform's quirk; two means it matches the actual mechanism.
 
 其 rootfs 僅支援 UTF-8，buildroot 設定明白寫著
 `# UTF-8-only rootfs: do not pull in libiconv`。「libarchive 不含 iconv」正是使
-`hdrcharset=UTF-8` 在 macOS 失敗、並連帶讓所有 ZIP 寫入一起停擺的那個組態——而本平台
-是基於自身理由、獨立地走到該條件，與 macOS 的建置決策相隔甚遠。
+`hdrcharset=UTF-8` 在 macOS 失敗、並連帶讓所有 ZIP 寫入一起失敗的那個組態——而本平台
+是獨立地走到該條件，與 macOS 的建置無關。
 
 2026-08-18 以 guest 內建置的 `swift_tar 20260818-073727` 實測，結果如上表。
 
-故該修正在一個獨立達到「無 iconv」條件的第二平台上同樣成立。這比單有 macOS 的結果更有
-價值：單一平台通過，可能只代表修正剛好迎合了該平台的特性；兩個平台通過，才代表它命中的
-是真正的機制。
+故 swift_tar 的 ZIP 寫入在一個獨立達到「無 iconv」條件的第二平台上同樣成立。單一平台
+通過，可能只代表程式剛好迎合了該平台的特性；兩個平台通過，才代表它命中的是真正的機制。
 
 The matrix identifies each reference by what it says about itself, never by
 filename: `tar` is bsdtar on macOS, GNU tar on most Linux, and on Windows
@@ -303,23 +263,20 @@ Put every platform's failures in one place and ask of each: is this a defect, or
 is it that platform's convention? The two are fixed differently and the answer is
 rarely visible from one machine.
 
-Worked example, from this repository: the matrix first reported "swift_tar
-cannot read bsdtar's archives" on macOS. It was not a defect. macOS bsdtar writes
-an AppleDouble `._name` member beside every entry to carry extended attributes,
-hides them again on its own read, and folds them back into xattrs. GNU tar lists
-them, extracts them as ordinary files, and warns about the unknown header — and
-swift_tar does exactly what GNU tar does. The finding was real; the diagnosis
-"swift_tar is broken" was wrong. Confirmed by reading the raw tar headers, with
-no tar involved at all.
+Example: on macOS, the matrix can report "swift_tar cannot read bsdtar's
+archives". That is not a defect. macOS bsdtar writes an AppleDouble `._name`
+member beside every entry to carry extended attributes, hides them again on its
+own read, and folds them back into xattrs. GNU tar lists them, extracts them as
+ordinary files, and warns about the unknown header — and swift_tar does exactly
+what GNU tar does.
 
 把各平台的失敗集中起來，逐項自問：這是缺陷，還是該平台的慣例？兩者的修法不同，而
 答案很少能從單一機器看出來。
 
-實例：矩陣起初在 macOS 回報「swift_tar 讀不懂 bsdtar 的封存」。那不是缺陷。macOS 的
-bsdtar 會為每個項目寫入 AppleDouble `._名稱` 成員以攜帶延伸屬性，並在自己讀取時隱藏、
-解出時還原為 xattr。GNU tar 會列出它們、解為一般檔案並警告該標頭無法辨識——而
-swift_tar 的行為與 GNU tar 完全相同。發現本身是真的，「swift_tar 壞了」這個診斷是錯的。
-最終以直接讀取原始 tar 標頭確認，全程不經任何 tar。
+實例：在 macOS 上，矩陣可能回報「swift_tar 讀不懂 bsdtar 的封存」。那不是缺陷。
+macOS 的 bsdtar 會為每個項目寫入 AppleDouble `._名稱` 成員以攜帶延伸屬性，並在自己讀取時
+隱藏、解出時還原為 xattr。GNU tar 會列出它們、解為一般檔案並警告該標頭無法辨識——而
+swift_tar 的行為與 GNU tar 完全相同。
 
 **When a platform disagrees with the others, name which one is the outlier
 before deciding who is wrong.**
@@ -329,17 +286,17 @@ before deciding who is wrong.**
 ### 階段三 — 一次改完，同時涵蓋所有平台
 
 Write the fix knowing every platform's constraint. A fix that helps one platform
-must be checked against the mechanism the others rely on — the ZIP fix kept
-Windows's `hdrcharset` path untouched and added a second, separate mechanism for
-the platforms where that option cannot work.
+must be checked against the mechanism the others rely on — swift_tar's ZIP name
+handling keeps Windows's `hdrcharset` path and uses a second, separate mechanism
+on the platforms where that option cannot work.
 
 Also: a fix in one direction is not a fix. Setting the UTF-8 flag on write alone
-produced archives that bsdtar and Python read correctly and swift_tar itself
-could not open. Both directions, or neither.
+produces archives that bsdtar and Python read correctly and swift_tar itself
+cannot open. Both directions, or neither.
 
 在知悉所有平台限制的前提下寫出修正。對某一平台有幫助的修正，必須對照其他平台所依賴的
-機制檢查——ZIP 的修正完整保留了 Windows 的 `hdrcharset` 路徑，另外為該選項無法運作的
-平台加上第二套獨立機制。
+機制檢查——swift_tar 的 ZIP 名稱處理保留 Windows 的 `hdrcharset` 路徑，並在該選項無法
+運作的平台上使用第二套獨立機制。
 
 另外：只修一個方向不算修好。只在寫入端設定 UTF-8 旗標，產出的封存 bsdtar 與 Python
 讀得正確，swift_tar 自己卻打不開。要嘛兩個方向都做，要嘛都不做。
@@ -365,57 +322,48 @@ measurement leaves a record nobody chose to take.
 | A measurement | `verifications/*_output-<platform>.txt`, written only with `--record` |
 | A regression test for a fixed defect | `test/test_blind_findings.zsh` |
 
-Defect narratives were moved out of the READMEs deliberately: a README that
+Defect narratives stay out of the READMEs deliberately: a README that
 catalogues its own bugs teaches the reader to distrust the parts that are fine.
 
-缺陷敘述是刻意移出 README 的：一份羅列自身缺陷的 README，會教讀者連正確的部分也不要
+缺陷敘述刻意不放在 README：一份羅列自身缺陷的 README，會教讀者連正確的部分也不要
 相信。
 
 ## Standing rules that keep biting / 一再重演、故列為常規
 
-- **Verify the agent, not just the code.** A blind tester has been wrong about
-  its own findings four times in seven rounds — "input is stdin only" (a
-  positional path works), "`-f` has two directions" (it has three), "there is no
-  timezone flag" (`--tz-offset-min`), "480 may be the host timezone" (it is a
-  constant). Every one would have gone into the README verbatim.
-  **驗證的對象包含 agent，不只是程式碼。** 盲測者在七回合中有四次對自己的發現判斷
-  錯誤，每一項若照抄都會逐字寫進 README。
+- **Verify the agent, not just the code.** A blind tester can be wrong about
+  its own findings — e.g. "input is stdin only" (a positional path works),
+  "`-f` has two directions" (it has three), "there is no timezone flag"
+  (`--tz-offset-min`), "480 may be the host timezone" (it is a constant). Copied
+  as-is, each would go into the README verbatim.
+  **驗證的對象包含 agent，不只是程式碼。** 盲測者對自己的發現也可能判斷錯誤，照抄就會
+  逐字寫進 README。
 - **A test that cannot fail proves nothing.** Run the new test against the
   unfixed binary before believing it.
   **不會失敗的測試什麼也證明不了。** 相信一個新測試之前，先拿未修正的執行檔跑一次。
-- **A fallback inside a test can hide the case the test exists for.** A
-  self-reference case was written as `cmd1 || cmd2`. On Windows `cmd1` failed,
-  the fallback ran, and the case passed. On macOS `cmd1` *succeeded* — so the
-  fallback never ran, and what got measured was the broken path: the archive
-  collected itself. The case was green on one platform for two weeks precisely
-  because the fallback worked. If a case needs a fallback, assert which branch
-  ran.
-  **測試內部的備援，可能掩蓋該測試存在的目的。** 一個自我參照案例寫成
-  `cmd1 || cmd2`。Windows 上 `cmd1` 失敗、備援執行、案例通過；macOS 上 `cmd1`
-  **成功**，備援永不執行，量到的正是壞掉那條——封存把自己收了進去。該案例在其中一個
-  平台上綠了兩週，正是因為備援有效。若某案例確實需要備援，請斷言實際走的是哪一支。
-- **A `SKIP` never becomes a `FAIL`, so nothing reports it.** Moving the tests
-  into `test/` left one fixture path one directory too shallow; the guard was
-  `if [ -f "$fixture" ]`, so 17 assertions — the path-traversal and raw-typeflag
-  cases, the adversarial ones — stopped running while the suite still said
-  `FAIL: 0`. Read the skip lines, and compare the assertion count against the
-  last run.
-  **`SKIP` 永遠不會變成 `FAIL`，因此無人回報。** 測試移入 `test/` 時，某個 fixture
-  路徑少了一層；守門是 `if [ -f "$fixture" ]`，於是 17 項斷言——路徑穿越與 raw
-  typeflag，也就是最具敵意的那批——停止執行，而整體仍回報 `FAIL: 0`。請讀 skip 行，
-  並與上一次的斷言總數比對。
+- **A fallback inside a test can hide the case the test exists for.** In a case
+  written as `cmd1 || cmd2`, if `cmd1` *succeeds* on one platform by taking the
+  broken path, the fallback never runs and the case passes on exactly the
+  behaviour it was meant to catch. If a case needs a fallback, assert which
+  branch ran.
+  **測試內部的備援，可能掩蓋該測試存在的目的。** 寫成 `cmd1 || cmd2` 的案例，若
+  `cmd1` 在某個平台上走壞掉那條卻**成功**，備援永不執行，案例就在它本該抓到的行為上
+  通過。若某案例確實需要備援，請斷言實際走的是哪一支。
+- **A `SKIP` never becomes a `FAIL`, so nothing reports it.** A guard such as
+  `if [ -f "$fixture" ]` with a wrong fixture path silently skips every
+  assertion behind it while the suite still says `FAIL: 0`. Read the skip lines,
+  and compare the assertion count against the last run.
+  **`SKIP` 永遠不會變成 `FAIL`，因此無人回報。** 像 `if [ -f "$fixture" ]` 這樣的
+  守門，若 fixture 路徑錯了，其後所有斷言都會靜默略過，而整體仍回報 `FAIL: 0`。請讀
+  skip 行，並與上一次的斷言總數比對。
 - **Confirm the phenomenon before profiling it.** A profiler always returns some
   hottest function, and that function then gets mistaken for the cause. The
-  decode-gap section of the FAQ had three mechanisms named and overturned that
-  way. Asked to profile it on 2026-09-06, the first measurement found the gap
-  had **reversed on macOS** — swift_tar was the faster of the two on all three
-  shapes — while remaining real on Linux at 1.24–1.46×. Profiling on macOS would
-  have produced a confident mechanism for a gap that is not there.
+  extract gap, for example, is real on Linux (1.24–1.46×) but not on macOS;
+  profiling it on macOS would produce a confident mechanism for a gap that is
+  not there.
   **先確認現象還在，再 profile。** profiler 一定會回報「某個最花時間的函式」，而那個
-  函式接著就會被當成成因。FAQ 解壓差距那一節已有三個機制以這種方式被提出又推翻。
-  2026-09-06 受託去 profile 時，第一次量測就發現該差距在 **macOS 上已經反轉**——三種
-  形狀下 swift_tar 都較快——而在 Linux 上仍為 1.24–1.46 倍。若當時直接在 macOS 上
-  profile，得到的會是一個為「並不存在的差距」寫下的、看起來很有把握的機制。
+  函式接著就會被當成成因。例如解壓差距在 Linux 上是真的（1.24–1.46 倍），在 macOS 上
+  則不是；在 macOS 上 profile，得到的會是一個為「並不存在的差距」寫下的、看起來很有
+  把握的機制。
 - **A short-lived target defeats sampling profilers, and the failure is silent.**
   Extracting a RAM-disk archive runs about 0.17 s. `sample <pid>` and
   `sample -wait` both returned **zero** samples; `xctrace --launch` returned 52;
@@ -428,10 +376,9 @@ catalogues its own bugs teaches the reader to distrust the parts that are fine.
   取到 52 個；錄一個 25 次的迴圈只得 13 個，且全部歸給外層 shell——`--launch` 不追子
   行程。這些都沒有報錯，各自產出一份空的或近乎空的 profile，讀起來就像一個結果。讀
   profile 之前先看樣本數。
-- **`.sh` → `.zsh` renames drop the exec bit.** Eleven committed scripts became
-  non-executable that way; two test suites failed with 126 as a result.
-  **`.sh` → `.zsh` 改名會掉執行位元。** 曾有十一支入版腳本因此無法執行。
+- **`.sh` → `.zsh` renames can drop the exec bit**, and a suite that runs the
+  script then fails with 126.
+  **`.sh` → `.zsh` 改名可能掉執行位元**，執行該腳本的測試套件就會以 126 失敗。
 - **Check `git status` after a suite run.** Scripts that write records will
-  otherwise commit a measurement taken under machine load — one such table came
-  in with every time uniformly 8% slower and the sizes unchanged.
+  otherwise commit a measurement taken under machine load.
   **跑完測試後檢查 `git status`。** 否則會把機器負載下取得的量測提交進去。

@@ -46,9 +46,7 @@ Linux 用 `compile_tar-linux.zsh`、Windows 用 `compile_tar-win.bat`——故�
 
 在 macOS 上，**單獨執行 `compile_tar.zsh` 只會建置**：結果留在 `release/swift_tar`，建置結束時印出
 安裝用的指令。加上 `--install`（或 `-install`）才會另外複製到 `/opt/homebrew/bin/swift_tar`。
-`build.zsh` 與 `compile_no_lzfse.zsh` 會自行帶上 `--install`，所以它們照舊會安裝。2026-10-07 之前，
-每次執行 `compile_tar.zsh` 都會安裝，一次只為量測分支而做的建置，就換掉了另一台機器 PATH 上的
-`swift_tar`。
+`build.zsh` 與 `compile_no_lzfse.zsh` 會自行帶上 `--install`，所以它們會安裝。
 
 ### Linux
 
@@ -69,7 +67,7 @@ sysroot 的共享庫並明白說出來，而這種建置的內容不是 submodul
 `ld` 連結並明白說出來。swift_tar 本身不連結 libxml2。編譯與連結分成兩步：aarch64 上的 Swift 會把
 `.rodata` 標成可寫，腳本在兩步之間把目的檔上的這個旗標拿掉，並拒絕 `.rodata` 可寫的執行檔。
 
-已於 QEMU 下的 aarch64 Linux（buildroot、glibc、Swift 6.3.3）驗證：建置無誤、正確記錄
+已於 QEMU 下的 aarch64 Linux（buildroot、glibc、Swift 6.4.0）驗證：建置無誤、正確記錄
 RPATH，並將所連結的函式庫寫入 `version-linux.txt`。
 
 建置時將 `lzfse2/lzfse-cli.swift` 當函式庫重用（剝除其頂層 `runCLI()`
@@ -95,7 +93,7 @@ binary，完全**不含**私有 LZFSE 引擎——不編譯 `lzfse-cli.swift`，
 
 Windows 需要 Swift、CMake 與 Visual Studio 2022 C++ workload。建置腳本會把
 固定版本的 zlib、zstd 與 libarchive submodule 編譯成 MSVC 靜態庫，再直接把
-gzip、zstd 與 ZIP 支援連結進 `swift_tar.exe`；執行時不需要 `zlib.dll`、外部 `gzip.exe`，也不再每個
+gzip、zstd 與 ZIP 支援連結進 `swift_tar.exe`；執行時不需要 `zlib.dll`、外部 `gzip.exe`，也不需要每個
 chunk 生一個 `zstd.exe`。
 
 ```bat
@@ -112,7 +110,7 @@ zsh，再交給完整的 zsh 安裝器；已安裝 zsh 時重跑亦安全。
 `build_zlib-win.zsh` 與 `build_zstd-win.zsh` 是相依套件維護步驟：各自同步固定的
 gitlink、重建靜態庫（`zs.lib`／`zstd_static.lib`），並將精確的 tag、commit 與
 連結方式寫入 `version-win.txt`。zstd 的 CMake binary tree 位於 submodule 外的
-`build/zstd-win`，因此產生檔不會再被廣泛的 submodule ignore 規則隱藏。
+`build/zstd-win`，因此產生檔不會被廣泛的 submodule ignore 規則隱藏。
 首次 clone 或變更任一 submodule 後才需執行；平常的
 `compile_tar-win.bat` 會增量重建 libarchive 後端並重用既有 zlib/zstd 靜態庫。
 建置版本產生流程會在 `version-win.txt` 保留 `zlib_*`、`zstd_*` 與 `libarchive_*`
@@ -138,7 +136,7 @@ CMake build tree 屬於開發產物，並非 runtime dependency，因此不放�
 
 正式版是公開版（不含 LZFSE），每個平台一份 `.tar.zst`，放在
 [GitHub Releases](https://github.com/raliclo/swift_tar/releases)，旁邊各附一個 `.sha256`。
-`swift_tar --version` 會印出版本號、build id（在 tag 上建的執行檔是 `v0.1.0 / <commit>`）
+`swift_tar --version` 會印出版本號、build id（在 tag 上建的執行檔是 `v0.1.1 / <commit>`）
 與來源戳記。
 
 ```sh
@@ -152,8 +150,8 @@ scoop bucket add raliclo https://github.com/raliclo/lzfse2
 scoop install raliclo/swift_tar
 
 # Linux（x86-64 或 aarch64）——完全靜態：解開後把 swift_tar 放上 PATH
-sha256sum -c swift_tar-0.1.0-linux-x86_64.tar.zst.sha256
-zstd -dc swift_tar-0.1.0-linux-x86_64.tar.zst | tar -xf -
+sha256sum -c swift_tar-0.1.1-linux-x86_64.tar.zst.sha256
+zstd -dc swift_tar-0.1.1-linux-x86_64.tar.zst | tar -xf -
 ```
 
 ### 發布正式版
@@ -406,9 +404,18 @@ release/swift_tar -x -f from-linux.tar
 `portal/pwned.txt`，而在連結解析後兩者的名稱皆不含 `..`。不會通往解出目標之外的 symlink
 不受影響，照常解出。
 
-封存能指定的任何名稱，都不會被寫到解出目錄之上。惟需注意：被略過的項目**不會**改變離開碼
-——整次執行仍以 0 結束——故解出不受信任的封存時，腳本應讀取 stderr，或將解出的樹與 `-t`
-的結果比對，而非只信任狀態碼。
+封存能指定的任何名稱，都不會被寫到解出目錄之上。被略過的項目**會**改變離開碼：因為
+`--strict` 是預設，`-x` 會回報略過數，並在整次執行結束時以非零結束。其餘每個成員仍會解出。
+見[離開碼](#離開碼)一節。
+
+```sh
+release/swift_tar -x -f untrusted.tar     # 內含 ../escape.txt 與 good.txt
+# -> swift_tar: skipping unsafe path '../escape.txt' / 略過不安全路徑 '../escape.txt'
+# -> swift_tar: I/O error: 1 member(s) skipped; pass --no-strict to exit 0 anyway / 略過了 1 個成員；如仍要以 0 結束請加 --no-strict
+# -> 離開碼 1，good.txt 已解出
+```
+
+只有 stderr 會說出被略過的是*哪一個*成員。
 
 **哪些項目型別會被存下與還原。** 一般檔案、目錄、符號連結、硬連結與 FIFO。納入 FIFO 是因為
 任何 POSIX 系統上的 `mkfifo` 都不需權限，該項目必定還原得回來——而且不花成本：它只是一次
@@ -539,8 +546,7 @@ tar 壓縮引擎皆輸出可串接串流，故 `gunzip`、`bunzip2`、`xz`、`lz
 `zstd` 與 `lz4` 可直接解開。ZIP/ZIP64 是容器後端，可與 `unzip`、`bsdtar`
 及其他 ZIP 工具互通。
 
-**FIFO 也會存進 ZIP**（自 2026-10-09 起；在此之前會以 `zip format cannot archive named pipes`
-略過），存成長度 0、Unix 模式標示為 FIFO 的項目。swift_tar 會把它解回 FIFO。**其他工具不一定：**
+**FIFO 也會存進 ZIP**，存成長度 0、Unix 模式標示為 FIFO 的項目。swift_tar 會把它解回 FIFO。**其他工具不一定：**
 Info-ZIP 的 `unzip` 會解成空的一般檔案，原版 libarchive（`bsdtar`）也一樣，因為它把每個 FIFO
 項目都當成一般檔案讀——那是為了 Info-ZIP 會把「正在讀取的管線」記錄成項目型別而做的變通。內附的
 libarchive 只在項目不帶任何資料時才保留為 FIFO；見 `patch/libarchive/0002-zip-store-fifo.patch`。
@@ -616,9 +622,9 @@ swift_tar -c -f first.tar -f second.tar ...      # 寫出 first.tar；second.tar
 | `-C <dir>`  | 建立前切換輸入目錄（須已存在）；讀取時解出至此目錄（不存在則自動建立） |
 | `--strip-components <N>` | （僅 `-x` tar 解出）寫入前移除成員路徑前 N 層；也接受 `--strip-components=N` |
 | `--zstd-level <N>` | （僅 `--zstd`）壓縮等級，`1`…`22`，預設 `9`。超出範圍或非數字時離開碼為 **2**。未同時指定 `--zstd` 則靜默忽略——見下 |
-| `--no-checksum`、`-no-checksum` | （`-c` 搭配 `--zstd`、`--lz4` 或 `--xz`）不寫入內容校驗碼。**預設會寫入**：每個 zstd frame 一個 XXH64 的低 32 位元、每個 lz4 frame 一個 XXH32、每個 xz 串流一個 CRC64，使損壞的分塊解碼失敗，而不是解出錯誤的位元組。gzip、bzip2、lzip 與 ZIP 一律帶 CRC，此旗標對它們沒有影響。2026-10-07 之前寫出的封存不帶 zstd 或 lz4 校驗碼。 |
+| `--no-checksum`、`-no-checksum` | （`-c` 搭配 `--zstd`、`--lz4` 或 `--xz`）不寫入內容校驗碼。**預設會寫入**：每個 zstd frame 一個 XXH64 的低 32 位元、每個 lz4 frame 一個 XXH32、每個 xz 串流一個 CRC64，使損壞的分塊解碼失敗，而不是解出錯誤的位元組。gzip、bzip2、lzip 與 ZIP 一律帶 CRC，此旗標對它們沒有影響。 |
 | `--skip-compressed` | （`-c` 搭配串流壓縮引擎）只有一個一般檔案且後綴屬於已壓縮格式時，改寫成純 tar。預設關閉；清單與理由見〈已壓縮的後綴（`--skip-compressed`）〉一節 |
-| `--strict`、`--no-strict` | （`-x`）**預設為嚴格：** 略過成員時，`-x` 在其餘成員都解出之後以非零結束；`--exclude` 命中者不算。`--no-strict` 在略過後仍以 `0` 結束，即 2026-10-08 之前的行為。`--strict` 供想明說的呼叫端使用。見〈離開碼〉一節 |
+| `--strict`、`--no-strict` | （`-x`）**預設為嚴格：** 略過成員時，`-x` 在其餘成員都解出之後以非零結束；`--exclude` 命中者不算。`--no-strict` 在略過後仍以 `0` 結束。`--strict` 供想明說的呼叫端使用。見〈離開碼〉一節 |
 | `-n <N>`    | 平行在途分塊數（預設每核一個，上限 4 × 核心數） |
 | `-v`        | 於 stderr 逐一報出處理中的成員，並印出偵測到的 filter 鏈。**它不會產生長格式列表**——沒有大小、權限或時間戳記，而 `-t -v` 印出的名稱與 `-t` 相同，只多一行 filter 鏈。若你是帶著 `tar -tvf` 的表格預期而來，這不是那個東西。 |
 | `-m`、`--touch` | （僅 `-x`）**不**還原封存中的 mtime；解出的檔案取得當下時間。`-m` 是 GNU tar 的寫法，此處作為完全等價的別名接受 |
@@ -630,10 +636,10 @@ swift_tar -c -f first.tar -f second.tar ...      # 寫出 first.tar；second.tar
 | `--encrypt` | （僅 `-c`）以 ChaCha20-Poly1305 加密，並提示輸入密語 |
 | `--keyfile <path>` | 以檔案位元組作為金鑰材料取代密語（建立與讀取皆適用；stdin 非終端機時為必要）。**建立時它本身即會開啟加密**——`-c --keyfile k.bin -f out.enc src/` 就會加密，不需要另外再加 `--encrypt`。 |
 | `--force`   | （僅 `-x`）允許某成員覆蓋**同一次**解出中較早寫出的檔案；未加時該情形會被拒絕 |
-| `-h`、`--dereference` | （`-c`、`-r`、`-u`）跟隨符號連結：存入它所指向的內容，而非連結本身。斷掉的連結會被回報並略過——此處改用的 `stat` 對它會失敗，而預設的 `lstat` 能好好把該連結存下來。連結指回「當前路徑上已走過的目錄」是迴圈，會被回報並略過而非展開；兩個經由不同路徑抵達同一目錄的連結**不是**迴圈，兩者都會被收錄。 |
+| `-h`、`--dereference` | （`-c`、`-r`、`-u`）跟隨符號連結：存入它所指向的內容，而非連結本身。**`-h` 解析不了的連結會被回報並存成連結，絕不丟掉**——不論它是斷掉的、目標 `stat` 不到，或是指回當前路徑上已走過的目錄（迴圈，會被回報且不展開）。兩個經由不同路徑抵達同一目錄的連結**不是**迴圈，兩者都會被收錄。見〈`--dereference` 會收錄什麼〉一節。 |
 | `--exclude <pattern>` | （`-c`、`-r`、`-u`）略過命中該 glob 的成員，可重複給定；亦接受 `--exclude=PATTERN`。比對規則與 bsdtar 相同，且是**實測而非臆測**得出：`*` 會跨越 `/`；不含 `/` 的樣式另外會逐一比對每個路徑元件；命中目錄的樣式會連整棵子樹一併排除。被排除的目錄**不會被走進去**，故它能繞開一個讀不到的子樹，而非僅僅把它從列表中略去。 |
-| `--help`    | 顯示說明。**此前 `-h` 是這個意思。** 現在 `-h` 等同 `--dereference`，與 GNU tar 及 bsdtar 一致；說明改由 `--help` 提供，那是 GNU 的寫法，也是 bsdtar 一向的用法。 |
-| `--version` | 顯示固定的建置日期版本（`yyyyMMdd-HHmmss`） |
+| `--help`    | 顯示說明。**`-h` 不是說明**：它等同 `--dereference`，與 GNU tar 及 bsdtar 一致；說明是 `--help`，即 GNU tar 與 bsdtar 的寫法。 |
+| `--version` | 顯示版本號、build id 與建置戳記（`swift_tar 0.1.1 (v0.1.1 / d3e2f887) 20261020-102103`） |
 | `--crypto-selftest` | 執行密碼學單元測試（公開向量、標頭解析、分塊切分）後結束 |
 
 `--zstd-level` 只有在同時指定 `--zstd` 時才生效。單獨給定時它會被接受，並寫出一個
@@ -662,17 +668,13 @@ swift_tar 跟隨 bsdtar，因為本工具在其他各處的對照對象一向是
 若要以兩種 tar 都一致的方式排除一個目錄，就別加結尾的 `/*`：`--exclude sub` 或
 `--exclude src/sub`。
 
-### `-h` 的語意已改變
+### `-h` 是 `--dereference`，不是說明
 
-`-h` 此前是「印出說明」。現在它等同 `--dereference`，與 GNU tar 及 bsdtar 一致；說明
-改由 `--help` 提供。
+`-h` 等同 `--dereference`，與 GNU tar 及 bsdtar 一致；說明是 `--help`。
+`swift_tar -c -h -f out.tar src/` 會寫出一個把每個符號連結都解析成目標的封存——體積更大，
+存的是內容而非連結——並以 0 結束。
 
-這是刻意的變更，但值得明白寫出來，因為**兩種行為都以 0 結束**。原本執行
-`swift_tar -c -h -f out.tar src/` 期待看到說明的呼叫端，現在會得到一個把每個符號連結
-都解析成目標的封存——體積更大，內容而非連結。沒有任何東西失敗，只是那個封存不是它要的
-那一個。
-
-單獨執行 `swift_tar -h` 仍會明確失敗，因為 `-h` 本身並未指名任何操作。
+單獨執行 `swift_tar -h` 會明確失敗，因為 `-h` 本身並未指名任何操作。
 
 ### `--dereference` 會收錄什麼
 
@@ -694,12 +696,56 @@ src/link -> ../real          # real/ 裡有 inside.txt
 
 解壓端因而有兩個後果，且**都不需要任何旗標**：
 
-- 該封存**完全不含 symlink 項目**，故解出的是純檔案與目錄。
-- 「拒絕穿過封存中較早項目所植入的 symlink 寫入」那道守門永遠不會派上用場，因為根本
-  沒有可植入的項目。
+- 對**每一個被跟隨的連結**，封存都不含其 symlink 項目，故解出的是純檔案與目錄。例外是
+  `-h` **跟不上**的連結：它會存成連結，並在發生時於 stderr 回報。見下文。
+- 「拒絕穿過封存中較早項目所植入的 symlink 寫入」那道守門照常作用，包括 `-h` 因跟不上而
+  存下的連結。
+
+**`-h` 跟不上的連結會存成連結，不會被丟掉。** 斷掉的連結，或目標 `stat` 不到的連結，會保留
+自己的項目與目標字串，並在執行時說明：
+
+```
+swift_tar: './mmm': --dereference cannot follow it, storing the link itself
+```
+
+`-h` 唯一被允許失敗的是「解參照」——不是「把名稱留在封存裡」。`bsdtar` 有同樣的後援
+（macOS、`bsdtar 3.5.3`）但不作聲；GNU tar 則丟掉該項目並以非零結束。
+
+**迴圈屬於同一種情形。** 指回「當前路徑上已走過的目錄」的連結不會被展開——迴圈偵測正是為此
+存在——但連結項目會保留，理由相同：迴圈背後的內容早已以其真實路徑存在封存裡，所以從頭到尾
+有風險的只有連結的名稱與目標。
+
+```
+cyc/d/up -> ..
+
+swift_tar -c -h   ./  ./d/  ./d/up -> ..     exit 0, "would loop here, storing the link itself"
+bsdtar    -c -h   ./  ./d/  ./d/up          exit 0, silent
+GNU tar   -c -h   2,200+ nested members     exit 2 — it does not detect this cycle at all
+```
+
+**仍刻意丟掉者，皆有實測理由：**
+
+- **不經連結抵達、而識別碼已在堆疊上的目錄。** 於 Windows 以自我指涉的 junction 實測
+  （`mklink /J d\up <root>`，tag `0xa0000003`）：NT 穿得過去，故迴圈檢查丟掉的成員是
+  `./d/up/d`——一個真實目錄，不是連結。沒有東西可以取代它，而其內容早已存在 `./d/` 之下。
+- **裝置節點與 socket**（`skipping special file`）：前者重建需要 root，後者無法由封存有意義
+  地重建。GNU tar 與 bsdtar 也都略過這兩者。
+- **列不出內容的目錄，其內容。** 該目錄自身的項目會寫出，接著回報列目錄失敗並繼續走訪，
+  最後與 bsdtar 一樣以 1 結束：
+  `swift_tar: ./mmm/: cannot read directory, contents left out: Permission denied`。
+  bsdtar 的封存含有同樣的項目，而它也會回報。
 
 代價是重複：多個指向同一目錄的連結會各自再存一份其內容，而指向樹外的連結會把該內容
 拉進封存。
+
+**在 Windows 上這對 WSL／MSYS 連結同樣有效。** WSL 下的 `ln -s`
+留下的是 `IO_REPARSE_TAG_LX_SYMLINK` reparse point，而 **NT 完全不穿過這種連結**——`cmd`
+會把它列成 `<JUNCTION> name [...]`、目標為空，對它執行 `type` 得到「The file cannot be
+accessed by the system」。因此 `-h` 必須自行解析該連結、經由解析後的路徑讀取，同時仍把成員
+存在連結自己的名稱之下。對 LX 連結 `dlink -> realdir`，封存內含
+`./ ./dlink/ ./dlink/f.txt ./realdir/ ./realdir/f.txt`——與 GNU tar 存下的五個成員相同。真正斷掉的 LX 連結會被回報並存成連結本身，
+與其他 `-h` 跟不上的連結相同；指回自身路徑的 LX 連結會被判定為迴圈。兩個參照實作如何處理同一批連結，見
+[bugs/bsdtar-bug.md](bugs/bsdtar-bug.md)——兩者都不安全。
 
 ### `-f` 指向哪一邊
 
@@ -748,10 +794,10 @@ cmp a.tar b.tar     # -> 第 138 個位元組起不同
 | 純 tar 與所有串流 codec（`--zstd`、`--gzip`、`--xz`、`--bzip2`、`--lz4`）| **是**，跨執行成立 |
 | 同上，跨 `-n 1`、`2`、`4`、`8`、`16` | **是**——平行度不會改變任何一個位元組 |
 | `--encrypt` | **否，且是刻意如此**——每次執行使用新的 nonce；解密後的明文相同 |
-| `--zip`、`--zip64` | **是**，跨執行成立，自 2026-10-09 起——每個項目只記錄 mtime。在此之前還記錄了 atime 與 ctime，而讀取這棵樹本身就會改變它們，所以任兩次執行都不相同 |
-| `--zip`、`--zip64`，換一個檔案系統或平台，使用同一個 `TZ` | **是**——macOS 與 Linux 逐位元組相同（2026-10-13 實測）。成員的排序方式與 tar 路徑相同，一次處理一個目錄。ZIP 檔頭存的是本地時間，所以 `TZ` 必須相同 |
-| 同上，加 `--zip-unsorted` | **否**——成員依檔案系統列出的順序寫出。2026-10-13 實測：同一棵樹在 macOS（APFS）與 Linux（tmpfs）得到不同的 ZIP，大小相同、順序不同。兩種方式的記憶體相同：1,001,206 個項目排序時最大 175 MB，不排序時 173 MB |
-| `--zip`、`--zip64`，`-n 1`、`2`、`4`、`8`、`10`、`16` 之間 | **是**——成員由 `-n` 個執行緒壓縮、依序寫出，每個成員都是單一執行緒會壓出的那條 deflate 串流（2026-10-14 實測）。M4 上的 claw-code（1.3 GB，5,408 個檔案）：`-n 1` 30.4 秒、`-n 4` 9.1 秒、`-n 10` 7.1 秒；最大記憶體分別為 9 MB、128 MB、187 MB（`verifications/zip_parallel_speed.zsh`）。Windows 的建置不論 `-n` 為何都只用一個執行緒壓縮 |
+| `--zip`、`--zip64` | **是**，跨執行成立——每個項目只記錄 mtime，不記錄讀取這棵樹本身就會改變的 atime 與 ctime |
+| `--zip`、`--zip64`，換一個檔案系統或平台，使用同一個 `TZ` | **是**——macOS 與 Linux 逐位元組相同。成員的排序方式與 tar 路徑相同，一次處理一個目錄。ZIP 檔頭存的是本地時間，所以 `TZ` 必須相同 |
+| 同上，加 `--zip-unsorted` | **否**——成員依檔案系統列出的順序寫出：同一棵樹在 macOS（APFS）與 Linux（tmpfs）得到不同的 ZIP，大小相同、順序不同。兩種方式的記憶體相同：1,001,206 個項目排序時最大 175 MB，不排序時 173 MB |
+| `--zip`、`--zip64`，`-n 1`、`2`、`4`、`8`、`10`、`16` 之間 | **是**——成員由 `-n` 個執行緒壓縮、依序寫出，每個成員都是單一執行緒會壓出的那條 deflate 串流。M4 上的 claw-code（1.3 GB，5,408 個檔案）：`-n 1` 30.4 秒、`-n 4` 9.1 秒、`-n 10` 7.1 秒；最大記憶體分別為 9 MB、128 MB、187 MB（`verifications/zip_parallel_speed.zsh`）。Windows 的建置不論 `-n` 為何都只用一個執行緒壓縮 |
 
 其中 `-n` 那一列才是真正有用的結論：分塊是決定性的，而不只是「碰巧以正確順序重組」，
 因此在一台機器上以 `-n 16` 建立的封存，會與另一台機器上以 `-n 1` 建立的完全相同。加密
@@ -769,7 +815,7 @@ cmp a.tar b.tar     # -> 第 138 個位元組起不同
 
 **被截斷的封存屬於失敗，而非空封存。** 空檔案是合法的空封存並以 `0` 結束，與 `bsdtar`
 一致；其餘無法被讀為封存的輸入一律以非零結束——包括在 gzip 標頭內就被切斷的 `.tar.gz`，
-它解出零位元組，先前與空封存無從分辨。故 `-t` 以 `0` 結束，確實代表該封存讀得出來。
+它與空封存一樣解出零位元組。故 `-t` 以 `0` 結束，確實代表該封存讀得出來。
 
 **非零離開碼並不代表什麼都沒寫出。** 作業是串流進行而非先暫存後提交，因此失敗前已完成
 的部分會留在磁碟上：
@@ -787,7 +833,7 @@ swift_tar -c -f mixed.tar tree/a.txt tree/typo.txt tree/sub/b.txt
 |---|---|
 | 建立時，壞路徑夾在好路徑之間 | 一個合法封存，內含壞路徑之前已處理的項目 |
 | 建立時，壞路徑排在最前 | 該封存檔本身，內容為空（0 bytes） |
-| 建立時（`-c`、`-r`、`-u`、`--zip`），有讀不到的目錄或檔案（權限不足） | 一個合法封存，內含其餘全部；每一項在遇到時回報，最後以非零結束，與 bsdtar 相同。2026-10-22 之前，讀不到的目錄會被存成空目錄且以 `0` 結束，讀不到的檔案會留下不完整的封存，`--zip` 則在第一個讀不到的項目就停下，留下空的或不完整的 ZIP |
+| 建立時（`-c`、`-r`、`-u`、`--zip`），有讀不到的目錄或檔案（權限不足） | 一個合法封存，內含其餘全部；每一項在遇到時回報，最後以非零結束，與 bsdtar 相同 |
 | 解出時，封存在中途被截斷 | 已解出的那些項目，且內容完整；截斷點落在其中的那個成員完全不會被建立，故不會留下半寫的檔案 |
 | 解出時，有成員被略過（路徑不安全、寫入或建立失敗……） | 其餘每個成員，內容完整；略過數與非零離開碼在最後才回報（見下方 `--strict`） |
 | 尚未開始工作即被拒絕（未知選項、封存檔不存在、金鑰錯誤） | 無 |
@@ -807,11 +853,10 @@ swift_tar -c -f mixed.tar tree/a.txt tree/typo.txt tree/sub/b.txt
   「x 是封存檔」——若您要判斷的是這件事，請比對印出的文字。
 - **`-x` 搭配指向不存在目錄的 `-C` 會回傳 `0`** 並自動建立該目錄。詳見上方 `-C`
   對照表。
-- **`-x` 略過成員時以非 0 結束（`--strict`，自 2026-10-08 起為預設）。** 因路徑不安全（絕對路徑、
+- **`-x` 略過成員時以非 0 結束（`--strict`，預設）。** 因路徑不安全（絕對路徑、
   `..`、穿過 symlink）而被拒絕的成員、寫不進去或建立不了的成員、此平台無法建立其型別的成員，都算
   略過；`--exclude` 排除的成員不算，因為那是您要求的。其餘成員仍會全部解出——略過數在最後才回報。
-  `--no-strict` 回到原本略過後仍以 `0` 結束的行為。在此之前，解出時略過了檔案的傳輸，對只看
-  離開碼的呼叫端而言看起來是成功的。
+  `--no-strict` 則在略過後仍以 `0` 結束。
 
 ## 檔案結構
 

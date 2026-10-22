@@ -68,8 +68,6 @@ RGB1 檔案 → 讀取 RGB payload → RGB 轉 RGBA → Metal 或 WinUI → 螢�
 | 解出吞吐量 | 311.1 MB/s |
 | 壓縮後大小 | 2,756,712 bytes（壓縮比 0.443） |
 
-此處原本記載的是合成語料的數字（4,567 bytes、建立 262.2 MB/s、解出 228.0 MB/s），來自一張由 4 KiB 區塊重複而成的 1024×1024 影像：任何視窗達 4 KiB 以上的 codec 都會直接匹配，壓縮比 0.001 量測的是「圖案」而非「影像」。真實影格約壓到原始的 0.44。
-
 詳細結果見 `verifications/rgb1_container_mbps_output-mac.txt`（各平台各有一份），測試限制見 `verifications/README.zh-TW.md`。
 
 目前驗證資料沒有相同條件的正式 RGBA 基準，因此不能從現有報告宣稱 RGB1 一定比 RGBA 壓縮或解壓更快。

@@ -78,32 +78,36 @@ The parallel pipeline deliberately holds up to `-n` 4 MiB chunks. Its semaphore
 slot is released only after a result is written in order, so memory is bounded
 by the configured in-flight count rather than the 1.4 GB stream size.
 
-### Results summary (Apple M4, claw-code 1.40 GB, medians of 3)
+### Results summary (Apple M4, claw-code 1.41 GB, medians of 3)
 
 Every figure below is section A and B of
 [`encrypt_mbps_rss_output.txt`](encrypt_mbps_rss_output.txt) — dated
-2026-08-15, build `20260814-201122`. Do not edit this table by hand; diff it
-against that file after each run.
+2026-10-22, build `swift_tar 0.1.2 (v0.1.1-17-gd493560e-dirty) 20261022-191859`.
+Do not edit this table by hand; diff it against that file after each run.
 
 | Codec | create | create + encrypt | extract | extract + decrypt |
 | --- | ---: | ---: | ---: | ---: |
-| plain tar | 1389 MB/s | 602 MB/s | 1199 MB/s | 476 MB/s |
-| gzip | 315 MB/s | 277 MB/s | 668 MB/s | 518 MB/s |
-| zstd | 531 MB/s | 468 MB/s | 830 MB/s | 647 MB/s |
+| plain tar | 686 MB/s | 415 MB/s | 703 MB/s | 370 MB/s |
+| gzip | 331 MB/s | 277 MB/s | 427 MB/s | 372 MB/s |
+| zstd | 537 MB/s | 473 MB/s | 879 MB/s | 636 MB/s |
 
-`--encrypt-only` runs at **659 MB/s** with 181 MB peak RSS and `--decrypt-only`
-runs at **647 MB/s** with 109 MB peak RSS. The decrypted output is verified
+`--encrypt-only` runs at **401 MB/s** with 181 MB peak RSS and `--decrypt-only`
+runs at **347 MB/s** with 109 MB peak RSS. The decrypted output is verified
 byte-identical to the original.
 
-The zstd rows were not measured at the current default level
-(`--zstd-level 9`), so re-running `encrypt_mbps_rss.zsh` will not reproduce
-them.
+**Sections A and B are bound by disk writes, not by the code.** They write
+every archive and extracted tree to a temporary directory on the internal
+disk, which is 91% full (18 GiB free) on this machine. Two builds (0.1.1 and
+0.1.2) writing to that same directory are equally variable, 0.86–2.11 s for
+the same step, and the `-n` sweep below, which takes the best round per
+setting, is unaffected. Read the plain-tar and `--encrypt-only` /
+`--decrypt-only` figures as this disk's write rate.
 
-Size overhead is **48 bytes of header plus 21 bytes per 4 MiB chunk** — 7125
+Size overhead is **48 bytes of header plus 21 bytes per 4 MiB chunk** — 7167
 bytes on a 1.4 GB archive (0.0005%).
 
 Passphrase derivation is measured directly against the same `crypto.swift`:
-**0.180 s** per scrypt derivation, with 51.48 MB peak RSS versus 6.13 MB for the
+**0.180 s** per scrypt derivation, with 51.31 MB peak RSS versus 6.03 MB for the
 keyfile baseline.
 
 ### `-n` scaling of the encryption layer
@@ -118,22 +122,22 @@ run as the tables above. Do not edit by hand.
 
 | `-n` | encrypt | RSS | decrypt | RSS |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 133 MB/s | 28 MB | 134 MB/s | 28 MB |
-| 2 | 259 MB/s | 45 MB | 258 MB/s | 41 MB |
-| 4 | 477 MB/s | 79 MB | 476 MB/s | 58 MB |
-| 8 | 659 MB/s | 147 MB | 665 MB/s | 97 MB |
-| 16 | 763 MB/s | 207 MB | 767 MB/s | 135 MB |
-| 20 (default) | **767 MB/s** | 228 MB | **771 MB/s** | 152 MB |
+| 1 | 134 MB/s | 28 MB | 134 MB/s | 28 MB |
+| 2 | 257 MB/s | 45 MB | 257 MB/s | 41 MB |
+| 4 | 470 MB/s | 79 MB | 467 MB/s | 62 MB |
+| 8 | 660 MB/s | 147 MB | 657 MB/s | 92 MB |
+| 16 | 764 MB/s | 206 MB | 736 MB/s | 156 MB |
+| 20 (default) | **768 MB/s** | 244 MB | **756 MB/s** | 164 MB |
 
-Throughput scales cleanly to about `-n 16` on this 10-core machine — a **5.8×**
+Throughput scales cleanly to about `-n 16` on this 10-core machine — a **5.7×**
 speed-up over `-n 1` — and the default (`2 × cores` = 20) sits at the plateau,
 so it needs no tuning. RSS grows linearly with in-flight chunks (~4 MiB each),
 the same trade-off the codecs make.
 
-The `--encrypt-only` rate quoted above (**659 MB/s**) is section B's, and it
-coincides with the `-n 8` row here rather than with the default `-n 20` row —
-the two sections are not measured at the same in-flight count, so neither is
-"the" encrypt rate on its own.
+The `--encrypt-only` rate quoted above (**401 MB/s**) is section B's median and
+sits below every row here from `-n 4` up. Section B reports the median round and
+this sweep the best round, at different in-flight counts, so neither is "the"
+encrypt rate on its own; on this disk, section B measures the writes.
 
 > **Methodology**: the sweep interleaves settings — every round runs the whole
 > sweep and the best time per setting is reported. Running all rounds of one
@@ -181,6 +185,15 @@ runs three rounds and writes `zip_claw_code_mbps_rss_output.txt`.
 ```sh
 ROUNDS=3 ./zip_claw_code_mbps_rss.zsh ../../claw-code
 ```
+
+On the Apple M4 (claw-code, 5448 files, 1406 MB; build
+`swift_tar 0.1.2 (v0.1.1-16-g72b2bbca-dirty) 20261022-184744`), medians of 3:
+encode **6.86 s / 205 MB/s** with 295 MB peak RSS, because members are deflated
+in parallel by default (see the `-n` section at the end); decode **3.52 s /
+400 MB/s** with 10 MB peak RSS. Decode runs through the pinned zlib that the
+macOS build links statically; the system libz decodes the same deflate data
+about 2× faster on macOS (TGZ decode ~930 against ~482 MB/s in
+[`chunk_size_tradeoff.txt`](chunk_size_tradeoff.txt)).
 
 ## Create-side `-C` compatibility
 
@@ -245,11 +258,13 @@ to `-n`:
 
 | Side | Peak RSS |
 | --- | --- |
-| Encode | **90MB (`n=4`) → 300MB (`n=40`); default `n=20` = 219MB** |
-| Decode | **~50MB, flat across `-n`** |
+| Encode | **115MB (`n=4`) → 298MB (`n=40`); default `n=20` = 222MB** |
+| Decode | **~70–76MB, flat across `-n`** |
 
-Encode takes 4.3–7.6s and decode 2.8–3.9s. Encode RSS follows a linear `-n`
-relationship (in-flight chunks × ~8MiB per chunk).
+Encode takes 4.6–8.2s and decode 3.3–4.5s. Encode RSS follows a linear `-n`
+relationship (in-flight chunks × ~8MiB per chunk). Decode runs through the
+pinned zlib that the macOS build links statically; the system libz decodes
+about 2× faster on macOS (see the chunk-size section).
 
 ### Windows verification
 
@@ -281,8 +296,8 @@ Encode follows the expected linear `-n` relationship, while decode stays flat
 around 43–45MB.
 
 Across the sweep, encode takes 7.2–15.6s; at the normal parallel plateau
-(`-n 12..40`) it is 7.2–7.8s, closely matching the macOS 4.3–7.6s range.
-Decode takes 9.7–11.0s, slower than macOS's 2.8–3.9s. Windows extraction and
+(`-n 12..40`) it is 7.2–7.8s, closely matching the macOS 4.6–8.2s range.
+Decode takes 9.7–11.0s, slower than macOS's 3.3–4.5s. Windows extraction and
 file-I/O overhead therefore remains a separate optimization target.
 
 ### Filename-extension compatibility
@@ -296,7 +311,7 @@ and `swift_tar -x` both succeeded. Use `.tgz` or `.tar.gz` for this output.
 
 - On macOS, TGZ memory usage is comparable to or below the LZFSE formats.
   Default `-n` needs no tuning; lower `-n` can still trade encode speed for
-  memory (`n=4` = 90MB at +75% time).
+  memory (`n=4` = 115MB at +75% time).
 - On Windows, native zlib keeps TGZ encode RSS at 56–208MB (`-n 4–40`, linear)
   and decode RSS at about 43–45MB flat.
 - With static zlib, parallel encode takes 7.2–7.8s. Decode takes 9.7–11.0s and
@@ -308,11 +323,11 @@ and `swift_tar -x` both succeeded. Use `.tgz` or `.tar.gz` for this output.
 
 `verifications/extract_write_path.zsh` → `extract_write_path_output.txt`
 
-macOS 27.0.0 arm64, 10 cores (4P+6E), APFS, 256 MiB per corpus, swift_tar
-20260810-170353 vs bsdtar 3.5.3. Three independent runs; the ratios below
-reproduced as 1.7/1.9/1.7, 1.1/0.9/1.1, 0.6/0.6/0.6. The `swift -x` figures in
-this section are the serial write path; small files go through the parallel
-write path measured in the next section.
+macOS 27.2.0 arm64, 10 cores (4P+6E), APFS, 256 MiB per corpus, swift_tar
+`0.1.2 (v0.1.1-16-g72b2bbca-dirty) 20261022-184744` vs bsdtar 3.5.3. The
+`swift -x` figures in this section run at the default `-n`, so small files go
+through the parallel write path (CPU/wall 3.95 in section 3 of the record,
+1.17 at `-n 1`).
 
 ### 1. Extraction cost is per-file, and swift_tar WINS on small files
 
@@ -320,48 +335,48 @@ Total bytes held constant, only the file count varies:
 
 | corpus | files | avg size | bsdtar -c | bsdtar -x | swift -c | swift -x | x ratio |
 |---|---|---|---|---|---|---|---|
-| few  | 8    | 32 MiB | 2142ms | 121ms  | **404ms** | 234ms  | 1.9x slower |
-| mid  | 512  | 512 KiB| 2308ms | 288ms  | **401ms** | 309ms  | 1.1x |
-| many | 8192 | 32 KiB | 4540ms | 2456ms | **459ms** | **1545ms** | **0.6x — faster** |
+| few  | 8    | 32 MiB | 2074ms | 85ms  | **319ms** | 126ms  | 1.5x slower |
+| mid  | 512  | 512 KiB| 2098ms | 136ms  | **335ms** | 153ms  | 1.1x |
+| many | 8192 | 32 KiB | 2306ms | 804ms | **384ms** | **428ms** | **0.5x — faster** |
 
 Two things fall out of this table:
 
-- **Creation is 4–10x faster than bsdtar in every corpus.** The chunked
+- **Creation is about 6x faster than bsdtar in every corpus.** The chunked
   parallel gzip is doing real work.
 - **Extraction gets relatively BETTER as files get smaller.** swift_tar loses
   on a handful of huge files and wins on thousands of small ones.
 
-It is bsdtar whose per-file cost dominates here: 2456ms for 8192 files versus
-swift_tar's 1545ms.
+It is bsdtar whose per-file cost dominates here: 804ms for 8192 files versus
+swift_tar's 428ms.
 
 **Practical consequence:** whether swift_tar or bsdtar is faster depends
 entirely on the archive's shape. For a Swift toolchain tarball (few, large
 files) bsdtar wins. For a source tree or a rootfs, swift_tar wins.
 
-### 2. The write path is ~90% of extraction for small files
+### 2. How much of extraction is the write path
 
 `-t` decodes the whole archive and writes nothing; `-x` decodes and writes.
 
 | corpus | files | swift -t | swift -x | write path | bsdtar -t | bsdtar -x | write path |
 |---|---|---|---|---|---|---|---|
-| few  | 8    | 120ms | 207ms  | 87ms   | 32ms  | 265ms  | 233ms  |
-| many | 8192 | 214ms | 1644ms | 1430ms | 226ms | 2929ms | 2703ms |
+| few  | 8    | 75ms | 162ms  | 87ms   | 30ms  | 163ms  | 133ms  |
+| many | 8192 | 285ms | 438ms | 153ms | 169ms | 765ms | 596ms |
 
-Decoding 256 MiB costs ~200ms and is essentially the same for both tools.
-Everything else is file I/O, and it is **syscall-bound, not CPU-bound**
-(`sys` ≫ `user`).
+For 8192 small files the write path is 153 of 438ms for swift_tar and 596 of
+765ms for bsdtar. Decoding 256 MiB costs swift_tar 75–285ms and bsdtar
+30–169ms. The file I/O is **syscall-bound, not CPU-bound** (`sys` ≫ `user`).
 
-For few large files the write path is 87 of 207ms — a handful of large
+For few large files the write path is 87 of 162ms — a handful of large
 sequential writes with nothing to parallelise. The gap to bsdtar there is in
-the read/decode plumbing feeding the writes: `-t` is 120ms vs bsdtar's 32ms on
+the read/decode plumbing feeding the writes: `-t` is 75ms vs bsdtar's 30ms on
 the `few` corpus.
 
 ### 3. `--gzip` really does emit one member per 4 MiB — and `gzip -l` cannot see it
 
 | archive | members | uncompressed per member |
 |---|---|---|
-| bsdtar `-czf` | 1 | 268,520,960 |
-| swift_tar `--gzip` | 65 | min 17,920 / **max 4,194,304** |
+| bsdtar `-czf` | 1 | 268,453,376 |
+| swift_tar `--gzip` | 65 | min 51,712 / **max 4,194,304** |
 
 4,194,304 is exactly 4 MiB. The pigz-style chunking works as documented.
 
@@ -413,7 +428,7 @@ memory ceiling is inflight × smallFileMax. Five runs of 8 × 32 MiB: 169-174ms.
 
 So the pool does **not** affect few-large-file archives, where swift_tar
 trails bsdtar. That gap is in the read/decode plumbing, not the writes — `-t`
-alone is 120ms against bsdtar's 32ms.
+alone is 75ms against bsdtar's 30ms.
 
 ### Correctness
 
@@ -499,13 +514,13 @@ Same script, same three shapes, both platforms, minima of interleaved reps
 
 | shape | macOS | Linux (QEMU aarch64) |
 |---|---|---|
-| 20 × 8 MB | 59 / 54 ms = **1.09×** | 38 / 26 ms = **1.46×** |
-| 200 × 800 KB | 43 / 57 ms = **0.75×** | 31 / 25 ms = **1.24×** |
-| 2000 × 80 KB | 67 / 151 ms = **0.44×** | 50 / 35 ms = **1.43×** |
+| 20 × 8 MB | 34 / 73 ms = **0.47×** | 24 / 27 ms = **0.89×** |
+| 200 × 800 KB | 53 / 89 ms = **0.60×** | 47 / 28 ms = **1.68×** |
+| 2000 × 80 KB | 84 / 194 ms = **0.43×** | 51 / 38 ms = **1.34×** |
 
-The extract gap is **Linux-specific**: there swift_tar is 1.24–1.46× slower on
-every shape. On macOS swift_tar is clearly faster on the fragmented shapes, by
-more as the corpus fragments, and close to parity on 20 × 8 MB.
+The extract gap is **Linux-specific** and lies in the fragmented shapes: there
+swift_tar is 1.34–1.68× slower on 200 × 800 KB and 2000 × 80 KB, and faster
+on 20 × 8 MB. On macOS swift_tar is faster than bsdtar on all three shapes.
 
 Two things in that folder's README are worth knowing before measuring anything
 here: sampling profilers do not work against a 0.17 s target (at most 52
@@ -534,19 +549,25 @@ too, as a check that this build method matches production.
 
 | chunk | ZSTD size | ZSTD decode | TGZ |
 | --- | ---: | ---: | --- |
-| **4 MiB** | 382.6 MiB | 1157 MB/s | speed and size unaffected by chunk size |
-| 8 MiB | **−2.6%** | −3.6% | |
-| 16 MiB | **−4.0%** | −5.1% | |
+| **4 MiB** | 385.7 MiB | 1431 MB/s | speed and size unaffected by chunk size |
+| 8 MiB | **−2.8%** | −2.6% | |
+| 16 MiB | **−4.0%** | −2.9% | |
 
-claw-code, swift_tar `f6ba52c`, 5 interleaved rounds, minimum taken, output on a
-RAM disk, decode via `--cat`.
+claw-code, swift_tar work tree @ `d493560`, 5 interleaved rounds, minimum taken,
+output on a RAM disk, decode via `--cat`.
 
 **Size differences are deterministic; speed differences are not.** Compressed
-size does not depend on load and repeated across two runs to the printed
-0.1 MiB. Speed did
-not: the control, identical in value to 4 MiB, itself deviated by up to 5.8% in
-this run. The only consistent speed signal is the direction: larger chunks,
+size does not depend on load: the control, built separately with the same
+value, matches 4 MiB to the printed 0.1 MiB. Speed does not repeat as
+exactly: the control deviates from 4 MiB by up to 3.0% on every speed but TGZ
+decode. The only consistent speed signal is the direction: larger chunks,
 slower ZSTD decode and plain tar.
+
+**TGZ decode is the one place the control differs, and it is the zlib, not the
+chunk.** The control (the installed `swift_tar 0.1.1`, a release build) decodes
+TGZ at 482 MB/s against 930 MB/s for the 4 MiB variant, −48.2%. Release builds
+link the pinned zlib submodule statically; the variants are linked with `-lz`,
+the system libz, which decodes about 2× faster on macOS.
 
 **Keep 4 MiB.** A larger chunk buys at most 4% of ZSTD size and no speed. TGZ
 is untouched either way — gzip's window is 32 KiB, so the chunk never reaches it.
@@ -566,33 +587,32 @@ keeps each case's fastest round, and hashes the output: `record` exits 1 when
 any two sorted swift_tar cases differ in sha256, because speed bought by
 changing the bytes would be a different result.
 
-claw-code (1.3 GB, about 5,400 files):
+claw-code (1.4 GB, 5,448 files):
 
 | | `-n 1` | `-n 2` | `-n 4` | `-n 8` | default | peak memory, `-n 1` → default |
 |---|---|---|---|---|---|---|
-| Apple M4 (10 cores) | 30.4 s | 15.5 s | 9.1 s | 7.7 s | 7.3 s (4.2×) | 9 MB → 180 MB |
-| Linux guest (4 vCPU, HVF) | 29.2 s | 14.8 s | 9.0 s | 9.2 s | 8.8 s (3.3×) | 22 MB → 134 MB |
+| Apple M4 (10 cores) | 28.6 s | 14.4 s | 8.7 s | 7.1 s | 6.8 s (4.2×) | 9 MB → 283 MB |
+| Linux guest (4 vCPU, HVF) | 28.0 s | 14.3 s | 8.6 s | 8.9 s | 8.6 s (3.3×) | 21 MB → 121 MB |
 
 * **The bytes do not change.** Every `-n` gives the same sha256 on a platform,
-  and the guest's is the one `cross_platform_bytes.csv2` holds.
+  and the M4's is the one `cross_platform_bytes.csv2` holds for `zip`. The
+  guest's archive has the same size (497,122,541 bytes) but a different
+  sha256: each ZIP entry carries the Unix UID/GID extra field (0x7875), and the
+  guest's corpus had a different owner here. With the owner set to 501:20 on
+  both sides, `cross_platform_bytes.csv2` shows the two platforms' ZIPs
+  byte-identical.
 * **Two and four threads scale almost linearly; past that it flattens.** On the
-  M4 only four cores are performance cores, and user CPU time rises from 28.6 s
+  M4 only four cores are performance cores, and user CPU time rises from 28.1 s
   to 36 s once the efficiency cores join. There is also no parallelism inside
   one file, so the largest members bound the run.
-* **`-n` above the core count is slower** (`-n 16`: 7.6 s on the M4, 9.9 s in
+* **`-n` above the core count is slower** (`-n 16`: 7.1 s on the M4, 9.3 s in
   the guest) and holds more memory.
-* **`-n 1` matches a build without the threaded path**: 30.4 s against 29.8 s
-  for the same sources built without it.
 * **Other tools on the same machine are single-threaded:** Info-ZIP `zip -r -6`
-  33.1 s and `bsdtar --format zip` 32.8 s on the M4; `bsdtar` 28.4 s in the
+  31.2 s and `bsdtar --format zip` 30.5 s on the M4; `bsdtar` 27.9 s in the
   guest.
-* **Sorting does not cost time.** On the M4 `--zip-unsorted` was slower than the
-  default in all three rounds (7.8 to 8.6 s against 7.3 to 7.5 s); in the guest
-  the two swapped places from round to round (9.1 to 10.0 s against 8.8 to
-  10.1 s).
+* **Sorting does not cost time.** `--zip-unsorted` is not faster than the
+  default: 7.6 s against 6.8 s on the M4, 8.8 s against 8.6 s in the guest
+  (fastest rounds).
 
-Limits of this run: the M4 carried a load average of 4 to 6 from other work, so
-its absolute times are upper bounds; the M4's corpus was the tree
-`cross_platform_bytes.zsh` leaves behind (one file added, one changed), which is
-why its sha256 is not the guest's; Windows was not measured, and its build has
-no threaded path.
+Limits of this run: Windows was not measured, and its build has no threaded
+path.

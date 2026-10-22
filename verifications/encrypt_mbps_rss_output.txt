@@ -1,51 +1,51 @@
-[Info] date / 日期: 2026-08-15 00:11:14 CST
-[Info] os: macOS 27.0 (26A5406e)
+[Info] date / 日期: 2026-10-22 19:34:37 CST
+[Info] os: macOS 27.2 (26B5112a)
 [Info] machine / 機器: arm64, Apple M4
-[Info] swift_tar: /Users/raliclo/proj/lzfse2/swift_tar/release/swift_tar (swift_tar 20260814-201122)
+[Info] swift_tar: /Users/raliclo/proj/lzfse2/swift_tar/release/swift_tar (swift_tar 0.1.2 (v0.1.1-17-gd493560e-dirty) 20261022-191859)
 [Info] corpus / 語料: /Users/raliclo/proj/lzfse2/claw-code
-[Info] regular files / 一般檔案: 5402
-[Info] logical input / 邏輯輸入: 1402999124 bytes (1403.00 MB)
+[Info] regular files / 一般檔案: 5448
+[Info] logical input / 邏輯輸入: 1406227265 bytes (1406.23 MB)
 [Info] rounds / 輪數: 3 (median reported / 取中位數)
 [Info] key / 金鑰: 64-byte keyfile (no scrypt; see the KDF note below)
 
 == A) create/extract, plain vs encrypted ==
 codec            mode         real(s)       MB/s  peakRSS(MB) archive(bytes)
-plain-tar        create          1.01    1389.11        20.07     1407545344
-                 create+enc       2.33     602.15       180.57     1407552469
-                 extract         1.17    1199.14        43.81              -
-                 extr+dec        2.95     475.59       145.74              -
-gzip             create          4.46     314.57       174.37      491321601
-                 create+enc       5.07     276.73       230.87      491324148
-                 extract         2.10     668.09        58.82              -
-                 extr+dec        2.71     517.71       160.17              -
-zstd             create          2.64     531.44       262.46      401152357
-                 create+enc       3.00     467.67       302.73      401154442
-                 extract         1.69     830.18       460.24              -
-                 extr+dec        2.17     646.54       507.58              -
+plain-tar        create          2.05     685.96        41.80     1416850944
+                 create+enc       3.39     414.82       205.68     1416858111
+                 extract         2.00     703.11        77.58              -
+                 extr+dec        3.80     370.06       164.48              -
+gzip             create          4.25     330.88       192.61      494875938
+                 create+enc       5.08     276.82       224.05      494878485
+                 extract         3.29     427.42        73.83              -
+                 extr+dec        3.78     372.02       175.98              -
+zstd             create          2.62     536.73       309.64      404415093
+                 create+enc       2.97     473.48       326.88      404417199
+                 extract         1.60     878.89        67.68              -
+                 extr+dec        2.21     636.30       174.60              -
 
 == B) --encrypt-only / --decrypt-only on an existing .tar ==
 phase               real(s)       MB/s  peakRSS(MB)  output(bytes)
-encrypt-only           2.13     658.69       181.09     1407552469
-decrypt-only           2.17     646.54       109.43     1407545344
+encrypt-only           3.51     400.63       180.73     1416858111
+decrypt-only           4.05     347.22       109.07     1416850944
 [OK] decrypt-only output is byte-identical to the original / 與原檔位元組一致
-[Info] size overhead / 大小開銷: 7125 bytes (0.0005%), = 48B header + 21B per 4 MiB chunk
+[Info] size overhead / 大小開銷: 7167 bytes (0.0005%), = 48B header + 21B per 4 MiB chunk
 
 == B2) -n scaling of the encryption layer ==
 [Info] cores / 核心數: 10, default -n / 預設 -n: 20 (2 x cores, capped at 4 x cores)
 -n      enc best(s)   enc MB/s  enc RSS(MB)  dec best(s)   dec MB/s  dec RSS(MB)
-1             10.54     133.11        28.28        10.46     134.13        28.31
-2              5.42     258.86        45.24         5.44     257.90        41.06
-4              2.94     477.21        79.23         2.95     475.59        58.18
-8              2.13     658.69       147.14         2.11     664.93        96.53
-16             1.84     762.50       206.54         1.83     766.67       134.77
-20             1.83     766.67       227.51         1.82     770.88       151.73
+1             10.53     133.54        28.05        10.51     133.80        28.10
+2              5.48     256.61        45.04         5.48     256.61        40.83
+4              2.99     470.31        78.95         3.01     467.19        62.13
+8              2.13     660.20       146.82         2.14     657.12        92.03
+16             1.84     764.25       206.05         1.91     736.24       155.86
+20             1.83     768.43       244.01         1.86     756.04       164.22
 [OK] every -n setting round-trips to identical bytes / 每種 -n 設定皆還原為相同位元組
 
 == C) passphrase KDF (scrypt N=2^15, r=8, p=1) ==
 mode                real(s)  peakRSS(MB)
-keyfile                0.00         6.28
-passphrase             0.17        51.59
-[Info] measured scrypt time delta / 實測 scrypt 時間差: 0.170 s per derivation
+keyfile                0.00         6.03
+passphrase             0.18        51.31
+[Info] measured scrypt time delta / 實測 scrypt 時間差: 0.180 s per derivation
 [Info] --encrypt pays this once per archive on create and read.
        --encrypt 每個封存於建立與讀取時各支付一次此成本。
 

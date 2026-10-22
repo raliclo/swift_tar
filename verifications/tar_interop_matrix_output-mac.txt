@@ -1,8 +1,8 @@
-[Info] date: 2026-10-14 01:32:12 CST
+[Info] date: 2026-10-22 18:17:01 CST
 [Info] platform: mac
 [Info] host: Darwin 27.2.0 arm64
-[Info] swift_tar: swift_tar 20261014-010226
-[Info] corpus digest: fa3448c545a1c8adc3f3138d9d0ca73615628997f08bbe1f426c331590f6b264
+[Info] swift_tar: swift_tar 0.1.2 (v0.1.1-16-g72b2bbca) 20261022-181622
+[Info] corpus digest: 8176db880e7851e3c3bb48d7ab26d9f27123e6eccd8ab4c60977c2a659395a73
 
 == reference tar implementations found / 現場找到的參照實作 ==
   bsdtar  /usr/bin/tar
@@ -31,8 +31,8 @@
 == macOS AppleDouble note / macOS AppleDouble 說明 ==
   An archive written by /usr/bin/tar WITHOUT COPYFILE_DISABLE lists:
     bsdtar    10 entries   (hides the ._ members it wrote)
-    GNU tar   20 entries   (shows them, extracts them as files)
-    swift_tar 20 entries   (same as GNU tar)
+    GNU tar   10 entries   (shows them, extracts them as files)
+    swift_tar 10 entries   (same as GNU tar)
   swift_tar agrees with GNU tar here. Set COPYFILE_DISABLE=1 when
   creating on macOS if the archive is for anything but bsdtar.
   swift_tar 在此與 GNU tar 一致。若封存的對象不是 bsdtar，於 macOS 建立時

@@ -638,8 +638,8 @@ containers, not stream codecs, and are not affected. The flag is off by default,
 
 Why: these files are already compressed, so a codec gains nothing — zstd stores
 their blocks raw — while the receiver still pays to decode them. On an M4, 512 MiB of
-random data extracted through a pipe at 2147 MB/s with `--zstd` and 1732 MB/s with
-`--zstd-parallel`; a plain tar is limited only by the pipe. Reading auto-detects, so
+random data extracts through a pipe at 5076 MB/s from a `--zstd` archive and 2503 MB/s
+from a `--zstd-parallel` one; a plain tar is limited only by the pipe. Reading auto-detects, so
 `-x --zstd` on the receiving side still extracts the plain tar.
 
 Matching is by name only, compared lowercased (`.MP4` matches `.mp4`); the contents
@@ -941,8 +941,8 @@ corpus spanning three 4 MiB chunks:
 | `--encrypt` | **no, by design** — a fresh nonce each run; the decrypted plaintext is identical |
 | `--zip`, `--zip64` | **yes**, across runs — each entry records its mtime only, not atime or ctime, which reading the tree changes |
 | `--zip`, `--zip64`, on another filesystem or platform, with one `TZ` | **yes** — byte-identical on macOS and Linux. Members are sorted like the tar path's, one directory at a time. ZIP headers hold local time, so `TZ` has to match |
-| the same with `--zip-unsorted` | **no** — members are written in the order the filesystem lists them: one tree gives different ZIPs on macOS (APFS) and Linux (tmpfs), same size, different order. Memory is the same either way: 1,001,206 entries peaked at 175 MB sorted and 173 MB unsorted |
-| `--zip`, `--zip64`, across `-n 1`, `2`, `4`, `8`, `10`, `16` | **yes** — members are compressed on `-n` threads and written in order, and each is the deflate stream one thread would have made. On an M4, claw-code (1.3 GB, 5,408 files): 30.4 s with `-n 1`, 9.1 s with `-n 4`, 7.1 s with `-n 10`; peak memory 9 MB, 128 MB and 187 MB (`verifications/zip_parallel_speed.zsh`). Windows builds compress on one thread whatever `-n` is |
+| the same with `--zip-unsorted` | **no** — members are written in the order the filesystem lists them: one tree gives different ZIPs on macOS (APFS) and Linux (tmpfs), same size, different order. Memory is the same either way: 1,008,901 entries peaked at 177 MB sorted and 176 MB unsorted |
+| `--zip`, `--zip64`, across `-n 1`, `2`, `4`, `8`, `10`, `16` | **yes** — members are compressed on `-n` threads and written in order, and each is the deflate stream one thread would have made. On an M4, claw-code (1.3 GB, 5,448 files): 28.6 s with `-n 1`, 8.7 s with `-n 4`, 6.7 s with `-n 10`; peak memory 9 MB, 237 MB and 280 MB (`verifications/zip_parallel_speed.zsh`). Windows builds compress on one thread whatever `-n` is |
 
 The `-n` result is the useful one: chunking is deterministic, not merely
 reassembled in the right order, so an archive built with `-n 16` on one machine

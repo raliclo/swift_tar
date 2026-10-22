@@ -32,26 +32,26 @@ Measured in the guest, 160 MB corpus, `-c --gzip`:
 
 | `-n` | TCG | HVF |
 |---|---:|---:|
-| 1 | 5775 ms | 1165 ms |
-| 2 | 5541 ms | 1144 ms |
-| 4 | **3252 ms** | **593 ms** |
-| 8 | 3213 ms | 587 ms |
+| 1 | 9483 ms | 2230 ms |
+| 2 | 4954 ms | 1137 ms |
+| 4 | **2897 ms** | **599 ms** |
+| 8 | 2976 ms | 605 ms |
 
-Threads help: 1 → 4 is **1.78×** under TCG and **1.96×** under HVF. Going to 8
+Threads help: 1 → 4 is **3.27×** under TCG and **3.72×** under HVF. Going to 8
 changes nothing, because there are only four vCPUs — past the core count the
 extra threads queue against each other.
 
-不是。guest 看得到四顆，也確實在用。執行緒有效：1 → 4 在 TCG 下為 **1.78 倍**、HVF 下
-為 **1.96 倍**。加到 8 沒有變化，因為只有四顆 vCPU——超過核心數之後，多出的執行緒只是
+不是。guest 看得到四顆，也確實在用。執行緒有效：1 → 4 在 TCG 下為 **3.27 倍**、HVF 下
+為 **3.72 倍**。加到 8 沒有變化，因為只有四顆 vCPU——超過核心數之後，多出的執行緒只是
 互相排隊。
 
 ---
 
-## Why is the speed-up 1.78× and not 4×? Can it be improved?
+## Why is the speed-up below 4×? Can it be improved?
 
-## 為何加速只有 1.78 倍而非 4 倍？能改善嗎？
+## 為何加速不到 4 倍？能改善嗎？
 
-Three separate causes, and only two of them are fixable.
+Three separate causes, and two of them are fixable.
 
 **The VM runs without hardware acceleration by default.** `run.sh` uses TCG
 unless `ACCEL=hvf` is given — every guest instruction is translated in
@@ -60,21 +60,19 @@ available. Measured cost of TCG:
 
 | | TCG | HVF | ratio |
 |---|---:|---:|---:|
-| swift_tar `-n 1` | 5775 ms | 1165 ms | 4.96× |
-| swift_tar `-n 4` | 3252 ms | 593 ms | 5.48× |
-| bsdtar | 10969 ms | 2262 ms | 4.85× |
+| swift_tar `-n 1` | 9483 ms | 2230 ms | 4.25× |
+| swift_tar `-n 4` | 2897 ms | 599 ms | 4.84× |
+| bsdtar | 10988 ms | 2238 ms | 4.91× |
 
-**Emulation costs about 5×, and it costs it uniformly.** TCG does not punish
-threaded code specifically: thread scaling barely moves under HVF — 1.78× to
-1.96×. TCG is a flat tax on everything, not a thread-specific penalty.
+**Emulation costs about 4–5×, and slightly more for threaded code.** Thread
+scaling from 1 to 4 is 3.27× under TCG against 3.72× under HVF.
 
 **Only four vCPUs on a ten-core host.** `-smp` is the knob; nothing structural
 prevents raising it.
 
 **The pipeline has a serial section.** Chunks compress concurrently but must be
-written back in order, and the input is read as one stream. That is the design's
-ceiling, not a configuration mistake, and it is why even under HVF four threads
-give 1.96× rather than 4×.
+written back in order, and the input is read as one stream. That is why four
+threads give 3.72× under HVF rather than 4×.
 
 So: raising `-smp` and enabling `ACCEL=hvf` are both available and both help.
 `run.sh` takes `ACCEL=hvf` and `SMP=n`; the default is TCG with four vCPUs.
@@ -83,12 +81,10 @@ So: raising `-smp` and enabling `ACCEL=hvf` are both available and both help.
 
 **VM 預設沒有硬體加速。** 未指定 `ACCEL=hvf` 時 `run.sh` 使用 TCG，逐一以軟體翻譯
 guest 指令。主機是 Apple silicon 跑 aarch64 guest，HVF 可用。TCG 的代價實測約為
-**5 倍，且是均勻的**：HVF 下的執行緒擴展性幾乎沒動——1.78 倍變 1.96 倍。TCG 是對所有
-東西課的均一稅，不是針對執行緒的懲罰。
+**4 到 5 倍，對多執行緒的程式碼略高**：1 → 4 的擴展在 TCG 下為 3.27 倍，HVF 下為 3.72 倍。
 
 **十核主機上只給四顆 vCPU**，`-smp` 即可調整。**管線本身有序列段**：分塊可並行壓縮，
-但寫回必須保序，輸入亦為單一串流——這是設計的天花板而非組態失誤，也是即使在 HVF 下
-四執行緒仍只有 1.96 倍的原因。
+但寫回必須保序，輸入亦為單一串流——這是 HVF 下四執行緒為 3.72 倍而非 4 倍的原因。
 
 ---
 
@@ -99,7 +95,7 @@ guest 指令。主機是 Apple silicon 跑 aarch64 guest，HVF 可用。TCG 的�
 **It is not, in general. It depends on the direction and the platform.**
 
 Compressing, the same guest and 160 MB corpus, HVF: swift_tar `-c --gzip -n 4`
-takes **593 ms**, bsdtar 2262 ms — swift_tar is 3.8× faster.
+takes **599 ms**, bsdtar 2238 ms — swift_tar is 3.7× faster.
 
 The asymmetry is in the format, not the tools' quality:
 
@@ -125,78 +121,53 @@ bsdtar:
 
 | shape | macOS | Linux (QEMU aarch64) |
 |---|---|---|
-| 20 × 8 MB | 59 / 54 ms = **1.09×** | 38 / 26 ms = **1.46×** |
-| 200 × 800 KB | 43 / 57 ms = **0.75×** | 31 / 25 ms = **1.24×** |
-| 2000 × 80 KB | 67 / 151 ms = **0.44×** | 50 / 35 ms = **1.43×** |
+| 20 × 8 MB | 34 / 73 ms = **0.47×** | 24 / 27 ms = **0.89×** |
+| 200 × 800 KB | 53 / 89 ms = **0.60×** | 47 / 28 ms = **1.68×** |
+| 2000 × 80 KB | 84 / 194 ms = **0.43×** | 51 / 38 ms = **1.34×** |
 
-On macOS the two are about even on a few large files (bsdtar 1.09×), and
-swift_tar is faster as the corpus fragments, up to 2.3× at 2000 entries. On
-Linux bsdtar extracts 1.24× to 1.46×
-faster, although swift_tar's own archives are multi-member and could be decoded
-in parallel.
+On macOS swift_tar is the faster extractor on all three shapes, about 1.7× to
+2.3×. On Linux the two are about even on a few large files, and bsdtar extracts
+1.3× to 1.7× faster once the corpus fragments, although swift_tar's own archives
+are multi-member and could be decoded in parallel. Single extractions here last
+tens of milliseconds, so the Linux ratios move by a few tenths between runs.
 
 The two references are different versions — bsdtar 3.5.3 / libarchive 3.7.4 on
-macOS against 3.8.8 / 3.8.8 on Linux — so platform is not the only variable
-between those columns.
-
-The cause of the Linux gap is not identified. Ruled out:
-
-- *Per-entry overhead in swift_tar's extract path.* Per-entry cost would grow
-  with the number of entries; the ratio does not.
-- *A chunk-boundary effect at 4 MiB.* Holding the total at 128 MB and sweeping
-  the single-file size across the boundary shows no discontinuity: 1 MB 1.16×,
-  4 MB 1.65×, 8 MB 1.58×, 32 MB 2.17×, 128 MB 1.56×.
-- *Per-file buffering in `FileWriterPool` as a source of page faults* (below).
+macOS against 3.8.9 / 3.8.9 on Linux — so platform is not the only variable
+between those columns. The cause of the Linux gap on small files is not
+identified.
 
 **Profiling belongs on Linux**, which is also the only end where it is
-feasible: on macOS the extract runs about 0.17 s and four separate sampling
-approaches returned at most 52 samples (recorded in that folder's README).
+feasible: on macOS each extract runs under 0.1 s, too short for a sampling
+profiler (recorded in that folder's README).
 
-**Page faults and per-file buffering.** `verifications/zstd_decode_gap.zsh`
-splits "why is native slower" into facets measured one at a time and excludes
-the E-cluster, the `-n` setting, and parallelism. `user` time is comparable
-while `sys` is not, with page faults differing by about 64× (128,042 against
-1,990). `verifications/page_fault_attribution.zsh` shows that per-file
-buffering in `FileWriterPool` is not the source of those faults.
+**Native zstd against the external `zstd`.** `verifications/zstd_decode_gap.zsh`
+extracts the same claw-code tree from a native zstd archive and through the
+external `zstd` binary. On macOS the native path is faster (1.29 s against
+2.13 s real) while taking about 13× the page faults (26,490 against 1,963).
 
-The `FileWriterPool.smallFileMax` check in the extract path is the switch: a
-member of at most `smallFileMax` (4 MiB) is buffered whole into a `Data()`;
-anything larger skips that path entirely. Sizing the members across 4 MiB
-therefore turns the path on and off in one binary. Five corpora, seven
-interleaved reps, minima taken, on a RAM disk, inter-rep variance under 1%:
+**Page faults and per-file buffering.** The `FileWriterPool.smallFileMax` check
+in the extract path is a switch: a member of at most `smallFileMax` (4 MiB) is
+buffered whole into a `Data()`; anything larger skips that path. Sizing the
+members across 4 MiB therefore turns the path on and off in one binary.
+`verifications/page_fault_attribution.zsh`, five corpora, seven interleaved reps,
+minima taken, on a RAM disk:
 
-| corpus | members | path | faults | per MiB | per 4 KiB page |
-|---|---|---|---|---|---|
-| C | 96 × 1 MiB | buffered | 8,144 | 84 | 0.33 |
-| A | 32 × 3 MiB | buffered | 26,424 | 275 | 1.08 |
-| D | 24 × 4 MiB | buffered | 26,206 | 272 | 1.07 |
-| E | 24 × 5 MiB | inline | 28,086 | 234 | 0.91 |
-| B | 16 × 6 MiB | inline | 20,482 | 213 | 0.83 |
+| corpus | members | path | faults | per MiB |
+|---|---|---|---|---|
+| C | 96 × 1 MiB | buffered | 1,663 | 17 |
+| A | 32 × 3 MiB | buffered | 19,941 | 207 |
+| D | 24 × 4 MiB | buffered | 14,394 | 149 |
+| E | 24 × 5 MiB | inline | 1,497 | 12 |
+| B | 16 × 6 MiB | inline | 1,490 | 15 |
 
-D against E decides it: same member count, adjacent sizes, the branch flips, and
-faults per page move smoothly from 1.07 to 0.91 — no discontinuity at the
-boundary. C is the stronger refutation: it leans on the buffered path hardest, 96
-members all taking it, and has the *fewest* faults. Were buffering the cause, C
-would be the worst case rather than the best.
-
-Faults per page varying continuously with allocation size, and not jumping when
-the branch changes, is the shape of the allocator — macOS `malloc` mmaps and
-munmaps large allocations, and the next one pays zero-fill page by page on first
-touch. The inline path allocates per chunk, so it pays the same cost.
-
-**Bounds, which must travel with this result.** It measures swift_tar extracting
-synthetic, incompressible corpora. It is *not* a measurement of the 64× native
-versus external gap itself; it answers only "is per-file buffering the source of
-the faults", and the answer is no. Naming the allocation site needs a
+Buffered members of 3–4 MiB take about ten times the faults per MiB of inline
+members, while buffered 1 MiB members do not. The faults follow the size of the
+buffer, not the buffered path as such. Each extraction above lasts well under
+0.1 s, so the faults cost little time; naming the allocation site needs a
 per-symbol profile (`sample`, or Instruments' Allocations).
 
-**A write-bound extraction.** Extracting a 1.05 GiB archive into 3.3 GiB of files
-in the VM takes 89 s with swift_tar and 52 s with bsdtar, while decompress-only
-is **3.2 s for both tools**. The bottleneck there is writing the files, not
-decoding — where no choice of tar helps.
-
-**並非一概如此，取決於方向與平台。** 壓縮時 swift_tar 快 3.8 倍；解壓在 macOS 上
-swift_tar 較快，在 Linux 上 bsdtar 快 1.24 到 1.46 倍。
+**並非一概如此，取決於方向與平台。** 壓縮時 swift_tar 快 3.7 倍；解壓在 macOS 上
+swift_tar 較快，在 Linux 上大檔兩者相當、小檔 bsdtar 快 1.3 到 1.7 倍。
 
 不對稱源於格式而非工具優劣：**壓縮可並行**（swift_tar 切成 4 MiB 分塊並行壓縮，實測其
 封存有 5 個 gzip 成員，bsdtar 只有 1 個）；**單一串流的解壓無法並行**（deflate 為滑動
@@ -208,60 +179,40 @@ swift_tar / bsdtar：
 
 | 形狀 | macOS | Linux（QEMU aarch64） |
 |---|---|---|
-| 20 × 8 MB | 59 / 54 毫秒 = **1.09×** | 38 / 26 毫秒 = **1.46×** |
-| 200 × 800 KB | 43 / 57 毫秒 = **0.75×** | 31 / 25 毫秒 = **1.24×** |
-| 2000 × 80 KB | 67 / 151 毫秒 = **0.44×** | 50 / 35 毫秒 = **1.43×** |
+| 20 × 8 MB | 34 / 73 毫秒 = **0.47×** | 24 / 27 毫秒 = **0.89×** |
+| 200 × 800 KB | 53 / 89 毫秒 = **0.60×** | 47 / 28 毫秒 = **1.68×** |
+| 2000 × 80 KB | 84 / 194 毫秒 = **0.43×** | 51 / 38 毫秒 = **1.34×** |
 
-macOS 上少量大檔時兩者相當（bsdtar 1.09 倍），語料愈碎 swift_tar 愈快，2000 項時快
-2.3 倍。Linux 上 bsdtar 快
-1.24 到 1.46 倍——儘管 swift_tar 自己的封存是多成員、理論上可以並行解碼。
+macOS 上三種形狀都是 swift_tar 較快，約 1.7 到 2.3 倍。Linux 上少量大檔時兩者相當，
+語料一碎 bsdtar 就快 1.3 到 1.7 倍——儘管 swift_tar 自己的封存是多成員、理論上可以並行
+解碼。這裡單次解壓只有數十毫秒，所以 Linux 的比值在不同次執行之間會差零點幾。
 
-兩端的參照實作版本不同——macOS 是 bsdtar 3.5.3 / libarchive 3.7.4，Linux 是 3.8.8 /
-3.8.8——所以「平台」不是那兩欄之間唯一的變數。
+兩端的參照實作版本不同——macOS 是 bsdtar 3.5.3 / libarchive 3.7.4，Linux 是 3.8.9 /
+3.8.9——所以「平台」不是那兩欄之間唯一的變數。Linux 上小檔差距的成因尚未確定。
 
-Linux 上這個差距的成因尚未確定。已排除：
+**profile 要在 Linux 上做**，而那也是唯一做得到的一端：macOS 上每次解壓不到 0.1 秒，
+對取樣式 profiler 來說太短（記於該資料夾的 README）。
 
-- *swift_tar 解壓路徑的逐項開銷。* 逐項成本應隨項目數增加而擴大，比值並未如此。
-- *4 MiB 分塊邊界效應。* 總量固定 128 MB、單檔大小跨越該邊界掃描，未見不連續：
-  1 MB 1.16×、4 MB 1.65×、8 MB 1.58×、32 MB 2.17×、128 MB 1.56×。
-- *`FileWriterPool` 的逐檔緩衝作為 page fault 來源*（見下）。
+**native zstd 對外部 `zstd`。** `verifications/zstd_decode_gap.zsh` 把同一棵 claw-code
+分別從 native zstd 封存、以及經由外部 `zstd` 解出。macOS 上 native 較快（real 1.29 對
+2.13 秒），page fault 則約為 13 倍（26,490 對 1,963）。
 
-**profile 要在 Linux 上做**，而那也是唯一做得到的一端：macOS 上解壓只跑約 0.17 秒，
-四種取樣做法最多只取到 52 個樣本（記於該資料夾的 README）。
+**page fault 與逐檔緩衝。** 解壓路徑中對 `FileWriterPool.smallFileMax` 的判斷是一個開關：
+成員大小不超過 `smallFileMax`（4 MiB）者整份緩衝進 `Data()`，更大者跳過該路徑。因此只要
+讓成員大小跨過 4 MiB，就能在同一個執行檔上把這條路徑開開關關。
+`verifications/page_fault_attribution.zsh`，五個語料、七輪交錯、取最小值、於 RAM disk 上：
 
-**page fault 與逐檔緩衝。** `verifications/zstd_decode_gap.zsh` 把「native 為何較慢」
-拆成可逐項量測的面向，排除了 E-cluster、`-n` 設定、平行度。`user` 時間相近而 `sys`
-不同，page fault 相差約 64 倍（128,042 對 1,990）。`verifications/page_fault_attribution.zsh`
-顯示 `FileWriterPool` 的逐檔緩衝不是這些 fault 的來源。
+| 語料 | 成員 | 路徑 | page fault | 每 MiB |
+|---|---|---|---|---|
+| C | 96 × 1 MiB | 緩衝 | 1,663 | 17 |
+| A | 32 × 3 MiB | 緩衝 | 19,941 | 207 |
+| D | 24 × 4 MiB | 緩衝 | 14,394 | 149 |
+| E | 24 × 5 MiB | inline | 1,497 | 12 |
+| B | 16 × 6 MiB | inline | 1,490 | 15 |
 
-解壓路徑中對 `FileWriterPool.smallFileMax` 的判斷**就是那個開關**。成員
-大小不超過 `smallFileMax`（4 MiB）者整份緩衝進 `Data()`，更大者完全跳過該路徑。因此只要
-讓成員大小跨過 4 MiB，就能在同一個執行檔上把這條路徑開開關關。五個語料、七輪交錯、取
-最小值、於 RAM disk 上進行，輪間變異低於 1%：
-
-| 語料 | 成員 | 路徑 | page fault | 每 MiB | 每 4 KiB 分頁 |
-|---|---|---|---|---|---|
-| C | 96 × 1 MiB | 緩衝 | 8,144 | 84 | 0.33 |
-| A | 32 × 3 MiB | 緩衝 | 26,424 | 275 | 1.08 |
-| D | 24 × 4 MiB | 緩衝 | 26,206 | 272 | 1.07 |
-| E | 24 × 5 MiB | inline | 28,086 | 234 | 0.91 |
-| B | 16 × 6 MiB | inline | 20,482 | 213 | 0.83 |
-
-決定性的是 D 與 E：成員數相同、大小相鄰、分支翻面，而每頁 fault 由 1.07 平順走到 0.91
-——分界處沒有不連續。C 是更強的反證：它把緩衝路徑用得最重（96 個成員全部走它），fault
-卻**最少**。若緩衝是成因，C 應是最壞的情況，而非最好的。
-
-每頁 fault 隨單次配置的大小連續變化、且跨越分支時不跳動，這個形狀指向配置器——macOS 的
-`malloc` 對大配置採 mmap／munmap，下一次配置在首次觸碰時逐頁 zero-fill。inline 路徑同樣
-逐塊配置，因此付同樣的代價。
-
-**界限必須與這個結果一起被引用。** 它量的是 swift_tar 在合成、不可壓縮語料上的解壓，
-**不是** native 對 external 那個 64 倍差距本身；它只回答「逐檔緩衝是不是 fault 的來源」，
-答案是否。要指出配置點需要逐符號 profile（`sample`，或 Instruments 的 Allocations）。
-
-**受限於寫入的解壓。** 在 VM 內把 1.05 GiB 的封存解成 3.3 GiB 的檔案，swift_tar 需
-89 秒、bsdtar 需 52 秒，而**僅解壓兩者都是 3.2 秒**——瓶頸是寫入檔案，不是解碼，那種
-情況換任何 tar 都無濟於事。
+3–4 MiB 的緩衝成員，每 MiB 的 fault 約為 inline 成員的十倍，而 1 MiB 的緩衝成員則否。
+fault 跟著緩衝的大小走，不是跟著緩衝路徑本身。上表每次解壓都遠低於 0.1 秒，fault 花掉的
+時間很少；要指出配置點需要逐符號 profile（`sample`，或 Instruments 的 Allocations）。
 
 ---
 
@@ -275,16 +226,16 @@ Windows, in both directions, against both bsdtar and GNU tar — so the two halv
 can be chosen independently.
 
 The packing side dominates: for one 160 MB payload swift_tar's parallel
-compression saves about 1.7 s (593 ms against 2262 ms), while the extraction
+compression saves about 1.6 s (599 ms against 2238 ms), while the extraction
 difference on the same scale is tens of milliseconds either way. For unpacking,
-swift_tar is faster on macOS once there are many files, and bsdtar on Linux (see
-the previous answer).
+swift_tar is faster on macOS, and bsdtar on Linux once there are many small files
+(see the previous answer).
 
 Three things that change the answer:
 
-- **If the receiving side is write-bound, none of this matters.** The 1.05 GiB →
-  3.3 GiB case above spends its time in the filesystem; both tools decompressed
-  it in 3.2 s. Measure where the time actually goes before optimising the tar.
+- **If the receiving side is write-bound, none of this matters.** When writing
+  the files takes longer than decoding them, the choice of tar changes little.
+  Measure where the time actually goes before optimising the tar.
 - **If you need encryption, it has to be swift_tar on both ends.** bsdtar cannot
   read a ChaCha20-Poly1305 container.
 - **If the archive must be readable by an unknown third party**, plain
@@ -292,8 +243,8 @@ Three things that change the answer:
 
 **打包用 swift_tar。** 兩者格式互通（互通矩陣在 macOS 13/13、Windows 12/12，雙向、
 且對 bsdtar 與 GNU tar 皆成立），故兩端可各自選擇。**打包端主導總時間**：以 160 MB
-負載計，swift_tar 並行壓縮省下約 1.7 秒（593 對 2262 毫秒），而同規模下解壓的差距
-無論哪一方較快都只有數十毫秒。解開時，macOS 上檔案一多 swift_tar 較快、Linux 上 bsdtar 較快
+負載計，swift_tar 並行壓縮省下約 1.6 秒（599 對 2238 毫秒），而同規模下解壓的差距
+無論哪一方較快都只有數十毫秒。解開時，macOS 上 swift_tar 較快，Linux 上小檔一多則 bsdtar 較快
 （見上一題）。
 
 三種會改變答案的情況：接收端若受限於寫入，則以上皆無意義（請先量測時間實際花在哪裡）；

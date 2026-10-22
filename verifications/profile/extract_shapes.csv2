@@ -9,3 +9,9 @@ linux,2000x80KB,2000,81920,50,35,1.43,20260905-164157,bsdtar 3.8.8 - libarchive 
 mac,20x8MB,20,8388608,59,54,1.09,20260920-170352,"bsdtar 3.5.3 - libarchive 3.7.4 zlib/1.2.12 liblzma/5.4.3 bz2lib/1.0.8 ",/Volumes/prof/w,3.72,2026-09-24T22:14:39Z
 mac,200x800KB,200,819200,43,57,0.75,20260920-170352,"bsdtar 3.5.3 - libarchive 3.7.4 zlib/1.2.12 liblzma/5.4.3 bz2lib/1.0.8 ",/Volumes/prof/w,3.72,2026-09-24T22:14:39Z
 mac,2000x80KB,2000,81920,67,151,0.44,20260920-170352,"bsdtar 3.5.3 - libarchive 3.7.4 zlib/1.2.12 liblzma/5.4.3 bz2lib/1.0.8 ",/Volumes/prof/w,3.72,2026-09-24T22:14:39Z
+mac,20x8MB,20,8388608,34,73,0.47,20261022-181622,"bsdtar 3.5.3 - libarchive 3.7.4 zlib/1.2.12 liblzma/5.4.3 bz2lib/1.0.8 ",/Volumes/prof/w,1.97,2026-10-22T10:22:32Z
+mac,200x800KB,200,819200,53,89,0.60,20261022-181622,"bsdtar 3.5.3 - libarchive 3.7.4 zlib/1.2.12 liblzma/5.4.3 bz2lib/1.0.8 ",/Volumes/prof/w,1.97,2026-10-22T10:22:32Z
+mac,2000x80KB,2000,81920,84,194,0.43,20261022-181622,"bsdtar 3.5.3 - libarchive 3.7.4 zlib/1.2.12 liblzma/5.4.3 bz2lib/1.0.8 ",/Volumes/prof/w,1.97,2026-10-22T10:22:32Z
+linux,20x8MB,20,8388608,24,27,0.89,20261022-115531,"bsdtar 3.8.9 - libarchive 3.8.9 zlib/1.3.2.1-motley liblzma/5.8.4 bz2lib/1.0.8 liblz4/1.10.0 libzstd/1.5.7 mbedtls/3.6.7 libb2/bundled ",/tmp/extract-shapes,0.52,2026-10-22T12:26:40Z
+linux,200x800KB,200,819200,47,28,1.68,20261022-115531,"bsdtar 3.8.9 - libarchive 3.8.9 zlib/1.3.2.1-motley liblzma/5.8.4 bz2lib/1.0.8 liblz4/1.10.0 libzstd/1.5.7 mbedtls/3.6.7 libb2/bundled ",/tmp/extract-shapes,0.52,2026-10-22T12:26:40Z
+linux,2000x80KB,2000,81920,51,38,1.34,20261022-115531,"bsdtar 3.8.9 - libarchive 3.8.9 zlib/1.3.2.1-motley liblzma/5.8.4 bz2lib/1.0.8 liblz4/1.10.0 libzstd/1.5.7 mbedtls/3.6.7 libb2/bundled ",/tmp/extract-shapes,0.52,2026-10-22T12:26:40Z

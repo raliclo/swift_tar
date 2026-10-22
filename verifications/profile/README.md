@@ -123,30 +123,35 @@ function, and that function then gets mistaken for the cause.
 
 `extract_shapes.csv2` 中各平台最新的一組，同樣三種形狀、同樣的腳本（swift_tar / 參照）：
 
-| 形狀 | macOS（`20260920-170352`，reps 10，RAM disk，load 3.72） | Linux (QEMU aarch64，`20260905-164157`，tmpfs，load 0.44) |
+| 形狀 | macOS（`20261022-181622`，RAM disk，load 1.97，2026-10-22） | Linux (QEMU aarch64，`20261022-115531`，`/tmp/extract-shapes`，load 0.52，2026-10-22) |
 |---|---|---|
-| 20 × 8 MB | 59 / 54 ms = **1.09×** | 38 / 26 ms = **1.46×** |
-| 200 × 800 KB | 43 / 57 ms = **0.75×** | 31 / 25 ms = **1.24×** |
-| 2000 × 80 KB | 67 / 151 ms = **0.44×** | 50 / 35 ms = **1.43×** |
+| 20 × 8 MB | 34 / 73 ms = **0.47×** | 24 / 27 ms = **0.89×** |
+| 200 × 800 KB | 53 / 89 ms = **0.60×** | 47 / 28 ms = **1.68×** |
+| 2000 × 80 KB | 84 / 194 ms = **0.43×** | 51 / 38 ms = **1.34×** |
 
-**差距是 Linux 專有的。** 在 Linux 上 swift_tar 慢 1.24–1.46 倍，三種形狀一致；在
-macOS 上它在碎檔形狀比 bsdtar 快，而且愈碎的語料領先愈多，20 × 8 MB 則接近持平。
+比值 = swift_tar 毫秒 ÷ 參照毫秒，小於 1 表示 swift_tar 較快。
+Ratio = swift_tar ms ÷ reference ms; below 1 means swift_tar is faster.
+
+**差距是 Linux 專有的，而且在碎檔形狀。** 在 Linux 上 swift_tar 於 200 × 800 KB 與
+2000 × 80 KB 慢 1.34–1.68 倍，於 20 × 8 MB 則較快（0.89×）；在 macOS 上它在三種形狀都
+比 bsdtar 快（0.43–0.60×）。
 
 **因此 profile 要在 Linux 上做，不是在 macOS 上。** 而那也剛好是可行的一端：guest 的
 行程壽命與工具鏈都允許取樣，macOS 這邊不允許（見上方陷阱 4）。
 
 **一個必須說出來的干擾項**：兩端的參照實作不同版本——macOS 是 bsdtar 3.5.3 /
-libarchive 3.7.4，Linux 是 bsdtar 3.8.8 / libarchive 3.8.8。所以「平台」不是兩組數字
-之間唯一的變數，libarchive 差了四個小版本。要把差距完全歸給平台，得先在同一個平台上
+libarchive 3.7.4，Linux 是 bsdtar 3.8.9 / libarchive 3.8.9。所以「平台」不是兩組數字
+之間唯一的變數，libarchive 是 3.7.4 對 3.8.9。要把差距完全歸給平台，得先在同一個平台上
 換掉參照版本再量一次。**這裡不做那個宣稱。**
 
-The latest rows per platform, same script and shapes: the gap is Linux-specific — 1.24x
-to 1.46x there, consistently, while on macOS swift_tar is faster on the fragmented shapes,
-with a lead that grows as the corpus fragments, and close to parity on 20 × 8 MB. So
-profiling belongs on Linux, which is also the end where sampling is feasible.
+The latest rows per platform, same script and shapes: the gap is Linux-specific and lies
+in the fragmented shapes — 1.34x to 1.68x slower there on 200 × 800 KB and 2000 × 80 KB,
+while 20 × 8 MB is faster (0.89x). On macOS swift_tar is faster than bsdtar on all three
+shapes (0.43x to 0.60x). So profiling belongs on Linux, which is also the end where
+sampling is feasible.
 
 One confound stated plainly: the two references are different versions (bsdtar 3.5.3 /
-libarchive 3.7.4 on macOS, 3.8.8 / 3.8.8 on Linux), so platform is not the only variable
+libarchive 3.7.4 on macOS, 3.8.9 / 3.8.9 on Linux), so platform is not the only variable
 between the two columns. No claim is made here that it is.
 
 ---

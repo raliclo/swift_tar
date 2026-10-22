@@ -1,28 +1,28 @@
-[Info] date: 2026-08-29 08:27:26 CST
-[Info] os: macOS 27.0 (26A5421a)
+[Info] date: 2026-10-22 19:33:19 CST
+[Info] os: macOS 27.2 (26B5112a)
 [Info] machine: arm64, 10 cpus
-[Info] swift_tar: swift_tar 20260816-014809
-[Info] corpus: /Users/raliclo/proj/lzfse2/claw-code (1351 MB, 5402 files)
+[Info] swift_tar: swift_tar 0.1.2 (v0.1.1-17-gd493560e-dirty) 20261022-191859
+[Info] corpus: /Users/raliclo/proj/lzfse2/claw-code (1354 MB, 5448 files)
 [Info] modes: pipeline syscall   reps: 5
 
 === 建立兩種封存（同為 level 9）/ building both archives at level 9 ===
-  ext     387.1 MB  frames 1
-  nat     382.6 MB  frames 336
+  ext     390.0 MB  frames 1
+  nat     385.7 MB  frames 338
 [Info] extracting to RAM disk 3GB
 
 === pipeline（每列取 real 最小的那一次）===
                       real    user     sys CPU/wall
-  native 解出           1.61    1.00    1.64     1.64
-  external 解出         2.27    1.10    2.15     1.43
-  native --cat        1.23    0.87    0.39     1.02
+  native 解出           1.29    0.90    1.02     1.49
+  external 解出         2.13    1.10    2.01     1.46
+  native --cat        0.94    0.77    0.19     1.02
   external -d         0.98    0.99    0.08     1.09
 
 === syscall：sys 時間的去向 / where sys time goes ===
   取自 time -l，無需 sudo。核心事實：兩邊 user 相近時，差距落在下列計數上。
   From time -l, no sudo. When user is comparable, the gap lives in these counts.
                          sys秒 page-faults   vol-ctx-sw invol-ctx-sw
-  native 解出              1.73     128013        89354        10246
-  external 解出            2.13       1998       120553         9594
+  native 解出              1.03      26490        53740         9381
+  external 解出            2.02       1963       121604         9666
   注意：external 是兩個行程，其 time -l 只涵蓋外層 sh，故其計數偏低。
   Note: external is two processes and time -l covers only the outer sh, so its
   counts understate the total. Compare shapes, not absolute values.

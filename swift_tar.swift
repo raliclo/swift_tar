@@ -3907,16 +3907,85 @@ final class TarWriter {
         for w in walk { try add(path: w.path, readPath: w.readPath) }
     }
 
-    /// Write a regular file's contents and padding: the prefetched bytes when they match the
-    /// size in the header just written, else read in place as before.
-    /// 寫出一般檔案的內容與補齊：預讀的位元組與剛寫出之標頭中的大小相符時用它，否則照舊就地讀取。
-    private func writeContents(_ path: String, size: UInt64, prefetched: Data?) throws {
-        if let data = prefetched, UInt64(data.count) == size {
+    /// Members that could not be read and were left out: an unreadable directory's contents,
+    /// an unreadable file. The walk reports each one and carries on, as bsdtar and GNU tar do;
+    /// the caller turns a non-zero count into exit 1 once the archive is complete.
+    ///
+    /// Until 2026-10-22 a directory read failure was `(try? ...) ?? []`: the directory read
+    /// as empty, its contents vanished, nothing was printed and the exit status was 0. An
+    /// unreadable file was not silent, but it threw after its header was written and left a
+    /// truncated archive. Measured on macOS against a `chmod 000` directory: bsdtar prints
+    /// `Couldn't visit directory: Permission denied` and exits 1, with the same members.
+    ///
+    /// 讀不到而被略過的成員：讀不到的目錄的內容、讀不到的檔案。走訪會逐一回報並繼續，與 bsdtar
+    /// 及 GNU tar 相同；呼叫端在封存完成之後，把非零的計數轉成結束碼 1。
+    ///
+    /// 2026-10-22 之前，讀目錄失敗是 `(try? ...) ?? []`：目錄被當成空的，內容消失，沒有任何
+    /// 訊息，結束碼 0。讀不到的檔案不是靜默的，但它在標頭寫出之後才擲出，留下一份不完整的封存。
+    /// 於 macOS 對 `chmod 000` 的目錄實測：bsdtar 印出 `Couldn't visit directory: Permission
+    /// denied` 並以 1 結束，成員相同。
+    private(set) var unreadableCount = 0
+
+    /// The system's short reason for `error` ("Permission denied") when Foundation carries
+    /// one, else its own description.
+    /// 若 Foundation 帶有系統的簡短原因（"Permission denied"）就用它，否則用錯誤本身的描述。
+    private static func shortReason(_ error: Error) -> String {
+        let ns = error as NSError
+        if let u = ns.userInfo[NSUnderlyingErrorKey] as? NSError, u.domain == NSPOSIXErrorDomain {
+            return String(cString: strerror(Int32(u.code)))
+        }
+        return ns.localizedDescription
+    }
+
+    private func noteUnreadable(_ name: String, _ what: String, _ zh: String, _ error: Error) {
+        unreadableCount += 1
+        let reason = Self.shortReason(error)
+        eprint("swift_tar: \(name): \(what): \(reason) / \(zh)：\(reason)")
+    }
+
+    /// A directory's entries, or none after reporting why they could not be read. The
+    /// directory's own header is already written, as bsdtar keeps it too.
+    /// 目錄的項目；讀不到時回報原因並回傳空清單。目錄自身的標頭已經寫出，bsdtar 也保留它。
+    private func listDirectory(_ readPath: String, name: String) -> [String] {
+        do {
+            return try FileManager.default.contentsOfDirectory(atPath: readPath)
+        } catch {
+            noteUnreadable(name + "/", "cannot read directory, contents left out",
+                           "無法讀取目錄，內容未收入", error)
+            return []
+        }
+    }
+
+    /// Where a regular file's bytes come from. Opened before its header is written, so a
+    /// file that cannot be opened is left out whole instead of leaving a header with no data.
+    /// 一般檔案的位元組來源。在寫出標頭之前開啟，使開不了的檔案整個略過，而不是留下一個沒有
+    /// 資料的標頭。
+    private enum Contents {
+        case bytes(Data)
+        case handle(FileHandle)
+    }
+
+    /// The prefetched bytes when they match `size`, else the file opened for reading; nil
+    /// after reporting why it could not be opened.
+    /// 預讀的位元組與 `size` 相符時用它，否則開啟檔案以讀取；開不了時回報原因並回傳 nil。
+    private func openContents(_ path: String, name: String, size: UInt64,
+                              prefetched: Data?) -> Contents? {
+        if let data = prefetched, UInt64(data.count) == size { return .bytes(data) }
+        do {
+            return .handle(try FileHandle(forReadingFrom: URL(fileURLWithPath: path)))
+        } catch {
+            noteUnreadable(name, "cannot open, left out", "無法開啟，未收入", error)
+            return nil
+        }
+    }
+
+    /// Write a regular file's contents and padding from what openContents returned.
+    /// 依 openContents 的結果寫出一般檔案的內容與補齊。
+    private func writeContents(_ contents: Contents, path: String, size: UInt64) throws {
+        switch contents {
+        case .bytes(let data):
             if size > 0 { try sink.write(data) }
-        } else {
-            guard let fh = FileHandle(forReadingAtPath: path) else {
-                throw TarError.io("cannot open '\(path)' / 無法開啟 '\(path)'")
-            }
+        case .handle(let fh):
             defer { try? fh.close() }
             var remaining = size
             while remaining > 0 {
@@ -4628,27 +4697,14 @@ final class TarWriter {
             // 子項目的名稱接在 `path` 之後，讀取接在 `readPath` 之後。除了在 -h 解析掉的 LX
             // 一跳底下，兩者處處相同——而那一處正是把它們綁在一起會整棵子樹盡失的地方。
             // A listing that fails is NOT an empty directory. Until 2026-10-22 this was
-            // `(try? ...) ?? []`, which turned a permission error into a silent empty subtree:
-            // measured on macOS, a chmod 000 directory among its siblings gave exit 0, an empty
-            // stderr, and an archive holding `./mmm/` with its contents gone, while both bsdtar
-            // and GNU tar reported it. The directory's own header is already written above, so
-            // the archive still names it -- as bsdtar's does. Reporting and moving on keeps
-            // every other member, which is this tool's documented behaviour for a skip; what
-            // was wrong was saying nothing at all. This is the `|| true` shape CLAUDE.md
-            // forbids, in its Swift spelling.
-            // 列目錄失敗不等於空目錄。2026-10-22 之前這裡是 `(try? ...) ?? []`，把權限錯誤變成
-            // 一棵靜默的空子樹：macOS 實測，一個 chmod 000 的目錄夾在兄弟項目之間時，得到
-            // exit 0、stderr 全空，封存裡留著一個內容盡失的 `./mmm/`，而 bsdtar 與 GNU tar
-            // 都會回報它。該目錄自身的標頭已在上方寫出，故封存仍然列出它——bsdtar 也是如此。
-            // 回報後繼續可保留其餘所有成員，那是本工具對「略過」已文件化的行為；真正錯的是
-            // 一個字都不說。這就是 CLAUDE.md 禁止的 `|| true` 形狀，只是換成 Swift 的拼法。
-            let children: [String]
-            do {
-                children = try FileManager.default.contentsOfDirectory(atPath: readPath)
-            } catch {
-                eprint("swift_tar: skipping contents of '\(name)/': \(error.localizedDescription) / 略過 '\(name)/' 的內容：\(error.localizedDescription)")
-                return
-            }
+            // `(try? ...) ?? []`: a chmod 000 directory gave exit 0, an empty stderr, and its
+            // contents gone. listDirectory reports it and counts it, the rest is archived, and
+            // the run exits 1 at the end -- as bsdtar does. The directory's own header is
+            // already written above, so the archive still names it, as bsdtar's does.
+            // 列目錄失敗不等於空目錄。2026-10-22 之前這裡是 `(try? ...) ?? []`：chmod 000 的
+            // 目錄得到 exit 0、stderr 全空、內容消失。listDirectory 會回報並計數，其餘照常
+            // 封存，最後以 1 結束——與 bsdtar 相同。該目錄自身的標頭已在上方寫出，故封存仍列出它。
+            let children = listDirectory(readPath, name: name)
             try add(walk: children.sorted().map {
                 (path: path + "/" + $0, readPath: readPath + "/" + $0)
             })
@@ -4666,13 +4722,18 @@ final class TarWriter {
                                  linkname: first)
             return
         }
+        let size = st.size
+        // Opened before the header and before it can become a hardlink target: a file left
+        // out must not be what a later link points at.
+        // 在標頭之前、也在它能成為硬連結目標之前開啟：被略過的檔案不可成為後續連結的指向。
+        guard let contents = openContents(readPath, name: name, size: size,
+                                          prefetched: prefetched) else { return }
         if st.nlink > 1 { seenInodes[key] = name }
         if verbose { eprint("a \(name)") }
-        let size = st.size
         try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
                              size: size, mtime: mtime, mtimeNanos: mtimeNanos,
                              typeflag: UInt8(ascii: "0"), linkname: "")
-        try writeContents(readPath, size: size, prefetched: prefetched)
+        try writeContents(contents, path: readPath, size: size)
 #else
         // Identity on POSIX: nothing here ever resolves a hop itself, because stat() traverses
         // every kind of symlink the platform has. Named and used anyway so that both branches
@@ -4787,27 +4848,14 @@ final class TarWriter {
             // 子項目的名稱接在 `path` 之後，讀取接在 `readPath` 之後。除了在 -h 解析掉的 LX
             // 一跳底下，兩者處處相同——而那一處正是把它們綁在一起會整棵子樹盡失的地方。
             // A listing that fails is NOT an empty directory. Until 2026-10-22 this was
-            // `(try? ...) ?? []`, which turned a permission error into a silent empty subtree:
-            // measured on macOS, a chmod 000 directory among its siblings gave exit 0, an empty
-            // stderr, and an archive holding `./mmm/` with its contents gone, while both bsdtar
-            // and GNU tar reported it. The directory's own header is already written above, so
-            // the archive still names it -- as bsdtar's does. Reporting and moving on keeps
-            // every other member, which is this tool's documented behaviour for a skip; what
-            // was wrong was saying nothing at all. This is the `|| true` shape CLAUDE.md
-            // forbids, in its Swift spelling.
-            // 列目錄失敗不等於空目錄。2026-10-22 之前這裡是 `(try? ...) ?? []`，把權限錯誤變成
-            // 一棵靜默的空子樹：macOS 實測，一個 chmod 000 的目錄夾在兄弟項目之間時，得到
-            // exit 0、stderr 全空，封存裡留著一個內容盡失的 `./mmm/`，而 bsdtar 與 GNU tar
-            // 都會回報它。該目錄自身的標頭已在上方寫出，故封存仍然列出它——bsdtar 也是如此。
-            // 回報後繼續可保留其餘所有成員，那是本工具對「略過」已文件化的行為；真正錯的是
-            // 一個字都不說。這就是 CLAUDE.md 禁止的 `|| true` 形狀，只是換成 Swift 的拼法。
-            let children: [String]
-            do {
-                children = try FileManager.default.contentsOfDirectory(atPath: readPath)
-            } catch {
-                eprint("swift_tar: skipping contents of '\(name)/': \(error.localizedDescription) / 略過 '\(name)/' 的內容：\(error.localizedDescription)")
-                return
-            }
+            // `(try? ...) ?? []`: a chmod 000 directory gave exit 0, an empty stderr, and its
+            // contents gone. listDirectory reports it and counts it, the rest is archived, and
+            // the run exits 1 at the end -- as bsdtar does. The directory's own header is
+            // already written above, so the archive still names it, as bsdtar's does.
+            // 列目錄失敗不等於空目錄。2026-10-22 之前這裡是 `(try? ...) ?? []`：chmod 000 的
+            // 目錄得到 exit 0、stderr 全空、內容消失。listDirectory 會回報並計數，其餘照常
+            // 封存，最後以 1 結束——與 bsdtar 相同。該目錄自身的標頭已在上方寫出，故封存仍列出它。
+            let children = listDirectory(readPath, name: name)
             try add(walk: children.sorted().map {
                 (path: path + "/" + $0, readPath: readPath + "/" + $0)
             })
@@ -4838,13 +4886,17 @@ final class TarWriter {
                                      typeflag: UInt8(ascii: "1"), linkname: first)
                 return
             }
+            let size = UInt64(st.st_size)
+            // Opened first, as in the Windows branch: before the header, and before it can be
+            // a hardlink target. / 先開啟，同 Windows 分支：早於標頭，也早於成為硬連結目標。
+            guard let contents = openContents(readPath, name: name, size: size,
+                                              prefetched: prefetched) else { return }
             if st.st_nlink > 1 { seenInodes[key] = name }
             if verbose { eprint("a \(name)") }
-            let size = UInt64(st.st_size)
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
                                  size: size, mtime: mtime, mtimeNanos: mtimeNanos,
                                  typeflag: UInt8(ascii: "0"), linkname: "")
-            try writeContents(readPath, size: size, prefetched: prefetched)
+            try writeContents(contents, path: readPath, size: size)
         case S_IFIFO:
             // A FIFO carries no data: size 0, no payload, no block padding --
             // the same shape as the symlink case above. It is stored rather
@@ -7914,6 +7966,17 @@ struct SwiftTarMain {
             encryptGroup.wait()
             if let message = encryptError.message { throw TarError.io(message) }
         }
+        try failIfUnreadable(writer)
+    }
+
+    /// Exit 1 after a complete archive that left members out, as bsdtar ("Error exit delayed
+    /// from previous errors") and GNU tar do. Each one was reported when it was met.
+    /// 封存已完整寫出、但有成員被略過時以 1 結束，與 bsdtar（"Error exit delayed from previous
+    /// errors"）及 GNU tar 相同。每一項在遇到時都已回報。
+    static func failIfUnreadable(_ writer: TarWriter) throws {
+        let n = writer.unreadableCount
+        guard n > 0 else { return }
+        throw TarError.io("\(n) unreadable item(s) left out; the archive holds the rest / 有 \(n) 項讀不到而未收入；封存含其餘內容")
     }
 
     // ---- append / update (-r / -u) / 追加、更新 ----
@@ -8125,6 +8188,7 @@ struct SwiftTarMain {
                                dereference: tarDereference)
         try writer.add(paths: files)
         try writer.finish()
+        try failIfUnreadable(writer)
     }
 
     // ---- delete (swift_tar-only; BSD tar has no --delete) / 刪除（swift_tar 獨有，BSD tar 無此功能）----

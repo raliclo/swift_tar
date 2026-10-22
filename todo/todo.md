@@ -4383,3 +4383,88 @@ the parent's `bucket/swift_tar.json`, and fail when that checkout is stale; that
 state, not a test bug. But the `grep | sed` at line 318 matched nothing then, and pipefail ended
 the script; it is now `sed -n …p` alone, so a stale manifest fails only those cases (measured on
 the Mac with a stale manifest: 41/5, the three publish.zsh checks still ran).
+
+## 建立封存時，無法讀取的目錄被靜默當成空目錄，結束碼 0 ▸ 🟢 已修 2026-10-22（macOS、Linux 編譯；Windows 待驗）/ On create, an unreadable directory is silently taken as empty and the exit status is 0 ▸ fixed (Windows to verify)
+
+使用者發現：`chmod 000` 的目錄，swift_tar `-c` 只收進目錄本身的標頭，裡面的內容不見，沒有任何訊息，
+結束碼 0。brew 的 0.1.1（`v0.1.1 / d3e2f887`）與 0.1.2 試建（`v0.1.1-7-g4452c3c2`）都一樣，直接把
+該目錄當操作元（`-cf x.tar src/locked`）也一樣。macOS 上以一般使用者實測（root 讀得到 000 目錄，
+重現不了）：
+
+| | 成員 | 結束碼 | 訊息 |
+|---|---|---|---|
+| swift_tar 0.1.1 / 0.1.2 試建 | `src/ src/locked/ src/ok/ src/ok/a.txt` | 0 | 無 |
+| bsdtar（/usr/bin/tar） | 同上 | 1 | `src/locked: Couldn't visit directory: Permission denied`、`Error exit delayed from previous errors.` |
+
+成因：讀目錄內容的兩處都是 `(try? FileManager.default.contentsOfDirectory(atPath: readPath)) ?? []`
+（POSIX 分支 `swift_tar.swift:4666`、Windows 分支 `:4553`），讀取失敗被吞掉、當成空目錄。自第一版
+（`1594b58`）起即如此。
+
+相關但不同的一項：無法讀取的**一般檔案**（`chmod 000`）不是靜默的——`I/O error: cannot open`、結束碼 1
+——但它在標頭已寫出之後才中止，留下一份 `truncated archive`。bsdtar 對同樣情況是警告、略過該檔、繼續，
+最後以 1 結束。
+
+修法（使用者選「跟 bsdtar 一樣」）：讀不到的目錄回報 `cannot read directory, contents left out:
+Permission denied` 並略過其內容（目錄自身的標頭保留，bsdtar 亦然）；一般檔案改為**先開啟、再寫標頭**，
+開不了就回報 `cannot open, left out` 並整個略過，也不會登記成硬連結目標——不再留下不完整的封存。
+TarWriter 記下略過數，`-c`／`-r`／`-u` 在封存完整收尾之後以 1 結束並印出略過數。Windows 與 POSIX
+兩個分支都改。
+
+測試：`test/test_unreadable.zsh`，16 項，涵蓋 -c、-cz、-r、-u、只鎖目錄（使用者回報的情況）、讀不到的
+檔案當操作元、讀不到的檔案有硬連結、全部讀得到的對照組。修正後 16／0；brew 的 0.1.1 為 4／12，其中
+「只鎖目錄」一項 0.1.1 以 rc 0 結束。需非 root 的 POSIX 使用者，root 與 Windows 上 SKIP。macOS 整套
+其餘測試皆過（`test_no_lzfse` 未能執行，與此無關，見下一條）；musl aarch64 交叉編譯通過、無警告。
+Windows 分支尚待 Windows 上編譯與測試。
+
+Found by the user: for a `chmod 000` directory, `swift_tar -c` stores only the directory's own
+header; its contents vanish with no message and exit status 0. Same in brew's 0.1.1 and the 0.1.2
+rehearsal build, and when the directory is the operand itself. bsdtar reports `Couldn't visit
+directory: Permission denied` and exits 1. Cause: both directory reads (`swift_tar.swift:4666`
+POSIX, `:4553` Windows) are `(try? contentsOfDirectory(...)) ?? []`, so the failure is swallowed
+and the directory reads as empty; present since `1594b58`. Related: an unreadable regular file is
+not silent (exit 1), but it aborts after its header is written and leaves a truncated archive,
+where bsdtar warns, skips it, carries on and exits 1.
+
+The fix (the user chose "as bsdtar does"): an unreadable directory is reported and its contents
+left out (its own header stays, as in bsdtar); a regular file is now opened *before* its header
+is written, so one that cannot be opened is reported and left out whole, and never registered
+as a hardlink target -- no more truncated archive. TarWriter counts what it left out, and
+-c / -r / -u exit 1 with that count once the archive is complete. Both the Windows and POSIX
+branches. Test: `test/test_unreadable.zsh`, 16 checks; 16/0 after the fix, 4/12 on brew's
+0.1.1, whose directory-only case exits 0. Skipped as root and on Windows. The rest of the macOS
+suite passes (`test_no_lzfse` could not run, unrelated, see the next entry); the musl aarch64
+cross build compiles without warnings. The Windows branch still needs building and testing on
+Windows.
+
+## `--zip` 遇到讀不到的目錄或檔案時中止，留下空的或不完整的 zip ▸ 🔴 未修 2026-10-22 / `--zip` stops at an unreadable directory or file, leaving an empty or partial zip ▸ open
+
+tar 路徑修好之後，`--zip` 是唯一仍不同的建立路徑。對同一棵樹（`src/locked` 為 000）：
+`swift_tar: I/O error: archive_read_next_header: src/locked: Couldn't visit directory`，rc 1，留下的 zip
+是空的（`unzip -l`：zipfile is empty）。0.1.1 相同。不是靜默的，但與使用者為 tar 路徑選的行為（回報、略過、
+繼續、最後以 1 結束）不一致。成因在 `libarchive_zip_bridge.c` 的兩個走訪迴圈（排序與 `--zip-unsorted`），
+`archive_read_next_header2` 回傳 `< ARCHIVE_OK` 一律當成致命——同檔 `write_entry_header` 已對
+ARCHIVE_FAILED 採「回報並略過」，讀取端還沒有。讀不到的檔案的資料是在平行壓縮的管線中讀取的，那裡也要看。
+另需把略過數交回 Swift 以決定結束碼。
+
+After the tar fix, `--zip` is the one create path still different: on the same tree it prints
+`archive_read_next_header: src/locked: Couldn't visit directory`, exits 1 and leaves an empty zip
+(0.1.1 the same). Not silent, but not what the user chose for tar either. Both walk loops in
+`libarchive_zip_bridge.c` treat any `archive_read_next_header2` status below ARCHIVE_OK as fatal,
+where `write_entry_header` in the same file already reports and skips ARCHIVE_FAILED. The data of
+an unreadable file is read inside the parallel compression pipeline, which needs looking at too,
+and the skip count has to reach Swift for the exit status.
+
+## `test_no_lzfse.zsh` 以 `--install` 覆寫 `/opt/homebrew/bin/swift_tar` ▸ 🔴 未修 2026-10-22 / `test_no_lzfse.zsh` installs over `/opt/homebrew/bin/swift_tar` ▸ open
+
+2026-10-22 在 Mac 上跑整套測試時，`test_no_lzfse.zsh` 在建置階段就失敗：`cp: /opt/homebrew/bin/swift_tar:
+Permission denied`、`FATAL: ./compile_tar.zsh --install failed`。那個路徑現在是 brew 安裝的正式版 0.1.1
+（唯讀），所以 cp 被拒——這次沒有蓋掉它，但一支測試會去覆寫使用者裝的版本本身就是問題；在 brew 安裝之前，
+它每跑一次就把 `/opt/homebrew/bin/swift_tar` 換成開發版。測試應該用 release/ 底下的執行檔或暫存的
+安裝位置，不碰系統上安裝的那一份。
+
+During the 2026-10-22 Mac suite run, `test_no_lzfse.zsh` failed while building: `cp:
+/opt/homebrew/bin/swift_tar: Permission denied`, `FATAL: ./compile_tar.zsh --install failed`.
+That path is now brew's read-only 0.1.1, so the copy was refused and nothing was overwritten --
+but a test that installs over the user's installed copy is the problem; before brew, every run
+replaced `/opt/homebrew/bin/swift_tar` with a dev build. It should use the binaries under
+release/ or a scratch install location.

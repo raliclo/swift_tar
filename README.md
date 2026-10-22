@@ -1017,6 +1017,7 @@ Measured behaviour on failure:
 | case | left behind |
 |---|---|
 | create, bad path among good ones | a valid archive holding the entries processed before it |
+| create (`-c`, `-r`, `-u`), an unreadable directory or file (permission denied) | a valid archive holding everything else; each one is reported as it is met and the run exits non-zero at the end, as bsdtar does. Before 2026-10-22 an unreadable directory was stored empty with exit `0`, and an unreadable file left a truncated archive. `--zip` still stops at the first unreadable entry |
 | create, bad path first | the archive file, empty (0 bytes) |
 | extract, archive truncated mid-stream | the entries already extracted, complete; the member the cut fell inside is not created at all, so no half-written file is left |
 | extract, a member skipped (unsafe path, write or create failure, …) | every other member, complete; the run reports the count and exits non-zero only at the end (see `--strict` below) |

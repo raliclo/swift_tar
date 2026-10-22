@@ -3878,8 +3878,33 @@ final class TarWriter {
     /// 依序加入每個運算元。運算元會先交給 ReadAhead，所以一長串檔案——multissh 的分片——也會
     /// 被預讀，而不只是目錄內容。
     func add(paths: [String]) throws {
-        readAhead.hint(paths)
-        for p in paths { try add(path: p) }
+        try add(walk: paths.map { (path: $0, readPath: $0) })
+    }
+
+    /// The same list, with the member's name separated from the path reads go through.
+    ///
+    /// The two differ only beneath a symlink that `-h` had to resolve on the platform's behalf
+    /// because the platform will not traverse it: an LX reparse point on Windows. The member
+    /// keeps the name the user can see and type, while every filesystem call goes through the
+    /// resolved path -- which is what GNU tar does, and what makes a directory reached that way
+    /// descendable at all. Holding both in one string is exactly what limited the 2026-10-22
+    /// fix to regular files and left such a directory skipped.
+    ///
+    /// ReadAhead is keyed on the read side, not the name side: that is the path it opens. Its
+    /// stack is positional, so two names resolving to the same file are not a problem.
+    ///
+    /// 同一份清單，但成員名稱與讀取所經路徑已分離。
+    ///
+    /// 兩者只在「`-h` 必須代替平台解析的 symlink」底下才不同：Windows 上的 LX reparse point。
+    /// 成員保留使用者看得到、打得出來的名稱，而每一個檔案系統呼叫都走解析後的路徑——GNU tar
+    /// 即如此，也正是經由該處抵達的目錄得以被走進去的原因。把兩者放在同一個字串裡，正是
+    /// 2026-10-22 那次修正只能涵蓋一般檔案、而讓該種目錄仍被略過的原因。
+    ///
+    /// ReadAhead 以讀取側為鍵而非名稱側：那才是它開啟的路徑。它的堆疊是位置式的，故兩個名稱
+    /// 解析到同一個檔案並無妨。
+    private func add(walk: [(path: String, readPath: String)]) throws {
+        readAhead.hint(walk.map(\.readPath))
+        for w in walk { try add(path: w.path, readPath: w.readPath) }
     }
 
     /// Write a regular file's contents and padding: the prefetched bytes when they match the
@@ -4367,12 +4392,17 @@ final class TarWriter {
     }
 #endif
 
-    func add(path: String) throws {
+    /// `path` decides the member's name; `readPath` is what every filesystem call uses. They
+    /// are the same string except beneath a resolved LX hop -- see add(walk:).
+    /// `path` 決定成員名稱；`readPath` 是每個檔案系統呼叫實際使用的路徑。除了在解析掉的 LX
+    /// 一跳底下，兩者是同一個字串——詳見 add(walk:)。
+    func add(path: String, readPath incomingReadPath: String) throws {
         // First, before any early return: every path ReadAhead was told about must be
         // claimed here, in walk order, or its stack would fall out of step with the walk.
+        // Keyed on the read side, matching what add(walk:) hinted.
         // 最先執行，早於任何提前返回：ReadAhead 得知的每個路徑都必須在此依走訪順序取走，
-        // 否則它的堆疊會與走訪脫節。
-        let prefetched = readAhead.claim(path)
+        // 否則它的堆疊會與走訪脫節。以讀取側為鍵，與 add(walk:) 給出的提示一致。
+        let prefetched = readAhead.claim(incomingReadPath)
         let name = TarWriter.archiveName(path)
         // Checked before stat, so an excluded entry costs nothing and an excluded
         // directory is never descended into -- which is what makes `--exclude` able
@@ -4392,7 +4422,7 @@ final class TarWriter {
         // measured against bsdtar, where it is the one shape of six that reveals the gap.
         let excludedAsDirectory = { Self.isExcluded(name + "/") }
 #if os(Windows)
-        guard var st = winStat(path) else {
+        guard var st = winStat(incomingReadPath) else {
             throw TarError.io("cannot stat '\(path)' / 無法讀取 '\(path)' 的檔案資訊")
         }
         // -h：與 POSIX 分支相同——跟隨後連結即被當成其目標，下方各分支不需改動。直到
@@ -4404,26 +4434,24 @@ final class TarWriter {
         // LX hop that NT cannot traverse. See winStatFollowing.
         // 下方的讀取一律走 readPath；它只在鏈中含有 NT 無法穿過的 LX 一跳時與 `path` 不同。
         // 詳見 winStatFollowing。
-        var readPath = path
+        var readPath = incomingReadPath
         if dereference, st.isSymlink {
-            guard let target = winStatFollowing(path) else {
+            guard let target = winStatFollowing(incomingReadPath) else {
                 eprint("swift_tar: skipping '\(name)': --dereference cannot follow it / 略過 '\(name)'：--dereference 無法跟隨")
                 return
             }
-            // A DIRECTORY reached through an LX hop is still skipped. The recursion at the end of
-            // this function derives the member name and the read path from one string, so
-            // descending through the resolved path would rename every member beneath it. Fixing
-            // that means separating name from read path through the whole walk, which is a larger
-            // change than this one; the file case -- the one the 2026-10-22 review reported and
-            // reproduced -- is fixed, and this limit is deliberate rather than accidental.
-            // 經由 LX 一跳抵達的「目錄」仍然略過。本函式末尾的遞迴以同一個字串同時推導成員名稱與
-            // 讀取路徑，若改走解析後的路徑，其下每個成員都會被改名。要修正那點必須把名稱與讀取路徑
-            // 在整趟走訪中分離，那是比本次更大的改動；檔案這一支——2026-10-22 審查所報告並重現的
-            // 那一支——已修好，而此限制是刻意的，不是疏漏。
-            if target.readPath != path, target.st.isDir {
-                eprint("swift_tar: skipping '\(name)': --dereference cannot follow it / 略過 '\(name)'：--dereference 無法跟隨")
-                return
-            }
+            // A resolved hop moves only the read side; `path` still names the member, so a
+            // DIRECTORY reached through an LX hop is now descended into under its own name --
+            // the recursion below passes the pair on. Until 2026-10-22 it was skipped outright,
+            // because name and read path were one string and descending the resolved path would
+            // have renamed every member beneath it. Measured on an LX link `dlink -> realdir`:
+            // 3 members before, 5 after, matching GNU tar, which stores the content read from
+            // `realdir` under `./dlink/`.
+            // 解析掉的一跳只移動讀取側；`path` 仍決定成員名稱，故經由 LX 一跳抵達的「目錄」現在
+            // 會以它自己的名稱被走進去——下方的遞迴把這一對往下傳。2026-10-22 之前它會被整個略過，
+            // 因為名稱與讀取路徑是同一個字串，改走解析後的路徑會讓其下每個成員都被改名。以 LX
+            // 連結 `dlink -> realdir` 實測：修正前 3 個成員，修正後 5 個，與 GNU tar 相同——它把
+            // 從 `realdir` 讀到的內容存在 `./dlink/` 之下。
             st = target.st
             readPath = target.readPath
         }
@@ -4474,8 +4502,12 @@ final class TarWriter {
             // 2026-10-14), which would store an empty linkname; winReadSymlinkTarget reads the
             // target straight from the reparse buffer in that case. winStat has already confirmed
             // this is a symlink by its reparse tag, so a nil here means dangling, not "not a link".
-            let dest = ((try? FileManager.default.destinationOfSymbolicLink(atPath: path))
-                        ?? winReadSymlinkTarget(path) ?? "")
+            // readPath, not path: a link *inside* an LX-resolved subtree is unreachable under
+            // its own member name, so reading its target has to go through the resolved path.
+            // 用 readPath 而非 path：位於 LX 解析後子樹*內部*的連結，以它自己的成員名稱是觸及
+            // 不到的，故讀取其目標必須走解析後的路徑。
+            let dest = ((try? FileManager.default.destinationOfSymbolicLink(atPath: readPath))
+                        ?? winReadSymlinkTarget(readPath) ?? "")
                 .replacingOccurrences(of: "\\", with: "/")
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
                                  size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
@@ -4513,8 +4545,15 @@ final class TarWriter {
                                      size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
                                      typeflag: UInt8(ascii: "5"), linkname: "")
             }
-            let children = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-            try add(paths: children.sorted().map { path + "/" + $0 })
+            // The child's name hangs off `path`, its reads off `readPath`. The two are the same
+            // string everywhere except below an LX hop -h resolved, and that is the one place
+            // where keeping them joined lost the whole subtree.
+            // 子項目的名稱接在 `path` 之後，讀取接在 `readPath` 之後。除了在 -h 解析掉的 LX
+            // 一跳底下，兩者處處相同——而那一處正是把它們綁在一起會整棵子樹盡失的地方。
+            let children = (try? FileManager.default.contentsOfDirectory(atPath: readPath)) ?? []
+            try add(walk: children.sorted().map {
+                (path: path + "/" + $0, readPath: readPath + "/" + $0)
+            })
             return
         }
         // Regular file. Hardlink dedup, same behavior as bsdtar (volume serial
@@ -4537,18 +4576,24 @@ final class TarWriter {
                              typeflag: UInt8(ascii: "0"), linkname: "")
         try writeContents(readPath, size: size, prefetched: prefetched)
 #else
+        // Identity on POSIX: nothing here ever resolves a hop itself, because stat() traverses
+        // every kind of symlink the platform has. Named and used anyway so that both branches
+        // read the same way and a future divergence has one obvious place to appear.
+        // 在 POSIX 上恆等：這裡從不自行解析任何一跳，因為 stat() 會穿過本平台所有種類的
+        // symlink。仍然命名並使用它，使兩個分支讀起來一致，日後若出現分歧也只有一個明顯的落點。
+        let readPath = incomingReadPath
         var st = stat()
         // 跟隨模式用 stat：它解析最後一層，故 S_IFLNK 不會出現，下方的 switch 自然把
         // 連結當成它的目標處理——不需要為此新增任何分支。
         // stat in follow mode resolves the final component, so S_IFLNK never appears and
         // the switch below treats a link as its target without a new branch.
-        let statRC = dereference ? stat(path, &st) : lstat(path, &st)
+        let statRC = dereference ? stat(readPath, &st) : lstat(readPath, &st)
         guard statRC == 0 else {
             // 跟隨模式下，斷掉的連結會使 stat 失敗，而 lstat 模式能好好地存下它。
             // 回報並略過，不讓整次建立因一個斷鏈而中止。
             // In follow mode a broken link makes stat fail where lstat would have stored it
             // happily. Report and skip rather than abandoning the whole create.
-            if dereference, lstat(path, &st) == 0 {
+            if dereference, lstat(readPath, &st) == 0 {
                 eprint("swift_tar: skipping '\(name)': --dereference cannot follow it / 略過 '\(name)'：--dereference 無法跟隨")
                 return
             }
@@ -4613,11 +4658,18 @@ final class TarWriter {
                                      size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
                                      typeflag: UInt8(ascii: "5"), linkname: "")
             }
-            let children = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-            try add(paths: children.sorted().map { path + "/" + $0 })
+            // The child's name hangs off `path`, its reads off `readPath`. The two are the same
+            // string everywhere except below an LX hop -h resolved, and that is the one place
+            // where keeping them joined lost the whole subtree.
+            // 子項目的名稱接在 `path` 之後，讀取接在 `readPath` 之後。除了在 -h 解析掉的 LX
+            // 一跳底下，兩者處處相同——而那一處正是把它們綁在一起會整棵子樹盡失的地方。
+            let children = (try? FileManager.default.contentsOfDirectory(atPath: readPath)) ?? []
+            try add(walk: children.sorted().map {
+                (path: path + "/" + $0, readPath: readPath + "/" + $0)
+            })
         case S_IFLNK:
             if verbose { eprint("a \(name)") }
-            let dest = (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) ?? ""
+            let dest = (try? FileManager.default.destinationOfSymbolicLink(atPath: readPath)) ?? ""
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
                                  size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
                                  typeflag: UInt8(ascii: "2"), linkname: dest)
@@ -4637,7 +4689,7 @@ final class TarWriter {
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
                                  size: size, mtime: mtime, mtimeNanos: mtimeNanos,
                                  typeflag: UInt8(ascii: "0"), linkname: "")
-            try writeContents(path, size: size, prefetched: prefetched)
+            try writeContents(readPath, size: size, prefetched: prefetched)
         case S_IFIFO:
             // A FIFO carries no data: size 0, no payload, no block padding --
             // the same shape as the symlink case above. It is stored rather

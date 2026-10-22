@@ -875,8 +875,9 @@ GNU tar   -c -h   2,200+ nested members     exit 2 — it does not detect this c
   recreate, the second cannot be meaningfully restored from an archive. GNU tar and
   bsdtar skip both as well.
 - **The contents of a directory that cannot be listed.** The directory's own entry
-  is written, then the listing failure is reported and the walk moves on:
-  `skipping contents of './mmm/': … You don't have permission`. Before 2026-10-22
+  is written, then the listing failure is reported, the walk moves on, and the run
+  exits 1 at the end, as bsdtar's does:
+  `swift_tar: ./mmm/: cannot read directory, contents left out: Permission denied`. Before 2026-10-22
   the failure was swallowed and the subtree vanished with an empty stderr and exit
   0 — the archive held `./mmm/` and nothing under it, with nothing said. bsdtar's
   archive holds the same entries and reports it too.
@@ -888,8 +889,9 @@ GNU tar   -c -h   2,200+ nested members     exit 2 — it does not detect this c
   `./d/up/d`——一個真實目錄，不是連結。沒有東西可以取代它，而其內容早已存在 `./d/` 之下。
 - **裝置節點與 socket**（`skipping special file`）：前者重建需要 root，後者無法由封存有意義
   地重建。GNU tar 與 bsdtar 也都略過這兩者。
-- **列不出內容的目錄，其內容。** 該目錄自身的項目會寫出，接著回報列目錄失敗並繼續走訪：
-  `skipping contents of './mmm/': … You don't have permission`。2026-10-22 之前這個失敗會被
+- **列不出內容的目錄，其內容。** 該目錄自身的項目會寫出，接著回報列目錄失敗並繼續走訪，
+  最後與 bsdtar 一樣以 1 結束：
+  `swift_tar: ./mmm/: cannot read directory, contents left out: Permission denied`。2026-10-22 之前這個失敗會被
   吞掉，整棵子樹連同空白的 stderr 與 exit 0 一起消失——封存裡有 `./mmm/` 而其下一無所有，
   且一個字都沒說。bsdtar 的封存含有同樣的項目，而它也會回報。
 

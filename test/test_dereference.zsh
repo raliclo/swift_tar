@@ -207,10 +207,10 @@ fi
 
 # ---------------------------------------------------------------------
 # 3. A directory that cannot be listed: its entry stays, its contents are
-#    reported, and the walk continues. POSIX only -- Windows does not
+#    reported, the walk continues, and the run exits 1. POSIX only -- Windows does not
 #    enforce mode bits against the owner, and an ACL deny blocks the stat
 #    too, which is a different (documented) failure.
-#    列不出內容的目錄：項目保留、內容被回報、走訪繼續。僅 POSIX——Windows 不對
+#    列不出內容的目錄：項目保留、內容被回報、走訪繼續，最後以 1 結束。僅 POSIX——Windows 不對
 #    擁有者強制 mode 位元，而 ACL 拒絕會連 stat 一起擋掉，那是另一種（已文件化的）失敗。
 # ---------------------------------------------------------------------
 if [ "${IS_WIN}" = 1 ]; then
@@ -231,10 +231,12 @@ else
   members "${TMP}/unl.tar" | grep -q 'inner.txt' \
     && bad 'unlistable directory: the unreadable content is absent' \
     || ok 'unlistable directory: the unreadable content is absent'
-  # The whole point: it is no longer silent. / 重點所在：它不再沉默。
-  printf '%s' "${out}" | grep -q 'skipping contents of' \
+  # The whole point: it is no longer silent, and the run exits 1 as bsdtar's does.
+  # 重點所在：它不再沉默，而且與 bsdtar 一樣以 1 結束。
+  printf '%s' "${out}" | grep -q 'mmm/: cannot read directory' \
     && ok 'unlistable directory: the failure is reported, not swallowed' \
     || bad "unlistable directory: the failure is reported, not swallowed (got: ${out})"
+  [ "${rc}" = 1 ] && ok 'unlistable directory: exit 1' || bad "unlistable directory: exit 1 (got ${rc})"
 fi
 
 # ---------------------------------------------------------------------

@@ -162,12 +162,16 @@ bad() { echo "FAIL: $1"; fail=$((fail+1)); }
 BIN=release/swift_tar
 case "$(uname -s)" in
     Darwin)
-        # --install keeps what this test always did: compile_tar.zsh stopped installing by
-        # default on 2026-10-07 (compile_no_lzfse.zsh passes it on its own).
-        # --install 維持本測試一向的行為：compile_tar.zsh 自 2026-10-07 起預設不再安裝
-        # （compile_no_lzfse.zsh 自己會帶上）。
-        build_full=(./compile_tar.zsh --install)
-        build_public=(./compile_no_lzfse.zsh)
+        # Build into release/ only, never install: the test copies both binaries from there.
+        # Until 2026-10-22 it passed --install and used compile_no_lzfse.zsh (which always
+        # installs), so every run replaced /opt/homebrew/bin/swift_tar with a dev build. Once
+        # that path became brew's read-only 0.1.1, the copy was refused and the test could not
+        # run at all.
+        # 只建到 release/，絕不安裝：測試從那裡複製兩個執行檔。2026-10-22 之前它帶 --install，
+        # 並使用一定會安裝的 compile_no_lzfse.zsh，所以每跑一次就把 /opt/homebrew/bin/swift_tar
+        # 換成開發版；該路徑變成 brew 安裝的唯讀 0.1.1 之後，cp 被拒，測試根本跑不起來。
+        build_full=(./compile_tar.zsh)
+        build_public=(./compile_tar.zsh --no-lzfse)
         ;;
     Linux)
         # 完整版需要私有的 lzfse2 已 checkout。缺了它，compile_tar-linux.zsh 會靜默地

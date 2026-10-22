@@ -4454,7 +4454,7 @@ where `write_entry_header` in the same file already reports and skips ARCHIVE_FA
 an unreadable file is read inside the parallel compression pipeline, which needs looking at too,
 and the skip count has to reach Swift for the exit status.
 
-## `test_no_lzfse.zsh` 以 `--install` 覆寫 `/opt/homebrew/bin/swift_tar` ▸ 🔴 未修 2026-10-22 / `test_no_lzfse.zsh` installs over `/opt/homebrew/bin/swift_tar` ▸ open
+## `test_no_lzfse.zsh` 以 `--install` 覆寫 `/opt/homebrew/bin/swift_tar` ▸ 🟢 已修 2026-10-22 / `test_no_lzfse.zsh` installs over `/opt/homebrew/bin/swift_tar` ▸ fixed
 
 2026-10-22 在 Mac 上跑整套測試時，`test_no_lzfse.zsh` 在建置階段就失敗：`cp: /opt/homebrew/bin/swift_tar:
 Permission denied`、`FATAL: ./compile_tar.zsh --install failed`。那個路徑現在是 brew 安裝的正式版 0.1.1
@@ -4468,3 +4468,12 @@ That path is now brew's read-only 0.1.1, so the copy was refused and nothing was
 but a test that installs over the user's installed copy is the problem; before brew, every run
 replaced `/opt/homebrew/bin/swift_tar` with a dev build. It should use the binaries under
 release/ or a scratch install location.
+
+修法：macOS 的兩個建置改為 `./compile_tar.zsh` 與 `./compile_tar.zsh --no-lzfse`，只輸出到 release/，
+測試本來就從那裡複製；不再帶 `--install`，也不再經由一定會安裝的 `compile_no_lzfse.zsh`（它是給使用者
+安裝用的，不改）。實測：15／0，`/opt/homebrew/bin/swift_tar` 前後 sha256 相同，仍為 0.1.1。
+
+Fix: the two macOS builds are now `./compile_tar.zsh` and `./compile_tar.zsh --no-lzfse`, which
+write only release/, where the test already copies from; no `--install`, and no
+`compile_no_lzfse.zsh`, which always installs (it is the user's install helper and stays).
+Measured: 15/0, with `/opt/homebrew/bin/swift_tar` byte-identical before and after, still 0.1.1.

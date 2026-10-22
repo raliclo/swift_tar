@@ -292,13 +292,22 @@ rw() {   # rw <version> <function> <args...>
     say() { print -r -- "$1" }; die() { print -ru2 -- "$1"; exit 1 }
     . "$ROOT/publish_rewrite.zsh"; "${@:2}" ) > "$TMP/rw.out" 2>&1
 }
-rc=0; rw 0.1.0 rewrite_pair "$P/swift_tar.rb" swift_tar-0.1.0-macos-arm64.tar.zst "$H1" || rc=$?
+# The version the Formula is at now, not a literal: this was 0.1.0, and once the Formula
+# moved to 0.1.1 the first rewrite left the file holding both, which rewrite_version rightly
+# refuses (2026-10-22 review). The history comment names it too, so that leaving the comment
+# alone is something the rewrite could get wrong.
+# Formula 目前的版本，而不是寫死的字面：這裡原本是 0.1.0，Formula 進到 0.1.1 之後，第一次改寫
+# 讓檔案同時含有兩個版本，而 rewrite_version 正確地拒絕了（2026-10-22 審查）。history 註解也寫
+# 這個版本，「註解保持不動」才是改寫有可能做錯的事。
+CUR=$(sed -n 's/^  version "\(.*\)"$/\1/p' "$FORMULA_SRC")
+check "Formula: its version is read" "$([[ $CUR == [0-9]*.[0-9]*.[0-9]* && $CUR != 0.2.0 ]] && print ok || print "[$CUR]")" ok
+rc=0; rw "$CUR" rewrite_pair "$P/swift_tar.rb" "swift_tar-$CUR-macos-arm64.tar.zst" "$H1" || rc=$?
 check "Formula: the macOS arm64 url and sha256 are rewritten" "$rc:$(grep -c "$H1" "$P/swift_tar.rb")" "0:1"
-print '  # history: 0.1.0 shipped first' >> "$P/swift_tar.rb"
+print -r -- "  # history: $CUR shipped first" >> "$P/swift_tar.rb"
 rc=0; rw 0.2.0 rewrite_version "$P/swift_tar.rb" rb || rc=$?
-check "Formula: every data line moves to 0.2.0" "$rc:$(grep -v '^ *#' "$P/swift_tar.rb" | grep -c '0\.1\.0')" "0:0"
+check "Formula: every data line moves to 0.2.0" "$rc:$(grep -v '^ *#' "$P/swift_tar.rb" | grep -cF "$CUR")" "0:0"
 check "Formula: the url, the version and the test line carry 0.2.0" "$(grep -c '0\.2\.0' "$P/swift_tar.rb")" 3
-check "Formula: a comment naming 0.1.0 as history is left alone" "$(grep -c 'history: 0.1.0 shipped first' "$P/swift_tar.rb")" 1
+check "Formula: a comment naming $CUR as history is left alone" "$(grep -cF "history: $CUR shipped first" "$P/swift_tar.rb")" 1
 rc=0; rw 0.2.0 rewrite_pair "$P/swift_tar.rb" swift_tar-0.2.0-macos-arm64.tar.zst "$H2" || rc=$?
 check "Formula: then the new archive's hash replaces the old" "$rc:$(grep -c "$H2" "$P/swift_tar.rb"):$(grep -c "$H1" "$P/swift_tar.rb")" "0:1:0"
 # Through a temp file: GNU grep refuses to append to its own input ("input file is also the

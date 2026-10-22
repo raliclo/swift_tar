@@ -739,7 +739,7 @@ would not predict.
 | `--encrypt` | (`-c` only) Encrypt with ChaCha20-Poly1305; prompts for a passphrase |
 | `--keyfile <path>` | Use the file's bytes as key material instead of a passphrase (create and read; required when stdin is not a terminal). **On create it turns encryption on by itself** — `-c --keyfile k.bin -f out.enc src/` encrypts; you do not also need `--encrypt`. |
 | `--force`   | (`-x` only) Allow a member to overwrite one written earlier in the *same* extraction; without it that case is refused |
-| `-h`, `--dereference` | (`-c`, `-r`, `-u`) Follow symlinks: store what each one points to rather than the link itself. A link that cannot be followed — broken, or with an unstattable target — is reported and **stored as a link**, so no member goes missing; before 2026-10-22 it was dropped. A link back to a directory already on the current path is a cycle; it is reported and skipped rather than expanded. Two links reaching the same directory by different routes are **not** a cycle and are both archived. See [What `--dereference` archives](#what---dereference-archives). |
+| `-h`, `--dereference` | (`-c`, `-r`, `-u`) Follow symlinks: store what each one points to rather than the link itself. **A link `-h` cannot resolve is reported and stored as a link, never dropped** — whether it is broken, has an unstattable target, or points back into a directory already on the current path (a cycle, which is reported and not expanded). Before 2026-10-22 all three dropped the member. Two links reaching the same directory by different routes are **not** a cycle and are both archived. See [What `--dereference` archives](#what---dereference-archives). |
 | `--exclude <pattern>` | (`-c`, `-r`, `-u`) Skip members matching the glob, repeatable; `--exclude=PATTERN` is accepted too. Matched as bsdtar does, which was measured rather than assumed: `*` crosses `/`, a pattern holding no `/` is also tried against every path component, and a pattern matching a directory takes its whole subtree. An excluded directory is **never descended into**, so this steps around an unreadable subtree rather than merely omitting it from the listing. |
 | `--help`    | Help. **`-h` used to mean this.** It now means `--dereference`, matching GNU tar and bsdtar; help is `--help`, which is GNU's spelling and what bsdtar has always used. |
 | `--version` | Show the fixed build-date version (`yyyyMMdd-HHmmss`) |
@@ -846,14 +846,52 @@ swift_tar: './mmm': --dereference cannot follow it, storing the link itself
 修正後 4 個。`-h` 唯一被允許失敗的是「解參照」——不是「把名稱留在封存裡」。`bsdtar` 有同樣
 的後援（於 macOS、`bsdtar 3.5.3` 實測）但不作聲；GNU tar 則丟掉該項目並以非零結束。
 
-**Still dropped, deliberately:** a link `-h` detects as a **cycle** (reported as
-`--dereference would loop here`), and a device node or socket (`skipping special
-file`). Both are design decisions rather than oversights — the first cannot be
-expanded, and the second cannot be meaningfully restored.
+**A cycle is the same case.** A link pointing back into a directory already on the
+current path is not expanded — that is what cycle detection is for — but the link
+entry is kept, for the same reason: the content behind the cycle is already in the
+archive under its real path, so the link's name and target are the only things that
+were ever at stake.
 
-**仍刻意丟掉者：** 被 `-h` 判定為**迴圈**的連結（回報 `--dereference would loop here`），
-以及裝置節點與 socket（`skipping special file`）。兩者皆為設計決定而非疏漏——前者無法展開，
-後者無法由封存有意義地重建。
+```
+cyc/d/up -> ..
+
+swift_tar -c -h   ./  ./d/  ./d/up -> ..     exit 0, "would loop here, storing the link itself"
+bsdtar    -c -h   ./  ./d/  ./d/up          exit 0, silent
+GNU tar   -c -h   2,200+ nested members     exit 2 — it does not detect this cycle at all
+```
+
+**迴圈屬於同一種情形。** 指回「當前路徑上已走過的目錄」的連結不會被展開——迴圈偵測正是為此
+存在——但連結項目會保留，理由相同：迴圈背後的內容早已以其真實路徑存在封存裡，所以從頭到尾
+有風險的只有連結的名稱與目標。
+
+**Still dropped, deliberately, with a measured reason:**
+
+- **A directory reached without a link, whose identity is already on the stack.**
+  Measured on Windows with a self-referencing junction (`mklink /J d\up <root>`,
+  tag `0xa0000003`): NT traverses it, so the member the cycle check drops is
+  `./d/up/d` — a real directory, not a link. There is nothing to store in its
+  place, and its content is already archived under `./d/`.
+- **A device node or socket** (`skipping special file`): the first needs root to
+  recreate, the second cannot be meaningfully restored from an archive. GNU tar and
+  bsdtar skip both as well.
+- **The contents of a directory that cannot be listed.** The directory's own entry
+  is written, then the listing failure is reported and the walk moves on:
+  `skipping contents of './mmm/': … You don't have permission`. Before 2026-10-22
+  the failure was swallowed and the subtree vanished with an empty stderr and exit
+  0 — the archive held `./mmm/` and nothing under it, with nothing said. bsdtar's
+  archive holds the same entries and reports it too.
+
+**仍刻意丟掉者，皆有實測理由：**
+
+- **不經連結抵達、而識別碼已在堆疊上的目錄。** 於 Windows 以自我指涉的 junction 實測
+  （`mklink /J d\up <root>`，tag `0xa0000003`）：NT 穿得過去，故迴圈檢查丟掉的成員是
+  `./d/up/d`——一個真實目錄，不是連結。沒有東西可以取代它，而其內容早已存在 `./d/` 之下。
+- **裝置節點與 socket**（`skipping special file`）：前者重建需要 root，後者無法由封存有意義
+  地重建。GNU tar 與 bsdtar 也都略過這兩者。
+- **列不出內容的目錄，其內容。** 該目錄自身的項目會寫出，接著回報列目錄失敗並繼續走訪：
+  `skipping contents of './mmm/': … You don't have permission`。2026-10-22 之前這個失敗會被
+  吞掉，整棵子樹連同空白的 stderr 與 exit 0 一起消失——封存裡有 `./mmm/` 而其下一無所有，
+  且一個字都沒說。bsdtar 的封存含有同樣的項目，而它也會回報。
 
 The cost is duplication: several links pointing at one directory each store its
 contents again, and a link out of the tree pulls that content into the archive.

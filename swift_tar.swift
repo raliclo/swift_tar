@@ -4449,8 +4449,46 @@ final class TarWriter {
             // 連結 `dlink -> realdir` 實測：修正前 3 個成員，修正後 5 個，與 GNU tar 相同——它把
             // 從 `realdir` 讀到的內容存在 `./dlink/` 之下。
             if let target = winStatFollowing(incomingReadPath) {
-                st = target.st
-                readPath = target.readPath
+                // Would following it re-enter a directory already on the recursion stack? Then
+                // do NOT follow: leave st as the link's own winStat and let the symlink branch
+                // below store the link. The cycle is in the target, but the MEMBER is a link,
+                // and the link entry is what would otherwise be lost. The content behind the
+                // cycle is already in the archive under its real path, so the link name and its
+                // target string are the only things at stake.
+                //
+                // Deciding it here rather than at the cycle check below is what keeps this to
+                // four lines: the cycle check runs on the resolved st, where the member is no
+                // longer a link and the existing symlink branch is out of reach. Doing it there
+                // would mean duplicating the whole typeflag '2' write.
+                //
+                // The cycle check below still skips, and must: measured 2026-10-22 with a
+                // self-referencing JUNCTION (`mklink /J d\up <root>`, tag 0xa0000003), NT
+                // traverses it, winStat reports a directory rather than a symlink, and the entry
+                // the cycle check drops is `./d/up/d` -- a real directory, not a link. There is
+                // no link to store in that case, and its content is already archived under
+                // `./d/`. So "store the link instead" applies only when the member really is one.
+                //
+                // 跟隨它會不會重新進入已在遞迴堆疊上的目錄？那就「不要」跟隨：讓 st 保持為該連結
+                // 自己的 winStat，交給下方的 symlink 分支把連結存下來。迴圈在「目標」那一邊，但
+                // 「成員」是一個連結，而會被丟掉的正是這個連結項目。迴圈背後的內容早已以其真實
+                // 路徑存在封存裡，所以真正有風險的只有連結的名稱與它的目標字串。
+                //
+                // 在此處判斷而非在下方的迴圈檢查處，是本次只需四行的原因：迴圈檢查跑在解析後的
+                // st 上，那時成員已不是連結，既有的 symlink 分支也觸及不到。在那裡做就得把整段
+                // typeflag '2' 的寫出邏輯複製一份。
+                //
+                // 下方的迴圈檢查仍然會略過，而且必須如此：2026-10-22 以自我指涉的 JUNCTION 實測
+                // （`mklink /J d\up <root>`，tag 0xa0000003），NT 穿得過去，winStat 回報的是目錄
+                // 而非 symlink，而迴圈檢查丟掉的項目是 `./d/up/d`——一個真實目錄，不是連結。那種
+                // 情況下沒有連結可存，其內容也早已存在 `./d/` 之下。所以「改存連結」只適用於成員
+                // 真的是連結的情形。
+                if target.st.isDir,
+                   walkedDirs.contains("\(target.st.volumeSerial)/\(target.st.fileIndex)") {
+                    eprint("swift_tar: '\(name)': --dereference would loop here, storing the link itself / '\(name)'：--dereference 於此形成迴圈，改存連結本身")
+                } else {
+                    st = target.st
+                    readPath = target.readPath
+                }
             } else {
                 // -h cannot be honoured for this link, so store the LINK ITSELF rather than
                 // dropping the member. st is still the winStat of the link, so falling through
@@ -4524,6 +4562,30 @@ final class TarWriter {
             let dest = ((try? FileManager.default.destinationOfSymbolicLink(atPath: readPath))
                         ?? winReadSymlinkTarget(readPath) ?? "")
                 .replacingOccurrences(of: "\\", with: "/")
+            // An empty target is not a link, it is a malformed member. Added 2026-10-22, when
+            // the `--dereference cannot follow it` sites began storing the link instead of
+            // dropping it: before that change an unreadable target meant a missing member,
+            // after it the entry gets written, so the empty case had to stop being writable.
+            // winStat's and winReadSymlinkTarget's tag sets match exactly (0xA000000C and
+            // 0xA000001D), so an unhandled tag is not the gap; the gap is winStat's
+            // `type == .typeSymbolicLink` disjunct, which could classify something Foundation
+            // calls a link and neither reader can resolve. No reproduction was found -- a
+            // dangling LX link resolves, a junction is a directory, and an AppExecLink is
+            // classified as a regular file -- so this is a guard against a path that is
+            // reachable on paper, not one that has been seen.
+            // 空目標不是連結，而是一個格式壞掉的成員。2026-10-22 新增，因為
+            // `--dereference cannot follow it` 兩處改為存下連結而非丟棄：在那次改動之前，
+            // 讀不出目標等於少一個成員，之後則會真的寫出該項目，所以空目標必須不再可寫。
+            // winStat 與 winReadSymlinkTarget 的 tag 集合完全一致（0xA000000C 與
+            // 0xA000001D），故未處理的 tag 不是缺口；缺口是 winStat 的
+            // `type == .typeSymbolicLink` 這一條，它可能把 Foundation 認定為連結、而兩個
+            // 讀取器都解不開的東西判為連結。沒有找到重現方式——斷掉的 LX 連結解得開、
+            // junction 是目錄、AppExecLink 被判為一般檔案——故這是對「紙上可達」的防護，
+            // 不是對已發生情形的修補。
+            guard !dest.isEmpty else {
+                eprint("swift_tar: skipping '\(name)': cannot read the symlink target / 略過 '\(name)'：讀不出 symlink 的目標")
+                return
+            }
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
                                  size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
                                  typeflag: UInt8(ascii: "2"), linkname: dest)
@@ -4565,7 +4627,28 @@ final class TarWriter {
             // where keeping them joined lost the whole subtree.
             // 子項目的名稱接在 `path` 之後，讀取接在 `readPath` 之後。除了在 -h 解析掉的 LX
             // 一跳底下，兩者處處相同——而那一處正是把它們綁在一起會整棵子樹盡失的地方。
-            let children = (try? FileManager.default.contentsOfDirectory(atPath: readPath)) ?? []
+            // A listing that fails is NOT an empty directory. Until 2026-10-22 this was
+            // `(try? ...) ?? []`, which turned a permission error into a silent empty subtree:
+            // measured on macOS, a chmod 000 directory among its siblings gave exit 0, an empty
+            // stderr, and an archive holding `./mmm/` with its contents gone, while both bsdtar
+            // and GNU tar reported it. The directory's own header is already written above, so
+            // the archive still names it -- as bsdtar's does. Reporting and moving on keeps
+            // every other member, which is this tool's documented behaviour for a skip; what
+            // was wrong was saying nothing at all. This is the `|| true` shape CLAUDE.md
+            // forbids, in its Swift spelling.
+            // 列目錄失敗不等於空目錄。2026-10-22 之前這裡是 `(try? ...) ?? []`，把權限錯誤變成
+            // 一棵靜默的空子樹：macOS 實測，一個 chmod 000 的目錄夾在兄弟項目之間時，得到
+            // exit 0、stderr 全空，封存裡留著一個內容盡失的 `./mmm/`，而 bsdtar 與 GNU tar
+            // 都會回報它。該目錄自身的標頭已在上方寫出，故封存仍然列出它——bsdtar 也是如此。
+            // 回報後繼續可保留其餘所有成員，那是本工具對「略過」已文件化的行為；真正錯的是
+            // 一個字都不說。這就是 CLAUDE.md 禁止的 `|| true` 形狀，只是換成 Swift 的拼法。
+            let children: [String]
+            do {
+                children = try FileManager.default.contentsOfDirectory(atPath: readPath)
+            } catch {
+                eprint("swift_tar: skipping contents of '\(name)/': \(error.localizedDescription) / 略過 '\(name)/' 的內容：\(error.localizedDescription)")
+                return
+            }
             try add(walk: children.sorted().map {
                 (path: path + "/" + $0, readPath: readPath + "/" + $0)
             })
@@ -4616,6 +4699,25 @@ final class TarWriter {
         if statRC != 0, dereference, lstat(readPath, &st) == 0 {
             eprint("swift_tar: '\(name)': --dereference cannot follow it, storing the link itself / '\(name)'：--dereference 無法跟隨，改存連結本身")
             statRC = 0
+        } else if statRC == 0, dereference, (st.st_mode & S_IFMT) == S_IFDIR,
+                  walkedDirs.contains("\(st.st_dev)/\(st.st_ino)") {
+            // Following it would re-enter a directory already on the stack. Store the link
+            // itself instead of dropping the member; see the Windows branch above for why this
+            // is decided here and not at the cycle check below, and for the junction case that
+            // keeps the cycle check necessary. `own` is a separate struct so a failed probe
+            // cannot leave st half-written: st is replaced only once the probe has confirmed a
+            // symlink, and otherwise the cycle check below skips as before -- which is the right
+            // answer for a directory reached without a link, where there is nothing to store.
+            // 跟隨它會重新進入已在堆疊上的目錄。改存連結本身而非丟掉該成員；為何在此判斷而不是
+            // 在下方的迴圈檢查處、以及讓迴圈檢查仍然必要的 junction 情形，見上方 Windows 分支。
+            // `own` 用獨立的結構，使探測失敗不會讓 st 處於半寫狀態：只有在探測確認是 symlink
+            // 之後才替換 st，否則下方的迴圈檢查照舊略過——對於「不經連結抵達的目錄」而言那才是
+            // 正解，因為那時沒有東西可存。
+            var own = stat()
+            if lstat(readPath, &own) == 0, (own.st_mode & S_IFMT) == S_IFLNK {
+                eprint("swift_tar: '\(name)': --dereference would loop here, storing the link itself / '\(name)'：--dereference 於此形成迴圈，改存連結本身")
+                st = own
+            }
         }
         guard statRC == 0 else {
             throw TarError.io("cannot stat '\(path)' / 無法讀取 '\(path)' 的檔案資訊")
@@ -4684,13 +4786,45 @@ final class TarWriter {
             // where keeping them joined lost the whole subtree.
             // 子項目的名稱接在 `path` 之後，讀取接在 `readPath` 之後。除了在 -h 解析掉的 LX
             // 一跳底下，兩者處處相同——而那一處正是把它們綁在一起會整棵子樹盡失的地方。
-            let children = (try? FileManager.default.contentsOfDirectory(atPath: readPath)) ?? []
+            // A listing that fails is NOT an empty directory. Until 2026-10-22 this was
+            // `(try? ...) ?? []`, which turned a permission error into a silent empty subtree:
+            // measured on macOS, a chmod 000 directory among its siblings gave exit 0, an empty
+            // stderr, and an archive holding `./mmm/` with its contents gone, while both bsdtar
+            // and GNU tar reported it. The directory's own header is already written above, so
+            // the archive still names it -- as bsdtar's does. Reporting and moving on keeps
+            // every other member, which is this tool's documented behaviour for a skip; what
+            // was wrong was saying nothing at all. This is the `|| true` shape CLAUDE.md
+            // forbids, in its Swift spelling.
+            // 列目錄失敗不等於空目錄。2026-10-22 之前這裡是 `(try? ...) ?? []`，把權限錯誤變成
+            // 一棵靜默的空子樹：macOS 實測，一個 chmod 000 的目錄夾在兄弟項目之間時，得到
+            // exit 0、stderr 全空，封存裡留著一個內容盡失的 `./mmm/`，而 bsdtar 與 GNU tar
+            // 都會回報它。該目錄自身的標頭已在上方寫出，故封存仍然列出它——bsdtar 也是如此。
+            // 回報後繼續可保留其餘所有成員，那是本工具對「略過」已文件化的行為；真正錯的是
+            // 一個字都不說。這就是 CLAUDE.md 禁止的 `|| true` 形狀，只是換成 Swift 的拼法。
+            let children: [String]
+            do {
+                children = try FileManager.default.contentsOfDirectory(atPath: readPath)
+            } catch {
+                eprint("swift_tar: skipping contents of '\(name)/': \(error.localizedDescription) / 略過 '\(name)/' 的內容：\(error.localizedDescription)")
+                return
+            }
             try add(walk: children.sorted().map {
                 (path: path + "/" + $0, readPath: readPath + "/" + $0)
             })
         case S_IFLNK:
             if verbose { eprint("a \(name)") }
+            // An empty target is not a link but a malformed member; see the Windows branch
+            // above for why this became writable on 2026-10-22. On POSIX lstat has already
+            // said S_IFLNK, so a readlink failure here is an I/O error or a race, not a
+            // misclassification.
+            // 空目標不是連結，而是格式壞掉的成員；它為何在 2026-10-22 變成可寫，見上方
+            // Windows 分支。POSIX 上 lstat 已判定為 S_IFLNK，故此處 readlink 失敗是 I/O
+            // 錯誤或競態，不是分類錯誤。
             let dest = (try? FileManager.default.destinationOfSymbolicLink(atPath: readPath)) ?? ""
+            guard !dest.isEmpty else {
+                eprint("swift_tar: skipping '\(name)': cannot read the symlink target / 略過 '\(name)'：讀不出 symlink 的目標")
+                return
+            }
             try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
                                  size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
                                  typeflag: UInt8(ascii: "2"), linkname: dest)

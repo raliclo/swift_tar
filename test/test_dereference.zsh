@@ -49,15 +49,21 @@ ok()   { printf 'PASS: %s\n' "$1"; pass=$((pass + 1)); }
 bad()  { printf 'FAIL: %s\n' "$1"; fail=$((fail + 1)); }
 note() { printf 'SKIP: %s\n' "$1"; skip=$((skip + 1)); }
 
-# `mktemp -d` can fail where TMPDIR is unset and the compiled-in /tmp is not writable, and that
-# failure is silent in the worst way: `TMP="$(mktemp -d)"` does NOT trip `set -e`, so the
-# assignment just holds an empty string and every fixture path becomes "/<name>" at the
-# filesystem root. Measured 2026-10-22 in a sandbox where /tmp was read-only. A test that
-# quietly relocates itself is worse than no test, so this reports why and exits non-zero.
-# 當 TMPDIR 未設且編譯進去的 /tmp 不可寫時，`mktemp -d` 會失敗，而該失敗以最糟的方式無聲：
-# `TMP="$(mktemp -d)"` 「不會」觸發 `set -e`，該賦值只是存了空字串，此後每個測資路徑都變成
-# 檔案系統根目錄下的 "/<名稱>"。2026-10-22 於 /tmp 唯讀的沙箱中實測。會靜默改變自身位置的
-# 測試比沒有測試更糟，故此處回報原因並以非零結束。
+# Tries TMPDIR before the compiled-in /tmp: in Git Bash under some sandboxes /tmp is read-only
+# while TMPDIR is fine (measured 2026-10-22), and a failure names every place that was tried.
+# 先試 TMPDIR 再試編譯進去的 /tmp：在某些沙箱下的 Git Bash 裡 /tmp 唯讀而 TMPDIR 可用
+# （2026-10-22 實測）；失敗時列出每個試過的位置。
+#
+# CORRECTED 2026-10-22. This comment first claimed that `TMP="$(mktemp -d)"` does not trip
+# `set -e`, so a failed mktemp would leave TMP empty and move every fixture to "/<name>", and
+# called that measured. It was not measured, and it is false: under `set -e` zsh aborts on a
+# failed command substitution in an assignment (rc 1, the next line never runs); only
+# `local x=$(...)` masks it. The empty TMP was seen in an interactive Git Bash with no
+# `set -e`, and the rest was inference written in the voice of a measurement.
+# 2026-10-22 更正。此註解最初宣稱 `TMP="$(mktemp -d)"` 不會觸發 `set -e`，於是 mktemp 失敗時
+# TMP 為空、每個測資移到 "/<名稱>"，並稱之為實測。它沒有量過，而且是錯的：在 `set -e` 下，
+# 賦值中的命令替換失敗時 zsh 會中止（rc 1，下一行不會執行）；只有 `local x=$(...)` 會蓋掉它。
+# 空的 TMP 是在沒有 `set -e` 的互動式 Git Bash 裡看到的，其餘是用實測語氣寫下的推論。
 mk_tmp() {
   local base d errs=""
   for base in "${TMPDIR:-}" /tmp; do
@@ -89,29 +95,34 @@ trap cleanup EXIT
 # is not a link at all, which every assertion below would then be testing nothing against.
 #
 # Two Windows routes, because neither alone is enough on this machine:
-#   * `ln -s` -- works on POSIX, and under the Cygwin zsh at scoop/shims/zsh for an EXISTING
-#     target, but fails outright for a MISSING one ("No such file or directory") in every
-#     winsymlinks mode, MSYS= and CYGWIN= alike.
-#   * `cmd mklink` -- creates dangling links happily, and Cygwin recognises the result
+#   * `ln -s` -- works on POSIX, and under the zsh at scoop/shims/zsh for an EXISTING target,
+#     but fails outright for a MISSING one ("No such file or directory") in every winsymlinks
+#     mode tried, MSYS= and CYGWIN= alike.
+#   * `cmd mklink` -- creates dangling links happily, and zsh recognises the result
 #     ([ -L ] true, readlink correct). Paths are RELATIVE with the cwd inherited, never built
-#     with cygpath: under the Cygwin zsh, `/tmp` lives inside the zsh install and `cygpath -m`
-#     resolves it to a different root entirely (measured: a temp dir came back as
-#     `C:/Windows/tmp.XXXX`), so a cygpath-built argument names a path that does not exist and
+#     with cygpath. That zsh ships its OWN msys-2.0.dll (runtime 3.6.11, uname MINGW64_NT) while
+#     Git Bash runs 3.6.10: two MSYS2 runtimes on one machine, each with its own "/" root. Its
+#     `/tmp` lives inside the zsh install, and `cygpath -m` resolved a temp dir there to
+#     `C:/Windows/tmp.XXXX`, so a cygpath-built argument names a path that does not exist and
 #     mklink answers "The system cannot find the path specified". Relative paths sidestep the
 #     whole root-mapping question. `mklink` needs Developer Mode or admin, so a failure here is
 #     an environment limit and the caller skips.
+#     (Corrected 2026-10-22: this comment first called it "the Cygwin zsh". It is MSYS --
+#     measured with uname and the shipped DLL. 2026-10-22 更正：此處原稱「Cygwin zsh」，實為
+#     MSYS，以 uname 與隨附的 DLL 量得。)
 #
 # 以 `[ -L ]` 驗證而非看 `ln` 的退出碼，因為在 MSYS 未設的 Git Bash 上，`ln -s` 指向「存在」的
 # 目標會回傳 0 卻靜默做出「複本」（2026-10-22 實測）——一個根本不是連結的測資，而底下每個斷言
 # 就都在對著它什麼也沒測。
 #
 # Windows 需要兩條途徑，因為這台機器上任一條都不夠：
-#   * `ln -s`——在 POSIX 上可行，在 scoop/shims/zsh 的 Cygwin zsh 下對「存在」的目標可行，但對
-#     「缺失」的目標一律失敗（"No such file or directory"），MSYS= 與 CYGWIN= 的各種
+#   * `ln -s`——在 POSIX 上可行，在 scoop/shims/zsh 的 zsh 下對「存在」的目標可行，但對
+#     「缺失」的目標一律失敗（"No such file or directory"），試過的 MSYS= 與 CYGWIN= 各種
 #     winsymlinks 模式皆然。
-#   * `cmd mklink`——可以直接建出斷鏈，且 Cygwin 認得其結果（[ -L ] 為真、readlink 正確）。路徑
-#     用「相對」並繼承 cwd，絕不用 cygpath 組：在 Cygwin zsh 下，`/tmp` 位於 zsh 安裝目錄內，
-#     而 `cygpath -m` 會把它解到完全不同的根（實測：一個暫存目錄被解成
+#   * `cmd mklink`——可以直接建出斷鏈，且 zsh 認得其結果（[ -L ] 為真、readlink 正確）。路徑
+#     用「相對」並繼承 cwd，絕不用 cygpath 組：那個 zsh 自帶 msys-2.0.dll（runtime 3.6.11），
+#     Git Bash 則是 3.6.10——同一台機器上兩份 MSYS2 runtime，各有自己的 "/" 根。它的 `/tmp`
+#     位於 zsh 安裝目錄內，而 `cygpath -m` 會把它解到完全不同的根（實測：一個暫存目錄被解成
 #     `C:/Windows/tmp.XXXX`），於是以 cygpath 組出的引數指向一個不存在的路徑，mklink 回答
 #     「The system cannot find the path specified」。相對路徑完全繞開根映射這個問題。`mklink`
 #     需要開發者模式或管理員權限，故此處失敗屬環境限制，呼叫方以 SKIP 處理。
@@ -273,11 +284,11 @@ if [ "${IS_WIN}" != 1 ] || ! command -v wsl.exe >/dev/null 2>&1; then
 else
   l="${TMP}/lx"; mkdir -p "${l}"
   # wsl.exe translates the inherited cwd itself, so no path is passed and cygpath stays out of
-  # it -- see mklink_s for what cygpath does to a Cygwin-zsh temp path. MSYS2_ARG_CONV_EXCL is
+  # it -- see mklink_s for what cygpath does to that zsh's temp path. MSYS2_ARG_CONV_EXCL is
   # still required: without it the MSYS runtime rewrites POSIX-looking arguments before
   # wsl.exe sees them.
   # wsl.exe 會自行轉換繼承而來的 cwd，故不傳任何路徑、也完全不碰 cygpath——cygpath 會對
-  # Cygwin zsh 的暫存路徑做什麼，見 mklink_s。MSYS2_ARG_CONV_EXCL 仍然必要：少了它，MSYS
+  # 那個 zsh 的暫存路徑做什麼，見 mklink_s。MSYS2_ARG_CONV_EXCL 仍然必要：少了它，MSYS
   # runtime 會在 wsl.exe 看到引數之前就改寫看起來像 POSIX 路徑的部分。
   if ! ( cd "${l}" && MSYS2_ARG_CONV_EXCL='*' wsl.exe -- bash -c 'ln -s realdir dlink && mkdir realdir && printf "inside\n" > realdir/f.txt' ) >/dev/null 2>&1 \
      || [ ! -e "${l}/dlink" ]; then

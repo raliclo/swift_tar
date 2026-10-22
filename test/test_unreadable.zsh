@@ -102,6 +102,29 @@ rc=0; "$ST" -uf r.tar src 2>u.err || rc=$?
 if [ "$rc" = 1 ] && grep -q 'src/ok/c.txt: cannot open' u.err; then ok "-u: reports and exits 1"
 else bad "-u: reports and exits 1 (got rc $rc)"; fi
 
+# --zip goes through libarchive (libarchive_zip_bridge.c), not TarWriter, so it is checked on
+# its own, in each of its three paths: sorted with worker threads, --zip-unsorted, and -n 1
+# (one thread, which is also how Windows always writes). Until 2026-10-22 it stopped at the
+# first unreadable entry and left an empty ZIP. The unsorted walk reports the file in
+# libarchive's words (`Can't open 'c.txt'`), so the file is matched by its base name.
+# --zip 走的是 libarchive（libarchive_zip_bridge.c）而不是 TarWriter，所以分開檢查，三條路徑
+# 各一次：排序加工作執行緒、--zip-unsorted、-n 1（單執行緒，Windows 一向如此寫出）。2026-10-22
+# 之前，它在第一個讀不到的項目就停下，留下空的 ZIP。unsorted 走訪以 libarchive 的措辭回報該檔
+# （`Can't open 'c.txt'`），所以只比對檔名。
+for v in "" "--zip-unsorted" "-n 1"; do
+  label="--zip${v:+ $v}"
+  rm -f z.zip
+  rc=0; "$ST" -cf z.zip --zip ${=v} src 2>z.err || rc=$?
+  got=$(members z.zip)
+  if [ "$rc" = 1 ]; then ok "$label: exit 1"; else bad "$label: exit 1 (got $rc)"; fi
+  if grep -q "src/locked: Couldn't visit directory" z.err && grep -q 'c\.txt' z.err; then
+    ok "$label: reports the directory and the file"
+  else bad "$label: reports the directory and the file ($(tr '\n' ' ' < z.err))"; fi
+  if "$ST" -tf z.zip >/dev/null 2>&1 && [ "$got" = "$EXPECTED" ]; then
+    ok "$label: a complete ZIP holding the readable members only"
+  else bad "$label: a complete ZIP holding the readable members only (got: ${got//$'\n'/ })"; fi
+done
+
 # An unreadable file named as the operand: an empty but valid archive, exit 1.
 # 以讀不到的檔案當操作元：一份空但有效的封存，以 1 結束。
 rc=0; "$ST" -cf one.tar src/ok/c.txt 2>one.err || rc=$?

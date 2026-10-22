@@ -138,18 +138,47 @@ static void set_archive_error(char *buffer, size_t capacity,
              detail != NULL ? detail : "unknown libarchive error");
 }
 
+/* Report an entry left out because it could not be read, and count it. The wording is the
+ * tar path's, so both say the same thing about the same tree; the count becomes exit 1 once
+ * the archive is complete (swift_tar_zip_create). Until 2026-10-22 an unreadable directory
+ * or file ended the whole run here and left an empty or partial ZIP, where bsdtar -- on this
+ * same libarchive -- reports it, carries on, and exits 1.
+ * 回報一個因讀不到而略過的項目，並計數。措辭與 tar 路徑相同，使兩者對同一棵樹說同一件事；
+ * 計數在封存完整之後轉成結束碼 1（swift_tar_zip_create）。2026-10-22 之前，讀不到的目錄或檔案
+ * 會在這裡結束整次執行，留下空的或不完整的 ZIP；而用同一套 libarchive 的 bsdtar 會回報、繼續，
+ * 最後以 1 結束。 */
+static void note_unreadable(long *unreadable, const char *name, const char *what,
+                            const char *what_zh, int error_number) {
+    const char *reason = error_number != 0 ? strerror(error_number) : "unknown error";
+    fprintf(stderr, "swift_tar: %s: %s: %s / %s：%s\n",
+            name != NULL ? name : "<unknown>", what, reason, what_zh, reason);
+    ++*unreadable;
+}
+
+/* Open a regular file's data for reading, or NULL with errno set.
+ * 開啟一般檔案的資料以供讀取；失敗時回傳 NULL 並設好 errno。 */
+static FILE *open_entry_source(struct archive_entry *entry) {
+#ifdef _WIN32
+    const wchar_t *wide_path = archive_entry_sourcepath_w(entry);
+    return wide_path != NULL ? _wfopen(wide_path, L"rb") :
+                               fopen(archive_entry_sourcepath(entry), "rb");
+#else
+    return fopen(archive_entry_sourcepath(entry), "rb");
+#endif
+}
+
+/* Copy `input`, already opened by write_entry, into the entry just written, and close it.
+ * 把 write_entry 已開啟的 `input` 複製進剛寫出的項目，並關閉它。 */
 static int copy_file_to_archive(struct archive *writer,
                                 struct archive_entry *entry,
+                                FILE *input,
                                 char *error_buffer,
                                 size_t error_capacity) {
     char buffer[64 * 1024];
-    FILE *input;
     size_t count;
     la_int64_t remaining;
 
-    if (archive_entry_filetype(entry) != AE_IFREG || archive_entry_size(entry) == 0) {
-        return 0;
-    }
+    if (input == NULL) return 0;
     /* No more than the size the entry was listed with. A file that grew after that used to
      * be read to its new end here: libarchive takes only the listed size, the count came
      * back short, and the whole run ended with an error -- while the threaded path stored
@@ -158,24 +187,6 @@ static int copy_file_to_archive(struct archive *writer,
      * 列出的大小，回傳的數量少了，整次執行以錯誤結束——而執行緒路徑對同一個檔案卻照存不誤。
      * 現在兩邊存的都是列出時的大小。 */
     remaining = archive_entry_size(entry);
-
-#ifdef _WIN32
-    {
-        const wchar_t *wide_path = archive_entry_sourcepath_w(entry);
-        input = wide_path != NULL ? _wfopen(wide_path, L"rb") :
-                                    fopen(archive_entry_sourcepath(entry), "rb");
-    }
-#else
-    input = fopen(archive_entry_sourcepath(entry), "rb");
-#endif
-    if (input == NULL) {
-        const char *path = archive_entry_sourcepath(entry);
-        if (error_buffer != NULL && error_capacity > 0) {
-            snprintf(error_buffer, error_capacity, "cannot open '%s': %s",
-                     path != NULL ? path : "<unknown>", strerror(errno));
-        }
-        return -1;
-    }
 
     while (remaining > 0 &&
            (count = fread(buffer, 1, remaining < (la_int64_t)sizeof(buffer) ?
@@ -339,11 +350,29 @@ static int write_entry_header(struct archive *writer,
 static int write_entry(struct archive *writer,
                        struct archive_entry *entry,
                        int verbose,
+                       long *unreadable,
                        char *error_buffer,
                        size_t error_capacity) {
-    int status = write_entry_header(writer, entry, verbose, error_buffer, error_capacity);
-    if (status <= 0) return status;
-    return copy_file_to_archive(writer, entry, error_buffer, error_capacity);
+    FILE *input = NULL;
+    int status;
+
+    /* Opened before the header, so a file that cannot be opened is left out whole rather
+     * than leaving a header with no data after it.
+     * 在標頭之前開啟，使開不了的檔案整個略過，而不是留下一個後面沒有資料的標頭。 */
+    if (archive_entry_filetype(entry) == AE_IFREG && archive_entry_size(entry) > 0) {
+        input = open_entry_source(entry);
+        if (input == NULL) {
+            note_unreadable(unreadable, archive_entry_pathname(entry),
+                            "cannot open, left out", "無法開啟，未收入", errno);
+            return 0;
+        }
+    }
+    status = write_entry_header(writer, entry, verbose, error_buffer, error_capacity);
+    if (status <= 0) {
+        if (input != NULL) fclose(input);
+        return status;
+    }
+    return copy_file_to_archive(writer, entry, input, error_buffer, error_capacity);
 }
 
 /* ---- compressing members on several threads -------------------------------------------
@@ -403,6 +432,8 @@ typedef struct {
     la_int64_t cost;          /* bytes counted against the window; 0 = not for a worker */
     int done;
     int failed;
+    int unreadable;           /* failed because the file could not be opened: left out, not fatal */
+    int error_number;         /* errno of that open */
     unsigned char *data;      /* the finished deflate stream */
     size_t length;
     unsigned long crc;
@@ -416,6 +447,7 @@ typedef struct {
     int verbose;
     char *error_buffer;
     size_t error_capacity;
+    long unreadable;          /* entries left out because they could not be read */
 #if defined(SWIFT_TAR_ZIP_PARALLEL) && !defined(_WIN32)
     int thread_count;         /* 0 = write every entry as it arrives */
     int started;
@@ -454,8 +486,10 @@ static void compress_job(zip_job *job, int base_dir, unsigned char *input, size_
 
     fd = openat(base_dir, path != NULL ? path : "", O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
-        snprintf(job->error, sizeof(job->error), "cannot open '%s': %s",
-                 path != NULL ? path : "<unknown>", strerror(errno));
+        /* Not fatal: the writer reports it and leaves the file out (pipeline_write_first).
+         * 不是致命錯誤：由寫出端回報並略過這個檔案（pipeline_write_first）。 */
+        job->error_number = errno;
+        job->unreadable = 1;
         job->failed = 1;
         return;
     }
@@ -580,7 +614,13 @@ static int pipeline_write_first(zip_pipeline *pipeline) {
 
     if (job->cost == 0) {
         result = write_entry(pipeline->writer, job->entry, pipeline->verbose,
+                             &pipeline->unreadable,
                              pipeline->error_buffer, pipeline->error_capacity);
+    } else if (job->unreadable) {
+        /* Nothing was written for it yet, so leaving it out leaves no trace in the archive.
+         * 它還沒有任何東西寫出，所以略過它不會在封存裡留下痕跡。 */
+        note_unreadable(&pipeline->unreadable, archive_entry_pathname(job->entry),
+                        "cannot open, left out", "無法開啟，未收入", job->error_number);
     } else if (job->failed) {
         set_error(pipeline->error_buffer, pipeline->error_capacity, job->error);
         result = -1;
@@ -692,6 +732,7 @@ static int pipeline_add(zip_pipeline *pipeline, struct archive_entry *entry) {
 #endif
     {
         int result = write_entry(pipeline->writer, entry, pipeline->verbose,
+                                 &pipeline->unreadable,
                                  pipeline->error_buffer, pipeline->error_capacity);
         archive_entry_free(entry);
         return result;
@@ -794,6 +835,35 @@ typedef struct {
     char *error_buffer;
     size_t error_capacity;
 } sorted_walk;
+
+/* What to do with what archive_read_next_header2 returned: 1 use the entry, 0 skip it, -1 end
+ * the run. Only ARCHIVE_FATAL ends it. ARCHIVE_FAILED and ARCHIVE_RETRY mean this one entry
+ * cannot be had -- "Couldn't visit directory" for a directory that cannot be opened, whose
+ * own entry was already handed over -- and libarchive carries on with the rest on the next
+ * call: reported, counted, skipped. ARCHIVE_WARN means the entry is usable: said, and used.
+ * The same rule as the read side (swift_tar_zip_read) and write_entry_header. Until
+ * 2026-10-22 anything below ARCHIVE_OK ended the run here.
+ * 如何處理 archive_read_next_header2 的回傳：1 使用該項目，0 略過，-1 結束整次執行。只有
+ * ARCHIVE_FATAL 會結束。ARCHIVE_FAILED 與 ARCHIVE_RETRY 代表只有這一項拿不到——開不了的目錄
+ * 回報的 "Couldn't visit directory"，其自身的項目已經交付——而 libarchive 下一次呼叫會繼續處理
+ * 其餘的：回報、計數、略過。ARCHIVE_WARN 代表項目可用：說出原因，照常使用。與讀取端
+ * （swift_tar_zip_read）及 write_entry_header 同一條規則。2026-10-22 之前，凡低於 ARCHIVE_OK
+ * 都會在這裡結束整次執行。 */
+static int next_header_action(int status, struct archive *disk, zip_pipeline *pipeline,
+                              char *error_buffer, size_t error_capacity) {
+    if (status == ARCHIVE_OK) return 1;
+    if (status == ARCHIVE_WARN) {
+        fprintf(stderr, "swift_tar: %s\n", archive_error_string(disk));
+        return 1;
+    }
+    if (status == ARCHIVE_FAILED || status == ARCHIVE_RETRY) {
+        note_unreadable(&pipeline->unreadable, archive_error_string(disk),
+                        "left out", "未收入", archive_errno(disk));
+        return 0;
+    }
+    set_archive_error(error_buffer, error_capacity, "archive_read_next_header", disk);
+    return -1;
+}
 
 /* The directories above the one being listed, innermost first, by identity. Only -h reads
  * it: a link that leads back to one of these is stored as a link instead of being followed
@@ -918,10 +988,13 @@ static int add_sorted_tree(sorted_walk *walk, const char *path, const sorted_chi
             entry = NULL;
             break;
         }
-        if (status < ARCHIVE_OK) {
-            set_archive_error(walk->error_buffer, walk->error_capacity,
-                              "archive_read_next_header", walk->disk);
-            goto close_reader;
+        status = next_header_action(status, walk->disk, walk->pipeline,
+                                    walk->error_buffer, walk->error_capacity);
+        if (status < 0) goto close_reader;
+        if (status == 0) {
+            archive_entry_free(entry);
+            entry = NULL;
+            continue;
         }
 
         /* A directory reached from its parent was already asked about there.
@@ -1148,9 +1221,12 @@ static int add_path(zip_pipeline *pipeline,
             entry = NULL;
             break;
         }
-        if (status < ARCHIVE_OK) {
-            set_archive_error(error_buffer, error_capacity, "archive_read_next_header", disk);
-            goto cleanup;
+        status = next_header_action(status, disk, pipeline, error_buffer, error_capacity);
+        if (status < 0) goto cleanup;
+        if (status == 0) {
+            archive_entry_free(entry);
+            entry = NULL;
+            continue;
         }
 
         if (skip_entry(entry, archive_id, verbose, is_excluded)) {
@@ -1380,6 +1456,20 @@ int swift_tar_zip_create(const char *archive_path,
         }
     }
     if (pipeline_drain(&pipeline) != 0) goto cleanup;
+    /* Everything readable is written; the ZIP is finished in cleanup either way (its central
+     * directory is written by archive_write_free), so a run that left entries out still
+     * leaves a complete archive and exits 1, as the tar path does.
+     * 讀得到的都已寫出；ZIP 不論如何都在 cleanup 完成收尾（中央目錄由 archive_write_free
+     * 寫出），所以略過了項目的執行仍會留下完整的封存並以 1 結束，與 tar 路徑相同。 */
+    if (pipeline.unreadable > 0) {
+        if (error_buffer != NULL && error_capacity > 0) {
+            snprintf(error_buffer, error_capacity,
+                     "%ld unreadable item(s) left out; the archive holds the rest / "
+                     "有 %ld 項讀不到而未收入；封存含其餘內容",
+                     pipeline.unreadable, pipeline.unreadable);
+        }
+        goto cleanup;
+    }
     result = 0;
 
 cleanup:

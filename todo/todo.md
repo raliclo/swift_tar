@@ -4436,7 +4436,7 @@ suite passes (`test_no_lzfse` could not run, unrelated, see the next entry); the
 cross build compiles without warnings. The Windows branch still needs building and testing on
 Windows.
 
-## `--zip` 遇到讀不到的目錄或檔案時中止，留下空的或不完整的 zip ▸ 🔴 未修 2026-10-22 / `--zip` stops at an unreadable directory or file, leaving an empty or partial zip ▸ open
+## `--zip` 遇到讀不到的目錄或檔案時中止，留下空的或不完整的 zip ▸ 🟢 已修 2026-10-22（macOS；Windows 待驗）/ `--zip` stops at an unreadable directory or file, leaving an empty or partial zip ▸ fixed (Windows to verify)
 
 tar 路徑修好之後，`--zip` 是唯一仍不同的建立路徑。對同一棵樹（`src/locked` 為 000）：
 `swift_tar: I/O error: archive_read_next_header: src/locked: Couldn't visit directory`，rc 1，留下的 zip
@@ -4453,6 +4453,27 @@ After the tar fix, `--zip` is the one create path still different: on the same t
 where `write_entry_header` in the same file already reports and skips ARCHIVE_FAILED. The data of
 an unreadable file is read inside the parallel compression pipeline, which needs looking at too,
 and the skip count has to reach Swift for the exit status.
+
+修法（同 tar 路徑的「跟 bsdtar 一樣」）：`next_header_action` 統一處理三個走訪迴圈的
+`archive_read_next_header2` 回傳——只有 ARCHIVE_FATAL 結束整次執行；ARCHIVE_FAILED／RETRY（例如
+`Couldn't visit directory`）回報、計數、略過，libarchive 下一次呼叫會繼續走訪其餘部分；ARCHIVE_WARN
+說出原因並照常使用該項目。一般檔案：單執行緒的 `write_entry` 改為先開檔、再寫標頭；平行路徑的工作執行緒
+開檔失敗時標成 `unreadable`，寫出端回報並略過，不再結束整次執行。略過數記在 pipeline，ZIP 照常收尾
+（中央目錄由 archive_write_free 寫出）後，回傳與 tar 路徑相同的訊息，Swift 端以 1 結束。
+`test_unreadable.zsh` 新增排序、`--zip-unsorted`、`-n 1` 三條路徑各 3 項：修正後 25／0，0.1.1 為 7／18。
+unsorted 走訪對讀不到的檔案用 libarchive 的措辭（`Can't open 'c.txt'`，只有檔名），仍有回報與計數。
+
+Fix, the same "as bsdtar does": `next_header_action` handles what `archive_read_next_header2`
+returns in all three walk loops -- only ARCHIVE_FATAL ends the run; ARCHIVE_FAILED/RETRY (e.g.
+`Couldn't visit directory`) is reported, counted and skipped, and libarchive carries on with the
+rest on the next call; ARCHIVE_WARN is said and the entry used. Regular files: the one-thread
+`write_entry` opens the file before writing its header, and a worker that cannot open its file
+marks the job `unreadable`, which the writer reports and skips instead of ending the run. The
+count lives in the pipeline; once the ZIP is finished (its central directory is written by
+archive_write_free), the same message as the tar path is returned and Swift exits 1.
+`test_unreadable.zsh` gains three checks for each of sorted, `--zip-unsorted` and `-n 1`: 25/0
+after, 7/18 on 0.1.1. The unsorted walk names an unreadable file in libarchive's words (`Can't
+open 'c.txt'`, base name only), still reported and counted.
 
 ## `test_no_lzfse.zsh` 以 `--install` 覆寫 `/opt/homebrew/bin/swift_tar` ▸ 🟢 已修 2026-10-22 / `test_no_lzfse.zsh` installs over `/opt/homebrew/bin/swift_tar` ▸ fixed
 

@@ -464,10 +464,33 @@ That last row is a separate attack from the first: an archive can carry a symlin
 contains `..` once the link is resolved. Symlinks that do not lead out of the
 extraction target are unaffected and extract normally.
 
-Nothing an archive can name will be written above the extraction directory. Note
-that a skipped entry does not change the exit code — the run still ends 0 — so a
-script extracting an untrusted archive should read stderr, or compare the
-extracted tree against `-t`, rather than trusting the status alone.
+Nothing an archive can name will be written above the extraction directory. A
+skipped entry **does** change the exit code: `-x` reports the count and exits
+non-zero at the end of the run, because `--strict` is the default. Every other
+member is still extracted. See [Exit status](#exit-status).
+
+> **Corrected 2026-10-22.** This paragraph used to read *"a skipped entry does not
+> change the exit code — the run still ends 0 — so a script extracting an untrusted
+> archive should read stderr, or compare the extracted tree against `-t`, rather
+> than trusting the status alone."* That was written before `--strict` became the
+> default on 2026-10-08 and had been contradicting the `--strict` row of the
+> [options table](#options) ever since. Measured on 2026-10-22, an archive holding
+> `../escape.txt` plus `good.txt`:
+> `skipping unsafe path '../escape.txt'` → `1 member(s) skipped; pass --no-strict to
+> exit 0 anyway` → **exit 1**. The wrong text is kept here because of what it was
+> wrong *about*: a paragraph whose whole purpose was "do not trust the exit status"
+> was itself the reason to distrust it, and it survived two weeks looking like
+> security advice. Reading stderr is still good practice — it is the only way to
+> learn *which* member was dropped — but it is no longer the only signal.
+>
+> **2026-10-22 更正。** 本段原文為「a skipped entry does not change the exit code —
+> the run still ends 0」，寫於 `--strict` 於 2026-10-08 成為預設之前，自此一直與
+> [選項表](#options)中 `--strict` 那一列互相矛盾。2026-10-22 實測，封存含
+> `../escape.txt` 與 `good.txt`：`skipping unsafe path '../escape.txt'` →
+> `1 member(s) skipped; pass --no-strict to exit 0 anyway` → **exit 1**。保留錯誤原
+> 文是因為它錯的對象：一個通篇在教人「不要只信退出碼」的段落，自己正是不該被相信的
+> 那一段，而它以安全建議的外觀存活了兩週。讀 stderr 仍是好習慣——那是唯一能知道*哪個*
+> 成員被丟掉的途徑——但它已不再是唯一的訊號。
 
 **Which entry types are stored and restored.** Regular files, directories,
 symlinks, hardlinks and FIFOs. A FIFO is included because `mkfifo` needs no
@@ -791,6 +814,29 @@ Two consequences on extraction, neither of which needs a flag:
 
 The cost is duplication: several links pointing at one directory each store its
 contents again, and a link out of the tree pulls that content into the archive.
+
+**On Windows this works for WSL/MSYS links too**, which it did not before
+2026-10-22. `ln -s` under WSL leaves an `IO_REPARSE_TAG_LX_SYMLINK` reparse point,
+and **NT will not traverse one at all** — `cmd` lists it as `<JUNCTION> name [...]`
+with an empty target and `type` on it fails with "The file cannot be accessed by the
+system". `-h` therefore has to resolve such a link itself and read through the
+resolved path while still storing the member under the link's own name. Measured on
+an LX link `dlink -> realdir`: `./ ./dlink/ ./dlink/f.txt ./realdir/ ./realdir/f.txt`
+— the same five members GNU tar stores, where before the fix the link's whole
+subtree was reported as unfollowable and dropped. A genuinely dangling LX link is
+still reported and skipped, and an LX link pointing back up its own path is still
+caught as a cycle. See [bugs/bsdtar-bug.md](bugs/bsdtar-bug.md) for how the two
+reference implementations handle the same links — neither does so safely.
+
+**在 Windows 上這對 WSL／MSYS 連結同樣有效**，2026-10-22 之前並非如此。WSL 下的 `ln -s`
+留下的是 `IO_REPARSE_TAG_LX_SYMLINK` reparse point，而 **NT 完全不穿過這種連結**——`cmd`
+會把它列成 `<JUNCTION> name [...]`、目標為空，對它執行 `type` 得到「The file cannot be
+accessed by the system」。因此 `-h` 必須自行解析該連結、經由解析後的路徑讀取，同時仍把成員
+存在連結自己的名稱之下。以 LX 連結 `dlink -> realdir` 實測：
+`./ ./dlink/ ./dlink/f.txt ./realdir/ ./realdir/f.txt`——與 GNU tar 存下的五個成員相同，而
+修正前該連結的整棵子樹會被回報為無法跟隨並丟棄。真正斷掉的 LX 連結仍會被回報並略過，指回
+自身路徑的 LX 連結仍會被判定為迴圈。兩個參照實作如何處理同一批連結，見
+[bugs/bsdtar-bug.md](bugs/bsdtar-bug.md)——兩者都不安全。
 
 ### Which way `-f` points
 

@@ -1,4 +1,4 @@
-INFO: platform  = MINGW64_NT-10.0-26200
+INFO: platform  = MINGW64_NT-10.0-26300
 INFO: swift_tar = release\swift_tar.exe
 INFO: bsdtar    = C:\Windows\System32\tar.exe
 SKIP: hardlink/symlink fixture disabled by default; rerun with EXTENDED_ENTRIES=1

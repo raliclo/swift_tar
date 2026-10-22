@@ -1,7 +1,7 @@
 # swift_tar parallel extraction: correctness
-date      : 2026-08-19T09:28:46Z
-swift_tar : swift_tar 20260819-170618
-host      : MINGW64_NT-10.0-26200 3.6.10-8fbd9808.x86_64 x86_64
+date      : 2026-10-22T13:15:28Z
+swift_tar : swift_tar 0.1.2 (v0.1.1-19-g08adeb75) 20261022-211307
+host      : MINGW64_NT-10.0-26300 3.6.11-00eb8435.x86_64 x86_64
 -n values : 1 2 8 16   repeats: 3
 umask     : 022   (modes must survive it -- see the modes case)
 ## 1. tree fingerprint matches the reference, at every -n, every repeat
@@ -21,7 +21,7 @@ a regression to umask defaults.
 ## 3. symlink and hardlink
   [PASS] symlink points at its target -- got 'a.txt'
   [PASS] symlink was not overwritten by a queued write -- must still be a symlink, not a regular file
-  [PASS] hardlink shares an inode with its target -- inodes 15481123720420069 / 15481123720420069
+  [PASS] hardlink shares an inode with its target -- inodes 18858823440604601 / 18858823440604601
 ## 4. mtime is restored by the worker (futimens), not the main thread
   a.txt mtime 1577905445 (source 1577905445)
   [PASS] mtime preserved through the pool

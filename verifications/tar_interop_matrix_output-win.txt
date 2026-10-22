@@ -1,14 +1,14 @@
-[Info] date: 2026-08-19 17:00:49 TST
+[Info] date: 2026-10-22 21:15:12 TST
 [Info] platform: win
-[Info] host: MINGW64_NT-10.0-26200 3.6.10-8fbd9808.x86_64 x86_64
-[Info] swift_tar: swift_tar 20260819-164551
-[Info] corpus digest: 32267bf40e8aab6447debde175e764b980767e134d7ee2ad0221203eef5cf2d8
+[Info] host: MINGW64_NT-10.0-26300 3.6.11-00eb8435.x86_64 x86_64
+[Info] swift_tar: swift_tar 0.1.2 (v0.1.1-19-g08adeb75) 20261022-211307
+[Info] corpus digest: 36399e05b7792d3bf371b4ccb14baf0d4e6902d414ddba5d502e4eb4a64ee28e
 
 == reference tar implementations found / 現場找到的參照實作 ==
   gnutar  /usr/bin/tar
          tar (GNU tar) 1.35
   bsdtar  /c/Windows/System32/tar.exe
-         bsdtar 3.8.4 - libarchive 3.8.4 zlib/1.2.13.1-motley liblzma/5.8.1 bz2lib/1.0.8 libzstd/1.5.7 cng/2.0 libb2/bundled 
+         bsdtar 3.8.9 - libarchive 3.8.9 zlib/1.2.13.1-motley liblzma/5.8.3 bz2lib/1.0.8 libzstd/1.5.7 cng/2.0 libb2/bundled 
 
 == swift_tar writes, each reference reads / swift_tar 寫入，各參照讀取 ==
   PASS  gnutar reads swift_tar's plain archive

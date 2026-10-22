@@ -67,9 +67,13 @@ fi
 
 measure() {
     # Usage: measure encode|decode <n> <archive> [corpus-or-dest]
+    # PowerShell ends its output with CRLF; strip the CR so it does not land in
+    # the peakWS field of the record. pipefail keeps a PowerShell failure fatal.
+    # PowerShell 的輸出以 CRLF 結尾；去掉 CR，免得它被寫進紀錄的 peakWS 欄。
+    # pipefail 讓 PowerShell 失敗時仍會中止。
     powershell -NoProfile -ExecutionPolicy Bypass -File "$MEASURE_PS1" \
         -Mode "$1" -Exe "$SWIFT_TAR_BIN" -N "$2" -Archive "$3" \
-        $([ "$1" = "encode" ] && echo "-Corpus" || echo "-Dest") "$4"
+        $([ "$1" = "encode" ] && echo "-Corpus" || echo "-Dest") "$4" | tr -d '\r'
 }
 
 echo "[Info] corpus: $CORPUS ($(du -sh "$CORPUS" | awk '{print $1}'))"

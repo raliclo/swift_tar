@@ -25,26 +25,25 @@ Windows/MSYS 吞吐量使用 `encrypt_mbps_win.zsh`，輸出寫入
 MB/s；peak working set 仍由既有 Windows RSS 腳本負責。
 
 ```sh
-ROUNDS=1 ./encrypt_mbps_win.zsh ../../claw-code
+ROUNDS=3 ./encrypt_mbps_win.zsh ../../claw-code
 ```
 
-已記錄的 Windows 執行日期為 2026-08-18，使用 MINGW64_NT-10.0-26200 上的
-`release/swift_tar.exe` 版本 `20260818-074043`，語料為 logical input 1.40 GB
-的 `claw-code`。結果為 `--crypto-selftest` **44 PASS / 0 FAIL**，throughput
-腳本的正確性檢查亦全數通過。完整 tree `diff -r` 可用 `VERIFY_TREE=1` 開啟，
-但預設關閉，因為它會主導 Windows wall time——另注意此處 `rounds` 為 **1**，
-不像 macOS 是 3 次中位數。
+已記錄的執行使用 MINGW64_NT-10.0-26300 上的 `release/swift_tar.exe` 版本
+`0.1.2 (v0.1.1-19-g08adeb75)`，語料為 logical input 1.40 GB 的 `claw-code`，
+取 3 輪中位數。結果為 `--crypto-selftest` **51 PASS / 0 FAIL**，throughput
+腳本的正確性檢查 **8 PASS / 0 FAIL**。完整 tree `diff -r` 可用 `VERIFY_TREE=1`
+開啟，但預設關閉，因為它會主導 Windows wall time。
 
 下表每一格皆取自 [`encrypt_mbps_win_output.txt`](encrypt_mbps_win_output.txt)
 的 A、B 兩節。**請勿手動編輯**；每次執行後以該檔比對。
 
 | Codec | 建立 | 建立 + 加密 | 解出 | 解出 + 解密 |
 | --- | ---: | ---: | ---: | ---: |
-| 純 tar | 457 MB/s | 249 MB/s | 75 MB/s | 61 MB/s |
-| gzip | 217 MB/s | 184 MB/s | 64 MB/s | 50 MB/s |
-| zstd | 235 MB/s | 213 MB/s | 71 MB/s | 56 MB/s |
+| 純 tar | 328 MB/s | 166 MB/s | 159 MB/s | 86 MB/s |
+| gzip | 155 MB/s | 122 MB/s | 102 MB/s | 73 MB/s |
+| zstd | 180 MB/s | 152 MB/s | 139 MB/s | 90 MB/s |
 
-`--encrypt-only` 為 **263 MB/s**，`--decrypt-only` 為 **289 MB/s**。解密輸出
+`--encrypt-only` 為 **260 MB/s**，`--decrypt-only` 為 **259 MB/s**。解密輸出
 已驗證與原封存位元組一致；錯誤金鑰與竄改密文皆被拒絕。
 
 ### Windows 正確性 smoke test
@@ -57,8 +56,8 @@ ROUNDS=1 ./encrypt_mbps_win.zsh ../../claw-code
 ./encrypt_windows_correctness.zsh
 ```
 
-已記錄的執行使用 MINGW64_NT-10.0-26200 上的 `release/swift_tar.exe`
-版本 `20260816-045456`。結果為 `--crypto-selftest` **44 PASS / 0 FAIL**，
+已記錄的執行使用 MINGW64_NT-10.0-26300 上的 `release/swift_tar.exe`
+版本 `0.1.2 (v0.1.1-19-g08adeb75)`。結果為 `--crypto-selftest` **51 PASS / 0 FAIL**，
 CLI 子集 **6 PASS / 0 FAIL**：plain tar、gzip、zstd 的加密建立／解出往返、
 `--encrypt-only`／`--decrypt-only` 位元組一致、錯誤金鑰拒絕與竄改拒絕。
 
@@ -251,21 +250,21 @@ codec 經由專用的 `DispatchQueue` pipe pump，並以同步 `readData(ofLengt
 
 | `-n` | Encode peak WS | Decode peak WS |
 | --- | ---: | ---: |
-| 4 | 55.6MB | 45.0MB |
-| 8 | 75.5MB | 42.9MB |
-| 12 | 93.1MB | 44.4MB |
-| 16 | 113.9MB | 44.4MB |
-| 20 | 139.8MB | 43.0MB |
-| 24 | 150.7MB | 42.6MB |
-| 28 | 161.0MB | 43.3MB |
-| 32 | 176.7MB | 44.7MB |
-| 36 | 195.8MB | 44.0MB |
-| 40 | 208.0MB | 44.1MB |
+| 4 | 61.9MB | 44.7MB |
+| 8 | 80.3MB | 45.3MB |
+| 12 | 102.7MB | 44.7MB |
+| 16 | 117.5MB | 46.6MB |
+| 20 | 134.1MB | 45.8MB |
+| 24 | 146.3MB | 45.6MB |
+| 28 | 162.1MB | 46.5MB |
+| 32 | 176.9MB | 45.1MB |
+| 36 | 189.6MB | 45.4MB |
+| 40 | 191.2MB | 47.1MB |
 
-encode 呈現預期的線性 `-n` 關係，decode 則穩定維持約 43–45MB。
+encode 呈現預期的線性 `-n` 關係，decode 則穩定維持約 45–47MB。
 
-完整掃描中 encode 為 7.2–15.6 秒；正常平行平台區（`-n 12..40`）為 7.2–7.8 秒，
-接近 macOS 的 4.6–8.2 秒。Decode 為 9.7–11.0 秒，慢於 macOS 的 3.3–4.5 秒，
+完整掃描中 encode 為 8.2–19.5 秒；正常平行平台區（`-n 12..40`）為 8.2–8.4 秒，
+接近 macOS 的 4.6–8.2 秒。Decode 為 13.4–13.8 秒，慢於 macOS 的 3.3–4.5 秒，
 因此 Windows 解出與檔案 I/O 成本仍是另一個最佳化目標。
 
 ### 副檔名相容性
@@ -280,9 +279,9 @@ encode 呈現預期的線性 `-n` 關係，decode 則穩定維持約 43–45MB�
 - 在 macOS 上，TGZ 的記憶體用量與 LZFSE 格式相當或更低。預設 `-n`
   不需調整；需要時仍可降低 `-n`，以 encode 速度換取更低記憶體
   （`n=4` = 115MB，時間增加 75%）。
-- 在 Windows 上，native zlib 將 TGZ encode RSS 維持在 56–208MB
-  （`-n 4–40`，線性），decode RSS 約 43–45MB，且不受 `-n` 影響。
-- 使用靜態 zlib 時，平行 encode 為 7.2–7.8 秒；decode 為 9.7–11.0 秒，仍是
+- 在 Windows 上，native zlib 將 TGZ encode RSS 維持在 62–191MB
+  （`-n 4–40`，線性），decode RSS 約 45–47MB，且不受 `-n` 影響。
+- 使用靜態 zlib 時，平行 encode 為 8.2–8.4 秒；decode 為 13.4–13.8 秒，仍是
   Windows 特定的最佳化目標。
 - `swift_tar -test -debug` 涵蓋建立端 `-C`、native ZSTD、兩種 Windows 寫入
   後端與系統 tar 雙向互通。

@@ -1,11 +1,11 @@
-[Info] date / 日期: 2026-08-18 09:18:48 TST
-[Info] os: MINGW64_NT-10.0-26200 3.6.10-8fbd9808.x86_64
-[Info] host / 主機: MINGW64_NT-10.0-26200 Ralic-W11 3.6.10-8fbd9808.x86_64 2026-08-13 11:15 UTC x86_64 Msys
-[Info] swift_tar: /c/Users/lowei/proj/lzfse2/swift_tar/release/swift_tar.exe (swift_tar 20260818-074043)
+[Info] date / 日期: 2026-10-22 23:20:50 TST
+[Info] os: MINGW64_NT-10.0-26300 3.6.11-00eb8435.x86_64
+[Info] host / 主機: MINGW64_NT-10.0-26300 Ralic-W11 3.6.11-00eb8435.x86_64 2026-10-16 10:03 UTC x86_64 Msys
+[Info] swift_tar: /c/Users/lowei/proj/lzfse2/swift_tar/release/swift_tar.exe (swift_tar 0.1.2 (v0.1.1-19-g08adeb75) 20261022-211307)
 [Info] corpus / 語料: /c/Users/lowei/proj/lzfse2/claw-code
 [Info] regular files / 一般檔案: 5403
 [Info] logical input / 邏輯輸入: 1402916995 bytes (1402.92 MB)
-[Info] rounds / 輪數: 1 (median reported / 取中位數)
+[Info] rounds / 輪數: 3 (median reported / 取中位數)
 [Info] verify tree / 完整 tree 比對: 0 (default 0 for Windows throughput / Windows 吞吐量預設關閉)
 [Info] key / 金鑰: 64-byte keyfile (no scrypt / 不含 scrypt KDF)
 
@@ -13,6 +13,13 @@
 PASS: ChaCha20 block (RFC 8439 2.3.2)
 PASS: ChaCha20 encrypt (RFC 8439 2.4.2)
 PASS: Poly1305 (RFC 8439 2.5.2)
+PASS: Poly1305 edge #5 (RFC 8439 A.3)
+PASS: Poly1305 edge #6 (RFC 8439 A.3)
+PASS: Poly1305 edge #7 (RFC 8439 A.3)
+PASS: Poly1305 edge #8 (RFC 8439 A.3)
+PASS: Poly1305 edge #9 (RFC 8439 A.3)
+PASS: Poly1305 edge #10 (RFC 8439 A.3)
+PASS: Poly1305 edge #11 (RFC 8439 A.3)
 PASS: ChaCha20-Poly1305 tag (RFC 8439 2.8.2)
 PASS: ChaCha20-Poly1305 round-trip
 PASS: ChaCha20-Poly1305 rejects tampering
@@ -55,34 +62,36 @@ PASS: parallel: empty: 16 encrypt/decrypt -n combinations round-trip
 PASS: container: keyfile round-trip
 PASS: container: wrong keyfile rejected
 -----------------------------------------
-crypto self-test — PASS: 44  FAIL: 0
+crypto self-test — PASS: 51  FAIL: 0
 
 == A) create/extract, plain vs encrypted ==
 codec            mode         real(s)       MB/s archive(bytes)
-plain-tar        create      3.068801     457.15     1407468032
-                 create+enc   5.643206     248.60     1407475157
-                 extract    18.782760      74.69              -
-                 extr+dec   23.165423      60.56              -
+plain-tar        create      4.277212     328.00     1413367296
+                 create+enc   8.461969     165.79     1413374442
+                 extract     8.823642     159.00              -
+                 extr+dec   16.360696      85.75              -
 PASS: plain-tar extracted file count matches source
-gzip             create      6.471568     216.78      491317355
-                 create+enc   7.637468     183.69      491319902
-                 extract    21.888995      64.09              -
-                 extr+dec   27.939425      50.21              -
+gzip             create      9.054414     154.94      491611206
+                 create+enc  11.476139     122.25      491613753
+                 extract    13.806165     101.62              -
+                 extr+dec   19.279595      72.77              -
 PASS: gzip extracted file count matches source
-zstd             create      5.965589     235.17      400822781
-                 create+enc   6.591783     212.83      400824866
-                 extract    19.864097      70.63              -
-                 extr+dec   24.996143      56.13              -
+zstd             create      7.797805     179.91      401498391
+                 create+enc   9.227976     152.03      401500476
+                 extract    10.072528     139.28              -
+                 extr+dec   15.548169      90.23              -
 PASS: zstd extracted file count matches source
 
 == B) --encrypt-only / --decrypt-only on an existing .tar ==
 phase               real(s)       MB/s  output(bytes)
 PASS: encrypt-only/decrypt-only byte-for-byte round 1
-encrypt-only       5.337054     262.86     1407475157
-decrypt-only       4.846293     289.48     1407468032
-[Info] size overhead / 大小開銷: 7125 bytes (0.0005%), = 48B header + 21B per 4 MiB chunk
+PASS: encrypt-only/decrypt-only byte-for-byte round 2
+PASS: encrypt-only/decrypt-only byte-for-byte round 3
+encrypt-only       5.400715     259.77     1413374442
+decrypt-only       5.411327     259.26     1413367296
+[Info] size overhead / 大小開銷: 7146 bytes (0.0005%), = 48B header + 21B per 4 MiB chunk
 PASS: wrong key is rejected
 PASS: tampered ciphertext is rejected
 
-SUMMARY: PASS=6 FAIL=0
+SUMMARY: PASS=8 FAIL=0
 [Done] output / 輸出: /c/Users/lowei/proj/lzfse2/swift_tar/verifications/encrypt_mbps_win_output.txt

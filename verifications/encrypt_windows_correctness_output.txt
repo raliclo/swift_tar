@@ -1,13 +1,20 @@
 [Info] blob: random (no sampled corpus)
-[Info] date: 2026-08-16 04:59:43 TST
-[Info] os: MINGW64_NT-10.0-26200 3.6.10-8fbd9808.x86_64
-[Info] uname: MINGW64_NT-10.0-26200 Ralic-W11 3.6.10-8fbd9808.x86_64 2026-07-31 07:26 UTC x86_64 Msys
-[Info] swift_tar: swift_tar 20260816-045456
+[Info] date: 2026-10-22 21:19:44 TST
+[Info] os: MINGW64_NT-10.0-26300 3.6.11-00eb8435.x86_64
+[Info] uname: MINGW64_NT-10.0-26300 Ralic-W11 3.6.11-00eb8435.x86_64 2026-10-16 10:03 UTC x86_64 Msys
+[Info] swift_tar: swift_tar 0.1.2 (v0.1.1-19-g08adeb75) 20261022-211307
 
 == crypto self-test ==
 PASS: ChaCha20 block (RFC 8439 2.3.2)
 PASS: ChaCha20 encrypt (RFC 8439 2.4.2)
 PASS: Poly1305 (RFC 8439 2.5.2)
+PASS: Poly1305 edge #5 (RFC 8439 A.3)
+PASS: Poly1305 edge #6 (RFC 8439 A.3)
+PASS: Poly1305 edge #7 (RFC 8439 A.3)
+PASS: Poly1305 edge #8 (RFC 8439 A.3)
+PASS: Poly1305 edge #9 (RFC 8439 A.3)
+PASS: Poly1305 edge #10 (RFC 8439 A.3)
+PASS: Poly1305 edge #11 (RFC 8439 A.3)
 PASS: ChaCha20-Poly1305 tag (RFC 8439 2.8.2)
 PASS: ChaCha20-Poly1305 round-trip
 PASS: ChaCha20-Poly1305 rejects tampering
@@ -50,7 +57,7 @@ PASS: parallel: empty: 16 encrypt/decrypt -n combinations round-trip
 PASS: container: keyfile round-trip
 PASS: container: wrong keyfile rejected
 -----------------------------------------
-crypto self-test — PASS: 44  FAIL: 0
+crypto self-test — PASS: 51  FAIL: 0
 [Info] crypto self-test rc: 0
 
 == Windows CLI correctness subset ==

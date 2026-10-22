@@ -27,15 +27,15 @@ only. Peak working set is intentionally left to the existing Windows RSS
 scripts.
 
 ```sh
-ROUNDS=1 ./encrypt_mbps_win.zsh ../../claw-code
+ROUNDS=3 ./encrypt_mbps_win.zsh ../../claw-code
 ```
 
-The recorded Windows run is dated 2026-08-18 and used `release/swift_tar.exe`
-version `20260818-074043` on MINGW64_NT-10.0-26200 with `claw-code` at 1.40 GB
-logical input. It passed `--crypto-selftest` (**44 PASS / 0 FAIL**) and the
-throughput script's correctness checks. Full tree `diff -r` is available with
-`VERIFY_TREE=1`, but is disabled by default because it dominates Windows wall
-time — note that `rounds` is **1** here, not a median of 3 as on macOS.
+The recorded run used `release/swift_tar.exe` version
+`0.1.2 (v0.1.1-19-g08adeb75)` on MINGW64_NT-10.0-26300 with `claw-code` at
+1.40 GB logical input, median of 3 rounds. It passed `--crypto-selftest`
+(**51 PASS / 0 FAIL**) and the throughput script's correctness checks
+(**8 PASS / 0 FAIL**). Full tree `diff -r` is available with `VERIFY_TREE=1`,
+but is disabled by default because it dominates Windows wall time.
 
 Every figure below is section A and B of
 [`encrypt_mbps_win_output.txt`](encrypt_mbps_win_output.txt). Do not edit this
@@ -43,11 +43,11 @@ table by hand; diff it against that file after each run.
 
 | Codec | create | create + encrypt | extract | extract + decrypt |
 | --- | ---: | ---: | ---: | ---: |
-| plain tar | 457 MB/s | 249 MB/s | 75 MB/s | 61 MB/s |
-| gzip | 217 MB/s | 184 MB/s | 64 MB/s | 50 MB/s |
-| zstd | 235 MB/s | 213 MB/s | 71 MB/s | 56 MB/s |
+| plain tar | 328 MB/s | 166 MB/s | 159 MB/s | 86 MB/s |
+| gzip | 155 MB/s | 122 MB/s | 102 MB/s | 73 MB/s |
+| zstd | 180 MB/s | 152 MB/s | 139 MB/s | 90 MB/s |
 
-`--encrypt-only` ran at **263 MB/s** and `--decrypt-only` at **289 MB/s**. The
+`--encrypt-only` ran at **260 MB/s** and `--decrypt-only` at **259 MB/s**. The
 decrypted output was verified byte-identical to the original archive; wrong-key
 and tampered-ciphertext inputs were rejected.
 
@@ -61,8 +61,9 @@ for the release executable. It writes
 ./encrypt_windows_correctness.zsh
 ```
 
-The recorded run used `release/swift_tar.exe` version `20260816-045456` on
-MINGW64_NT-10.0-26200. It passed `--crypto-selftest` (**44 PASS / 0 FAIL**) and the
+The recorded run used `release/swift_tar.exe` version
+`0.1.2 (v0.1.1-19-g08adeb75)` on MINGW64_NT-10.0-26300. It passed
+`--crypto-selftest` (**51 PASS / 0 FAIL**) and the
 CLI subset (**6 PASS / 0 FAIL**): encrypted create/extract round-trips for
 plain tar, gzip and zstd, byte-for-byte `--encrypt-only` / `--decrypt-only`,
 wrong-key rejection, and tamper rejection.
@@ -281,23 +282,23 @@ across the full range:
 
 | `-n` | Encode peak WS | Decode peak WS |
 | --- | ---: | ---: |
-| 4 | 55.6MB | 45.0MB |
-| 8 | 75.5MB | 42.9MB |
-| 12 | 93.1MB | 44.4MB |
-| 16 | 113.9MB | 44.4MB |
-| 20 | 139.8MB | 43.0MB |
-| 24 | 150.7MB | 42.6MB |
-| 28 | 161.0MB | 43.3MB |
-| 32 | 176.7MB | 44.7MB |
-| 36 | 195.8MB | 44.0MB |
-| 40 | 208.0MB | 44.1MB |
+| 4 | 61.9MB | 44.7MB |
+| 8 | 80.3MB | 45.3MB |
+| 12 | 102.7MB | 44.7MB |
+| 16 | 117.5MB | 46.6MB |
+| 20 | 134.1MB | 45.8MB |
+| 24 | 146.3MB | 45.6MB |
+| 28 | 162.1MB | 46.5MB |
+| 32 | 176.9MB | 45.1MB |
+| 36 | 189.6MB | 45.4MB |
+| 40 | 191.2MB | 47.1MB |
 
 Encode follows the expected linear `-n` relationship, while decode stays flat
-around 43–45MB.
+around 45–47MB.
 
-Across the sweep, encode takes 7.2–15.6s; at the normal parallel plateau
-(`-n 12..40`) it is 7.2–7.8s, closely matching the macOS 4.6–8.2s range.
-Decode takes 9.7–11.0s, slower than macOS's 3.3–4.5s. Windows extraction and
+Across the sweep, encode takes 8.2–19.5s; at the normal parallel plateau
+(`-n 12..40`) it is 8.2–8.4s, close to the macOS 4.6–8.2s range.
+Decode takes 13.4–13.8s, slower than macOS's 3.3–4.5s. Windows extraction and
 file-I/O overhead therefore remains a separate optimization target.
 
 ### Filename-extension compatibility
@@ -312,9 +313,9 @@ and `swift_tar -x` both succeeded. Use `.tgz` or `.tar.gz` for this output.
 - On macOS, TGZ memory usage is comparable to or below the LZFSE formats.
   Default `-n` needs no tuning; lower `-n` can still trade encode speed for
   memory (`n=4` = 115MB at +75% time).
-- On Windows, native zlib keeps TGZ encode RSS at 56–208MB (`-n 4–40`, linear)
-  and decode RSS at about 43–45MB flat.
-- With static zlib, parallel encode takes 7.2–7.8s. Decode takes 9.7–11.0s and
+- On Windows, native zlib keeps TGZ encode RSS at 62–191MB (`-n 4–40`, linear)
+  and decode RSS at about 45–47MB flat.
+- With static zlib, parallel encode takes 8.2–8.4s. Decode takes 13.4–13.8s and
   remains a Windows-specific optimization target.
 - `swift_tar -test -debug` covers create-side `-C`, native ZSTD, both Windows
   write backends and bidirectional system-tar interoperability.

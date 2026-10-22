@@ -2395,6 +2395,35 @@ private func parseTarNumber(_ field: ArraySlice<UInt8>) -> UInt64 {
     return v
 }
 
+/// `size` bytes rounded up to a whole number of 512-byte blocks, as an Int; nil when that
+/// arithmetic cannot be done. Callers turn nil into TarError.format, which is what a declared
+/// size no reader could satisfy is: a malformed header, not a reason to die.
+///
+/// `size` comes from parseTarNumber, so a base-256 field may carry up to UInt64.max and then
+/// `size + 511` overflows. Swift traps on that, and a 1.5 KB archive whose checksum verifies
+/// was enough to crash `-t` with an illegal instruction (exit 132, the 2026-10-22 review; the
+/// fixture's 12-byte size field is 80 00 00 00 followed by eight ff). A tar reader takes
+/// untrusted input by definition, so the padded length has to be computed, not assumed.
+///
+/// Returning the Int also makes `Int(size)` safe at the call sites: padded is size rounded UP,
+/// so if padded fits in an Int then size does too, and no caller needs its own check.
+///
+/// 把 `size` 位元組向上取整為 512 的倍數後以 Int 回傳；無法完成該運算時回 nil。呼叫端將 nil
+/// 轉為 TarError.format——一個沒有讀取器能滿足的宣告長度正是「標頭格式錯誤」，不是該當掉的理由。
+///
+/// `size` 來自 parseTarNumber，base-256 欄位可帶到 UInt64.max，此時 `size + 511` 會溢位。
+/// Swift 對此 trap，而一個校驗和正確的 1.5 KB 封存就足以讓 `-t` 以非法指令崩潰（exit 132，
+/// 2026-10-22 審查；夾具的 12 位元組 size 欄為 80 00 00 00 後接八個 ff）。tar 讀取器本質上就在
+/// 吃不可信的輸入，所以補齊後的長度必須算出來，不能假設。
+///
+/// 回傳 Int 也讓呼叫端的 `Int(size)` 變安全：padded 是 size 向上取整的結果，padded 放得進 Int
+/// 就代表 size 也放得進，呼叫端不需要各自再檢查一次。
+private func tarPaddedLength(_ size: UInt64) -> Int? {
+    let (sum, overflow) = size.addingReportingOverflow(511)
+    guard !overflow else { return nil }
+    return Int(exactly: (sum / 512) * 512)
+}
+
 // =================================================================
 // MARK: - Windows file identity (stat/lstat/symlink/link replacement)
 // MARK: - Windows 版檔案識別（取代 stat/lstat/symlink/link）
@@ -2551,14 +2580,46 @@ private func winStat(_ path: String) -> WinStat? {
 /// stat()-equivalent for -h: follow the link chain to what it finally names, at most 40
 /// hops (Linux's MAXSYMLINKS), and stat that. nil for a broken link or a chain too long.
 /// A relative destination is relative to the link's own directory, as on POSIX.
+///
+/// Also returns the path the CALLER must read through. For an all-native chain that is `path`
+/// itself, because NT traverses those: reading the link reads the target. For a chain with an LX
+/// hop it is the resolved path, because NT does not traverse those at all -- `type` on one gives
+/// "The file cannot be accessed by the system" (measured 2026-10-22). Without that distinction,
+/// teaching this function to resolve an LX link would have made -h store a member with the
+/// target's size and no readable bytes, which is worse than the skip it replaced.
+///
 /// 等同 stat()，供 -h 使用：沿連結鏈走到最終指向的對象再取其資訊，最多 40 層（同 Linux 的
 /// MAXSYMLINKS）。斷鏈或鏈過長時回傳 nil。相對的目的地以連結自身所在目錄為基準，同 POSIX。
-private func winStatFollowing(_ path: String) -> WinStat? {
+///
+/// 另外回傳呼叫端該用來讀取的路徑。全為原生連結的鏈回傳 `path` 本身，因為 NT 會穿過它們：讀連結
+/// 即讀到目標。鏈中含 LX 一跳時回傳解析後的路徑，因為 NT 完全不穿過那種連結——對它執行 `type` 得到
+/// 「The file cannot be accessed by the system」（2026-10-22 實測）。少了這個區分，光是讓本函式
+/// 解析得出 LX 連結，只會讓 -h 寫出一個帶著目標大小卻讀不到位元組的成員，比它取代掉的「略過」更糟。
+private func winStatFollowing(_ path: String) -> (st: WinStat, readPath: String)? {
     var p = path
+    var viaLX = false
     for _ in 0..<40 {
         guard let st = winStat(p) else { return nil }
-        if !st.isSymlink { return st }
-        guard let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: p) else { return nil }
+        if !st.isSymlink { return (st, viaLX ? p : path) }
+        // Whether NT can traverse this hop is decided by the tag, not by whether Foundation
+        // happened to read it, so the tag is what is tested.
+        // NT 能否穿過這一跳由 tag 決定，而非 Foundation 恰好讀不讀得出來，故以 tag 判定。
+        if winReparseTag(p) == IO_REPARSE_TAG_LX_SYMLINK_VALUE { viaLX = true }
+        // Foundation reads a native IO_REPARSE_TAG_SYMLINK but returns nil for an LX symlink
+        // (IO_REPARSE_TAG_LX_SYMLINK, what MSYS/WSL `ln -s` leaves behind), so winStat classified
+        // one as a link -- it checks the tag -- and this then could not read its target, and -h
+        // dropped the member from the archive with exit 0. winReadSymlinkTarget already parses
+        // both tags and add(path:) already falls back to it for the stored linkname; this is the
+        // same fallback, which -h was missing. Measured 2026-10-22: a valid LX symlink was absent
+        // from the archive (3 members where GNU tar stored 4) while the native one beside it was
+        // followed correctly.
+        // Foundation 讀得出原生 IO_REPARSE_TAG_SYMLINK，但對 LX symlink（IO_REPARSE_TAG_LX_SYMLINK，
+        // MSYS／WSL `ln -s` 留下的那種）回 nil。於是 winStat 會把它判為連結——它看的是 tag——而這裡
+        // 讀不出目標，-h 就把該成員從封存裡丟掉並以 0 結束。winReadSymlinkTarget 本來就解析兩種 tag，
+        // add(path:) 存 linkname 時也早已退回用它；此處補的就是 -h 漏掉的同一個後援。2026-10-22 實測：
+        // 一個有效的 LX symlink 不在封存裡（3 個成員，GNU tar 存了 4 個），而旁邊的原生連結跟隨正常。
+        guard let dest = (try? FileManager.default.destinationOfSymbolicLink(atPath: p))
+            ?? winReadSymlinkTarget(p) else { return nil }
         let u = Array(dest.utf8)
         let absolute = dest.hasPrefix("/") || dest.hasPrefix("\\")
             || (u.count >= 2 && u[1] == UInt8(ascii: ":"))
@@ -4339,12 +4400,32 @@ final class TarWriter {
         // -h: as in the POSIX branch, a followed link is then just its target and the
         // branches below need no change. Until 2026-10-07 this branch never looked at
         // dereference, so -h on Windows always stored the link itself.
+        // Reads below go through readPath, which differs from `path` only when the chain had an
+        // LX hop that NT cannot traverse. See winStatFollowing.
+        // 下方的讀取一律走 readPath；它只在鏈中含有 NT 無法穿過的 LX 一跳時與 `path` 不同。
+        // 詳見 winStatFollowing。
+        var readPath = path
         if dereference, st.isSymlink {
             guard let target = winStatFollowing(path) else {
                 eprint("swift_tar: skipping '\(name)': --dereference cannot follow it / 略過 '\(name)'：--dereference 無法跟隨")
                 return
             }
-            st = target
+            // A DIRECTORY reached through an LX hop is still skipped. The recursion at the end of
+            // this function derives the member name and the read path from one string, so
+            // descending through the resolved path would rename every member beneath it. Fixing
+            // that means separating name from read path through the whole walk, which is a larger
+            // change than this one; the file case -- the one the 2026-10-22 review reported and
+            // reproduced -- is fixed, and this limit is deliberate rather than accidental.
+            // 經由 LX 一跳抵達的「目錄」仍然略過。本函式末尾的遞迴以同一個字串同時推導成員名稱與
+            // 讀取路徑，若改走解析後的路徑，其下每個成員都會被改名。要修正那點必須把名稱與讀取路徑
+            // 在整趟走訪中分離，那是比本次更大的改動；檔案這一支——2026-10-22 審查所報告並重現的
+            // 那一支——已修好，而此限制是刻意的，不是疏漏。
+            if target.readPath != path, target.st.isDir {
+                eprint("swift_tar: skipping '\(name)': --dereference cannot follow it / 略過 '\(name)'：--dereference 無法跟隨")
+                return
+            }
+            st = target.st
+            readPath = target.readPath
         }
         // 迴圈偵測：同 POSIX 分支，只看目前遞迴堆疊上的祖先。
         // Cycle detection: as in the POSIX branch, ancestors on the current stack only.
@@ -4454,7 +4535,7 @@ final class TarWriter {
         try writeEntryHeader(name: name, mode: mode, uid: uid, gid: gid,
                              size: size, mtime: mtime, mtimeNanos: mtimeNanos,
                              typeflag: UInt8(ascii: "0"), linkname: "")
-        try writeContents(path, size: size, prefetched: prefetched)
+        try writeContents(readPath, size: size, prefetched: prefetched)
 #else
         var st = stat()
         // 跟隨模式用 stat：它解析最後一層，故 S_IFLNK 不會出現，下方的 switch 自然把
@@ -5048,8 +5129,17 @@ final class TarReader {
         var foldedWritten: [String: String] = [:]
 
         func skipData(_ size: UInt64) throws {
-            let padded = (size + UInt64(TAR_BLOCK) - 1) / UInt64(TAR_BLOCK) * UInt64(TAR_BLOCK)
-            guard try copyExactly(padded, to: nil) else {
+            // `+ TAR_BLOCK - 1` is the same overflow as `+ 511` in another spelling, which is why
+            // grepping for the literal 511 missed this site and the two scanners. This one is
+            // reached by -t on a regular file, by typeflag g, and by any member whose pax
+            // `size=` record overrode the header, so it is the widest of the three.
+            // `+ TAR_BLOCK - 1` 與 `+ 511` 是同一個溢位的另一種拼法，這也是用字面 511 搜尋時漏掉
+            // 本處與另兩個掃描器的原因。此處會由 -t 對一般檔案、typeflag g，以及任何以 pax `size=`
+            // 覆寫標頭長度的成員走到，是三者中涵蓋最廣的一處。
+            guard let padded = tarPaddedLength(size) else {
+                throw TarError.format("member size out of range / 成員長度超出範圍")
+            }
+            guard try copyExactly(UInt64(padded), to: nil) else {
                 throw TarError.format("truncated archive / 檔案不完整")
             }
         }
@@ -5107,7 +5197,16 @@ final class TarReader {
             var name = str(0..<100)
             let prefix = str(345..<500)
             if !prefix.isEmpty { name = prefix + "/" + name }
-            let mode = UInt32(parseTarNumber(h[100..<108]))
+            // UInt32(_:) traps on anything above UInt32.max, and the 8-byte mode field is
+            // base-256 capable, so it can carry one. The 2026-10-22 review's fixture holds
+            // 80 00 00 01 00 00 00 00 == 2^32, one past the limit, and crashed -t with an
+            // illegal instruction (exit 132) on an archive whose checksum verified.
+            // UInt32(_:) 遇到超過 UInt32.max 的值會 trap，而 8 位元組的 mode 欄支援 base-256，
+            // 帶得出這種值。2026-10-22 審查的夾具是 80 00 00 01 00 00 00 00 == 2^32，剛好超出
+            // 上限一，就讓一個校驗和正確的封存把 -t 以非法指令打掛（exit 132）。
+            guard let mode = UInt32(exactly: parseTarNumber(h[100..<108])) else {
+                throw TarError.format("mode field out of range / mode 欄位超出範圍")
+            }
             var size = parseTarNumber(h[124..<136])
             let headerMtime = parseTarNumber(h[136..<148])
             let typeflag = h[156]
@@ -5115,7 +5214,10 @@ final class TarReader {
 
             switch typeflag {
             case UInt8(ascii: "x"):     // pax extended header / pax 擴充標頭
-                guard let data = readExactly(Int((size + 511) / 512) * 512) else {
+                guard let padded = tarPaddedLength(size) else {
+                    throw TarError.format("pax header size out of range / pax 標頭長度超出範圍")
+                }
+                guard let data = readExactly(padded) else {
                     throw TarError.format("truncated pax header / pax 標頭不完整")
                 }
                 let records = data.prefix(Int(size))
@@ -5202,14 +5304,20 @@ final class TarReader {
                 try skipData(size)
                 continue
             case UInt8(ascii: "L"):     // GNU long name / GNU 長檔名
-                guard let data = readExactly(Int((size + 511) / 512) * 512) else {
+                guard let padded = tarPaddedLength(size) else {
+                    throw TarError.format("GNU longname size out of range / GNU 長檔名長度超出範圍")
+                }
+                guard let data = readExactly(padded) else {
                     throw TarError.format("truncated GNU longname / GNU 長檔名不完整")
                 }
                 gnuLongName = String(decoding: data.prefix(Int(size)), as: UTF8.self)
                     .trimmingCharacters(in: CharacterSet(["\0"]))
                 continue
             case UInt8(ascii: "K"):     // GNU long linkname / GNU 長連結名
-                guard let data = readExactly(Int((size + 511) / 512) * 512) else {
+                guard let padded = tarPaddedLength(size) else {
+                    throw TarError.format("GNU longlink size out of range / GNU 長連結名長度超出範圍")
+                }
+                guard let data = readExactly(padded) else {
                     throw TarError.format("truncated GNU longlink / GNU 長連結名不完整")
                 }
                 gnuLongLink = String(decoding: data.prefix(Int(size)), as: UTF8.self)
@@ -7691,7 +7799,12 @@ struct SwiftTarMain {
             let size = parseTarNumber(h[124..<136])
             let mtime = parseTarNumber(h[136..<148])
             let typeflag = h[156]
-            let dataBlocks = (size + UInt64(TAR_BLOCK) - 1) / UInt64(TAR_BLOCK) * UInt64(TAR_BLOCK)
+            // Same overflow as skipData's, in the -u/-r scanner. / 與 skipData 同一個溢位，位於
+            // -u/-r 的掃描器內。
+            guard let paddedData = tarPaddedLength(size) else {
+                throw TarError.format("member size out of range / 成員長度超出範圍")
+            }
+            let dataBlocks = UInt64(paddedData)
 
             switch typeflag {
             case UInt8(ascii: "x"), UInt8(ascii: "L"):
@@ -7886,7 +7999,14 @@ struct SwiftTarMain {
             let h = [UInt8](block)
             let size = parseTarNumber(h[124..<136])
             let typeflag = h[156]
-            let dataLen = Int((size + UInt64(TAR_BLOCK) - 1) / UInt64(TAR_BLOCK)) * TAR_BLOCK
+            // Same overflow as skipData's, in --delete's scanner. Here the `* TAR_BLOCK` after
+            // the Int conversion could overflow too, which tarPaddedLength's single Int result
+            // removes along with the addition.
+            // 與 skipData 同一個溢位，位於 --delete 的掃描器內。此處在 Int 轉換之後的
+            // `* TAR_BLOCK` 同樣可能溢位，tarPaddedLength 回傳單一 Int 結果即一併消除。
+            guard let dataLen = tarPaddedLength(size) else {
+                throw TarError.format("member size out of range / 成員長度超出範圍")
+            }
 
             switch typeflag {
             case UInt8(ascii: "x"), UInt8(ascii: "L"), UInt8(ascii: "K"):

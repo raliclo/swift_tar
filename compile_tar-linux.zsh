@@ -206,6 +206,13 @@ if [[ -z "${CODECS_STATIC:-}" ]]; then
         log_msg "      本次建置的內容不是這四者的 submodule pin。"
     fi
 fi
+# version-linux.txt is untracked since ae1421b (.gitignore keeps it as the glibc dev
+# stamp), so a fresh checkout has none, and build_codecs.zsh refuses to run without it.
+# Seed it empty, as compile_tar-musl.zsh does; generate_version.zsh fills it in below.
+# version-linux.txt 自 ae1421b 起不再受追蹤（.gitignore 把它當作 glibc 開發戳記），新
+# checkout 裡沒有它，而 build_codecs.zsh 缺它就拒絕執行。比照 compile_tar-musl.zsh 先建
+# 一個空檔；下方的 generate_version.zsh 會補齊內容。
+[[ -f version-linux.txt ]] || : > version-linux.txt
 if [[ "$CODECS_STATIC" == 1 ]]; then
     command -v cmake >/dev/null 2>&1 || die "CODECS_STATIC=1 需要 cmake / requires cmake"
     CC="$CLANG" zsh ./build_codecs.zsh

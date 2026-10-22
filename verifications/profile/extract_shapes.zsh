@@ -127,7 +127,12 @@ ms() {
   printf "%.0f" $(( (t1-t0)*1000 ))
 }
 
-STAMP=$(sed -n 's/^swift_tar_version=//p' "$ROOT/version-$PLAT.txt" 2>/dev/null | sed -n '1p')
+# Check the file first: under pipefail a missing file ended the run silently here.
+# 先確認檔案存在：在 pipefail 下，檔案不存在會讓整支腳本在此靜默結束。
+STAMP=""
+if [[ -f $ROOT/version-$PLAT.txt ]]; then
+  STAMP=$(sed -n 's/^swift_tar_version=//p' "$ROOT/version-$PLAT.txt" | sed -n '1p')
+fi
 [[ -n $STAMP ]] || STAMP="(none)"
 LOADAVG=$(uptime | sed -n 's/.*averages*: *\([0-9.]*\).*/\1/p')
 

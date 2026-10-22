@@ -171,7 +171,9 @@ run() {
         # sed leaves the text unchanged without error when nothing matches, so count.
         got=$(grep -c "^let TAR_CHUNK_SIZE = $S << 20\$" $W/v$S/swift_tar.swift)
         (( got == 1 )) || die "$S MiB：常數替換失敗（命中 $got 行）"
+        # Both constants generate_version.zsh would write. / generate_version.zsh 會寫的兩個常數。
         print "let swiftTarBuildVersion = \"chunk-${S}MiB\"" > $W/v$S/ver.swift
+        print "let swiftTarIdentity = \"swift_tar chunk-${S}MiB\"" >> $W/v$S/ver.swift
         ( cd $ROOT && swiftc -O -swift-version 6 $W/cli.swift $W/v$S/ver.swift $W/v$S/swift_tar.swift \
               $W/rgb1.swift $W/crypto.swift \
               build/libarchive_zip_bridge.o build/libarchive-macos/libarchive/libarchive.a \

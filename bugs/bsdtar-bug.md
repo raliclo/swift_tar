@@ -13,6 +13,8 @@ Windows 上，觸發它不需要任何惡意：在 WSL 下跑一次普通的 `ln
 - `bsdtar 3.8.9 - libarchive 3.8.9` (`C:\Windows\System32\tar.exe`, the one Microsoft ships)
 - `tar (GNU tar) 1.35` (MSYS2)
 - `swift_tar 0.1.1 (v0.1.1-4-gc859c228)`
+- **Does not reproduce on macOS 27.2 with `bsdtar 3.5.3`** — see
+  [Scope](#scope-macos-does-not-reproduce-it)
 
 This is recorded here rather than in the README because it is a finding about the
 reference implementations, not about this tool. It is kept because it was the
@@ -255,20 +257,85 @@ measured.** Here the second measurement did not refine the first, it reversed it
 值得留下的是方法而非結論：**「參照實作是這樣做的」在只量過一個之前還不算事實。** 在此處，
 第二次量測並非補強第一次，而是推翻了它。
 
-## Scope of the measurement
+## Scope: macOS does not reproduce it
 
-**Windows only, one bsdtar build.** Everything above is `bsdtar 3.8.9` as shipped in
-`C:\Windows\System32\tar.exe`, meeting reparse points NT refuses to traverse. No
-claim is made about bsdtar on macOS or Linux, where LX reparse points do not exist
-and the `stat` failure that starts the sequence therefore cannot occur in this form.
-Whether the same walk-abort shows up there for a different unstattable entry — a
-file deleted mid-walk, a permission-denied directory — is **not yet measured**.
+**The walk-abort is specific to the Windows build.** Measured on macOS 27.2 / APFS,
+`bsdtar 3.5.3 - libarchive 3.7.4` (`/usr/bin/bsdtar`; `/usr/bin/tar` is the same
+binary, confirmed by `cmp`), against `gtar 1.35` from Homebrew. LX reparse points do
+not exist there, so the trigger had to be a different unstattable entry.
 
-**僅限 Windows，僅一個 bsdtar 版本。** 以上全部是 `C:\Windows\System32\tar.exe` 所附的
-`bsdtar 3.8.9`，遇上 NT 拒絕穿越的 reparse point。對 macOS 或 Linux 上的 bsdtar 不作任何
-主張——那些平台沒有 LX reparse point，故引發整串行為的 `stat` 失敗無法以此形式發生。同樣的
-走訪中止是否會在那裡因別種 stat 不到的項目出現（走訪途中被刪的檔案、權限不足的目錄），
-**尚未量測**。
+**走訪中止是 Windows 版本特有的。** 於 macOS 27.2／APFS 量測，`bsdtar 3.5.3 -
+libarchive 3.7.4`（`/usr/bin/bsdtar`；`/usr/bin/tar` 為同一個執行檔，以 `cmp` 確認），
+對照 Homebrew 的 `gtar 1.35`。那裡沒有 LX reparse point，故觸發條件必須換成別種 stat
+不到的項目。
+
+**The order caveat makes this stronger, not weaker.** APFS `readdir` order is not
+alphabetical — `ls -f` gave `mmm ccc ddd eee bbb ggg aaa fff` — and both tars walk in
+`readdir` order, so the bad entry came **first** and every sibling came after it. That
+is the worst case for the defect, and it still did not appear.
+
+**順序這個附帶條件讓結論更強而非更弱。** APFS 的 `readdir` 順序並非字典序——`ls -f` 得到
+`mmm ccc ddd eee bbb ggg aaa fff`——而兩個 tar 都依 `readdir` 順序走訪，故壞項目排在
+**第一個**，所有兄弟項目都在它之後。那是這個缺陷最壞的情況，而它仍未出現。
+
+### macOS, `chmod 000` directory `mmm/` between `aaa.txt` and `zzz.txt`
+
+| | rc | members |
+|---|---|---|
+| bsdtar 3.5.3 | 1 | `./` `./mmm/` `./aaa.txt` `./zzz.txt` — **`zzz.txt` survives** |
+| gtar 1.35 | 2 | `./` `./aaa.txt` `./zzz.txt` (`./mmm` dropped entirely) |
+
+bsdtar's stderr: `Couldn't list extended attributes: Permission denied`, `./mmm:
+Couldn't visit directory: Permission denied`, `Error exit delayed from previous
+errors.` — and here the phrase is accurate. Without `-h`, and via `/usr/bin/tar`,
+identical.
+
+### macOS, an unfollowable symlink under `-h`
+
+Two fixtures, 7 sibling files each: `mmm -> nowhere` (dangling, `lstat` works), and
+`mmm -> ../locked/f.txt` where `locked` is `chmod 000` (`stat` gives `EACCES`).
+
+| | rc | what happens to `mmm` |
+|---|---|---|
+| bsdtar 3.5.3 `-h` | **0** | **stored as a symlink** (`lrwx ./mmm -> nowhere`), silently |
+| gtar 1.35 `-h` | 1 / 2 | dropped, reported |
+| swift_tar `-h` | 0 | skipped, reported |
+
+All 7 siblings survive in every case. A third behaviour worth recording: **bsdtar's
+`-h` falls back to `lstat` and stores the link itself, with no message and exit 0.**
+`-h` asked it to dereference; it archived a symlink entry instead and said nothing.
+That is not data loss, but an archive built with `-h` is documented to contain no
+symlink entries at all, and a caller relying on that gets one anyway.
+
+全部 7 個兄弟項目在每一種情況下都存活。第三個值得記下的行為：**bsdtar 的 `-h` 會退回
+`lstat` 並存下連結本身，沒有任何訊息、退出 0。** `-h` 要求它解參照，它卻存了一個 symlink
+項目而且不作聲。這不是資料遺失，但以 `-h` 建立的封存按文件是完全不含 symlink 項目的，
+依賴這一點的呼叫者會拿到一個。
+
+### Still not measured
+
+- bsdtar on Linux.
+- A file **deleted mid-walk**, on any platform.
+- Whether the Windows walk-abort comes from the 3.8.9 build or from LX handling
+  specifically. The macOS run cannot separate those two, because it has neither.
+
+### The Windows equivalent of the macOS fixture fails differently
+
+For completeness: the `chmod 000` directory has no Windows analogue, because Windows
+does not enforce POSIX mode bits against the owner. Denying the directory with an ACL
+instead (`icacls mmm /deny <user>:(RD)`) blocks `winStat` as well as the listing, so
+`swift_tar` throws `cannot stat './mmm'` and the create aborts at **rc 1 with
+`./ ./aaa.txt`** — `zzz.txt` lost. That is this tool's documented create-failure
+behaviour (see [Exit status](../README.md#exit-status): a failed create leaves a valid
+archive holding the entries processed before it) and not the same defect, but it does
+mean the macOS fixture cannot be replayed on Windows as written.
+
+為完整起見：`chmod 000` 目錄在 Windows 上沒有對應物，因為 Windows 不對擁有者強制 POSIX
+mode 位元。改以 ACL 拒絕該目錄（`icacls mmm /deny <user>:(RD)`）會同時擋住 `winStat` 與
+列目錄，於是 `swift_tar` 擲出 `cannot stat './mmm'`，建立作業以 **rc 1、`./ ./aaa.txt`**
+中止——`zzz.txt` 遺失。那是本工具已文件化的建立失敗行為（見
+[Exit status](../README.md#exit-status)：失敗的建立會留下一個含先前已處理項目的有效封存），
+並非同一個缺陷，但它表示 macOS 那組測資無法照原樣在 Windows 上重播。
 
 ## Not reported upstream
 

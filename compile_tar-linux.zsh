@@ -507,10 +507,18 @@ fi
 # buildroot 設備上沒有 ldd——busybox 不提供，buildroot 也沒安裝 glibc 那份——而本段
 # 先前的版本在 `set -e` 下使用它，導致一次成功的建置在執行檔都已產出並跑過之後，
 # 仍以 rc=127 回報失敗。
-record_linked() {        # key  soname-prefix
-    local key="$1" pat="$2" soname real ver
-    soname=$(readelf -d release/swift_tar 2>/dev/null \
-        | awk -F'[][]' -v p="$pat" '/NEEDED/ && $2 ~ "^" p {print $2; exit}') || return 0
+record_linked() {        # key  soname-prefix (literal / 字面字串)
+    local key="$1" pat="$2" soname="" real ver out line
+    # Matched with zsh, not awk: the prefix is a literal string, so there is no
+    # escape processing to turn `\.` into "any character" (awk -v did that).
+    # 以 zsh 比對而非 awk：前綴是字面字串，不會有跳脫處理把 `\.` 變成「任意字元」
+    # （awk -v 就是這樣）。
+    out=$(readelf -d release/swift_tar 2>/dev/null) || return 0
+    for line in "${(@f)out}"; do
+        [[ $line == *'(NEEDED)'*"[$pat"* ]] || continue
+        soname=${${line#*\[}%%\]*}
+        break
+    done
     [[ -n "$soname" ]] || return 0
     real=$(readlink -f "$SYSROOT/lib/$soname" 2>/dev/null) || real=""
     [[ -n "$real" ]] || real="$soname (unresolved / 未解析)"
@@ -557,11 +565,11 @@ record_provenance() {
     strip+='|^libarchive_(so_version|path)='
     {
         grep -vE "$strip" "$version_file" || [ $? -eq 1 ]
-        [[ "$CODECS_STATIC" == 1 ]] || record_linked zlib       'libz\.so'
-        record_linked bzip2      'libbz2\.so'
-        [[ "$CODECS_STATIC" == 1 ]] || record_linked lz4        'liblz4\.so'
-        [[ "$CODECS_STATIC" == 1 ]] || record_linked xz         'liblzma\.so'
-        [[ "$CODECS_STATIC" == 1 ]] || record_linked zstd       'libzstd\.so'
+        [[ "$CODECS_STATIC" == 1 ]] || record_linked zlib       'libz.so'
+        record_linked bzip2      'libbz2.so'
+        [[ "$CODECS_STATIC" == 1 ]] || record_linked lz4        'liblz4.so'
+        [[ "$CODECS_STATIC" == 1 ]] || record_linked xz         'liblzma.so'
+        [[ "$CODECS_STATIC" == 1 ]] || record_linked zstd       'libzstd.so'
     } > "$tmp_version"
     mv "$tmp_version" "$version_file"
     log_msg "Recorded linked libraries in $version_file / 已將連結的函式庫記入 $version_file"

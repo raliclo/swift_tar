@@ -1,0 +1,60 @@
+swift_tar 0.1.2 release verification / 0.1.2 發布驗證
+tag v0.1.2 = 1290c3fe, swift_tar_source=a6fe6f6a5a50df766398da375441882b700a2330
+All four archives are public builds (lzfse2=excluded). / 四份封存皆為公開版（不含 LZFSE）。
+Collected 2026-10-23 from Mac M4, the aarch64 VM, Windows and WSL. / 2026-10-23 彙整自 Mac M4、aarch64 VM、Windows 與 WSL。
+
+== Archives / 封存 ==
+eeaf5923ef675e086f1dab10c13a4f6b6e6d0e3e7cb26f40ba020d25c358d530  swift_tar-0.1.2-linux-aarch64.tar.zst
+6308f3534df6a08c87f14f8fc0723d66b79d3fc74bab8384b467870cddde0114  swift_tar-0.1.2-linux-x86_64.tar.zst
+6d5a2a82586ec9f2f13c7c3eb9dfd6c5b8cc4c13979e7016fea60f18ff434f2e  swift_tar-0.1.2-macos-arm64.tar.zst
+f9acde96db07187c632051ca6cb9d7cfc02d622bedee2c62deeea5e27ffd6b7e  swift_tar-0.1.2-windows-x86_64.tar.zst
+
+== macos-arm64 (Mac M4, macOS 27.2) ==
+toolchain: swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)
+build warnings / 建置警告: 0
+release.zsh:
+swift_tar 0.1.2 (v0.1.2 / 1290c3fe) 20261023-121143
+verified: extracted, ran, round-tripped a .tar.gz, refused LZFSE / 已驗證：解開、執行、完成 .tar.gz 往返、拒絕 LZFSE
+test/ (same source a6fe6f6a): 30 scripts, 0 FAIL; PASS counts sum to 852
+  (849 from 25 scripts + 3 from test_record_zlib); exclude, same_permissions, touch_alias
+  print PASS without a count; test_linux_libarchive_source skips (Linux build only).
+test/（同一份原始碼 a6fe6f6a）：30 支，0 失敗；有計數者合計 852 通過。
+
+== linux-aarch64 (musl static, built on the Mac; run in the VM) ==
+toolchain: Apple Swift version 6.4 (swift-6.4-RELEASE), swift-6.4.0-RELEASE_static-linux-0.1.0
+build warnings / 建置警告: 0
+VM: ~/projWin/VM-test, hvf, kernel 7.3.0-dirty
+VERIFIED swift_tar-0.1.2-linux-aarch64.tar.zst
+  sha256  eeaf5923ef675e086f1dab10c13a4f6b6e6d0e3e7cb26f40ba020d25c358d530
+  version swift_tar 0.1.2 (v0.1.2 / 1290c3fe) 20261023-122311
+  machine Linux 7.3.0-dirty aarch64
+  checks  static, ran in an empty environment, .tar.gz round trip, LZFSE refused, --crypto-selftest, -test
+VERIFY_RC=0
+
+== linux-x86_64 (musl static, built on the Mac; run on WSL) ==
+toolchain: Apple Swift version 6.4 (swift-6.4-RELEASE), swift-6.4.0-RELEASE_static-linux-0.1.0
+build warnings / 建置警告: 0
+VERIFIED swift_tar-0.1.2-linux-x86_64.tar.zst
+  sha256  6308f3534df6a08c87f14f8fc0723d66b79d3fc74bab8384b467870cddde0114
+  version swift_tar 0.1.2 (v0.1.2 / 1290c3fe) 20261023-122325
+  machine Linux 6.18.54.1-microsoft-standard-WSL2 x86_64
+  checks  static, ran in an empty environment, .tar.gz round trip, LZFSE refused, --crypto-selftest, -test
+rc=0
+
+== windows-x86_64 (built and run on Windows) ==
+toolchain: Swift version 6.4.1 (swift-6.4.1-RELEASE), Target: x86_64-unknown-windows-msvc
+build warnings / 建置警告: 22 linker warnings (11 LNK4217, 11 LNK4286), the same set as 0.1.1
+release.zsh:
+swift_tar 0.1.2 (v0.1.2 / 1290c3fe) 20261023-144908
+verified: extracted, ran, round-tripped a .tar.gz, refused LZFSE / 已驗證：解開、執行、完成 .tar.gz 往返、拒絕 LZFSE
+--crypto-selftest: PASS: 51  FAIL: 0
+-test: 18 checks, all ✓; timing, 400 small files: foundation 0.51s / ucrt 0.25s
+test/: 30 scripts, all rc=0, TOTAL PASS 737 FAIL 0. Skipped on Windows: record_zlib (macOS
+  only), linux_libarchive_source (Linux build), same_permissions (no POSIX mode bits),
+  unreadable (chmod 000 does not deny access).
+test/：30 支皆 rc=0，合計 737 通過、0 失敗；上列 4 支在 Windows 上預期略過。
+test_no_lzfse leaves the full build in release/, so the 17 scripts after it were rerun on a
+rebuilt public binary (bvx3=0): same counts, all rc=0. The dist/ archive was packed before
+the tests and is unaffected.
+test_no_lzfse 結束時 release/ 留下完整版，因此排在它之後的 17 支以重建的公開版重跑：計數相同、
+皆 rc=0。dist/ 的封存在測試前已打包，不受影響。

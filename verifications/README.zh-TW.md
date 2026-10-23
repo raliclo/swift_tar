@@ -540,3 +540,19 @@ claw-code（1.4 GB，5,448 個檔案）：
   8.8 秒對 8.6 秒（各取最快一輪）。
 
 這次量測的限制：Windows 沒有量，它的建置也沒有多執行緒路徑。
+
+## 0.1.2 發布：四份封存各自在自己的平台上執行
+
+[`release_0.1.2_output.txt`](release_0.1.2_output.txt) 彙整了在 tag `v0.1.2`
+（`1290c3fe`）建出的四份公開版封存的驗證結果。每一份都在同平台、同架構的機器上實際執行：
+
+| 封存 | 建置於 | 執行於 | 結果 |
+|---|---|---|---|
+| macos-arm64 | Mac M4，Swift 6.4 | Mac M4 | `release.zsh` 驗證通過；test/ 0 失敗 |
+| linux-aarch64 | Mac（musl 交叉編譯），Swift 6.4 | aarch64 VM，kernel 7.3 | `verify_release.zsh` VERIFIED，rc=0 |
+| linux-x86_64 | Mac（musl 交叉編譯），Swift 6.4 | WSL2 x86_64 | `verify_release.zsh` VERIFIED，rc=0 |
+| windows-x86_64 | Windows，Swift 6.4.1 | Windows | `release.zsh` 驗證通過；加密自測 51/0；test/ 737/0 |
+
+`verify_release.zsh` 會核對 `.sha256`、確認執行檔是靜態連結、在空環境中執行、完成一次
+`.tar.gz` 往返、確認 LZFSE 被拒絕，並執行 `--crypto-selftest` 與 `-test`。macOS 與 Linux
+的建置沒有警告；Windows 建置有與 0.1.1 相同的 22 個連結器警告。

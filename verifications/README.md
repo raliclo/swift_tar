@@ -617,3 +617,21 @@ claw-code (1.4 GB, 5,448 files):
 
 Limits of this run: Windows was not measured, and its build has no threaded
 path.
+
+## Release 0.1.2: the four archives, each run on its own platform
+
+[`release_0.1.2_output.txt`](release_0.1.2_output.txt) collects the verification
+of the four public archives built at tag `v0.1.2` (`1290c3fe`). Each archive was
+run on a machine of its own platform and architecture:
+
+| Archive | Built on | Run on | Result |
+|---|---|---|---|
+| macos-arm64 | Mac M4, Swift 6.4 | Mac M4 | `release.zsh` verified; test/ 0 FAIL |
+| linux-aarch64 | Mac (musl cross), Swift 6.4 | aarch64 VM, kernel 7.3 | `verify_release.zsh` VERIFIED, rc=0 |
+| linux-x86_64 | Mac (musl cross), Swift 6.4 | WSL2 x86_64 | `verify_release.zsh` VERIFIED, rc=0 |
+| windows-x86_64 | Windows, Swift 6.4.1 | Windows | `release.zsh` verified; crypto 51/0; test/ 737/0 |
+
+`verify_release.zsh` checks the `.sha256`, that the binary is static, runs it
+in an empty environment, round-trips a `.tar.gz`, sees LZFSE refused, and runs
+`--crypto-selftest` and `-test`. The macOS and Linux builds had no warnings; the
+Windows build has the same 22 linker warnings as 0.1.1.

@@ -52,6 +52,17 @@ still stores NFC.
 
 ### 沒有 git 的原始碼包 / A source drop without git
 
+Windows 的 `patch/tool.zsh` 優先選 MSYS2 或 Git for Windows 的 `patch.exe`，跳過
+Perl、BusyBox 安裝目錄與 Scoop shim；找不到時明確失敗。macOS／Linux 使用 PATH 上的
+`patch`，同樣排除這些來源。測試與建置共用此選擇，不修改使用者的 PATH。
+雜湊工具使用 `sha256sum` 或 OpenSSL，不使用 Perl 寫的 `shasum`。
+
+On Windows, `patch/tool.zsh` prefers MSYS2 or Git for Windows' `patch.exe`, excluding
+Perl/BusyBox install directories and Scoop shims; it fails explicitly if none is found.
+macOS/Linux use patch from PATH with the same exclusions. Tests and builds share this
+selection without modifying the user's PATH. Hashing uses sha256sum or OpenSSL, not
+the Perl-based shasum.
+
 原始碼包沒有 `.git`，也可能落在完全沒有 git 的機器上（Linux VM 的 guest 就是）。那裡
 `apply_patches.zsh` 仍然可用：狀態由腳本自己比對 patch 的文字判斷——patch 新增的每一行都在
 檔案裡就是已套用；不全在、而它移除的每一行都還在，就是未套用；其餘為過期——`patch` 指令只

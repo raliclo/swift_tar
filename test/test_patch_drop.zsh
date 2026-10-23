@@ -32,7 +32,9 @@ pass=0; fail=0
 ok()  { echo "PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "FAIL: $1"; fail=$((fail + 1)); }
 
-command -v patch >/dev/null 2>&1 || { echo "SKIP: no patch command here"; exit 0; }
+. "$ROOT/patch/tool.zsh"
+PATCH_TOOL=$(swift_tar_patch_tool) || exit 1
+print -r -- "patch: $PATCH_TOOL"
 [ -f "$ROOT/libarchive/CMakeLists.txt" ] || { echo "SKIP: libarchive/ is not checked out"; exit 0; }
 
 TMP="$(mktemp -d)"
@@ -136,7 +138,7 @@ grep -q 'neither applies nor reverses' "$TMP/out" && [ "$rc" = 1 ] \
 # 編出來的 patch，免得上面的東西被重複計數。
 DUP="$TMP/dup"
 mkdir -p "$DUP/patch/demo" "$DUP/demo"
-cp "$ROOT/patch/apply_patches.zsh" "$DUP/patch/"
+cp "$ROOT/patch/apply_patches.zsh" "$ROOT/patch/tool.zsh" "$DUP/patch/"
 print -l 'int first(void) {' '    return 1;' '}' 'int second(void) {' '    int ret;' '    return 2;' '}' > "$DUP/demo/a.c"
 cp "$DUP/demo/a.c" "$DUP/a.c.orig"
 print -rl -- '--- a/a.c' '+++ b/a.c' '@@ -1,3 +1,4 @@' ' int first(void) {' '+    int ret;' '     return 1;' ' }' \
@@ -187,7 +189,7 @@ fi
 # 會在建置前停下來。
 NEW="$TMP/new"
 mkdir -p "$NEW/patch/demo" "$NEW/demo"
-cp "$ROOT/patch/apply_patches.zsh" "$NEW/patch/"
+cp "$ROOT/patch/apply_patches.zsh" "$ROOT/patch/tool.zsh" "$NEW/patch/"
 print -l 'int a;' > "$NEW/demo/a.c"
 print -rl -- '--- /dev/null' '+++ b/b.c' '@@ -0,0 +1,2 @@' '+int x;' '+int y;' \
   > "$NEW/patch/demo/0001-new-file.patch"

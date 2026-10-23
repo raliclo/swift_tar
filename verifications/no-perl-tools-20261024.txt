@@ -1,0 +1,71 @@
+=== patch selection ===
+C:/Program Files/Git/usr/bin/patch.exe
+=== patch regression ===
+patch: C:/Program Files/Git/usr/bin/patch.exe
+PASS: 0001-no-apple-nfd-normalisation.patch: no inserted line equals the line after the insertion
+PASS: 0002-zip-store-fifo.patch: no inserted line equals the line after the insertion
+PASS: 0003-zip-write-deflated.patch: no inserted line equals the line after the insertion
+PASS: unpatched drop: --check exits 1
+PASS: unpatched drop: every patch reported not applied
+PASS: --check changes nothing
+PASS: apply exits 0
+PASS: patched drop: --check exits 0
+PASS: apply changed every file the patches name
+PASS: revert exits 0
+PASS: after the round trip the drop is byte-identical to the submodule
+PASS: a file matching neither state is reported stale, exit 1
+PASS: a patch adding a line found elsewhere in the file is reported not applied
+PASS: and applying it changes the file
+PASS: after which --check exits 0
+SKIP: failed-apply case (Windows does not enforce POSIX write bits against the owner)
+PASS: a patch creating a file is reported not applied, not stale
+PASS: and applying it creates the file
+PASS: after which --check exits 0
+-----------------------------------------
+PASS: 18  FAIL: 0
+exit=0
+=== external tools ===
+PASS: mktemp -d
+PASS: mktemp -d gives a directory zsh can write
+PASS: uname -s (MSYS_NT-10.0-26300)
+PASS: head
+PASS: tail
+PASS: sort
+PASS: cat
+PASS: grep
+PASS: sed
+PASS: awk
+PASS: tr
+PASS: cut
+PASS: wc
+PASS: od
+PASS: paste
+PASS: xargs
+PASS: tee
+PASS: basename
+PASS: dirname
+PASS: date
+PASS: cmp
+PASS: diff
+PASS: ls
+PASS: find
+PASS: cp
+PASS: mv
+PASS: mkdir
+PASS: rm
+PASS: chmod
+PASS: touch
+PASS: stat
+PASS: dd
+PASS: sleep
+PASS: id
+PASS: timeout
+PASS: sha256sum
+PASS: openssl
+-----------------------------------------
+PASS: 37  FAIL: 0
+exit=0
+=== OpenSSL fallback known answer ===
+PASS
+=== no active Perl/shasum call in tracked first-party scripts ===
+PASS

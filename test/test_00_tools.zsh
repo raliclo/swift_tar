@@ -14,7 +14,7 @@
 # them, and a failure prints where the name resolved (`whence -p`). The platform comes from
 # zsh's own $OSTYPE, so uname is checked rather than assumed. Composite checks are shell
 # functions, not nested `zsh -c`, which through the scoop shim mangles positional arguments.
-# Tools a platform may lack (timeout, shasum/sha256sum) SKIP when absent; present but broken
+# Tools a platform may lack (timeout, openssl/sha256sum) SKIP when absent; present but broken
 # is a FAIL.
 #
 # 每個工具都用已知輸入執行，輸出與已知答案比對——不相信單一退出碼。2026-10-19 某版 zsh port
@@ -23,7 +23,7 @@
 # 空字串，於是測試挑了非 Windows 的執行檔、關掉 Windows 守門，然後在錯的前提上繼續回報。本檔名
 # 排在最前面，所以先於它們執行；失敗時印出該名稱解析到哪裡（`whence -p`）。平台取自 zsh 自己的
 # $OSTYPE，所以 uname 是被檢查而非被假定。組合檢查寫成 shell 函式，而非巢狀 `zsh -c`——經 scoop
-# shim 時後者會弄壞位置參數。某些平台可能沒有的工具（timeout、shasum／sha256sum）不存在時
+# shim 時後者會弄壞位置參數。某些平台可能沒有的工具（timeout、openssl／sha256sum）不存在時
 # SKIP；存在卻壞了就是 FAIL。
 set -u
 
@@ -125,7 +125,7 @@ t_id()    { local u; u=$(id -u) && [[ $u == <-> ]] && print ok }
 t_od()    { local h; h=$(od -An -tx1 "$TMP/A") && print -r -- ${h// /} }
 t_timeout()   { timeout 5 true && print ok }
 t_sha256sum() { local h; h=$(sha256sum "$TMP/hashme") && print -r -- ${h%% *} }
-t_shasum()    { local h; h=$(shasum -a 256 "$TMP/hashme") && print -r -- ${h%% *} }
+t_openssl()   { local h; h=$(openssl dgst -sha256 -r "$TMP/hashme") && print -r -- ${h%% *} }
 
 # ---- text tools / 文字工具 ----
 check head     a          head -1 "$TMP/abc"
@@ -166,7 +166,7 @@ check id       ok         t_id
 want_sha=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
 optional timeout   ok        t_timeout
 optional sha256sum $want_sha t_sha256sum
-optional shasum    $want_sha t_shasum
+optional openssl   $want_sha t_openssl
 
 printf -- '-----------------------------------------\nPASS: %s  FAIL: %s\n' "$pass" "$fail"
 (( fail == 0 ))

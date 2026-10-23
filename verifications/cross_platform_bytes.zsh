@@ -58,7 +58,7 @@ usage() { sed -n '2,/^# ====.*$/p' "$0" | sed -n '/^# 用法/,$p' >&2; exit 2; }
 (( $# >= 1 )) || usage
 mode=$1; shift
 
-if whence sha256sum > /dev/null; then sha() { sha256sum | cut -c1-64 }; else sha() { shasum -a 256 | cut -c1-64 }; fi
+if whence sha256sum > /dev/null; then sha() { sha256sum | cut -c1-64 }; else sha() { openssl dgst -sha256 -r | cut -c1-64 }; fi
 
 case $mode in
 prepare)

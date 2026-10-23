@@ -324,8 +324,8 @@ if ( cd -- "$CHECK" && "./$STEM/$BIN_NAME" -c --bvx3-fast -f probe/l.bin -C prob
       "解開後的執行檔接受了 --bvx3-fast；它不是公開版"
 fi
 
-# sha256 beside the archive, in the shape `sha256sum -c` / `shasum -a 256 -c` accept.
-# 在封存旁寫 sha256，形狀是 `sha256sum -c`／`shasum -a 256 -c` 接受的那種。
+# sha256 beside the archive, in the shape `sha256sum -c` accepts.
+# 在封存旁寫 sha256，形狀是 `sha256sum -c` 接受的那種。
 if command -v sha256sum >/dev/null 2>&1; then
   ( cd -- "$DIST" && sha256sum "$STEM.tar.zst" > "$STEM.tar.zst.sha256" )
 elif command -v openssl >/dev/null 2>&1; then

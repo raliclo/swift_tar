@@ -61,6 +61,8 @@ fi
 
 HERE=${0:A:h}
 ROOT=${HERE:h}
+. "$HERE/tool.zsh"
+PATCH_TOOL=""
 cd "$ROOT"
 
 MODE=apply
@@ -178,13 +180,13 @@ p_state() {   # submodule patch -> applied | missing | stale
 p_apply() {
   local said
   if with_git "$1"; then git -C "$1" apply "$2"; return; fi
-  said=$( cd "$1" && patch -p1 -N 2>&1 <"$2" )
+  said=$( cd "$1" && "$PATCH_TOOL" -p1 -N 2>&1 <"$2" )
   [[ $(text_state "$1" "$2") == applied ]] || { print -ru2 -- "$said"; return 1; }
 }
 p_reverse() {
   local said
   if with_git "$1"; then git -C "$1" apply --reverse "$2"; return; fi
-  said=$( cd "$1" && patch -p1 -R 2>&1 <"$2" )
+  said=$( cd "$1" && "$PATCH_TOOL" -p1 -R 2>&1 <"$2" )
   [[ $(text_state "$1" "$2") == missing ]] || { print -ru2 -- "$said"; return 1; }
 }
 
@@ -194,7 +196,7 @@ for dir in "$HERE"/*(/N); do
     print -- "  – $sub — submodule 未 checkout / not checked out"
     continue
   }
-  if ! with_git "$sub" && ! command -v patch >/dev/null 2>&1; then
+  if ! with_git "$sub" && [[ -z $PATCH_TOOL ]] && ! PATCH_TOOL=$(swift_tar_patch_tool); then
     print -- "  ✗ $sub — 沒有 git checkout，也沒有 patch 指令，無法套用或檢查 / neither a git checkout nor a patch command: cannot apply or check"
     problems=$(( problems + 1 ))
     continue

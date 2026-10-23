@@ -1,0 +1,42 @@
+=== readahead ===
+PASS: tree: -c exits 0
+PASS: tree: every file holds its own bytes
+PASS: tree: a symlink stays a symlink
+PASS: tree: a dangling symlink round-trips to its target
+SKIP: FIFO case — no mkfifo on this platform / 此平台無 mkfifo
+PASS: repeat: -c exits 0
+PASS: repeat: two runs write identical archives
+PASS: zstd: -c exits 0
+PASS: zstd: decodes to the same tar
+PASS: exclude: -c exits 0
+PASS: exclude: the rest still hold their own bytes
+PASS: exclude: the excluded file is absent
+PASS: operands: -c exits 0
+PASS: operands: every file holds its own bytes
+PASS: operands: members are in command-line order
+PASS: update: -u exits 0
+PASS: update: the newer files land with their new bytes
+-----------------------------------------
+PASS: 16  FAIL: 0
+exit=0
+=== concurrent extract ===
+PASS: precondition: file shards carry no directory entries
+PASS: precondition: the directory shard lists all 84 directories
+PASS: --touch: every process exits 0 in 10 rounds
+PASS: --touch: nothing on stderr
+PASS: --touch: the tree is rebuilt exactly in every round
+PASS: preserve (default): every process exits 0 in 10 rounds
+PASS: preserve (default): nothing on stderr
+PASS: preserve (default): the tree is rebuilt exactly in every round
+PASS: preserve: a file keeps its archived mtime
+PASS: preserve: directories get their archived mtimes from the last shard
+PASS: -p: every process exits 0 in 10 rounds
+PASS: -p: nothing on stderr
+PASS: -p: the tree is rebuilt exactly in every round
+SKIP: -p mode bits (Windows does not enforce POSIX group bits against the owner)
+PASS: zstd archives, --zstd-parallel --touch: every process exits 0 in 10 rounds
+PASS: zstd archives, --zstd-parallel --touch: nothing on stderr
+PASS: zstd archives, --zstd-parallel --touch: the tree is rebuilt exactly in every round
+-----------------------------------------
+PASS: 16  FAIL: 0
+exit=0

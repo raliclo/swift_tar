@@ -68,7 +68,7 @@ run)
     [[ -x $ST && -d $PARENT/$NAME ]] || { print -u2 -- "missing $ST or $PARENT/$NAME / 找不到"; exit 1 }
     mkdir -p "$W" || exit 1
     export TZ=UTC
-    if whence sha256sum > /dev/null; then sha() { sha256sum "$1" | cut -c1-64 }; else sha() { shasum -a 256 "$1" | cut -c1-64 }; fi
+    if whence sha256sum > /dev/null; then sha() { sha256sum "$1" | cut -c1-64 }; else sha() { openssl dgst -sha256 -r "$1" | cut -c1-64 }; fi
     if whence nproc > /dev/null; then cores=$(nproc); else cores=$(getconf _NPROCESSORS_ONLN); fi
     print -r -- "ZS-INFO cores=$cores rounds=$rounds version=$("$ST" --version | head -1) files=$(find "$PARENT/$NAME" -type f | wc -l | tr -d ' ')"
 

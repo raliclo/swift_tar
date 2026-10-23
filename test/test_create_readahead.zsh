@@ -72,11 +72,8 @@ ok()  { echo "PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "FAIL: $1"; fail=$((fail + 1)); }
 
 # Contents of every regular file, by path. / 依路徑列出每個一般檔案的內容雜湊。
-# shasum where it exists, sha256sum otherwise: the Buildroot guest has only the latter, and
-# without this the suite ended with 127 and no verdict (2026-10-12).
-# 有 shasum 就用，否則用 sha256sum：Buildroot guest 只有後者，少了這段時本套件以 127 結束而
-# 沒有任何結論（2026-10-12）。
-if command -v shasum >/dev/null 2>&1; then SHA256=(shasum -a 256); else SHA256=(sha256sum); fi
+# Neither choice requires Perl. / 兩種選擇皆不依賴 Perl。
+if command -v sha256sum >/dev/null 2>&1; then SHA256=(sha256sum); else SHA256=(openssl dgst -sha256 -r); fi
 manifest() { ( cd -q "$1" && find . -type f | LC_ALL=C sort | xargs "${SHA256[@]}" ) | "${SHA256[@]}" | cut -c1-16; }
 
 # run_limited <label> <-c|-u> <archive> <args...> ; runs swift_tar in $TMP with a 60 s limit,

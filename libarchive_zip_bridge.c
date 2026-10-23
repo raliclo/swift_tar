@@ -1598,6 +1598,7 @@ int swift_tar_zip_read(const char *archive_path,
                        int verbose,
                        int restore_mtime,
                        int strict,
+                       int no_links,
                        int (*is_excluded)(const char *path, int is_directory),
                        char *error_buffer,
                        size_t error_capacity) {
@@ -1733,6 +1734,32 @@ int swift_tar_zip_read(const char *archive_path,
             const char *name = archive_entry_pathname_utf8(entry);
             if (name == NULL) name = path;
             if (name != NULL && is_excluded(name, archive_entry_filetype(entry) == AE_IFDIR)) {
+                continue;
+            }
+        }
+        /* --no-links, the same rule and the same stderr line as the tar reader (tarNoLinks in
+         * swift_tar.swift): a symlink or hard link member is named and not created, and not
+         * counted for --strict. Unsafe names never get here as links: libarchive's SECURE_*
+         * flags refuse them when writing, which is counted below.
+         * --no-links，規則與 stderr 訊息皆與 tar 讀取端相同（見 swift_tar.swift 的 tarNoLinks）：
+         * 符號連結或硬連結成員只報出名稱、不建立，也不計入 --strict。名稱不安全者由 libarchive
+         * 的 SECURE_* 旗標在寫入時拒絕，並於下方計數。 */
+        if (extract && !to_stdout && no_links) {
+            const char *hard = archive_entry_hardlink_utf8(entry);
+            if (hard == NULL) hard = archive_entry_hardlink(entry);
+            if (hard != NULL || archive_entry_filetype(entry) == AE_IFLNK) {
+                const char *target = hard;
+                if (target == NULL) target = archive_entry_symlink_utf8(entry);
+                if (target == NULL) target = archive_entry_symlink(entry);
+                if (target == NULL) target = "";
+                const char *name = path != NULL ? path : "";
+                if (hard != NULL) {
+                    fprintf(stderr, "swift_tar: skipping link '%s' (hardlink -> %s) / 略過連結 '%s'（硬連結 -> %s）\n",
+                            name, target, name, target);
+                } else {
+                    fprintf(stderr, "swift_tar: skipping link '%s' (symlink -> %s) / 略過連結 '%s'（符號連結 -> %s）\n",
+                            name, target, name, target);
+                }
                 continue;
             }
         }

@@ -251,6 +251,31 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
+## 2026-10-23 `-x` 會建立指向目的地之外的 symlink，且沒有不建連結的選項 ▸ ✅ 已實作 2026-10-23，以 `--no-links` 提供 / `-x` creates a symlink pointing outside the destination, with no way to extract without links ▸ added as `--no-links`
+
+**來源**：LiveFiles session（Windows）2026-10-23 對 0.1.2 用手工構造的惡意封存實測後提出，
+使用者要求。LiveFiles 要解開不可信的上傳（`.tar.zst`，最大 1 GiB）。
+
+**現象**：只含 `portal -> ../..`（typeflag `2`）的封存，`-x` 以 0 結束並建立 `out/portal`，指向
+目的地之外。之後「穿過」它寫入的成員會被拒絕，但連結本身留在呼叫端的目錄樹裡。成員之間的硬連結
+（`b.txt -> a.txt`）也會建立。`--exclude` 是名稱 glob，而 `-t` 不顯示成員型別，呼叫端無法安全地
+找出連結名稱去排除。
+
+**修法**：`-x --no-links` 不建立 typeflag `1`／`2` 的成員，tar 與 ZIP 兩個後端皆然，每個成員在
+stderr 印一行固定格式：`swift_tar: skipping link '<名稱>' (symlink -> <目標>)` 或
+`(hardlink -> <目標>)`，` / ` 後接中文。與 `--exclude` 相同，不算 `--strict` 的略過；名稱不安全
+的連結仍先以不安全路徑拒絕並計數。`-t` 與 `-O` 不受影響。預設行為不變。
+
+**測試**：`test/test_no_links.zsh`，25 項；對 0.1.2 執行檔失敗（不認得此選項），對新建置全數通過。
+Windows 上的 ZIP 案例需要真正的 symlink 作測資，取不到時以 SKIP 標示。
+
+**Source**: requested by the LiveFiles session (Windows) on 2026-10-23 after testing 0.1.2 against
+hand-built hostile archives; the user asked for it. **Symptom**: an archive holding only
+`portal -> ../..` extracts with exit 0 and leaves an outward link in the caller's tree. **Fix**:
+`-x --no-links` creates no symlink or hard link member on either backend and names each one on
+stderr in a fixed form; not a skip for `--strict`; unsafe names still count. **Test**:
+`test/test_no_links.zsh`, 25 checks; fails against 0.1.2, passes against the new build.
+
 ## 2026-10-19 晚：codec 升級、建置腳本無聲改回子模組、vcvars 打亂 PATH、zsh port 的 127 與變慢 ▸ ✅ 已修 2026-10-19 / Evening: codec bump, build scripts silently reverting submodules, vcvars reordering PATH, the zsh port's 127s and slowdown
 
 **起因**：multissh 的 sync_all 把 swift_tar 底下四個子模組移到各自分支最新，使用者決定 swift_tar

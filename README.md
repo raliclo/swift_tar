@@ -458,11 +458,28 @@ archive need not have been written by this tool:
 | `../../x`, `dir/../../x`, `..\..\x` | entry skipped: `skipping unsafe path '<name>'` |
 | `/etc/x`, `C:\Windows\x` | leading `/` and any drive letter dropped; written **inside** the destination |
 | a member whose path runs through a symlink an earlier entry created | entry skipped: `path passes through a symlink` |
+| a symlink member whose target points outside, e.g. `portal -> ../..` | **created as stored**, exit `0`; with `--no-links` it is not created: `skipping link 'portal' (symlink -> ../..)` |
 
-That last row is a separate attack from the first: an archive can carry a symlink
+The third row is a separate attack from the first: an archive can carry a symlink
 `portal -> ../../..` and then a member `portal/pwned.txt`, and neither name
-contains `..` once the link is resolved. Symlinks that do not lead out of the
-extraction target are unaffected and extract normally.
+contains `..` once the link is resolved.
+
+**The link itself is still created**, as the last row says: what is refused is
+writing *through* it, not the link. So an archive can leave a link in your tree
+that points outside it, and anything that later follows that link leaves the
+destination. When the input is untrusted, extract with **`--no-links`**: no
+symlink or hard link member is created, on the tar and the ZIP path alike, and
+each one is named on stderr instead. Those lines are a fixed format meant to be
+grepped, so a caller can report exactly what was dropped. A link dropped this way
+is not a skip for `--strict`, as with `--exclude`; a link whose own name is unsafe
+is still refused as unsafe and still counts.
+
+```sh
+release/swift_tar -x --no-links -f upload.tar.zst -C staging
+# -> swift_tar: skipping link 'portal' (symlink -> ../..) / 略過連結 'portal'（符號連結 -> ../..）
+# -> swift_tar: skipping link 'b.txt' (hardlink -> a.txt) / 略過連結 'b.txt'（硬連結 -> a.txt）
+# -> exit 0, every other member extracted
+```
 
 Nothing an archive can name will be written above the extraction directory. A
 skipped entry **does** change the exit code: `-x` reports the count and exits
@@ -713,6 +730,7 @@ would not predict.
 | `--no-checksum`, `-no-checksum` | (`-c` with `--zstd`, `--lz4` or `--xz`) Omit content checksums. **They are written by default**: the low 32 bits of XXH64 per zstd frame, XXH32 per lz4 frame, CRC64 per xz stream, so a damaged chunk fails to decode instead of decoding to wrong bytes. gzip, bzip2, lzip and ZIP always carry a CRC, so the flag changes nothing there. |
 | `--skip-compressed` | (`-c` with a stream codec) One regular file with an already-compressed suffix is written as a plain tar instead. Off by default; see [Already-compressed suffixes](#already-compressed-suffixes---skip-compressed) for the list and the reasons |
 | `--strict`, `--no-strict` | (`-x`) **Strict is the default:** a skipped member makes `-x` exit non-zero after every other member has been extracted; `--exclude` matches do not count. `--no-strict` exits `0` after skips. `--strict` is accepted for callers that want to say so. See [Exit status](#exit-status) |
+| `--no-links` | (`-x`, tar and ZIP) Create no symlink or hard link member. Each one is named on stderr instead, one line per member: `swift_tar: skipping link '<name>' (symlink -> <target>)` or `(hardlink -> <target>)`, followed by a Traditional Chinese copy after ` / `. Like `--exclude`, a link dropped this way is not a skip for `--strict`. A link with an unsafe name (`../x`) is still refused as unsafe and still counts. Without it, `-x` creates links, including one pointing outside the destination; it only refuses to write *through* one. `-t` is unaffected |
 | `-n <N>`    | In-flight parallel chunks (default: one per core, capped at 4 × cores) |
 | `-v`        | Name each member as it is processed, on stderr, and print the detected filter chain. **It does not produce a long listing** — there are no sizes, modes or timestamps, and `-t -v` prints the same names as `-t` plus one filter-chain line. If you arrived from `tar -tvf` expecting a table, this is not it. |
 | `-m`, `--touch` | (`-x` only) Do **not** restore the archived mtime; extracted files get the current time. `-m` is the GNU tar spelling and is accepted as an exact alias |
@@ -1011,8 +1029,8 @@ Two cases deserve their own line because a script will otherwise get them wrong:
   directory. See the `-C` table above.
 - **`-x` exits non-zero when it skipped a member (`--strict`, the default).** A member refused for an unsafe path (absolute, `..`, through a
   symlink), one that could not be written or created, and one whose type cannot exist
-  on this platform all count; a member left out by `--exclude` does not, since you
-  asked for it. Every other member is still extracted — the count is reported at the
+  on this platform all count; a member left out by `--exclude`, or a link left out by
+  `--no-links`, does not, since you asked for it. Every other member is still extracted — the count is reported at the
   end. `--no-strict` exits `0` after a skip instead.
 
 ## Layout

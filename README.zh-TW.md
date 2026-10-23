@@ -401,10 +401,23 @@ release/swift_tar -x -f from-linux.tar
 | `../../x`、`dir/../../x`、`..\..\x` | 略過該項目：`skipping unsafe path '<name>'` |
 | `/etc/x`、`C:\Windows\x` | 去除開頭的 `/` 與磁碟機代號，寫入目的地**之內** |
 | 路徑穿過「較早項目所建立之 symlink」的成員 | 略過該項目：`path passes through a symlink` |
+| 目標指向外部的 symlink 成員，例如 `portal -> ../..` | **照封存內容建立**，以 `0` 結束；加 `--no-links` 則不建立：`skipping link 'portal' (symlink -> ../..)` |
 
-最後一列是與第一列不同的攻擊：封存可攜帶一個 symlink `portal -> ../../..`，接著一個成員
-`portal/pwned.txt`，而在連結解析後兩者的名稱皆不含 `..`。不會通往解出目標之外的 symlink
-不受影響，照常解出。
+第三列是與第一列不同的攻擊：封存可攜帶一個 symlink `portal -> ../../..`，接著一個成員
+`portal/pwned.txt`，而在連結解析後兩者的名稱皆不含 `..`。
+
+**連結本身仍會被建立**，如最後一列所示：被拒絕的是「穿過」它寫入，而不是連結本身。所以封存可以
+在您的目錄樹裡留下一個指向外部的連結，之後任何跟隨它的動作都會離開目的地。輸入不可信時，請以
+**`--no-links`** 解出：tar 與 ZIP 兩條路徑都不建立任何符號連結或硬連結成員，改為逐一在 stderr
+報出。這些訊息是固定格式、供比對用，呼叫端可據以精確回報丟掉了什麼。與 `--exclude` 相同，以此
+丟掉的連結不算 `--strict` 的略過；名稱本身不安全的連結仍以不安全路徑拒絕，仍然計數。
+
+```sh
+release/swift_tar -x --no-links -f upload.tar.zst -C staging
+# -> swift_tar: skipping link 'portal' (symlink -> ../..) / 略過連結 'portal'（符號連結 -> ../..）
+# -> swift_tar: skipping link 'b.txt' (hardlink -> a.txt) / 略過連結 'b.txt'（硬連結 -> a.txt）
+# -> 離開碼 0，其餘成員全部解出
+```
 
 封存能指定的任何名稱，都不會被寫到解出目錄之上。被略過的項目**會**改變離開碼：因為
 `--strict` 是預設，`-x` 會回報略過數，並在整次執行結束時以非零結束。其餘每個成員仍會解出。
@@ -627,6 +640,7 @@ swift_tar -c -f first.tar -f second.tar ...      # 寫出 first.tar；second.tar
 | `--no-checksum`、`-no-checksum` | （`-c` 搭配 `--zstd`、`--lz4` 或 `--xz`）不寫入內容校驗碼。**預設會寫入**：每個 zstd frame 一個 XXH64 的低 32 位元、每個 lz4 frame 一個 XXH32、每個 xz 串流一個 CRC64，使損壞的分塊解碼失敗，而不是解出錯誤的位元組。gzip、bzip2、lzip 與 ZIP 一律帶 CRC，此旗標對它們沒有影響。 |
 | `--skip-compressed` | （`-c` 搭配串流壓縮引擎）只有一個一般檔案且後綴屬於已壓縮格式時，改寫成純 tar。預設關閉；清單與理由見〈已壓縮的後綴（`--skip-compressed`）〉一節 |
 | `--strict`、`--no-strict` | （`-x`）**預設為嚴格：** 略過成員時，`-x` 在其餘成員都解出之後以非零結束；`--exclude` 命中者不算。`--no-strict` 在略過後仍以 `0` 結束。`--strict` 供想明說的呼叫端使用。見〈離開碼〉一節 |
+| `--no-links` | （`-x`，tar 與 ZIP）不建立任何符號連結或硬連結成員，改為在 stderr 逐一報出，每個成員一行：`swift_tar: skipping link '<名稱>' (symlink -> <目標>)` 或 `(hardlink -> <目標>)`，` / ` 之後接繁體中文的同一句。與 `--exclude` 相同，以此丟掉的連結不算 `--strict` 的略過。名稱不安全（`../x`）的連結仍以不安全路徑拒絕，仍然計數。不加此選項時，`-x` 會建立連結，包括指向目的地之外的連結；它只拒絕「穿過」連結寫入。`-t` 不受影響 |
 | `-n <N>`    | 平行在途分塊數（預設每核一個，上限 4 × 核心數） |
 | `-v`        | 於 stderr 逐一報出處理中的成員，並印出偵測到的 filter 鏈。**它不會產生長格式列表**——沒有大小、權限或時間戳記，而 `-t -v` 印出的名稱與 `-t` 相同，只多一行 filter 鏈。若你是帶著 `tar -tvf` 的表格預期而來，這不是那個東西。 |
 | `-m`、`--touch` | （僅 `-x`）**不**還原封存中的 mtime；解出的檔案取得當下時間。`-m` 是 GNU tar 的寫法，此處作為完全等價的別名接受 |
@@ -857,7 +871,7 @@ swift_tar -c -f mixed.tar tree/a.txt tree/typo.txt tree/sub/b.txt
   對照表。
 - **`-x` 略過成員時以非 0 結束（`--strict`，預設）。** 因路徑不安全（絕對路徑、
   `..`、穿過 symlink）而被拒絕的成員、寫不進去或建立不了的成員、此平台無法建立其型別的成員，都算
-  略過；`--exclude` 排除的成員不算，因為那是您要求的。其餘成員仍會全部解出——略過數在最後才回報。
+  略過；`--exclude` 排除的成員、`--no-links` 丟掉的連結不算，因為那是您要求的。其餘成員仍會全部解出——略過數在最後才回報。
   `--no-strict` 則在略過後仍以 `0` 結束。
 
 ## 檔案結構

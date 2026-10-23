@@ -27,6 +27,7 @@ int swift_tar_zip_read(const char *archive_path,
                        int verbose,
                        int restore_mtime,
                        int strict,
+                       int no_links,
                        int (*is_excluded)(const char *path, int is_directory),
                        char *error_buffer,
                        size_t error_capacity);

@@ -173,6 +173,7 @@ private func cSwiftTarZipRead(
     _ verbose: Int32,
     _ restoreMtime: Int32,
     _ strict: Int32,
+    _ noLinks: Int32,
     _ isExcluded: (@convention(c) (UnsafePointer<CChar>?, Int32) -> Int32)?,
     _ errorBuffer: UnsafeMutablePointer<CChar>,
     _ errorCapacity: Int
@@ -307,6 +308,7 @@ private func runZipRead(archivePath: String, extract: Bool, destDir: String,
                              verbose ? 1 : 0,
                              restoreMtime ? 1 : 0,
                              tarStrict ? 1 : 0,
+                             tarNoLinks ? 1 : 0,
                              { path, isDirectory in
                                  guard let path else { return 0 }
                                  return TarReader.memberIsExcluded(String(cString: path),
@@ -1072,6 +1074,23 @@ let tarStrictBox = Mutex<Bool>(true)
 var tarStrict: Bool {
     get { tarStrictBox.withLock { $0 } }
     set { tarStrictBox.withLock { $0 = newValue } }
+}
+
+// --no-links: -x creates no symlink or hard link member; each one is named on stderr instead.
+// Added 2026-10-23 for LiveFiles, which extracts untrusted uploads: -x already refuses to
+// write THROUGH a symlink, but it still created one pointing outside the destination
+// (`portal -> ../..`, exit 0), leaving an outward link in the caller's tree. Like --exclude,
+// a link dropped this way was asked for, so it is not a skip for --strict; a link with an
+// unsafe name is still refused as unsafe and still counts. Held like the other settings.
+// --no-links：-x 不建立任何符號連結或硬連結成員，改為逐一在 stderr 報出名稱。2026-10-23 為
+// LiveFiles 加入，它要解開不可信的上傳：-x 本來就拒絕穿過 symlink 寫入，但仍會建立指向目的地之外
+// 的 symlink（`portal -> ../..`，以 0 結束），在呼叫端的目錄樹裡留下向外的連結。與 --exclude
+// 相同，以此丟掉的連結是呼叫端要求的，不算 --strict 的略過；名稱不安全的連結仍以不安全路徑拒絕，
+// 仍然計數。持有方式與其他設定相同。
+let tarNoLinksBox = Mutex<Bool>(false)
+var tarNoLinks: Bool {
+    get { tarNoLinksBox.withLock { $0 } }
+    set { tarNoLinksBox.withLock { $0 = newValue } }
 }
 
 func zstdCompressFrame(_ input: Data, level: Int32 = zstdCompressionLevel) -> Data? {
@@ -5646,6 +5665,18 @@ final class TarReader {
                 if !isDir { try skipData(size) }
                 continue
             }
+            // --no-links (see tarNoLinks). After the unsafe-name check, so a link named
+            // `../x` is still refused and counted as unsafe; not a skip for --strict. With
+            // -O nothing reaches the disk anyway, so there is nothing to report.
+            // --no-links（見 tarNoLinks）。放在不安全名稱檢查之後，所以名為 `../x` 的連結仍以不安全
+            // 拒絕並計數；不算 --strict 的略過。-O 本來就不寫磁碟，因此沒有可回報的東西。
+            if tarNoLinks, !options.toStdout,
+               typeflag == UInt8(ascii: "1") || typeflag == UInt8(ascii: "2") {
+                let kind = typeflag == UInt8(ascii: "2") ? ("symlink", "符號連結") : ("hardlink", "硬連結")
+                eprint("swift_tar: skipping link '\(name)' (\(kind.0) -> \(linkname)) / 略過連結 '\(name)'（\(kind.1) -> \(linkname)）")
+                try skipData(size)
+                continue
+            }
             if options.verbose {
                 print("x \(rel)")
             }
@@ -6275,6 +6306,11 @@ private func printTarUsage() {
                          --exclude is not a skip)
                          -x 略過成員時仍以 0 結束（預設為嚴格：略過成員則以非 0
                          結束；--exclude 不算略過）
+      --no-links       : -x creates no symlink or hard link member; each one is
+                         named on stderr as "skipping link '<name>' (symlink ->
+                         <target>)" or "(hardlink -> <target>)"; not a skip
+                         -x 不建立符號連結與硬連結成員，逐一在 stderr 報出；
+                         不算略過
       --skip-compressed: -c with a codec and one already-compressed file (by
                          suffix; see README) writes it without the codec
                          -c 搭配 codec 且只有一個已壓縮檔案（依後綴，見 README）
@@ -7315,7 +7351,7 @@ struct SwiftTarMain {
             "-o", "--no-same-owner", "--force",
             "-p", "--same-permissions", "--no-same-permissions",
             "--dereference", "--help", "--exclude", "--no-checksum", "-no-checksum",
-            "--skip-compressed", "--strict", "--no-strict",
+            "--skip-compressed", "--strict", "--no-strict", "--no-links",
             "--strip-components", "--zstd-level", "--exclude",
             "-write_ucrt", "-write_foundation", "--write_ucrt", "--write_foundation",
             // codecs / 壓縮引擎
@@ -7568,6 +7604,7 @@ struct SwiftTarMain {
         // --strict 是預設值，接受它是為了讓想明說的呼叫端可以帶上（multissh 會明確傳入）；
         // 兩者同時給定時以 --no-strict 為準。
         tarStrict = !args.contains("--no-strict")
+        tarNoLinks = args.contains("--no-links")
         if args.contains(where: { $0 == "--zstd-level" || $0.hasPrefix("--zstd-level=") }) {
             guard let raw = optValue("--zstd-level"), let lv = Int32(raw) else {
                 try? FileHandle.standardError.write(contentsOf: Data("swift_tar: --zstd-level needs a number / --zstd-level 需要一個數字\n".utf8))

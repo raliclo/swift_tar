@@ -96,6 +96,21 @@ fi
 # 在 Windows 上的發行預演涵蓋。
 if [ "$OS" = windows ]; then
   echo "SKIP: release.zsh native cases (the stand-in binary is a shell script, not a PE; see win_dlls below)"
+elif [ "$OS" = linux ]; then
+  # Not on glibc Linux either: since f19c63a (2026-10-20) a Linux release is the static musl
+  # build made on the Mac, and release.zsh refuses a native one before reading anything else.
+  # Until 2026-10-23 these cases still ran here and failed nine times on WSL, all with that
+  # refusal. What is left to test here is the refusal itself.
+  # glibc Linux 上也不跑：自 f19c63a（2026-10-20）起，Linux 正式版是 Mac 上建的靜態 musl 版，
+  # release.zsh 在讀任何東西之前就拒絕原生打包。2026-10-23 之前這些案例仍在此執行，於 WSL 上
+  # 失敗九次，全都是那個拒絕。這裡剩下要測的就是拒絕本身。
+  echo "SKIP: release.zsh native cases (Linux releases are the musl cross build; see the cross cases below)"
+  L=$TMP/linrel
+  mkdir -p "$L"
+  cp "$ROOT/release.zsh" "$ROOT/build_id.zsh" "$ROOT/platform.zsh" "$L/"
+  rc=0; ( cd "$L" && unset SWIFT_TAR_PLATFORM && zsh ./release.zsh ) > "$TMP/lin.out" 2>&1 || rc=$?
+  check "release.zsh: a native glibc Linux release is refused and points to the musl build" \
+        "$rc:$(grep -c 'Linux releases are the static musl build made on the Mac' "$TMP/lin.out")" "1:1"
 elif ! command -v zstd >/dev/null 2>&1; then
   echo "SKIP: release.zsh cases (no zstd on PATH)"
 else

@@ -251,6 +251,23 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
+## 2026-10-23 `test_release.zsh` 在 glibc Linux（WSL）上 9 項失敗 ▸ ✅ 已修 2026-10-23（測試端）/ `test_release.zsh` fails 9 checks on glibc Linux (WSL) ▸ fixed the same day, in the test
+
+**現象**：Swift_tar-Win 在 WSL 跑 4a9c06c 的整套測試，只有 `test_release.zsh` 不過（30/9）。9 項
+（打包一份乾淨公開版、dist/ 裡有封存與 .sha256、7 個「refuses …」）全都死在同一句：`release.zsh`
+拒絕在 glibc Linux 上原生打包，要求改用 Mac 上的 musl 交叉建置。
+
+**成因**：`f19c63a`（2026-10-20）讓 `release.zsh` 拒絕 `linux` 平台，但 `test_release.zsh` 只在
+Windows 上略過原生打包案例，沒有同時略過 Linux。macOS 上看不到，WSL 上一直都是紅的。
+
+**修法**：Linux 上略過原生打包案例（跨平台的 musl 案例本來就在下方涵蓋），改為只測「拒絕本身」：
+`release.zsh` 以 1 結束並指向 musl 建置。程式碼沒有改動。
+
+**Symptom**: on WSL the whole suite passed except `test_release.zsh` (30/9), every failure being
+`release.zsh` refusing a native glibc Linux release. **Cause**: `f19c63a` (2026-10-20) made it
+refuse, and the test skipped its native cases only on Windows. **Fix**: skip them on Linux too and
+test the refusal itself instead. No program change.
+
 ## 2026-10-23 `-x` 會建立指向目的地之外的 symlink，且沒有不建連結的選項 ▸ ✅ 已實作 2026-10-23，以 `--no-links` 提供 / `-x` creates a symlink pointing outside the destination, with no way to extract without links ▸ added as `--no-links`
 
 **來源**：LiveFiles session（Windows）2026-10-23 對 0.1.2 用手工構造的惡意封存實測後提出，

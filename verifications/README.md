@@ -188,13 +188,12 @@ ROUNDS=3 ./zip_claw_code_mbps_rss.zsh ../../claw-code
 ```
 
 On the Apple M4 (claw-code, 5448 files, 1406 MB; build
-`swift_tar 0.1.2 (v0.1.1-16-g72b2bbca-dirty) 20261022-184744`), medians of 3:
-encode **6.86 s / 205 MB/s** with 295 MB peak RSS, because members are deflated
-in parallel by default (see the `-n` section at the end); decode **3.52 s /
-400 MB/s** with 10 MB peak RSS. Decode runs through the pinned zlib that the
-macOS build links statically; the system libz decodes the same deflate data
-about 2× faster on macOS (TGZ decode ~930 against ~482 MB/s in
-[`chunk_size_tradeoff.txt`](chunk_size_tradeoff.txt)).
+`swift_tar 0.1.2 (v0.1.1-21-g2f88c70b-dirty) 20261023-115820`), medians of 3:
+encode **6.95 s / 202 MB/s** with 301 MB peak RSS, because members are deflated
+in parallel by default (see the `-n` section at the end); decode **2.22 s /
+633 MB/s** with 10 MB peak RSS. Decode runs through the system libz, which the
+macOS build links; with the pinned zlib 1.3.2 it linked before, the same
+decode took 3.52 s / 400 MB/s.
 
 ## Create-side `-C` compatibility
 
@@ -259,13 +258,13 @@ to `-n`:
 
 | Side | Peak RSS |
 | --- | --- |
-| Encode | **115MB (`n=4`) → 298MB (`n=40`); default `n=20` = 222MB** |
-| Decode | **~70–76MB, flat across `-n`** |
+| Encode | **112MB (`n=4`) → 286MB (`n=40`); default `n=20` = 219MB** |
+| Decode | **~70–77MB, flat across `-n`** |
 
-Encode takes 4.6–8.2s and decode 3.3–4.5s. Encode RSS follows a linear `-n`
-relationship (in-flight chunks × ~8MiB per chunk). Decode runs through the
-pinned zlib that the macOS build links statically; the system libz decodes
-about 2× faster on macOS (see the chunk-size section).
+Encode takes 4.2–7.6s and decode 1.9–2.6s (one 4.1s outlier at `n=40`).
+Encode RSS follows a linear `-n` relationship (in-flight chunks × ~8MiB per
+chunk). Decode runs through the system libz; with the pinned zlib 1.3.2 the
+macOS build linked before, decode took 3.3–4.5s.
 
 ### Windows verification
 
@@ -297,8 +296,8 @@ Encode follows the expected linear `-n` relationship, while decode stays flat
 around 45–47MB.
 
 Across the sweep, encode takes 8.2–19.5s; at the normal parallel plateau
-(`-n 12..40`) it is 8.2–8.4s, close to the macOS 4.6–8.2s range.
-Decode takes 13.4–13.8s, slower than macOS's 3.3–4.5s. Windows extraction and
+(`-n 12..40`) it is 8.2–8.4s, close to the macOS 4.2–7.6s range.
+Decode takes 13.4–13.8s, slower than macOS's 1.9–2.6s. Windows extraction and
 file-I/O overhead therefore remains a separate optimization target.
 
 ### Filename-extension compatibility
@@ -312,7 +311,7 @@ and `swift_tar -x` both succeeded. Use `.tgz` or `.tar.gz` for this output.
 
 - On macOS, TGZ memory usage is comparable to or below the LZFSE formats.
   Default `-n` needs no tuning; lower `-n` can still trade encode speed for
-  memory (`n=4` = 115MB at +75% time).
+  memory (`n=4` = 112MB at +78% time).
 - On Windows, native zlib keeps TGZ encode RSS at 62–191MB (`-n 4–40`, linear)
   and decode RSS at about 45–47MB flat.
 - With static zlib, parallel encode takes 8.2–8.4s. Decode takes 13.4–13.8s and
@@ -567,8 +566,9 @@ slower ZSTD decode and plain tar.
 **TGZ decode is the one place the control differs, and it is the zlib, not the
 chunk.** The control (the installed `swift_tar 0.1.1`, a release build) decodes
 TGZ at 482 MB/s against 930 MB/s for the 4 MiB variant, −48.2%. Release builds
-link the pinned zlib submodule statically; the variants are linked with `-lz`,
-the system libz, which decodes about 2× faster on macOS.
+then linked the pinned zlib submodule statically; the variants are linked with
+`-lz`, the system libz, which decodes about 2× faster on macOS. That difference
+is why the macOS build went back to the system libz in 0.1.2.
 
 **Keep 4 MiB.** A larger chunk buys at most 4% of ZSTD size and no speed. TGZ
 is untouched either way — gzip's window is 32 KiB, so the chunk never reaches it.

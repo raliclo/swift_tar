@@ -1,24 +1,24 @@
-[Info] date / 日期: 2026-10-22 19:02:51 CST
+[Info] date / 日期: 2026-10-23 12:00:47 CST
 [Info] os: macOS 27.2 (26B5112a)
 [Info] machine / 機器: arm64, Apple M4
-[Info] swift_tar: /Users/raliclo/proj/lzfse2/swift_tar/release/swift_tar (swift_tar 0.1.2 (v0.1.1-16-g72b2bbca-dirty) 20261022-184744)
+[Info] swift_tar: /Users/raliclo/proj/lzfse2/swift_tar/release/swift_tar (swift_tar 0.1.2 (v0.1.1-21-g2f88c70b-dirty) 20261023-115820)
 [Info] corpus / 語料: /Users/raliclo/proj/lzfse2/claw-code
 [Info] regular files / 一般檔案: 5448
 [Info] logical input / 邏輯輸入: 1406227265 bytes (1406.23 MB)
 [Info] rounds / 輪數: 3
 
 phase   round      real(s)         MB/s  peakRSS(MB)
-encode  1             7.00       200.89       297.94
-decode  1             3.52       399.50         9.96
+encode  1             7.13       197.23       304.97
+decode  1             2.25       624.99         9.81
 [Verify] extracted tree matches claw-code / 解壓目錄與 claw-code 完全一致
-encode  2             6.86       204.99       294.81
-decode  2             3.52       399.50         9.99
-encode  3             6.84       205.59       291.03
-decode  3             3.46       406.42         9.83
+encode  2             6.95       202.33       298.96
+decode  2             2.22       633.44         9.91
+encode  3             6.89       204.10       301.15
+decode  3             2.13       660.20         9.91
 
 == Summary / 摘要 ==
 ZIP size / ZIP 大小: 497122541 bytes (497.12 MB, 35.35% of logical input)
-Encode median: 6.86 s, 204.99 MB/s, peak RSS median 294.81 MB
-Decode median: 3.52 s, 399.50 MB/s, peak RSS median 9.96 MB
+Encode median: 6.95 s, 202.33 MB/s, peak RSS median 301.15 MB
+Decode median: 2.22 s, 633.44 MB/s, peak RSS median 9.91 MB
 [PASS] ZIP throughput, RSS, and round-trip verification completed.
 [PASS] ZIP 吞吐量、RSS 與往返正確性驗證完成。

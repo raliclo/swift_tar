@@ -40,9 +40,11 @@ git submodule update --init   # lzfse2 + libarchive + zlib + xz + lz4 + zstd
 No Homebrew packages are needed. `liblzma`, `liblz4` and `libzstd` are built
 from the pinned submodules by `build_codecs.zsh` and linked statically, so the
 version in a binary is a committed fact rather than whatever `brew upgrade` last
-installed. `zlib` is also built statically from its pinned submodule and its
-version and commit are recorded in `version-mac.txt`. Only `libbz2` comes from
-the SDK, dynamically.
+installed. `zlib` and `libbz2` come from the SDK, dynamically, and
+`compile_tar.zsh` records the linked dylib in `version-mac.txt`. macOS uses the
+system zlib because it inflates about 1.9× faster than the pinned 1.3.2 on
+Apple silicon (1.6–1.7× on gzip and ZIP extraction), with byte-identical
+compressed output. The other platforms keep the pinned zlib.
 
 `build.zsh` detects the platform with `uname` and runs that platform's build —
 `compile_tar.zsh` on macOS, `compile_tar-linux.zsh` on Linux,

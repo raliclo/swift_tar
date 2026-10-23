@@ -165,12 +165,10 @@ ROUNDS=3 ./zip_claw_code_mbps_rss.zsh ../../claw-code
 ```
 
 Apple M4（claw-code，5448 個檔案、1406 MB；build
-`swift_tar 0.1.2 (v0.1.1-16-g72b2bbca-dirty) 20261022-184744`），3 次中位數：
-encode **6.86 秒／205 MB/s**、peak RSS 295 MB，因為成員預設以平行方式 deflate
-（見文末 `-n` 一節）；decode **3.52 秒／400 MB/s**、peak RSS 10 MB。decode 經由
-macOS 建置靜態連結的固定版本 zlib；macOS 的系統 libz 解同樣的 deflate 資料約快 2 倍
-（[`chunk_size_tradeoff.txt`](chunk_size_tradeoff.txt) 中 TGZ 解壓約 930 對約
-482 MB/s）。
+`swift_tar 0.1.2 (v0.1.1-21-g2f88c70b-dirty) 20261023-115820`），3 次中位數：
+encode **6.95 秒／202 MB/s**、peak RSS 301 MB，因為成員預設以平行方式 deflate
+（見文末 `-n` 一節）；decode **2.22 秒／633 MB/s**、peak RSS 10 MB。decode 經由
+macOS 建置連結的系統 libz；先前連結固定版 zlib 1.3.2 時，同樣的解壓為 3.52 秒／400 MB/s。
 
 ## 建立端 `-C` 相容性
 
@@ -229,12 +227,12 @@ swift_tar/verifications/tgz_inflight_rss.zsh <path-to-corpus>
 
 | 方向 | Peak RSS |
 | --- | --- |
-| Encode | **115MB（`n=4`）→ 298MB（`n=40`）；預設 `n=20` = 222MB** |
-| Decode | **約 70–76MB，不受 `-n` 影響** |
+| Encode | **112MB（`n=4`）→ 286MB（`n=40`）；預設 `n=20` = 219MB** |
+| Decode | **約 70–77MB，不受 `-n` 影響** |
 
-encode 為 4.6–8.2 秒，decode 為 3.3–4.5 秒。encode RSS 呈 `-n` 線性關係
-（在途 chunk 數 × 每個 chunk 約 8MiB）。decode 經由 macOS 建置靜態連結的固定版本
-zlib；macOS 的系統 libz 解壓約快 2 倍（見 chunk 大小一節）。
+encode 為 4.2–7.6 秒，decode 為 1.9–2.6 秒（`n=40` 有一次 4.1 秒的離群值）。encode RSS
+呈 `-n` 線性關係（在途 chunk 數 × 每個 chunk 約 8MiB）。decode 經由系統 libz；先前
+macOS 建置連結固定版 zlib 1.3.2 時，decode 為 3.3–4.5 秒。
 
 ### Windows 驗證
 
@@ -264,7 +262,7 @@ codec 經由專用的 `DispatchQueue` pipe pump，並以同步 `readData(ofLengt
 encode 呈現預期的線性 `-n` 關係，decode 則穩定維持約 45–47MB。
 
 完整掃描中 encode 為 8.2–19.5 秒；正常平行平台區（`-n 12..40`）為 8.2–8.4 秒，
-接近 macOS 的 4.6–8.2 秒。Decode 為 13.4–13.8 秒，慢於 macOS 的 3.3–4.5 秒，
+接近 macOS 的 4.2–7.6 秒。Decode 為 13.4–13.8 秒，慢於 macOS 的 1.9–2.6 秒，
 因此 Windows 解出與檔案 I/O 成本仍是另一個最佳化目標。
 
 ### 副檔名相容性
@@ -278,7 +276,7 @@ encode 呈現預期的線性 `-n` 關係，decode 則穩定維持約 45–47MB�
 
 - 在 macOS 上，TGZ 的記憶體用量與 LZFSE 格式相當或更低。預設 `-n`
   不需調整；需要時仍可降低 `-n`，以 encode 速度換取更低記憶體
-  （`n=4` = 115MB，時間增加 75%）。
+  （`n=4` = 112MB，時間增加 78%）。
 - 在 Windows 上，native zlib 將 TGZ encode RSS 維持在 62–191MB
   （`-n 4–40`，線性），decode RSS 約 45–47MB，且不受 `-n` 影響。
 - 使用靜態 zlib 時，平行 encode 為 8.2–8.4 秒；decode 為 13.4–13.8 秒，仍是
@@ -503,8 +501,8 @@ tar 越慢。
 
 **TGZ 解壓是對照組唯一不同之處，而原因是 zlib，不是 chunk。** 對照組（已安裝的
 `swift_tar 0.1.1`，正式建置）TGZ 解壓為 482 MB/s，4 MiB 變體為 930 MB/s，−48.2%。
-正式建置靜態連結固定版本的 zlib submodule；變體以 `-lz` 連結系統 libz，而它在 macOS
-上解壓約快 2 倍。
+當時的正式建置靜態連結固定版本的 zlib submodule；變體以 `-lz` 連結系統 libz，而它在 macOS
+上解壓約快 2 倍。macOS 建置自 0.1.2 起改回系統 libz，正是因為這項差異。
 
 **維持 4 MiB。** 放大 chunk 只換到 ≤4% 的 ZSTD 大小，速度沒有變好。TGZ 完全不受影響——gzip
 的視窗只有 32 KiB，chunk 碰不到它。

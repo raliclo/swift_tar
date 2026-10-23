@@ -105,7 +105,15 @@ fi
 # macOS 的目的檔一律如此。
 platform_flags=()
 case "$(swift_tar_platform)" in
-    mac)   build_dir="build/libarchive-macos"; version_file="version-mac.txt" ;;
+    # The SDK swiftc links against. Homebrew's clang otherwise defaults to the
+    # CommandLineTools SDK while FindZLIB finds zlib.h in the Xcode SDK; that directory
+    # then goes in as a plain -I and two SDKs' headers mix (seen as 800+
+    # -Wnullability-completeness warnings from _stdio.h).
+    # 與 swiftc 連結時相同的 SDK。否則 Homebrew 的 clang 預設用 CommandLineTools SDK，而
+    # FindZLIB 在 Xcode SDK 找到 zlib.h；那個目錄便以一般 -I 加入，兩份 SDK 的標頭混用（表現為
+    # _stdio.h 的 800 多個 -Wnullability-completeness 警告）。
+    mac)   build_dir="build/libarchive-macos"; version_file="version-mac.txt"
+           platform_flags=(-DCMAKE_OSX_SYSROOT="$(xcrun --show-sdk-path)") ;;
     linux) build_dir="build/libarchive-linux"; version_file="version-linux.txt"
            platform_flags=(-DCMAKE_POSITION_INDEPENDENT_CODE=ON) ;;
     # The musl cross targets (compile_tar-musl.zsh) take their cmake toolchain file from
@@ -119,8 +127,15 @@ case "$(swift_tar_platform)" in
         exit 1
         ;;
 esac
+# Without ZLIB_LIBRARY, drop any zlib paths cached by an earlier configure so FindZLIB looks
+# again. A build dir configured against the pinned zlib otherwise keeps compiling libarchive
+# with the pinned headers while the binary links another libz (macOS left the pinned zlib
+# on 2026-10-23).
+# 未給 ZLIB_LIBRARY 時，清掉先前 configure 快取的 zlib 路徑，讓 FindZLIB 重新尋找。否則一個曾以
+# 固定版 zlib configure 過的建置目錄，會繼續以固定版標頭編譯 libarchive，而執行檔連結的卻是另一份
+# libz（macOS 於 2026-10-23 改回系統 zlib）。
 typeset -a zlib_options
-zlib_options=()
+zlib_options=(-UZLIB_LIBRARY -UZLIB_LIBRARY_RELEASE -UZLIB_LIBRARY_DEBUG -UZLIB_INCLUDE_DIR)
 if [[ -n ${ZLIB_LIBRARY:-} ]]; then
     zlib_options=(-DZLIB_LIBRARY="$ZLIB_LIBRARY" -DZLIB_LIBRARY_RELEASE="$ZLIB_LIBRARY" \
                   -DZLIB_INCLUDE_DIR="${ZLIB_INCLUDE_DIR:?}")

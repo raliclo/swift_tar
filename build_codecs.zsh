@@ -1,8 +1,9 @@
 #!/usr/bin/env zsh
 # build_codecs.zsh -- build zlib, liblzma (xz), liblz4 and libzstd from their pinned
 # submodules as static libraries, and record the gitlinks in version-<platform>.txt.
+# zlib is skipped on macOS, which links the system libz.
 # build_codecs.zsh -- 以固定版本的 submodule 建置 zlib、liblzma(xz)、liblz4 與 libzstd
-# 靜態庫，並將 gitlink 記入 version-<平台>.txt。
+# 靜態庫，並將 gitlink 記入 version-<平台>.txt。macOS 不建 zlib，改連結系統 libz。
 #
 #   zsh ./build_codecs.zsh          build all three / 建置三者
 #   zsh ./build_codecs.zsh --help   print this synopsis and exit / 印出說明後結束
@@ -64,8 +65,19 @@ cd "$SCRIPT_DIR"
 # sync_all.zsh 移動的 pin 只在 macOS 建置與測試：2026-10-12 lz4 由 0774d055 升到 8aba903e，
 # 而隨後的 Linux 那一輪照舊連結 liblz4.so.1.10.0。現在 cmake 與原始碼都在時，
 # compile_tar-linux.zsh 會呼叫本腳本。Windows 另有自己的 build_*-win.zsh。
+#
+# zlib is built here for Linux and musl only. macOS links the system libz instead: on the
+# Apple M4 it inflates about 1.9x faster than upstream 1.3.2 (built -O3, with either
+# compiler, hardware CRC32 present), which is 1.6-1.7x on swift_tar's gzip and ZIP
+# extraction, while deflate output is byte-identical. compile_tar.zsh records it from the
+# linked binary with otool, the same way as libbz2.
+# zlib 只為 Linux 與 musl 在此建置。macOS 改連結系統 libz：在 Apple M4 上它的 inflate 比上游
+# 1.3.2 快約 1.9 倍（以 -O3 建置，兩種編譯器皆然，且已用到硬體 CRC32），反映在 swift_tar 的
+# gzip 與 ZIP 解壓上是 1.6–1.7 倍，而 deflate 輸出逐位元組相同。compile_tar.zsh 以 otool 自
+# 連結好的執行檔記錄它，與 libbz2 相同。
+codec_keys=(zlib lz4 xz zstd)
 case "$(swift_tar_platform)" in
-    mac)   plat=macos; version_file="version-mac.txt"; pic=() ;;
+    mac)   plat=macos; version_file="version-mac.txt"; pic=(); codec_keys=(lz4 xz zstd) ;;
     linux) plat=linux; version_file="version-linux.txt"; pic=(-DCMAKE_POSITION_INDEPENDENT_CODE=ON) ;;
     musl-aarch64|musl-x86_64)
            plat=$(swift_tar_platform); version_file="version-$plat.txt"; pic=() ;;
@@ -101,9 +113,11 @@ if command -v git >/dev/null 2>&1 && [ -e .git ]; then in_git=1; fi
 if [ "$in_git" = 1 ]; then
     # Never moves a checked-out submodule; see submodule_pins.zsh. / 絕不移動已 checkout 的子模組；見 submodule_pins.zsh。
     . ./submodule_pins.zsh
-    ensure_submodule_pins zlib xz lz4 zstd || exit 1
+    ensure_submodule_pins $codec_keys || exit 1
 else
-    for d in zlib xz lz4/build/cmake zstd/build/cmake; do
+    src_dirs=(xz lz4/build/cmake zstd/build/cmake)
+    (( ${codec_keys[(Ie)zlib]} )) && src_dirs=(zlib $src_dirs)
+    for d in $src_dirs; do
         if [ ! -f "$d/CMakeLists.txt" ]; then
             echo "[FAIL] not a git checkout and $d/ has no sources / 不是 git checkout，且 $d/ 沒有原始碼" >&2
             exit 1
@@ -112,13 +126,15 @@ else
     echo "[NOTICE] not a git checkout: building the codec sources as shipped / 不是 git checkout：依送來的 codec 原始碼原樣建置" >&2
 fi
 
-# Build zlib from the same headers imported by Swift.
-# 以 Swift 匯入的同一份標頭建置 zlib。
-cmake -S zlib -B build/zlib-$plat "${cross[@]}" \
-    -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    -DZLIB_BUILD_SHARED=OFF -DZLIB_BUILD_STATIC=ON -DZLIB_BUILD_TESTING=OFF
-cmake --build build/zlib-$plat --config Release --target zlibstatic --parallel
-[ -f build/zlib-$plat/libz.a ] || exit 1
+# Build zlib from the same headers imported by Swift (not on macOS; see above).
+# 以 Swift 匯入的同一份標頭建置 zlib（macOS 除外，見上）。
+if (( ${codec_keys[(Ie)zlib]} )); then
+    cmake -S zlib -B build/zlib-$plat "${cross[@]}" \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DZLIB_BUILD_SHARED=OFF -DZLIB_BUILD_STATIC=ON -DZLIB_BUILD_TESTING=OFF
+    cmake --build build/zlib-$plat --config Release --target zlibstatic --parallel
+    [ -f build/zlib-$plat/libz.a ] || exit 1
+fi
 
 # ---- xz / liblzma ----
 # The encoder is needed as well as the decoder: swift_tar calls
@@ -231,12 +247,13 @@ tmp_version="$version_file.tmp"
     # grep 在沒有輸出時以 1 結束，在此情境即代表檔案裡只有 codec 鍵。僅容忍該狀態；
     # 真正的 grep 錯誤（2）仍會失敗，而檔案不存在已於上方擋下，故此處不會靜默產生
     # 一份被截斷的紀錄。
-    grep -vE '^(zlib|lz4|xz|zstd)_(dylib_version|so_version|path|version|commit|linkage)=' \
+    # Only this platform's codec keys: on macOS the zlib_* keys belong to compile_tar.zsh.
+    # 只處理本平台的 codec 鍵：macOS 上的 zlib_* 鍵歸 compile_tar.zsh 管。
+    grep -vE "^(${(j:|:)codec_keys})_(dylib_version|so_version|path|version|commit|linkage)=" \
         "$version_file" || [ $? -eq 1 ]
-    for pair in "zlib:zlib" "lz4:lz4" "xz:xz" "zstd:zstd"; do
-        key="${pair%%:*}"; dir="${pair#*:}"
-        echo "${key}_version=$(describe "$dir")"
-        echo "${key}_commit=$(commit_of "$dir")"
+    for key in $codec_keys; do
+        echo "${key}_version=$(describe "$key")"
+        echo "${key}_commit=$(commit_of "$key")"
         echo "${key}_linkage=static"
     done
 } > "$tmp_version"

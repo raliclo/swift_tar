@@ -9,7 +9,7 @@
 # runCLI() 進入點後兩檔合併編譯）。
 #
 # Links / 連結：
-#   libz.a     : zlib submodule (static) — gzip members / gzip 成員
+#   -lz        : zlib (SDK, dynamic)     — gzip members / gzip 成員
 #   -lbz2      : libbz2 (SDK, dynamic)   — bzip2 streams / bzip2 串流
 #   liblzma.a  : xz submodule (static)   — xz / lzma / lzip
 #   libzstd.a  : zstd submodule (static) — zstd frames
@@ -106,7 +106,11 @@ mkdir -p release
 # failed; the two binaries simply became indistinguishable by the field that exists to
 # distinguish them.
 #
-# Only bzip2 is recorded after linking; zlib provenance is written by build_codecs.zsh.
+# zlib and bzip2 stay one build behind by necessity: their record is read back from the
+# finished binary with otool, which cannot happen before the stamp is compiled into it.
+# They come from the SDK and move only with the OS. zlib went back to the SDK because the
+# system libz inflates about 1.9x faster than the pinned 1.3.2 on the Apple M4, with
+# byte-identical deflate output; see build_codecs.zsh.
 #
 # 相依建置腳本要在 generate_version.zsh **之前**執行，不是之後。
 #
@@ -119,9 +123,11 @@ mkdir -p release
 # 了新 commit，而 `swift_tar --version` 仍回報 20260917-065248——與內含舊 liblzma 的那個
 # 執行檔同一個字串。沒有任何一步失敗，只是兩個執行檔在「用來區分它們的那個欄位」上再也分不開。
 #
-# 只有 bzip2 在連結後記錄；zlib 來源由 build_codecs.zsh 在產生戳記前記錄。
+# zlib 與 bzip2 必然落後一次建置：它們的紀錄是以 otool 自完成的執行檔讀回，而那不可能發生在
+# 戳記被編進去之前。兩者取自 SDK，只隨 OS 變動。zlib 改回 SDK 版，是因為在 Apple M4 上系統
+# libz 的 inflate 比固定版 1.3.2 快約 1.9 倍，而 deflate 輸出逐位元組相同；見 build_codecs.zsh。
 zsh ./build_codecs.zsh
-ZLIB_LIBRARY="$PWD/build/zlib-macos/libz.a" ZLIB_INCLUDE_DIR="$PWD/zlib" zsh ./build_libarchive.zsh
+zsh ./build_libarchive.zsh
 
 # zsh, not sh: both callees declare `#!/usr/bin/env zsh`, and `sh script`
 # ignores the shebang. Running a zsh script under sh works only for as long as
@@ -138,8 +144,7 @@ SWIFT_TAR_LZFSE_SOURCE=$([[ "$EXCLUDE_LZFSE" != 1 ]] && print -r -- lzfse2/lzfse
 swiftc -O -swift-version 6 $SWIFT_DEFINES $CLI_SRC "$TEMP_VERSION" swift_tar.swift rgb1.swift crypto.swift \
     build/libarchive_zip_bridge.o build/libarchive-macos/libarchive/libarchive.a \
     build/xz-macos/liblzma.a build/lz4-macos/liblz4.a build/zstd-macos/lib/libzstd.a \
-    -I cmodules/PinnedZlib -Xcc -I"$PWD/zlib" \
-    -o release/swift_tar build/zlib-macos/libz.a -lbz2
+    -o release/swift_tar -lz -lbz2
 
 echo "Built ./release/swift_tar / 已建置 ./release/swift_tar"
 
@@ -177,10 +182,28 @@ record_linked() {        # key  first-field pattern / 鍵名 與 第一欄比對
             exit
         }'
 }
+# The system zlib's version. If otool gives no numeric current version, the OS build
+# identifies it instead: the system libz changes only with macOS.
+# 系統 zlib 的版本。otool 讀不到數字形式的 current version 時，改以 OS 版本與 build
+# 辨識它：系統 libz 只隨 macOS 變動。
+record_zlib() {
+    local out
+    out=$(record_linked zlib 'libz\.')
+    if [[ $out == zlib_dylib_version=[0-9]* ]]; then
+        print -r -- "$out"
+        return
+    fi
+    print -r -- "zlib_dylib_version=macos-$(sw_vers -productVersion)-$(sw_vers -buildVersion)"
+    print -r -- "zlib_path=/usr/lib/libz.1.dylib"
+    print -r -- "zlib_linkage=dynamic"
+}
 version_file="version-$(swift_tar_platform).txt"
 tmp_version="$version_file.tmp"
 {
-    grep -vE '^bzip2_(dylib_version|path|linkage)=' "$version_file" 2>/dev/null || true
+    # zlib_version/zlib_commit are cleared too: they described the pinned submodule.
+    # 一併清除 zlib_version／zlib_commit：它們描述的是固定版 submodule。
+    grep -vE '^(zlib|bzip2)_(dylib_version|path|version|commit|linkage)=' "$version_file" 2>/dev/null || true
+    record_zlib
     record_linked bzip2 'libbz2\.'
 } > "$tmp_version"
 mv "$tmp_version" "$version_file"

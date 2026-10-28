@@ -458,6 +458,7 @@ archive need not have been written by this tool:
 | `../../x`, `dir/../../x`, `..\..\x` | entry skipped: `skipping unsafe path '<name>'` |
 | `/etc/x`, `C:\Windows\x` | leading `/` and any drive letter dropped; written **inside** the destination |
 | a member whose path runs through a symlink an earlier entry created | entry skipped: `path passes through a symlink` |
+| a member whose path runs through a link **already on disk** under `-C` — on Windows a junction or LX symlink too, not only a symlink | entry skipped and counted, tar and ZIP alike; `--no-links` cannot help here, because the link was never in the archive (junctions fixed 2026-10-29, `test/test_junction_extract.zsh`) |
 | a symlink member whose target points outside, e.g. `portal -> ../..` | **created as stored**, exit `0`; with `--no-links` it is not created: `skipping link 'portal' (symlink -> ../..)` |
 
 The third row is a separate attack from the first: an archive can carry a symlink

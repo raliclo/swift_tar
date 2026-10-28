@@ -2799,6 +2799,25 @@ private func winReparseTag(_ path: String) -> UInt32? {
     return data.dwReserved0
 }
 
+/// Whether `path` is a reparse point that stands for another named entity -- the
+/// name-surrogate bit (0x20000000, IsReparseTagNameSurrogate) of its tag. That one bit covers a
+/// symlink (0xA000000C), a junction (0xA0000003) and an LX symlink (0xA000001D), and none of the
+/// cloud placeholders, dedup stubs or AppExecLinks, which are files in their own right. It is
+/// what -x must refuse to write through: a junction reports as an ordinary directory to
+/// FileManager, so `dest/j` pointing outside let `j/evil.txt` land outside -C with exit 0
+/// (2026-10-24 review). Asking the tag rather than listing junctions keeps the rule from
+/// missing the next surrogate kind.
+/// `path` 是否為「代表另一個具名對象」的 reparse point——即其 tag 的 name-surrogate 位元
+/// （0x20000000，IsReparseTagNameSurrogate）。這一個位元涵蓋 symlink（0xA000000C）、junction
+/// （0xA0000003）與 LX symlink（0xA000001D），且不含雲端佔位、dedup stub、AppExecLink——那些本身
+/// 就是檔案。這正是 -x 不可穿過寫出的對象：junction 在 FileManager 看來是一般目錄，於是指向外部
+/// 的 `dest/j` 讓 `j/evil.txt` 落在 -C 之外並以 0 結束（2026-10-24 審查）。問 tag 而非列舉
+/// junction，下一種 surrogate 也不會漏掉。
+private func winIsNameSurrogate(_ path: String) -> Bool {
+    guard let tag = winReparseTag(path) else { return false }
+    return (tag & 0x2000_0000) != 0
+}
+
 /// A symlink's target read straight from its reparse buffer, so a DANGLING link (target absent)
 /// still round-trips with its real linkname instead of an empty one: destinationOfSymbolicLink
 /// returns nil for it (measured on Windows 2026-10-14). FSCTL_GET_REPARSE_POINT needs no existing
@@ -5283,6 +5302,11 @@ final class TarReader {
                    attrs[.type] as? FileAttributeType == .typeSymbolicLink {
                     return true
                 }
+                #if os(Windows)
+                // A junction reads as .typeDirectory above; see winIsNameSurrogate.
+                // junction 在上方讀作 .typeDirectory；見 winIsNameSurrogate。
+                if winIsNameSurrogate(walked) { return true }
+                #endif
                 cleared.insert(walked)
             }
             walked += "/"

@@ -1555,7 +1555,19 @@ static int copy_archive_data_to_stdout(struct archive *reader,
  * 把檔案刪掉騰出位置。2026-10-07 實測：含 `a`（檔案）、`a/b`、`c` 的 ZIP 在 Windows 解出
  * 後 `a` 成了目錄、內含 `b`，檔案內容消失，以 0 結束且 stderr 無訊息。這裡恢復 POSIX 的
  * 結果，解出前就在磁碟上的檔案亦同（2026-10-07 決定：ZIP 路徑與其他平台的 ZIP 路徑一致——
- * 拒絕不會遺失資料，取代會）。 */
+ * 拒絕不會遺失資料，取代會）。
+ *
+ * Returns 2 instead when the ancestor is a name-surrogate reparse point: a symlink, a junction
+ * or an LX symlink (tag bit 0x20000000, IsReparseTagNameSurrogate). libarchive's
+ * SECURE_SYMLINKS refuses a symlink there but sees a junction as a directory, so a junction
+ * `j` already under -C, pointing outside, let `j/evil.txt` be written outside with exit 0
+ * (2026-10-24 review). Same rule as winIsNameSurrogate in swift_tar.swift. Folded into this
+ * walk so each ancestor is still asked once.
+ * 上層若為 name-surrogate reparse point——symlink、junction 或 LX symlink（tag 位元
+ * 0x20000000，IsReparseTagNameSurrogate）——則改回傳 2。libarchive 的 SECURE_SYMLINKS 會在此
+ * 拒絕 symlink，卻把 junction 當成目錄，於是 -C 之下既有、指向外部的 junction `j` 讓
+ * `j/evil.txt` 寫到外部並以 0 結束（2026-10-24 審查）。規則同 swift_tar.swift 的
+ * winIsNameSurrogate。併入這次走訪，使每個上層仍只被詢問一次。 */
 static int blocking_ancestor(const wchar_t *path, wchar_t *out, size_t out_count) {
     size_t len = wcslen(path);
     /* Only true ancestors count: a directory entry `a/` is `a` itself, not something
@@ -1582,6 +1594,15 @@ static int blocking_ancestor(const wchar_t *path, wchar_t *out, size_t out_count
         wchar_t sep = out[i];
         out[i] = L'\0';
         DWORD attrs = GetFileAttributesW(out);
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) {
+            /* Only a reparse point pays for the tag lookup. / 只有 reparse point 才查 tag。 */
+            WIN32_FIND_DATAW data;
+            HANDLE h = FindFirstFileW(out, &data);
+            if (h != INVALID_HANDLE_VALUE) {
+                FindClose(h);
+                if (data.dwReserved0 & 0x20000000u) return 2;
+            }
+        }
         if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
             return 1;
         }
@@ -1590,6 +1611,38 @@ static int blocking_ancestor(const wchar_t *path, wchar_t *out, size_t out_count
     return 0;
 }
 #endif
+
+/* For a link under --no-links: the reason libarchive's SECURE_NODOTDOT or
+ * SECURE_NOABSOLUTEPATHS would give for refusing `name`, or NULL if the name is safe. Backslash
+ * and a drive letter count only on Windows, where they are separators and roots; elsewhere they
+ * are ordinary name bytes. The caller refuses and counts the link itself rather than passing it
+ * on, so a misjudged name can change how a link is reported but never lets one be created.
+ * 供 --no-links 下的連結使用：libarchive 的 SECURE_NODOTDOT 或 SECURE_NOABSOLUTEPATHS 拒絕
+ * `name` 時會給的理由；名稱安全則回 NULL。反斜線與磁碟代號只在 Windows 上算數——在那裡它們是
+ * 分隔符與根；其他平台上只是名稱裡的普通位元組。呼叫端自行拒絕並計數，不再往下傳，所以判斷
+ * 失準只會改變連結被回報的方式，永遠不會讓連結被建立。 */
+static const char *unsafe_name_reason(const char *name) {
+#ifdef _WIN32
+#define SWIFT_TAR_IS_SEP(c) ((c) == '/' || (c) == '\\')
+#else
+#define SWIFT_TAR_IS_SEP(c) ((c) == '/')
+#endif
+    if (name == NULL || name[0] == '\0') return NULL;
+    if (SWIFT_TAR_IS_SEP(name[0])) return "Path is absolute";
+#ifdef _WIN32
+    if (((name[0] >= 'A' && name[0] <= 'Z') || (name[0] >= 'a' && name[0] <= 'z')) && name[1] == ':') {
+        return "Path is absolute";
+    }
+#endif
+    for (const char *p = name; *p != '\0'; ) {
+        const char *end = p;
+        while (*end != '\0' && !SWIFT_TAR_IS_SEP(*end)) end++;
+        if (end - p == 2 && p[0] == '.' && p[1] == '.') return "Path contains '..'";
+        p = (*end == '\0') ? end : end + 1;
+    }
+    return NULL;
+#undef SWIFT_TAR_IS_SEP
+}
 
 int swift_tar_zip_read(const char *archive_path,
                        const char *destination_dir,
@@ -1739,15 +1792,33 @@ int swift_tar_zip_read(const char *archive_path,
         }
         /* --no-links, the same rule and the same stderr line as the tar reader (tarNoLinks in
          * swift_tar.swift): a symlink or hard link member is named and not created, and not
-         * counted for --strict. Unsafe names never get here as links: libarchive's SECURE_*
-         * flags refuse them when writing, which is counted below.
+         * counted for --strict. A link with an unsafe name is refused as unsafe instead, with
+         * libarchive's wording, and counted, as the tar reader and README promise. It is refused
+         * here rather than passed on to SECURE_*, so no misjudged name can reach the disk.
          * --no-links，規則與 stderr 訊息皆與 tar 讀取端相同（見 swift_tar.swift 的 tarNoLinks）：
-         * 符號連結或硬連結成員只報出名稱、不建立，也不計入 --strict。名稱不安全者由 libarchive
-         * 的 SECURE_* 旗標在寫入時拒絕，並於下方計數。 */
+         * 符號連結或硬連結成員只報出名稱、不建立，也不計入 --strict。名稱不安全的連結則改以不安全
+         * 路徑拒絕（沿用 libarchive 的措辭）並計數，與 tar 讀取端及 README 的承諾一致。在此直接
+         * 拒絕而不交給 SECURE_*，使判斷失準的名稱也不可能落到磁碟上。
+         *
+         * CORRECTED 2026-10-29. This comment used to say "Unsafe names never get here as links:
+         * libarchive's SECURE_* flags refuse them when writing". They did get here, and this
+         * branch ran first and dropped them, so `--no-links` on a ZIP holding a symlink named
+         * `../portal` exited 0 where tar exits 1. The SECURE_* refusal is real, but it is
+         * downstream of this branch, so it never saw the name.
+         * 2026-10-29 更正。此註解原本寫「名稱不安全者不會以連結身分走到這裡：libarchive 的 SECURE_*
+         * 旗標在寫入時拒絕它們」。它們確實會走到這裡，而本分支先執行並把它們略過，於是 ZIP 中名為
+         * `../portal` 的 symlink 在 `--no-links` 下以 0 結束，tar 則以 1 結束。SECURE_* 的拒絕是真的，
+         * 但位在本分支之後，所以從沒看到那個名稱。 */
         if (extract && !to_stdout && no_links) {
             const char *hard = archive_entry_hardlink_utf8(entry);
             if (hard == NULL) hard = archive_entry_hardlink(entry);
             if (hard != NULL || archive_entry_filetype(entry) == AE_IFLNK) {
+                const char *unsafe = unsafe_name_reason(path);
+                if (unsafe != NULL) {
+                    fprintf(stderr, "swift_tar: %s: %s\n", path, unsafe);
+                    skipped++;
+                    continue;
+                }
                 const char *target = hard;
                 if (target == NULL) target = archive_entry_symlink_utf8(entry);
                 if (target == NULL) target = archive_entry_symlink(entry);
@@ -1785,7 +1856,16 @@ int swift_tar_zip_read(const char *archive_path,
                  * mangle a non-ASCII name. / 用寬字元路徑：窄字元會經 ANSI 字碼頁而弄壞非 ASCII 名稱。 */
                 const wchar_t *wpath = archive_entry_pathname_w(entry);
                 wchar_t blocker[MAX_PATH * 4];
-                if (wpath != NULL && blocking_ancestor(wpath, blocker, sizeof blocker / sizeof blocker[0])) {
+                int blocked = wpath != NULL
+                    ? blocking_ancestor(wpath, blocker, sizeof blocker / sizeof blocker[0]) : 0;
+                if (blocked == 2) {
+                    fprintf(stderr, "swift_tar: %s: Cannot extract through symlink or junction '%ls'\n",
+                            path != NULL ? path : "", blocker);
+                    archive_read_data_skip(reader);
+                    skipped++;
+                    continue;
+                }
+                if (blocked) {
                     fprintf(stderr, "swift_tar: %s: Can't create directory '%ls': a file is in the way\n",
                             path != NULL ? path : "", blocker);
                     archive_read_data_skip(reader);

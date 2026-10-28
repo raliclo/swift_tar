@@ -131,5 +131,53 @@ else
   skipc "zip: cannot make a real symlink here / 此處無法建立真正的 symlink"
 fi
 
+# 8. ZIP: a link with an unsafe name is still refused as unsafe and still counts, as case 4
+#    checks for tar. The ZIP backend dropped it as a --no-links link before libarchive's
+#    SECURE_* check ever saw the name, so it exited 0 where tar exits 1 (2026-10-24 review).
+#    No ZIP writer stores "../portal", so a link named `zzzportal` (same length) is zipped
+#    and the name rewritten in place: the CRC covers data, not the name. `ln -s` copies
+#    under MSYS, so Windows falls back to mklink, and -L confirms a real link either way.
+#    ZIP：名稱不安全的連結仍以不安全路徑拒絕並計入，與第 4 項對 tar 的檢查相同。ZIP 後端原本
+#    在 libarchive 的 SECURE_* 看到名稱之前，就把它當成 --no-links 的連結略過，於是 tar 以 1
+#    結束時它以 0 結束（2026-10-24 審查）。沒有 ZIP 寫入器會存 "../portal"，故先壓一個同長度
+#    的 `zzzportal` 連結再原地改寫名稱：CRC 只涵蓋資料、不含名稱。MSYS 下 `ln -s` 會複製，
+#    故 Windows 改用 mklink，兩者都以 -L 確認是真正的連結。
+mkdir -p "$TMP/usrc"
+print -n hello > "$TMP/usrc/a.txt"
+case "$(uname -s)" in
+  MSYS*|MINGW*|CYGWIN*) ( cd "$TMP/usrc" && cmd.exe //c mklink zzzportal '..\..' ) >/dev/null 2>&1 </dev/null \
+                          || true ;;  # Developer Mode or admin needed; -L below decides / 需開發者模式或管理員，由下方 -L 判定
+  *) ln -s ../.. "$TMP/usrc/zzzportal" ;;
+esac
+if [[ -L $TMP/usrc/zzzportal ]]; then
+  ( cd "$TMP/usrc" && "$ST" -c --zip -f "$TMP/z9.zip" a.txt zzzportal )
+  # LC_ALL=C in the shell itself, so the substitution works on bytes, not characters; the
+  # trailing x keeps $(...) from eating a final newline byte.
+  # 在殼本身設 LC_ALL=C，使替換以位元組而非字元進行；結尾的 x 避免 $(...) 吃掉最後的換行位元組。
+  () { local LC_ALL=C b; b=$(cat "$1"; print -n x); b=${b%x}; printf '%s' "${b//zzzportal/../portal}" > "$2" } \
+    "$TMP/z9.zip" "$TMP/u.zip"
+  # Two copies of the name (local header, central directory), three bytes each.
+  # 名稱有兩份（本地標頭、中央目錄），各改三個位元組。
+  ndiff=$(cmp -l "$TMP/z9.zip" "$TMP/u.zip" | wc -l) || true  # cmp exits 1 when files differ, which is the point / 檔案不同時 cmp 以 1 結束，那正是預期
+  if (( ndiff == 6 )); then
+    mkdir "$TMP/ouz"
+    rc=0; "$ST" -x --no-links -f "$TMP/u.zip" -C "$TMP/ouz" 2>"$TMP/euz" || rc=$?
+    (( rc != 0 )) && ok "zip: unsafe link name still fails --strict / zip：不安全名稱仍使嚴格模式失敗" \
+                  || { bad "zip: unsafe link: exit 0"; cat "$TMP/euz" }
+    grep -q "Path contains '..'" "$TMP/euz" && ok "zip: unsafe link reported as unsafe / zip：以不安全路徑回報" \
+                                           || { bad "zip: unsafe line missing"; cat "$TMP/euz" }
+    ! grep -q 'skipping link' "$TMP/euz" && ok "zip: unsafe link not reported as a --no-links drop / zip：不以 --no-links 回報" \
+                                          || bad "zip: unsafe link also reported as link"
+    [[ $(cat "$TMP/ouz/a.txt") == hello ]] && ok "zip: the safe member is still extracted / zip：安全成員仍解出" \
+                                           || bad "zip: a.txt missing"
+    [[ ! -e $TMP/portal && ! -L $TMP/portal ]] && ok "zip: nothing created outside -C / zip：-C 之外沒有建立任何東西" \
+                                               || bad "zip: portal created outside -C"
+  else
+    bad "zip: fixture rewrite changed $ndiff bytes, expected 6 / zip：測資改寫了 $ndiff 個位元組，應為 6"
+  fi
+else
+  skipc "zip unsafe name: cannot make a real symlink here / 此處無法建立真正的 symlink"
+fi
+
 print -r -- "PASS: $pass  FAIL: $fail  SKIP: $skip"
 (( fail == 0 ))

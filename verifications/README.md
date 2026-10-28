@@ -635,3 +635,24 @@ run on a machine of its own platform and architecture:
 in an empty environment, round-trips a `.tar.gz`, sees LZFSE refused, and runs
 `--crypto-selftest` and `-test`. The macOS and Linux builds had no warnings; the
 Windows build has the same 22 linker warnings as 0.1.1.
+
+## Release 0.1.3: the four archives, and the whole suite on each platform
+
+[`release_0.1.3_output.txt`](release_0.1.3_output.txt) collects the verification
+of the four public archives built at tag `v0.1.3` (`6b96dc37`), which adds
+`-x --no-links`. Unlike 0.1.2, the whole test suite was also run at the tagged
+commit on three platforms before the tag was made:
+
+| Platform | Whole suite at `6b96dc3` | Archive | Run on | Result |
+|---|---|---|---|---|
+| macOS | 31 files, FAIL 0 (874 counted PASS + `record_zlib` 3/0) | macos-arm64 | Mac M4 | `release.zsh` verified |
+| Windows | 31 files, 770/0 | windows-x86_64 | Windows, Swift 6.4.1 | `release.zsh` verified; crypto 51/0 |
+| Linux | WSL: 31 files, 845/0 | linux-x86_64 | WSL2 x86_64 | `verify_release.zsh` VERIFIED, rc=0 |
+| Linux | — | linux-aarch64 | aarch64 VM | `verify_release.zsh` VERIFIED, rc=0 |
+
+`test_no_links` is 25/0 on all four platforms, with real symlinks on Windows.
+The aarch64 VM has no Swift toolchain, so it runs the release binary rather than
+the suite. The macOS and Linux builds had no warnings; the Windows build has the
+same 22 linker warnings as 0.1.2. Each node then installed the published archive
+(brew, scoop, `~/.local/bin` on WSL, LinuxCS's pin on the VM) and reported
+`swift_tar 0.1.3 (v0.1.3 / 6b96dc37)`.

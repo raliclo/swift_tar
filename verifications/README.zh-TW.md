@@ -556,3 +556,21 @@ claw-code（1.4 GB，5,448 個檔案）：
 `verify_release.zsh` 會核對 `.sha256`、確認執行檔是靜態連結、在空環境中執行、完成一次
 `.tar.gz` 往返、確認 LZFSE 被拒絕，並執行 `--crypto-selftest` 與 `-test`。macOS 與 Linux
 的建置沒有警告；Windows 建置有與 0.1.1 相同的 22 個連結器警告。
+
+## 0.1.3 發布：四份封存，以及各平台的整套測試
+
+[`release_0.1.3_output.txt`](release_0.1.3_output.txt) 彙整了在 tag `v0.1.3`（`6b96dc37`）
+建出的四份公開版封存的驗證結果；這一版新增 `-x --no-links`。與 0.1.2 不同的是，打 tag 前
+也在三個平台上以該 commit 跑過整套測試：
+
+| 平台 | `6b96dc3` 整套測試 | 封存 | 執行於 | 結果 |
+|---|---|---|---|---|
+| macOS | 31 支，0 失敗（有計數者 874 通過，另 `record_zlib` 3/0） | macos-arm64 | Mac M4 | `release.zsh` 驗證通過 |
+| Windows | 31 支，770/0 | windows-x86_64 | Windows，Swift 6.4.1 | `release.zsh` 驗證通過；加密自測 51/0 |
+| Linux | WSL：31 支，845/0 | linux-x86_64 | WSL2 x86_64 | `verify_release.zsh` VERIFIED，rc=0 |
+| Linux | — | linux-aarch64 | aarch64 VM | `verify_release.zsh` VERIFIED，rc=0 |
+
+`test_no_links` 在四個平台皆為 25/0，Windows 上是以真正的 symlink 測試。aarch64 VM 沒有 Swift
+工具鏈，所以那裡執行的是發布版執行檔，而不是整套測試。macOS 與 Linux 的建置沒有警告；Windows
+建置有與 0.1.2 相同的 22 個連結器警告。之後各節點都安裝了發布版（brew、scoop、WSL 的
+`~/.local/bin`、VM 上 LinuxCS 的釘選），回報皆為 `swift_tar 0.1.3 (v0.1.3 / 6b96dc37)`。

@@ -1,3 +1,4 @@
 id,title,total,sameday_max,sameday_date,days_seen,first_seen,last_seen,corrective,shape,guard
 編號,標題,總次數,單日最多,該日,發生天數,首次,最近,矯正措施,共同形狀,現行防範
 1,樣式要 extended_glob 而未開，檢查的一部分不可能失敗,1,1,2026-10-30,1,2026-10-30,2026-10-30,,"test_bridge_errors.zsh 以 [[:space:]]#(/\\*|\\*)* 略過註解行，而 # 需要 extended_glob；沒開時樣式從不成立，註解過濾形同不存在。測試照樣 4/4 通過，因為註解裡剛好沒有帶括號的呼叫","用到 #、(#c…)、(#i)、(#a…) 就在該處 setopt extended_glob；新檢查以 zsh -f 跑一次，並放一個必定落在被過濾那一邊的輸入，證明過濾器真的作用"
+2,管線末端的 tail 吞掉 push 失敗，&& 照樣推出上層 gitlink,1,1,2026-10-30,1,2026-10-30,2026-10-30,,git push origin master 2>&1 | tail -2 && cd .. && … git push：swift_tar 的 push 被拒（non-fast-forward），但 && 看的是 tail 的退出碼 0，於是上層照樣 commit 並推出指向遠端沒有之 commit 的 gitlink（7278ef3）,push 不接管線：先 push >out 2>&1、rc=$? 判斷，再推上層；推上層之前以 git branch -r --contains 確認子模組 commit 已在遠端

@@ -31,6 +31,7 @@ $S/counter.zsh -i mistakes_counter.csv2 bump 1 <date>   # 第 1 條再犯一次 
 | # | 標題 | 總次數 | 單日最多 | 發生天數 | 矯正措施 |
 | ---: | --- | ---: | ---: | ---: | --- |
 | 1 | 樣式要 `extended_glob` 而未開，檢查的一部分不可能失敗 | 1 | 1 | 1 | — |
+| 2 | 管線末端的 `tail` 吞掉 push 失敗，`&&` 照樣推出上層 gitlink | 1 | 1 | 1 | — |
 
 ---
 
@@ -73,3 +74,44 @@ passed 4/4 only because no comment then held the call with its parenthesis. Thre
 run, none of them on the filtered side. Caught before commit by rerunning under `zsh -f` with a
 source whose comments do name the call. Same shape as lzfse2's entry 10. Set `extended_glob`
 where it is used, run new checks under `zsh -f`, and give every filter an input it must filter.
+
+---
+
+## 2. 管線末端的 `tail` 吞掉 push 失敗，`&&` 照樣推出上層 gitlink — **已發生 1 次（2026-10-30）**
+
+**症狀**：一條「先推子模組、再推上層」的指令跑完，上層那一段印出 `65bbe9e..7278ef3  HEAD -> main`，
+看起來兩邊都推好了——**而上層剛推出的 gitlink 指向一個遠端沒有的 commit**（`958741c`）。
+
+**實際狀況**：
+
+```zsh
+git push origin master 2>&1 | tail -2 && cd .. && … git commit … && git push origin HEAD
+```
+
+swift_tar 的 push 被拒（non-fast-forward：另一處已先推了內容相同的 `fb86de8`），拒絕訊息就在
+`tail -2` 印出的那兩行 hint 上方。但 `&&` 判斷的是**管線最後一個指令** `tail` 的退出碼，那是 0，
+於是後半段照跑：上層 commit 了 `958741c` 的指標並推了出去。拒絕訊息被 `tail -2` 截到只剩
+`hint: use 'git pull' before pushing again.`，而它與成功的輸出一起捲過去。
+
+**怎麼發現的**：讀那次輸出時才看到 `hint:` 兩行與 `[ahead 1, behind 1]`。事後補了一個 commit
+（`bba229c`）把上層指標改指 origin 上的 `fb86de8`；沒有 force push，所以上層歷史裡留著一個暫時
+指錯的 `7278ef3`。
+
+**與 lzfse2 `mistakes.md` 第 1 條同形**（自己的過濾器把失敗藏起來），正是那裡列的第 7 種偽裝
+`cmd | tail -3; rc=$?`：**管線改變了 `$?`（以及 `&&`）指涉的對象。** 這次多了一層代價——後面
+接的不是一個摘要，而是一次對外的 push。
+
+**現在怎麼防**：
+
+- **push 不接管線。** `git push … >out 2>&1; rc=$?`，判斷 `rc` 之後才讀 `out`、才走下一步。
+  zsh 裡若非接管線不可，用 `setopt pipe_fail`，或看 `${pipestatus[1]}`。
+- **推上層 gitlink 之前，先確認子模組的那個 commit 已在遠端**：
+  `git -C swift_tar branch -r --contains <commit>` 要有 `origin/master`。這一步與退出碼無關，
+  所以前一步不管以什麼方式失敗，它都擋得住。
+- 子模組與上層的 push 分成兩條指令，中間看一次 `git status -sb`。
+
+`git push … 2>&1 | tail -2 && …` made `&&` test tail's exit status, so a rejected push
+(non-fast-forward) let the next half commit and push a parent gitlink pointing at a commit the
+remote did not have. Same shape as lzfse2 entry 1, seventh disguise. Never pipe a push; check
+its own status, and before pushing a parent gitlink confirm the submodule commit is on the
+remote with `git branch -r --contains`.

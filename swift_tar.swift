@@ -3001,26 +3001,32 @@ private func winUcrtPath(_ path: String) -> String {
     // 名稱、於 Linux 建立的封存時，只寫出六個檔案，`nul` 被無聲地丟進空裝置，且離開碼
     // 為 0。GNU tar 與 bsdtar 對同一封存都產出七個，故此非 Windows 的限制——bsdtar
     // 同樣是原生 Windows 程式。
-    if !p.hasPrefix("\\\\?\\") {
-        var comps: [Substring] = []
-        for c in p.split(separator: "\\", omittingEmptySubsequences: false) {
-            if c == "." { continue }
-            // An empty segment after the first real one is a doubled separator (`tree/` + member
-            // gives `tree//a.txt`). `\\?\` turns off the normalisation that used to drop it, so it
-            // has to go here: once winStat and the readers came through this function (finding H),
-            // `-c tree/` left every file out as "cannot open". Leading empties stay, so a UNC
-            // path is not changed by this.
-            // 第一個實際段落之後的空段落是重複的分隔符（`tree/` 加成員名得到 `tree//a.txt`）。`\\?\`
-            // 關閉了原本會丟掉它的正規化，所以必須在這裡處理：winStat 與讀取函式改走本函式之後
-            // （發現 H），`-c tree/` 把每個檔案都以「cannot open」略過。開頭的空段落保留，因此 UNC
-            // 路徑不受此改動影響。
-            if c.isEmpty && comps.contains(where: { !$0.isEmpty }) { continue }
-            if c == ".." { if comps.count > 1 { comps.removeLast() }; continue }
-            comps.append(c)
-        }
-        p = "\\\\?\\" + comps.joined(separator: "\\")
+    // Already `\\?\` or a `\\.\` device path: the caller meant it as written.
+    // 已是 `\\?\` 或 `\\.\` 裝置路徑：呼叫端就是要這個寫法。
+    if p.hasPrefix("\\\\?\\") || p.hasPrefix("\\\\.\\") { return p }
+    // A UNC path `\\server\share\x` becomes `\\?\UNC\server\share\x`, and `..` stops at the share
+    // as it stops at the drive. This produced `\\?\\\server\share\x`, which names nothing, so
+    // `-x -C \\server\share\dir` wrote no file (0.1.4 already); and once finding H sent winStat and
+    // the readers here, `-c` from a share said "cannot stat" too (2026-10-30, measured through
+    // `//localhost/C$/...`: 0.1.4 stored 4 members, ab1b4e9 none).
+    // UNC 路徑 `\\server\share\x` 轉成 `\\?\UNC\server\share\x`，且 `..` 停在共用資料夾，如同停在磁碟
+    // 機。原本產生的是 `\\?\\\server\share\x`，什麼也不指向，於是 `-x -C \\server\share\dir` 一個檔案都
+    // 寫不出（0.1.4 即如此）；發現 H 讓 winStat 與讀取函式也走這裡之後，從共用資料夾 `-c` 也回報
+    // 「cannot stat」（2026-10-30 以 `//localhost/C$/...` 實測：0.1.4 收入 4 個成員，ab1b4e9 為 0）。
+    let isUNC = p.hasPrefix("\\\\")
+    let floor = isUNC ? 2 : 1
+    var comps: [Substring] = []
+    // Empty segments are doubled separators (`tree/` + member gives `tree//a.txt`), which `\\?\`
+    // does not normalise: dropping them is what fixed `-c tree/` leaving every file out as
+    // "cannot open" in the first version of finding H's fix.
+    // 空段落是重複的分隔符（`tree/` 加成員名得到 `tree//a.txt`），`\\?\` 不會將其正規化：發現 H 修正
+    // 的第一版讓 `-c tree/` 把每個檔案都以「cannot open」略過，就是靠丟掉它們修好的。
+    for c in p.split(separator: "\\") {
+        if c == "." { continue }
+        if c == ".." { if comps.count > floor { comps.removeLast() }; continue }
+        comps.append(c)
     }
-    return p
+    return (isUNC ? "\\\\?\\UNC\\" : "\\\\?\\") + comps.joined(separator: "\\")
 }
 
 /// Create `path` and every missing parent, one component at a time, each call
@@ -3046,26 +3052,29 @@ private func winUcrtPath(_ path: String) -> String {
 /// errno 2（ENOENT）——父層根本不存在。swift_tar 因此會寫出自己解不開的封存，
 /// 而 GNU tar 讀同一批封存卻毫無問題。
 private func winMakeDirectories(_ path: String) -> Bool {
-    var abs = path.replacingOccurrences(of: "/", with: "\\")
-    let u = Array(abs.utf16)
-    let hasDrive = u.count >= 2 && u[1] == UInt16(UInt8(ascii: ":"))
-    if !hasDrive && !abs.hasPrefix("\\\\") { abs = winProcessCwd + "\\" + abs }
-    var comps: [Substring] = []
-    for c in abs.split(separator: "\\", omittingEmptySubsequences: false) {
-        if c == "." || c.isEmpty { continue }
-        if c == ".." { if comps.count > 1 { comps.removeLast() }; continue }
-        comps.append(c)
+    // winUcrtPath does the resolving, so there is one conversion to keep right. This kept its own
+    // copy, which took a UNC path's server for the drive and built `\\?\server\share`; with the
+    // root now the drive or `UNC\server\share`, `-x -C \\server\share\dir` works (2026-10-30).
+    // 由 winUcrtPath 負責解析，只留一份轉換要維持正確。這裡原本有自己的一份，把 UNC 路徑的 server 當成
+    // 磁碟機，組出 `\\?\server\share`；如今根是磁碟機或 `UNC\server\share`，`-x -C \\server\share\dir`
+    // 得以運作（2026-10-30）。
+    let full = winUcrtPath(path)
+    let prefix = full.hasPrefix("\\\\?\\UNC\\") ? "\\\\?\\UNC\\" : "\\\\?\\"
+    guard full.hasPrefix(prefix) else {
+        return full.withCString(encodedAs: UTF16.self) { _waccess($0, 0) == 0 }
     }
-    guard !comps.isEmpty else { return false }
-    var built = String(comps[0])            // drive letter or UNC root
-    for c in comps.dropFirst() {
+    let comps = full.dropFirst(prefix.count).split(separator: "\\")
+    let rootCount = prefix.count > 4 ? 2 : 1   // server + share, or the drive
+    guard comps.count >= rootCount else { return false }
+    var built = prefix + comps[..<rootCount].joined(separator: "\\")
+    for c in comps.dropFirst(rootCount) {
         built += "\\" + c
         // Ignore the return: EEXIST is the common and correct outcome, and the
         // one answer that matters is the _waccess check below.
         // 忽略回傳值：EEXIST 是常見且正確的結果，真正算數的是下方的 _waccess。
-        _ = ("\\\\?\\" + built).withCString(encodedAs: UTF16.self) { _wmkdir($0) }
+        _ = built.withCString(encodedAs: UTF16.self) { _wmkdir($0) }
     }
-    return ("\\\\?\\" + built).withCString(encodedAs: UTF16.self) { _waccess($0, 0) == 0 }
+    return built.withCString(encodedAs: UTF16.self) { _waccess($0, 0) == 0 }
 }
 
 /// Write one extracted regular file with the selected backend; returns an

@@ -11,6 +11,9 @@
 # exists (2026-10-30 review, finding H); `top/con` and `top/aux` worked, because Windows 11
 # reserves only `nul` past the first component. `plain` is the control. big/nul is over the
 # 1 MiB prefetch limit, so it is read through openContents rather than readSmallRegularFile.
+# Mutation-checked 2026-10-31: with only openContents back on the raw path, the walk case fails
+# ("short read on './big/nul'": `.\big\nul` opens the device), while the direct `big` case still
+# passes -- `big\nul` happened to open the file. Keep the walk case.
 # `pdir/` and `con/` pin the first version of that fix: winUcrtPath kept the empty segment of
 # `pdir//f.txt`, which `\\?\` does not normalise, so `-c pdir/` left every file out as "cannot open"
 # -- caught by test_blind_findings, not by this test, which had no trailing slash.
@@ -18,7 +21,9 @@
 # 任何目錄下的 `nul`，解析成 DOS 裝置。於是 `-c nul`、`-c con` 或走訪到 `sub/nul` 時，對存在的檔案
 # 回報「cannot stat」並以 1 結束（2026-10-30 審查，發現 H）；`top/con` 與 `top/aux` 正常，因為
 # Windows 11 在第一段之後只保留 `nul`。`plain` 是對照組。big/nul 超過 1 MiB 的預讀上限，故經
-# openContents 而非 readSmallRegularFile 讀取。`pdir/` 與 `con/` 釘住該修正的第一版：winUcrtPath
+# openContents 而非 readSmallRegularFile 讀取。2026-10-31 以突變驗證：只把 openContents 改回原始路徑時，
+# 走訪案例失敗（「short read on './big/nul'」：`.\big\nul` 開到裝置），直接打包 `big` 的案例卻仍通過
+# ——`big\nul` 恰好開到檔案。走訪案例要保留。`pdir/` 與 `con/` 釘住該修正的第一版：winUcrtPath
 # 保留了 `pdir//f.txt` 的空段落，而 `\\?\` 不做正規化，於是 `-c pdir/` 把每個檔案都以「cannot open」
 # 略過——是 test_blind_findings 抓到的，不是本測試，因為本測試原本沒有結尾斜線。
 set -euo pipefail

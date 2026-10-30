@@ -16,6 +16,10 @@
 # 2026-10-30 實測（審查第 2 項）：`plain` 還原為 1970-01-02，`con` 與 200 字元的目錄則是「現在」。
 # `plain` 保留為對照組：一個處處失敗的設定函式會在它身上失敗。測資以 GNU tar 產生，因為 swift_tar -c
 # 目前還讀不到名為 `con` 的目錄。
+# CORRECTED 2026-10-30: finding H fixed that (test_win_reserved_create.zsh pins it); GNU tar stays
+# as the fixture maker so this test does not depend on the -c side it is not about.
+# 更正 2026-10-30：發現 H 已修好此點（由 test_win_reserved_create.zsh 釘住）；測資仍由 GNU tar
+# 產生，使本測試不依賴與它無關的 -c 端。
 set -euo pipefail
 
 script_path="${0:A}"

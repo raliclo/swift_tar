@@ -2516,7 +2516,16 @@ private struct WinStat {
 /// reparse point），symlink 一律回報自身（對應 lstat 的 S_IFLNK），即使目標
 /// 是目錄。
 private func winStat(_ path: String) -> WinStat? {
-    guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else { return nil }
+    // winUcrtPath, not the raw path: Foundation resolves a bare `con`/`aux`/`nul`, and `nul`
+    // under any directory, to the DOS device, so `-c nul` or a walk reaching `sub/nul` reported
+    // "cannot stat" and exited 1 for a file that exists (2026-10-30 review, finding H). bsdtar
+    // and GNU tar both store it. `top/con` was never affected: Windows 11 reserves only `nul`
+    // past the first component.
+    // 用 winUcrtPath 而非原始路徑：Foundation 會把裸的 `con`／`aux`／`nul`，以及任何目錄下的
+    // `nul`，解析成 DOS 裝置，於是 `-c nul` 或走訪到 `sub/nul` 時，對一個存在的檔案回報
+    // 「cannot stat」並以 1 結束（2026-10-30 審查，發現 H）。bsdtar 與 GNU tar 都會收入它。
+    // `top/con` 從未受影響：Windows 11 在第一段之後只保留 `nul`。
+    guard let attrs = try? FileManager.default.attributesOfItem(atPath: winUcrtPath(path)) else { return nil }
     let type = attrs[.type] as? FileAttributeType
     let size = (attrs[.size] as? UInt64) ?? 0
     let nlink = UInt32((attrs[.referenceCount] as? UInt64) ?? 1)
@@ -2996,6 +3005,16 @@ private func winUcrtPath(_ path: String) -> String {
         var comps: [Substring] = []
         for c in p.split(separator: "\\", omittingEmptySubsequences: false) {
             if c == "." { continue }
+            // An empty segment after the first real one is a doubled separator (`tree/` + member
+            // gives `tree//a.txt`). `\\?\` turns off the normalisation that used to drop it, so it
+            // has to go here: once winStat and the readers came through this function (finding H),
+            // `-c tree/` left every file out as "cannot open". Leading empties stay, so a UNC
+            // path is not changed by this.
+            // 第一個實際段落之後的空段落是重複的分隔符（`tree/` 加成員名得到 `tree//a.txt`）。`\\?\`
+            // 關閉了原本會丟掉它的正規化，所以必須在這裡處理：winStat 與讀取函式改走本函式之後
+            // （發現 H），`-c tree/` 把每個檔案都以「cannot open」略過。開頭的空段落保留，因此 UNC
+            // 路徑不受此改動影響。
+            if c.isEmpty && comps.contains(where: { !$0.isEmpty }) { continue }
             if c == ".." { if comps.count > 1 { comps.removeLast() }; continue }
             comps.append(c)
         }
@@ -3849,6 +3868,9 @@ final class ReadAhead: Sendable {
     /// POSIX 以非阻塞方式開啟，並在已開啟的 fd 上檢查型別。
     private static func readSmallRegularFile(_ path: String, followLinks: Bool) -> Data? {
 #if os(Windows)
+        // winUcrtPath for the same reason as winStat (finding H): the raw `nul` is the device.
+        // 用 winUcrtPath，理由同 winStat（發現 H）：原始路徑的 `nul` 是裝置。
+        let path = winUcrtPath(path)
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
               attrs[.type] as? FileAttributeType == .typeRegular,
               let size = (attrs[.size] as? NSNumber)?.intValue, size <= fileMax,
@@ -4026,7 +4048,13 @@ final class TarWriter {
     /// 目錄的項目；讀不到時回報原因並回傳空清單。目錄自身的標頭已經寫出，bsdtar 也保留它。
     private func listDirectory(_ readPath: String, name: String) -> [String] {
         do {
+#if os(Windows)
+            // A directory named `con` or `nul` is a device to the raw path; see winStat (finding H).
+            // 名為 `con` 或 `nul` 的目錄，以原始路徑看是裝置；見 winStat（發現 H）。
+            return try FileManager.default.contentsOfDirectory(atPath: winUcrtPath(readPath))
+#else
             return try FileManager.default.contentsOfDirectory(atPath: readPath)
+#endif
         } catch {
             noteUnreadable(name + "/", "cannot read directory, contents left out",
                            "無法讀取目錄，內容未收入", error)
@@ -4050,7 +4078,13 @@ final class TarWriter {
                               prefetched: Data?) -> Contents? {
         if let data = prefetched, UInt64(data.count) == size { return .bytes(data) }
         do {
+#if os(Windows)
+            // A large `nul` is not prefetched and arrives here; see winStat (finding H).
+            // 大的 `nul` 不會預讀而走到這裡；見 winStat（發現 H）。
+            return .handle(try FileHandle(forReadingFrom: URL(fileURLWithPath: winUcrtPath(path))))
+#else
             return .handle(try FileHandle(forReadingFrom: URL(fileURLWithPath: path)))
+#endif
         } catch {
             noteUnreadable(name, "cannot open, left out", "無法開啟，未收入", error)
             return nil

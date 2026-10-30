@@ -125,9 +125,13 @@ fi
 # 2. 封存：重算校驗和、與建置節點寫的 .sha256 比對、列出內容，並把執行檔的 build id 與正在發布的
 #    commit 比對。
 # ---------------------------------------------------------------------
+# No `--` for openssl: macOS's /usr/bin/openssl is LibreSSL, which rejects it with a usage message
+# and exit 1 (2026-10-31 review). Both callers pass an absolute path, never one starting with `-`.
+# openssl 不加 `--`：macOS 的 /usr/bin/openssl 是 LibreSSL，它會印出用法並以 1 結束（2026-10-31
+# 審查）。兩個呼叫端傳的都是絕對路徑，不會以 `-` 開頭。
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum -- "$1" | cut -d' ' -f1
-  else openssl dgst -sha256 -r -- "$1" | cut -d' ' -f1; fi
+  else openssl dgst -sha256 -r "$1" | cut -d' ' -f1; fi
 }
 HEAD_SHA=$(git rev-parse HEAD)
 VERSION_RE=${VERSION//./\\.}

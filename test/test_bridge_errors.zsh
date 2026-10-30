@@ -17,7 +17,6 @@
 # 訊息，所以這裡改查原始碼：唯一剩下的呼叫在 archive_reason 裡，而它絕不回傳 NULL。新增一處
 # 直接呼叫就會在這裡失敗。
 set -euo pipefail
-setopt extended_glob   # for `#` in the comment-line pattern below / 下方註解行樣式中的 `#` 需要它
 
 script_path="${0:A}"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
@@ -32,14 +31,27 @@ pass=0; fail=0
 ok()  { echo "PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "FAIL: $1"; fail=$((fail + 1)); }
 
-# Code lines only: a comment line starts with /* or *, after indentation.
-# 只看程式碼行：註解行在縮排之後以 /* 或 * 開頭。
-calls=() n=0 def=0
+# Code only: what lies inside /* ... */ is dropped, tracked across lines. Not "a line starting
+# with *": that is also `*msg = archive_error_string(a);`, which the first version of this test
+# skipped as a comment and passed 4/4 (2026-10-31 review).
+# 只看程式碼：/* ... */ 之內的部分跨行追蹤並捨去。不用「以 * 開頭的行」：那也包括
+# `*msg = archive_error_string(a);`，本測試第一版把它當成註解略過，照樣 4/4 通過（2026-10-31 審查）。
+calls=() n=0 def=0 in_comment=0
 while IFS= read -r line; do
   n=$((n + 1))
-  [[ $line == [[:space:]]#(/\*|\*)* ]] && continue
-  [[ $line == *'static const char *archive_reason('* ]] && def=$n
-  [[ $line == *'archive_error_string('* ]] && calls+=($n)
+  code="" rest=$line
+  while [ -n "$rest" ]; do
+    if (( in_comment )); then
+      [[ $rest == *'*/'* ]] || break
+      rest=${rest#*'*/'}; in_comment=0
+    elif [[ $rest == *'/*'* ]]; then
+      code+=${rest%%'/*'*}; rest=${rest#*'/*'}; in_comment=1
+    else
+      code+=$rest; rest=""
+    fi
+  done
+  [[ $code == *'static const char *archive_reason('* ]] && def=$n
+  [[ $code == *'archive_error_string('* ]] && calls+=($n)
 done < "$SRC"
 
 [ "$def" -gt 0 ] && ok "archive_reason is defined" || bad "archive_reason is defined"

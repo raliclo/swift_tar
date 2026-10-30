@@ -204,6 +204,29 @@ else
   chmod +x "$TMP/badsum/sha256sum" "$TMP/failsum/sha256sum"
   PATH="$TMP/badsum:$PATH" rel_refuses "a sha256 that is not 64 hex digits" "not 64 hex digits"
   PATH="$TMP/failsum:$PATH" rel_refuses "a sha256 tool that fails" "a command failed"
+  # The openssl branch, with macOS's own openssl (LibreSSL) and no sha256sum on PATH. Every machine
+  # that has sha256sum skips this branch, so the cases above never ran it: a `--` that LibreSSL
+  # rejects stopped every release from a Mac without sha256sum and nothing failed (2026-10-31
+  # review). Only on macOS, where sha256sum can be left off PATH without losing zstd.
+  # openssl 分支：使用 macOS 自己的 openssl（LibreSSL），PATH 上沒有 sha256sum。有 sha256sum 的機器
+  # 都不走這條分支，所以上面的案例從沒跑過它：一個 LibreSSL 不接受的 `--` 讓沒有 sha256sum 的 Mac
+  # 全部無法出貨，而沒有任何測試失敗（2026-10-31 審查）。只在 macOS 跑，那裡可以把 sha256sum 移出
+  # PATH 而不失去 zstd。
+  if [ "$OS" = macos ] && [ -x /usr/bin/openssl ]; then
+    mkdir -p "$TMP/libressl"; ln -sf /usr/bin/openssl "$TMP/libressl/openssl"
+    nosum=("$TMP/libressl")
+    for d in $path; do [ -x "$d/sha256sum" ] || nosum+=("$d"); done
+    if PATH=${(j.:.)nosum} command -v zstd >/dev/null 2>&1; then
+      PATH=${(j.:.)nosum} rel
+      check "release.zsh: packages with LibreSSL's openssl when there is no sha256sum" "$rc" 0
+      if [ -s "$R/dist/$STEM.tar.zst.sha256" ]; then
+        want=$(openssl dgst -sha256 -r "$R/dist/$STEM.tar.zst"); want=${want%% *}
+        check "release.zsh: the openssl branch writes the archive's sha256 in sha256sum -c form" \
+          "$(<"$R/dist/$STEM.tar.zst.sha256")" "$want  $STEM.tar.zst"
+      else bad "release.zsh: the openssl branch writes the archive's sha256 in sha256sum -c form (no .sha256; $(tail -3 "$TMP/rel.out" | tr '\n' '|'))"; fi
+      rm -rf "$R/dist"
+    else echo "SKIP: release.zsh openssl branch (zstd shares a directory with sha256sum)"; fi
+  fi
   rc=0; ( cd "$R" && ./release.zsh --nope ) >/dev/null 2>&1 || rc=$?
   check "release.zsh refuses an argument" "$rc" 2
 fi
@@ -447,6 +470,22 @@ if [ -r "$MANIFEST_SRC" ]; then
   rc=0; out=$(PATH="$TMP/fakebin:$PATH" SWIFT_TAR_SCOOP_MANIFEST=$MANIFEST_SRC "$C/publish.zsh" "$(<"$C/VERSION")" 2>&1) || rc=$?
   if [ "$rc" = 1 ] && [[ $out == *"HEAD is on no origin branch"* ]]; then ok "publish.zsh refuses an unpushed commit on a detached HEAD"
   else bad "publish.zsh refuses an unpushed commit on a detached HEAD (rc $rc: $out)"; fi
+  # The other side: the same detached commit once it is on an origin branch passes the guard and
+  # stops at the fake gh. Without this a guard that refused everything would pass the case above.
+  # The origin here is a bare copy, so the push never reaches this repository.
+  # 另一側：同一個 detached commit 推上 origin 的分支之後要通過這道檢查，停在假的 gh。少了這一項，
+  # 一道什麼都拒絕的檢查也會通過上面那個案例。這裡的 origin 是一份 bare 複本，push 不會到達本 repo。
+  B=$TMP/pub.git; C2=$TMP/pubclone2
+  git clone -q --bare --shared "$ROOT" "$B"
+  git clone -q --shared "$B" "$C2"
+  git -C "$C2" checkout -q --detach
+  cp "$ROOT/publish.zsh" "$C2/publish.zsh"
+  git -C "$C2" -c user.name=test -c user.email=test@invalid commit -q --allow-empty -am pushed
+  git -C "$C2" push -q origin HEAD:refs/heads/pushed
+  rc=0; out=$(PATH="$TMP/fakebin:$PATH" SWIFT_TAR_SCOOP_MANIFEST=$MANIFEST_SRC "$C2/publish.zsh" "$(<"$C2/VERSION")" 2>&1) || rc=$?
+  if [ "$rc" = 1 ] && [[ $out == *"gh is not authenticated"* ]] && [[ $out != *"HEAD is on no origin branch"* ]]; then
+    ok "publish.zsh lets a detached HEAD that is on an origin branch through"
+  else bad "publish.zsh lets a detached HEAD that is on an origin branch through (rc $rc: $out)"; fi
 fi
 
 echo "-----------------------------------------"

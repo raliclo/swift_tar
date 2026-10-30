@@ -65,9 +65,14 @@ write_sha256() {
   # A tool that exits non-zero is TRAPZERR's, which removes the archive; this checks what a
   # tool that succeeded printed. / 以非零結束的工具交給 TRAPZERR，它會刪掉封存；這裡檢查的是成功
   # 結束的工具印了什麼。
+  # No `--` for openssl: macOS's /usr/bin/openssl is LibreSSL, which rejects it with a usage
+  # message and exit 1, so a Mac without sha256sum could not release (2026-10-31 review). The
+  # path is "$1/$2" and never starts with `-`.
+  # openssl 不加 `--`：macOS 的 /usr/bin/openssl 是 LibreSSL，它會印出用法並以 1 結束，於是沒有
+  # sha256sum 的 Mac 無法出貨（2026-10-31 審查）。路徑是 "$1/$2"，不會以 `-` 開頭。
   local h=""
   if command -v sha256sum >/dev/null 2>&1; then h=$(cd -- "$1" && sha256sum -- "$2")
-  elif command -v openssl >/dev/null 2>&1; then h=$(openssl dgst -sha256 -r -- "$1/$2")
+  elif command -v openssl >/dev/null 2>&1; then h=$(openssl dgst -sha256 -r "$1/$2")
   else die "no sha256sum and no openssl; an archive without a checksum is not released" \
            "沒有 sha256sum 也沒有 openssl；沒有校驗和的封存不發布"; fi
   h=${h%% *}

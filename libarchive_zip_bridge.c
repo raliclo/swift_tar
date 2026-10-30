@@ -149,12 +149,23 @@ static void set_error(char *buffer, size_t capacity, const char *message) {
     snprintf(buffer, capacity, "%s", message != NULL ? message : "unknown libarchive error");
 }
 
+/* libarchive's message for its last error, never NULL. archive_error_string returns NULL when no
+ * message was set, and a status below ARCHIVE_OK does not promise one; printf's %s with NULL is
+ * undefined behaviour -- glibc prints "(null)", other C runtimes may crash. Every message in this
+ * file goes through here (2026-10-30 review; test_bridge_errors.zsh keeps it that way).
+ * libarchive 對最後一個錯誤的訊息，絕不為 NULL。沒有設定訊息時 archive_error_string 回傳 NULL，
+ * 而低於 ARCHIVE_OK 的狀態並不保證有訊息；printf 的 %s 收到 NULL 是未定義行為——glibc 印出
+ * "(null)"，其他 C 執行環境可能崩潰。本檔所有訊息都經過這裡（2026-10-30 審查；
+ * test_bridge_errors.zsh 確保維持如此）。 */
+static const char *archive_reason(struct archive *archive) {
+    const char *detail = archive != NULL ? archive_error_string(archive) : NULL;
+    return detail != NULL ? detail : "unknown libarchive error";
+}
+
 static void set_archive_error(char *buffer, size_t capacity,
                               const char *operation, struct archive *archive) {
-    const char *detail = archive != NULL ? archive_error_string(archive) : NULL;
     if (buffer == NULL || capacity == 0) return;
-    snprintf(buffer, capacity, "%s: %s", operation,
-             detail != NULL ? detail : "unknown libarchive error");
+    snprintf(buffer, capacity, "%s: %s", operation, archive_reason(archive));
 }
 
 /* Report an entry left out because it could not be read, and count it. The wording is the
@@ -359,7 +370,7 @@ static int write_entry_header(struct archive *writer,
          * 全部缺席，而檔案仍被建立出來。同一套 libarchive 上的 bsdtar 是略過
          * 該項並繼續；此處的 tar 路徑亦然，它在 Swift 端以檔案身分排除封存。 */
         fprintf(stderr, "swift_tar: %s: %s\n",
-                archive_entry_pathname(entry), archive_error_string(writer));
+                archive_entry_pathname(entry), archive_reason(writer));
         return 0;
     }
     if (status < ARCHIVE_OK) {
@@ -367,7 +378,7 @@ static int write_entry_header(struct archive *writer,
          * but do not let the reason go unsaid.
          * ARCHIVE_WARN：標頭已寫入，故繼續複製資料，但不讓原因無聲消失。 */
         fprintf(stderr, "swift_tar: %s: %s\n",
-                archive_entry_pathname(entry), archive_error_string(writer));
+                archive_entry_pathname(entry), archive_reason(writer));
     }
     return 1;
 }
@@ -882,11 +893,11 @@ static int next_header_action(int status, struct archive *disk, zip_pipeline *pi
                               char *error_buffer, size_t error_capacity) {
     if (status == ARCHIVE_OK) return 1;
     if (status == ARCHIVE_WARN) {
-        fprintf(stderr, "swift_tar: %s\n", archive_error_string(disk));
+        fprintf(stderr, "swift_tar: %s\n", archive_reason(disk));
         return 1;
     }
     if (status == ARCHIVE_FAILED || status == ARCHIVE_RETRY) {
-        note_unreadable(&pipeline->unreadable, archive_error_string(disk),
+        note_unreadable(&pipeline->unreadable, archive_reason(disk),
                         "left out", "未收入", archive_errno(disk));
         return 0;
     }
@@ -1436,7 +1447,7 @@ int swift_tar_zip_create(const char *archive_path,
         if (verbose) {
             fprintf(stderr,
                 "swift_tar: ZIP header charset stays platform default: %s\n",
-                archive_error_string(writer));
+                archive_reason(writer));
         }
         archive_clear_error(writer);
     }
@@ -1803,13 +1814,13 @@ int swift_tar_zip_read(const char *archive_path,
             /* The next archive_read_next_header skips whatever data is left unread.
              * 下一次 archive_read_next_header 會自動略過尚未讀取的資料。 */
             fprintf(stderr, "swift_tar: %s: %s\n", path != NULL ? path : "",
-                    archive_error_string(reader));
+                    archive_reason(reader));
             if (extract) skipped++;
             continue;
         }
         if (status < ARCHIVE_OK) {
             fprintf(stderr, "swift_tar: %s: %s\n", path != NULL ? path : "",
-                    archive_error_string(reader));
+                    archive_reason(reader));
         }
         /* --exclude on reading, the same Swift function the tar reader calls
          * (TarReader.memberIsExcluded), so -t and -x mean the same on both backends. The
@@ -1914,13 +1925,13 @@ int swift_tar_zip_read(const char *archive_path,
             }
             if (status == ARCHIVE_FAILED || status == ARCHIVE_RETRY) {
                 fprintf(stderr, "swift_tar: %s: %s\n", path != NULL ? path : "",
-                        archive_error_string(disk));
+                        archive_reason(disk));
                 skipped++;
                 continue;
             }
             if (status < ARCHIVE_OK) {
                 fprintf(stderr, "swift_tar: %s: %s\n", path != NULL ? path : "",
-                        archive_error_string(disk));
+                        archive_reason(disk));
             }
             if (copy_archive_data(reader, disk, error_buffer, error_capacity) != 0) {
                 goto cleanup;
@@ -1932,7 +1943,7 @@ int swift_tar_zip_read(const char *archive_path,
             }
             if (status < ARCHIVE_OK) {
                 fprintf(stderr, "swift_tar: %s: %s\n", path != NULL ? path : "",
-                        archive_error_string(disk));
+                        archive_reason(disk));
             }
         } else {
             archive_read_data_skip(reader);
@@ -1965,7 +1976,7 @@ int swift_tar_zip_read(const char *archive_path,
             goto cleanup;
         }
         if (status < ARCHIVE_OK) {
-            fprintf(stderr, "swift_tar: %s\n", archive_error_string(disk));
+            fprintf(stderr, "swift_tar: %s\n", archive_reason(disk));
         }
     }
     if (strict && skipped > 0) {

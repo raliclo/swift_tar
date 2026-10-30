@@ -54,6 +54,28 @@ die() {
   exit 1
 }
 
+# write_sha256 <dir> <file>: <dir>/<file>.sha256 in the shape `sha256sum -c` accepts. One copy for
+# both the cross and the native branch: the cross copy had no die when neither tool was there,
+# and both wrote whatever the tool printed, so a missing or broken tool gave a .sha256 with an
+# empty hash that only publish.zsh noticed (2026-10-30 review). The hash is checked, not the tool.
+# write_sha256 <目錄> <檔案>：寫出 `sha256sum -c` 接受形狀的 <目錄>/<檔案>.sha256。交叉與原生兩個分支
+# 共用這一份：交叉那份在兩個工具都不在時沒有 die，而兩份都照寫工具印出的東西，所以工具缺少或壞掉時
+# 會寫出雜湊為空的 .sha256，要到 publish.zsh 才被發現（2026-10-30 審查）。檢查的是雜湊，不是工具。
+write_sha256() {
+  # A tool that exits non-zero is TRAPZERR's, which removes the archive; this checks what a
+  # tool that succeeded printed. / 以非零結束的工具交給 TRAPZERR，它會刪掉封存；這裡檢查的是成功
+  # 結束的工具印了什麼。
+  local h=""
+  if command -v sha256sum >/dev/null 2>&1; then h=$(cd -- "$1" && sha256sum -- "$2")
+  elif command -v openssl >/dev/null 2>&1; then h=$(openssl dgst -sha256 -r -- "$1/$2")
+  else die "no sha256sum and no openssl; an archive without a checksum is not released" \
+           "沒有 sha256sum 也沒有 openssl；沒有校驗和的封存不發布"; fi
+  h=${h%% *}
+  [[ $h =~ '^[0-9a-f]{64}$' ]] || die "the sha256 of $2 came out as [$h], not 64 hex digits; not released" \
+                                      "$2 的 sha256 算出來是 [$h]，不是 64 位十六進位；不發布"
+  print -r -- "$h  $2" > "$1/$2.sha256"
+}
+
 # Which build: this machine's own, or a musl cross target named by SWIFT_TAR_PLATFORM (made by
 # compile_tar-musl.zsh on the Mac; the Linux releases are those, decided 2026-10-20). A cross
 # binary cannot run here, so it is checked from the file and run later on a Linux machine of
@@ -289,11 +311,7 @@ if (( CROSS )); then
   # 它在這裡跑不了：解開的檔案必須與檢查過的那一份逐位元組相同，執行則交給同架構 Linux 機器上的
   # verify_release.zsh。
   cmp -s "$CHECK/$STEM/$BIN_NAME" "$BIN" || die "the extracted binary differs from $BIN" "解開後的執行檔與 $BIN 不同"
-  if command -v sha256sum >/dev/null 2>&1; then
-    ( cd -- "$DIST" && sha256sum "$STEM.tar.zst" > "$STEM.tar.zst.sha256" )
-  else
-    ( cd -- "$DIST" && printf '%s  %s\n' "$(openssl dgst -sha256 -r "$STEM.tar.zst" | cut -d' ' -f1)" "$STEM.tar.zst" > "$STEM.tar.zst.sha256" )
-  fi
+  write_sha256 "$DIST" "$STEM.tar.zst"
   print -r -- "$ARCHIVE"
   cat -- "$DIST/$STEM.tar.zst.sha256"
   print -r -- "$REPORTED"
@@ -326,14 +344,7 @@ fi
 
 # sha256 beside the archive, in the shape `sha256sum -c` accepts.
 # 在封存旁寫 sha256，形狀是 `sha256sum -c` 接受的那種。
-if command -v sha256sum >/dev/null 2>&1; then
-  ( cd -- "$DIST" && sha256sum "$STEM.tar.zst" > "$STEM.tar.zst.sha256" )
-elif command -v openssl >/dev/null 2>&1; then
-  ( cd -- "$DIST" && printf '%s  %s\n' "$(openssl dgst -sha256 -r "$STEM.tar.zst" | cut -d' ' -f1)" "$STEM.tar.zst" > "$STEM.tar.zst.sha256" )
-else
-  die "no sha256sum and no openssl; an archive without a checksum is not released" \
-      "沒有 sha256sum 也沒有 openssl；沒有校驗和的封存不發布"
-fi
+write_sha256 "$DIST" "$STEM.tar.zst"
 
 print -r -- "$ARCHIVE"
 cat -- "$DIST/$STEM.tar.zst.sha256"

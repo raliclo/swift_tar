@@ -191,6 +191,19 @@ else
   print more >> "$R/LICENSE"
   rel_refuses "a dirty tree" "not clean"
   ( cd "$R" && git checkout -q -- LICENSE )
+  # The hash is checked, not the tool (2026-10-30 review): a sha256sum that succeeds but prints
+  # something other than a hash is refused with nothing left in dist/; the old release.zsh
+  # wrote "not-a-hash" into the .sha256 and exited 0. One that fails is TRAPZERR's, already
+  # refused before the review; kept so a change to the trap shows here.
+  # 檢查的是雜湊，不是工具（2026-10-30 審查）：成功結束卻印出非雜湊內容的 sha256sum 要被拒絕且
+  # dist/ 不留東西；舊的 release.zsh 把 "not-a-hash" 寫進 .sha256 並以 0 結束。失敗結束的工具由
+  # TRAPZERR 處理，審查前就已被拒絕；保留這一項，讓 trap 的改動在這裡現形。
+  mkdir -p "$TMP/badsum" "$TMP/failsum"
+  printf '#!/bin/sh\necho "not-a-hash  $2"\n' > "$TMP/badsum/sha256sum"
+  printf '#!/bin/sh\nexit 1\n' > "$TMP/failsum/sha256sum"
+  chmod +x "$TMP/badsum/sha256sum" "$TMP/failsum/sha256sum"
+  PATH="$TMP/badsum:$PATH" rel_refuses "a sha256 that is not 64 hex digits" "not 64 hex digits"
+  PATH="$TMP/failsum:$PATH" rel_refuses "a sha256 tool that fails" "a command failed"
   rc=0; ( cd "$R" && ./release.zsh --nope ) >/dev/null 2>&1 || rc=$?
   check "release.zsh refuses an argument" "$rc" 2
 fi
@@ -242,6 +255,20 @@ else
   got=$(zstd -dq -c "$X/dist/$XSTEM.tar.zst" | tar -tf - | sed -n "s:^$XSTEM/::p" | grep -E -v '^(swift_tar|version\.txt|README.*|swift_tar-LICENSE\.txt|zlib-LICENSE\.txt)?$' | sort | tr '\n' ' ')
   check "release.zsh, cross: the archive carries every licence in licenses/" "$got" "$want"
   rm -rf "$X/dist"
+  # The cross branch writes its .sha256 through the same write_sha256 (see the native cases).
+  # Here, before the licence is dropped below, so the hash is the only thing wrong.
+  # 交叉分支經由同一個 write_sha256 寫 .sha256（見原生案例）。放在下方移除授權之前，讓雜湊是唯一
+  # 出錯的東西。
+  for d in badsum failsum; do
+    mkdir -p "$TMP/x$d"
+    [ $d = badsum ] && printf '#!/bin/sh\necho "not-a-hash  $2"\n' > "$TMP/x$d/sha256sum" || printf '#!/bin/sh\nexit 1\n' > "$TMP/x$d/sha256sum"
+    chmod +x "$TMP/x$d/sha256sum"
+    PATH="$TMP/x$d:$PATH" xrel
+    [ $d = badsum ] && why='not 64 hex digits' || why='a command failed'
+    if [ "$rc" = 1 ] && grep -q "$why" "$TMP/x.out" && [ ! -e "$X/dist/$XSTEM.tar.zst" ]; then ok "release.zsh, cross: a bad sha256 ($d) is refused"
+    else bad "release.zsh, cross: a bad sha256 ($d) is refused (rc $rc; $(tr '\n' '|' < "$TMP/x.out"))"; fi
+    rm -rf "$X/dist"
+  done
   # A licence missing from a committed tree is refused, and nothing is left in dist/.
   # 已提交的樹裡少了一份授權就拒絕，dist/ 也不留東西。
   ( cd "$X" && quiet_git rm -q licenses/musl-COPYRIGHT.txt && quiet_git commit -qm 'drop musl licence' )

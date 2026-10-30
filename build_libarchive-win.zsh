@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
-# Build the bundled static libarchive ZIP backend with MSVC for Windows.
-# 使用 MSVC 建置 Windows 使用的內附靜態 libarchive ZIP 後端。
+# Build the bundled static libarchive ZIP backend with clang-cl for Windows.
+# 使用 clang-cl 建置 Windows 使用的內附靜態 libarchive ZIP 後端。
 #
 #   zsh ./build_libarchive-win.zsh          build it; run build_zlib-win.zsh first
 #                                           建置；須先執行 build_zlib-win.zsh
@@ -53,7 +53,32 @@ build_dir="build/libarchive-win"
 #
 # 它同時需要非 UTF-8 的 ACP 與一次真正的重編，因此只要沒有東西讓建置樹失效，
 # 一份快取的 archive.lib 就會一直把它遮住。
-cmake -S libarchive -B "$build_dir" -G "Visual Studio 17 2022" -A x64 \
+#
+# Compiler: the Swift toolchain's clang-cl, not MSVC cl.exe (2026-10-30, with zlib and zstd moving to
+# clang; measured in verifications/win_clang_deps.zsh). clang-cl rather than the GNU driver because
+# libarchive's CMake then keeps its MSVC branch -- /WX, its warning set, the archive.lib name -- and
+# -utf-8 still means what the paragraph above says. clang-cl's /O2 already implies /Gy.
+# win_clang_cmake.zsh (NMake, not Visual Studio) keeps the library at libarchive/Release/, where
+# compile_tar-win.zsh looks.
+# 編譯器：Swift 工具鏈的 clang-cl，而非 MSVC cl.exe（2026-10-30，隨 zlib 與 zstd 改用 clang；量測見
+# verifications/win_clang_deps.zsh）。選 clang-cl 而非 GNU 驅動，是因為這樣 libarchive 的 CMake 仍走
+# MSVC 分支——/WX、它的警告組合、archive.lib 的檔名——而 -utf-8 的意義仍如上段所述。clang-cl 的 /O2
+# 已隱含 /Gy。win_clang_cmake.zsh（NMake，而非 Visual Studio）讓靜態庫仍在 compile_tar-win.zsh 尋找的
+# libarchive/Release/。
+. ./win_clang_cmake.zsh
+win_clang_cmake clang-cl "$SCRIPT_DIR/$build_dir/libarchive/Release" || exit 1
+# This build tree is incremental (compile_tar-win.zsh runs this every time), and CMake refuses to
+# reuse a tree made by another generator or compiler. Start over once when either differs, e.g. a
+# tree left by the earlier Visual Studio build. / 此建置樹是增量的（compile_tar-win.zsh 每次都會執行
+# 本腳本），而 CMake 拒絕沿用以其他產生器或編譯器建立的樹。兩者任一不同時（例如先前 Visual Studio
+# 建置留下的樹）重來一次。
+cache="$build_dir/CMakeCache.txt"
+if [ -f "$cache" ] && ! { grep -qxF 'CMAKE_GENERATOR:INTERNAL=NMake Makefiles' "$cache" &&
+                          grep -qxF "CMAKE_C_COMPILER:STRING=$win_cc" "$cache"; }; then
+    echo "[Info] $build_dir was configured differently; removing it / 設定不同，移除重建"
+    rm -rf -- "$build_dir"
+fi
+cmake -S libarchive -B "$build_dir" "${win_cmake_args[@]}" \
     -DBUILD_SHARED_LIBS=OFF \
     -DMSVC_USE_STATIC_CRT=OFF \
     -DCMAKE_C_FLAGS=-utf-8 \
@@ -68,7 +93,7 @@ cmake -S libarchive -B "$build_dir" -G "Visual Studio 17 2022" -A x64 \
     -DENABLE_TAR=OFF -DENABLE_CPIO=OFF -DENABLE_CAT=OFF -DENABLE_UNZIP=OFF \
     -DENABLE_XATTR=OFF -DENABLE_ACL=OFF -DENABLE_ICONV=OFF \
     -DENABLE_TEST=OFF -DENABLE_INSTALL=OFF
-cmake --build "$build_dir" --config Release --target archive_static --parallel
+cmake --build "$build_dir" --target archive_static
 
 archive_lib="$build_dir/libarchive/Release/archive.lib"
 if [ ! -f "$archive_lib" ]; then

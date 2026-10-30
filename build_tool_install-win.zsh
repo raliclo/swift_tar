@@ -9,7 +9,8 @@
 #   2. MSVC C++ build tools (link.exe)        (winget: Microsoft.VisualStudio.2022.BuildTools,
 #                                               C++ workload -- swiftc needs this to link .exe)
 #   3. scoop package manager                  (get.scoop.sh)
-#   4. CMake                                  (scoop: cmake; builds static zlib)
+#   4. CMake                                  (scoop: cmake; builds static zlib, zstd and
+#                                               libarchive with the Swift toolchain's clang)
 #   5. Compression CLI tools swift_tar still shells out to on Windows
 #                                              (scoop: bzip2 xz zstd lz4 lzip)
 #
@@ -24,7 +25,8 @@
 #   2. MSVC C++ 建置工具（link.exe）           (winget: Microsoft.VisualStudio.2022.BuildTools,
 #                                               C++ workload -- swiftc 在 Windows 上連結 .exe 需要)
 #   3. scoop 套件管理員                        (get.scoop.sh)
-#   4. CMake                                  (scoop: cmake；建置靜態 zlib)
+#   4. CMake                                  (scoop: cmake；以 Swift 工具鏈的 clang 建置
+#                                               靜態 zlib、zstd、libarchive)
 #   5. swift_tar 在 Windows 上仍會 shell out 呼叫的壓縮 CLI 工具
 #                                              (scoop: bzip2 xz zstd lz4 lzip)
 #
@@ -40,7 +42,7 @@ set -e
 
 script_path="${0:A}"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-    sed -n '3,38p' "$script_path" | sed 's/^# \{0,1\}//'
+    sed -n '3,40p' "$script_path" | sed 's/^# \{0,1\}//'
     exit 0
 fi
 
@@ -205,7 +207,10 @@ else
         "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; Invoke-RestMethod get.scoop.sh | Invoke-Expression"
 fi
 
-# 4. CMake builds the pinned zlib submodule as a static MSVC library.
+# 4. CMake builds the pinned zlib, zstd and libarchive submodules with the Swift toolchain's
+# clang, through nmake from step 2 (see win_clang_cmake.zsh) -- no Ninja needed.
+# 4. CMake 以 Swift 工具鏈的 clang、經由步驟 2 的 nmake 建置釘選的 zlib、zstd、libarchive 子模組
+# （見 win_clang_cmake.zsh）——不需要 Ninja。
 if command -v cmake >/dev/null 2>&1; then
     echo "[OK] cmake already installed: $(cmake --version | head -1)"
 else

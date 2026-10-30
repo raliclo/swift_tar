@@ -255,7 +255,9 @@ mkdir -p build
 # 「unrecognized source file type」。cl 向來接受 `-nologo`、`-O2` 等寫法，改用它們
 # 即可完全繞開該轉換——這比 MSYS2_ARG_CONV_EXCL 更好，後者對單次呼叫是全有全無，
 # 會連帶阻止原始檔與輸出路徑的轉換，而那兩者正需要被轉換。
-cl -nologo -O2 -MD -utf-8 -DLIBARCHIVE_STATIC -c libarchive_zip_bridge.c \
+# clang-cl, like libarchive itself (build_libarchive-win.zsh): same dash-form flags, Swift toolchain.
+# clang-cl，與 libarchive 本身相同（見 build_libarchive-win.zsh）：同樣的 dash 形式旗標，Swift 工具鏈。
+"${commands[swiftc]:h}/clang-cl.exe" -nologo -O2 -MD -utf-8 -DLIBARCHIVE_STATIC -c libarchive_zip_bridge.c \
    -Ilibarchive/libarchive -Fobuild/libarchive_zip_bridge.obj \
    || die "libarchive bridge compile failed / libarchive bridge 編譯失敗"
 

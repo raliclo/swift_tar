@@ -114,8 +114,9 @@ submodule.
 ### Windows
 
 Windows requires Swift, CMake, and the Visual Studio 2022 C++ workload. The
-build compiles the pinned zlib, zstd, and libarchive submodules as static MSVC
-libraries, then links gzip, zstd, and ZIP support directly into `swift_tar.exe`; no `zlib.dll`,
+build compiles the pinned zlib, zstd, and libarchive submodules as static libraries
+with the Swift toolchain's clang (MSVC ABI; measured faster than cl.exe, see
+`verifications/README.md`), then links gzip, zstd, and ZIP support directly into `swift_tar.exe`; no `zlib.dll`,
 external `gzip.exe`, or per-chunk `zstd.exe` is required at runtime.
 
 ```bat

@@ -93,8 +93,9 @@ binary，完全**不含**私有 LZFSE 引擎——不編譯 `lzfse-cli.swift`，
 
 ### Windows
 
-Windows 需要 Swift、CMake 與 Visual Studio 2022 C++ workload。建置腳本會把
-固定版本的 zlib、zstd 與 libarchive submodule 編譯成 MSVC 靜態庫，再直接把
+Windows 需要 Swift、CMake 與 Visual Studio 2022 C++ workload。建置腳本會以 Swift 工具鏈的
+clang（MSVC ABI；量測比 cl.exe 快，見 `verifications/README.zh-TW.md`）把固定版本的 zlib、zstd 與
+libarchive submodule 編譯成靜態庫，再直接把
 gzip、zstd 與 ZIP 支援連結進 `swift_tar.exe`；執行時不需要 `zlib.dll`、外部 `gzip.exe`，也不需要每個
 chunk 生一個 `zstd.exe`。
 

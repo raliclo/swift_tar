@@ -34,12 +34,24 @@ case "$build_dir" in
     *) echo "[FAIL] unsafe zlib build path: $build_dir" >&2; exit 1 ;;
 esac
 
-cmake -S zlib -B zlib/build -G "Visual Studio 17 2022" -A x64 \
+# Compiler: the Swift toolchain's clang (GNU driver, MSVC ABI), as for zstd -- see build_zstd-win.zsh
+# for why, and for -ffunction-sections/-fdata-sections (the counterpart of MSVC's /Gy).
+# zlib's CMake names the static library zs.lib on every WIN32 compiler; win_clang_cmake.zsh (NMake,
+# not Visual Studio) keeps it at zlib/build/Release/, where build_libarchive-win.zsh and
+# compile_tar-win.zsh look.
+# 編譯器：與 zstd 相同，用 Swift 工具鏈的 clang（GNU 驅動、MSVC ABI）——理由與
+# -ffunction-sections／-fdata-sections（對應 MSVC 的 /Gy）見 build_zstd-win.zsh。zlib 的 CMake 在所有
+# WIN32 編譯器下都把靜態庫命名為 zs.lib；win_clang_cmake.zsh（NMake，而非 Visual Studio）讓它仍在
+# build_libarchive-win.zsh 與 compile_tar-win.zsh 尋找的 zlib/build/Release/。
+. ./win_clang_cmake.zsh
+win_clang_cmake clang "$SCRIPT_DIR/zlib/build/Release" || exit 1
+cmake -S zlib -B zlib/build "${win_cmake_args[@]}" \
+    "-DCMAKE_C_FLAGS=-ffunction-sections -fdata-sections" \
     -DZLIB_BUILD_SHARED=OFF \
     -DZLIB_BUILD_STATIC=ON \
     -DZLIB_BUILD_TESTING=OFF \
     -DZLIB_INSTALL=OFF
-cmake --build zlib/build --config Release --target zlibstatic
+cmake --build zlib/build --target zlibstatic
 
 if [ ! -f zlib/build/Release/zs.lib ]; then
     echo "[FAIL] zlib/build/Release/zs.lib not found / 找不到 zlib 靜態庫" >&2

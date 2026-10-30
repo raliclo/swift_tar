@@ -48,18 +48,44 @@ fi
 # compress one zstd frame per chunk with a single in-process ZSTD_compress).
 # zstd 的 CMake 專案在 build/cmake。只建靜態 libzstd target——不建 CLI／測試／
 # 舊格式／多執行緒（每 chunk 一個 frame，in-process 單次 ZSTD_compress）。
-cmake -S zstd/build/cmake -B "$build_dir" -G "Visual Studio 17 2022" -A x64 \
+#
+# Compiler: the Swift toolchain's clang (GNU driver, MSVC ABI), not MSVC cl.exe. Measured by
+# verifications/zstd_bmi2_win.zsh on claw-code (variant e there). Note what this does NOT buy:
+# zstd's run-time BMI2 dispatch stays inert, because compiler.h defines TARGET_ATTRIBUTE only under
+# __GNUC__, which clang does not define when targeting MSVC -- the gain is clang's codegen.
+# The generator (NMake, not Visual Studio) and the paths come from win_clang_cmake.zsh.
+# -ffunction-sections/-fdata-sections are clang's counterpart of the /Gy that MSVC's /O2 implies: one
+# section per function, so the linker can drop what swift_tar never calls. Measured 2026-10-30 on
+# swift_tar.exe (MSVC zstd: 1,619,456 bytes): clang without them 1,808,384, with them 1,756,160. The
+# remaining +136,704 (all .text) is clang -O3's inlining and unrolling, not dead code: the level is
+# chosen at run time, so every zstd strategy is reachable and the linker can drop none of them.
+# 編譯器：Swift 工具鏈的 clang（GNU 驅動、MSVC ABI），而非 MSVC cl.exe。由
+# verifications/zstd_bmi2_win.zsh 在 claw-code 上量測（該處的 e 版本）。注意它「沒有」帶來的：zstd 的
+# 執行時 BMI2 分派仍不生效，因為 compiler.h 只在 __GNUC__ 下定義 TARGET_ATTRIBUTE，而 clang 以 MSVC
+# 為目標時不定義它——收益來自 clang 的程式碼生成。產生器（NMake，而非 Visual Studio）與路徑來自
+# win_clang_cmake.zsh。
+# -ffunction-sections／-fdata-sections 對應 MSVC /O2 隱含的 /Gy：每個函式一個 section，連結器才能丟掉
+# swift_tar 用不到的部分。2026-10-30 量測 swift_tar.exe（MSVC 版 zstd 為 1,619,456 位元組）：clang 不加
+# 為 1,808,384，加上後為 1,756,160。剩下的 +136,704（全在 .text）是 clang -O3 的 inline 與展開，不是
+# 死碼：壓縮等級在執行時才決定，所有 zstd 策略都可能被呼叫，連結器一個也丟不掉。
+. ./win_clang_cmake.zsh
+win_clang_cmake clang "$build_dir/lib/Release" || exit 1
+cmake -S zstd/build/cmake -B "$build_dir" "${win_cmake_args[@]}" \
+    -DCMAKE_CXX_COMPILER="$win_cc" \
+    -DCMAKE_ASM_COMPILER="$win_cc" \
+    "-DCMAKE_C_FLAGS=-ffunction-sections -fdata-sections" \
     -DZSTD_BUILD_STATIC=ON \
     -DZSTD_BUILD_SHARED=OFF \
     -DZSTD_BUILD_PROGRAMS=OFF \
     -DZSTD_BUILD_TESTS=OFF \
     -DZSTD_LEGACY_SUPPORT=OFF \
     -DZSTD_MULTITHREAD_SUPPORT=OFF
-cmake --build "$build_dir" --config Release --target libzstd_static
+cmake --build "$build_dir" --target libzstd_static
 
-# MSVC renames the static lib to zstd_static.lib (avoids clashing with the
-# shared import library). / MSVC 會把靜態庫改名為 zstd_static.lib（避免與
-# 動態庫的 import library 撞名）。
+# zstd's CMake names the static lib zstd_static.lib for MSVC and for clang targeting
+# MSVC alike (avoids clashing with the shared import library). / zstd 的 CMake 對 MSVC
+# 與以 MSVC 為目標的 clang 都把靜態庫命名為 zstd_static.lib（避免與動態庫的 import
+# library 撞名）。
 lib="$build_dir/lib/Release/zstd_static.lib"
 if [ ! -f "$lib" ]; then
     echo "[FAIL] $lib not found / 找不到 zstd 靜態庫" >&2

@@ -235,11 +235,25 @@ if [[ $OS == windows ]]; then
   # 與 compile_tar-win.zsh 選它建置所用的 runtime 相同：%LOCALAPPDATA%\Programs\Swift\Runtimes 下依 zsh
   # 數字 glob 排序最新的那份。升級期間兩份並存時（2026-10-19 的 6.4.0 與 6.4.1 就是），封存帶的是執行
   # 檔所對應的那份，而不是失敗或拿到較舊的。
-  swift_root="$(cygpath -u "${LOCALAPPDATA:-$HOME/AppData/Local}")/Programs/Swift"
-  found=("$swift_root"/Runtimes/*/usr/bin(/Nn))
-  rt_bin=${found[-1]:-}
-  [[ -n $rt_bin && -f $rt_bin/swiftCore.dll ]] || die "no Swift runtime with swiftCore.dll under $swift_root/Runtimes" \
-                                                      "$swift_root/Runtimes 下找不到含 swiftCore.dll 的 Swift runtime"
+  #
+  # CORRECTED 2026-10-30 (review item 5): "the one the binary was built for" above was not what
+  # this did. It took the newest installed at RELEASE time, so a Swift upgrade between build and
+  # release shipped DLLs the binary was never built or tested against. compile_tar-win.zsh now
+  # records the runtime it used in release/swift_tar.exe.runtime, and that record is what ships;
+  # without it, or with its runtime gone, this refuses.
+  # 2026-10-30 更正（審查第 5 項）：上文「執行檔所對應的那份」並非實際行為。它取的是「發布時」已安裝
+  # 的最新版，於是建置與發布之間升級 Swift，就會帶上執行檔從未以之建置或測試的 DLL。現在
+  # compile_tar-win.zsh 把所用的 runtime 記在 release/swift_tar.exe.runtime，出貨的就是那一份；沒有
+  # 紀錄、或紀錄的 runtime 已不在時，這裡拒絕。
+  # The reading lives in win_dlls.zsh so test/test_release.zsh can exercise it off Windows.
+  # 讀取邏輯放在 win_dlls.zsh，讓 test/test_release.zsh 在 Windows 以外也能測。
+  source "$HERE/win_dlls.zsh"
+  rt_rc=0
+  rt_bin=$(swift_tar_win_runtime "$BIN") || rt_rc=$?
+  (( rt_rc != 1 )) || die "$BIN.runtime is missing; rebuild with ./compile_tar-win.zsh, which records the Swift runtime it used" \
+                          "缺少 $BIN.runtime；請以 ./compile_tar-win.zsh 重新建置，它會記下所用的 Swift runtime"
+  (( rt_rc == 0 )) || die "the Swift runtime $BIN was built with ($(<$BIN.runtime)) has no swiftCore.dll any more; rebuild" \
+                          "$BIN 建置時所用的 Swift runtime（$(<$BIN.runtime)）已沒有 swiftCore.dll；請重新建置"
   # Only the DLLs the binary actually loads: follow its PE imports, then theirs, and take each
   # one found in the runtime directory. That directory also holds FoundationNetworking,
   # FoundationXML and others swift_tar never loads, which carry curl, libxml2 and more whose
@@ -253,7 +267,6 @@ if [[ $OS == windows ]]; then
   for t in llvm-objdump objdump; do command -v $t >/dev/null 2>&1 && { objdump_bin=$t; break; }; done
   [[ -n $objdump_bin ]] || die "neither llvm-objdump nor objdump is on PATH; the DLLs to ship are read from the PE imports" \
                                "PATH 上沒有 llvm-objdump 或 objdump；要帶哪些 DLL 是從 PE import 讀出來的"
-  source "$HERE/win_dlls.zsh"
   typeset -a dlls=(${(f)"$(swift_tar_win_dlls "$objdump_bin" "$BIN" "$rt_bin")"})
   has_core=0
   for f in $dlls; do [[ ${f:t:l} == swiftcore.dll ]] && has_core=1; done

@@ -2502,6 +2502,11 @@ private struct WinStat {
     var nlink: UInt32
     var volumeSerial: UInt64
     var fileIndex: UInt64
+    /// The reparse tag winStat already read, kept so winStatFollowing does not ask
+    /// FindFirstFileW a second time per hop (2026-10-30 review, item 8).
+    /// winStat 已讀到的 reparse tag，保留下來，讓 winStatFollowing 不必每一跳再問一次
+    /// FindFirstFileW（2026-10-30 審查第 8 項）。
+    var reparseTag: UInt32?
 }
 
 /// lstat()-equivalent via FileManager.attributesOfItem, which (verified) does
@@ -2607,7 +2612,7 @@ private func winStat(_ path: String) -> WinStat? {
     return WinStat(isDir: type == .typeDirectory,
                    isSymlink: isLink,
                    size: size, mtime: mtime, mtimeNanos: mtimeNanos, nlink: nlink,
-                   volumeSerial: volumeSerial, fileIndex: fileIndex)
+                   volumeSerial: volumeSerial, fileIndex: fileIndex, reparseTag: tag)
 }
 
 /// stat()-equivalent for -h: follow the link chain to what it finally names, at most 40
@@ -2637,7 +2642,7 @@ private func winStatFollowing(_ path: String) -> (st: WinStat, readPath: String)
         // Whether NT can traverse this hop is decided by the tag, not by whether Foundation
         // happened to read it, so the tag is what is tested.
         // NT 能否穿過這一跳由 tag 決定，而非 Foundation 恰好讀不讀得出來，故以 tag 判定。
-        if winReparseTag(p) == IO_REPARSE_TAG_LX_SYMLINK_VALUE { viaLX = true }
+        if st.reparseTag == IO_REPARSE_TAG_LX_SYMLINK_VALUE { viaLX = true }
         // Foundation reads a native IO_REPARSE_TAG_SYMLINK but returns nil for an LX symlink
         // (IO_REPARSE_TAG_LX_SYMLINK, what MSYS/WSL `ln -s` leaves behind), so winStat classified
         // one as a link -- it checks the tag -- and this then could not read its target, and -h
@@ -2768,7 +2773,13 @@ private func winFileTime(_ mtime: UInt64, _ nanos: UInt32 = 0) -> FILETIME? {
 @discardableResult
 private func winSetPathMtime(_ path: String, _ mtime: UInt64, _ nanos: UInt32 = 0) -> String? {
     guard var ft = winFileTime(mtime, nanos) else { return "out of range: \(mtime)" }
-    let handle = path.withCString(encodedAs: UTF16.self) { wide in
+    // winUcrtPath, not the raw path: without `\\?\` a path past MAX_PATH fails to open, and a
+    // member named `nul` or `con` opens the device -- the same two failures winUcrtPath was
+    // written for, which this one setter had missed (2026-10-30 review, item 2).
+    // 用 winUcrtPath 而非原始路徑：少了 `\\?\`，超過 MAX_PATH 的路徑開不起來，名為 `nul`、`con`
+    // 的成員則會開到裝置——正是 winUcrtPath 要解決的兩種失敗，唯獨這個設定函式漏了（2026-10-30
+    // 審查第 2 項）。
+    let handle = winUcrtPath(path).withCString(encodedAs: UTF16.self) { wide in
         CreateFileW(wide,
                     DWORD(FILE_WRITE_ATTRIBUTES),
                     DWORD(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE),
@@ -2857,7 +2868,13 @@ private func winReadSymlinkTarget(_ path: String) -> String? {
         DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, nil, 0,
                         raw.baseAddress, DWORD(raw.count), &returned, nil)
     }
+    // Bounds below are checked against `returned`, the bytes the call actually wrote, not
+    // buf.count: with the capacity a corrupt length read the zero fill past the data and put
+    // NULs into the stored linkname (2026-10-30 review, item 9).
+    // 以下的邊界檢查對照 `returned`——呼叫實際寫入的位元組數——而非 buf.count：用容量檢查時，
+    // 損壞的長度會讀到資料之後填零的部分，把 NUL 寫進存下的 linkname（2026-10-30 審查第 9 項）。
     guard ok, Int(returned) >= 8 else { return nil }
+    let limit = Int(returned)
     func u16(_ o: Int) -> Int { Int(buf[o]) | (Int(buf[o + 1]) << 8) }
     func u32(_ o: Int) -> UInt32 {
         UInt32(buf[o]) | (UInt32(buf[o + 1]) << 8) | (UInt32(buf[o + 2]) << 16) | (UInt32(buf[o + 3]) << 24)
@@ -2871,7 +2888,7 @@ private func winReadSymlinkTarget(_ path: String) -> String? {
         let substOff = u16(8), substLen = u16(10), printOff = u16(12), printLen = u16(14)
         let base = 20
         func str(_ off: Int, _ len: Int) -> String? {
-            guard len >= 2, base + off + len <= buf.count else { return nil }
+            guard len >= 2, base + off + len <= limit else { return nil }
             var units: [UInt16] = []
             var i = base + off
             let end = i + len
@@ -2897,7 +2914,7 @@ private func winReadSymlinkTarget(_ path: String) -> String? {
         // 這裡的讀取都得手工處理。
         let start = 8 + 4
         let len = dataLen - 4
-        guard len > 0, start + len <= buf.count else { return nil }
+        guard len > 0, start + len <= limit else { return nil }
         return String(decoding: buf[start ..< start + len], as: UTF8.self)
     }
     return nil

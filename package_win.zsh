@@ -7,11 +7,12 @@
 #   ./package_win.zsh --exe release/swift_tar.exe --out release/swift_tar_win.zip
 #   ./package_win.zsh --help
 #
-# Mirrors helper_windows/build-cli-win.zsh's packaging step for lzfse.exe: find
-# the Swift runtime directory from swiftc's own location, copy every DLL beside
-# the exe, then zip.
-# 與 helper_windows/build-cli-win.zsh 為 lzfse.exe 所做的封裝步驟一致：由 swiftc
-# 自身位置推得 Swift runtime 目錄，將其中所有 DLL 複製到 exe 旁，再打包成 zip。
+# Mirrors helper_windows/build-cli-win.zsh's packaging step for lzfse.exe: take
+# the Swift runtime directory the exe was built against (<exe>.runtime, written by
+# compile_tar-win.zsh), copy every DLL beside the exe, then zip.
+# 與 helper_windows/build-cli-win.zsh 為 lzfse.exe 所做的封裝步驟一致：取 exe 建置時
+# 所依據的 Swift runtime 目錄（<exe>.runtime，由 compile_tar-win.zsh 寫出），將其中所有
+# DLL 複製到 exe 旁，再打包成 zip。
 #
 # gzip, zstd and the ZIP backend are statically linked from the zlib, zstd and
 # libarchive submodules. The other non-LZFSE codecs (bzip2/xz/lz4/lzip) still
@@ -57,16 +58,20 @@ die() { print -ru2 -- "package_win: $1"; exit 1 }
 [[ -f zstd/LICENSE ]]         || die "zstd/LICENSE not found (initialize the zstd submodule)"
 [[ -f libarchive/COPYING ]]   || die "libarchive/COPYING not found (initialize the libarchive submodule)"
 
-(( $+commands[swiftc] )) || die "swiftc not found on PATH"
-# swiftc lives at .../Programs/Swift/Toolchains/<ver>/usr/bin/swiftc.exe, so the
-# Swift root is five levels up.
-# swiftc 位於 .../Programs/Swift/Toolchains/<ver>/usr/bin/swiftc.exe，故 Swift
-# 根目錄在其上五層。
-swift_root=${${commands[swiftc]}:A:h:h:h:h:h}
-rt_dll=( ${swift_root}/Runtimes/**/swiftCore.dll(N) )
-(( $#rt_dll )) || die "Swift runtime (swiftCore.dll) not found under $swift_root/Runtimes"
-rt_bin=${rt_dll[1]:h}
-print -r -- "Swift runtime: $rt_bin"
+# The runtime is the one the exe was built against, recorded by compile_tar-win.zsh in
+# <exe>.runtime. This took the FIRST swiftCore.dll a recursive glob of the Runtimes directory found -- in name order
+# the oldest installed, so with 6.4.0 and 6.4.1 side by side the zip carried 6.4.0's DLLs
+# beside a 6.4.1 build (2026-10-30 review, finding I; same class as release.zsh's item 5).
+# 用的是 exe 建置時所依據的 runtime，由 compile_tar-win.zsh 記在 <exe>.runtime。這裡原本取
+# 遞迴 glob Runtimes 目錄所找到的「第一個」swiftCore.dll——依名稱排序就是已安裝的最舊版，於是 6.4.0 與 6.4.1
+# 並存時，zip 會在 6.4.1 的建置旁帶上 6.4.0 的 DLL（2026-10-30 審查，發現 I；與 release.zsh 第 5 項
+# 同類）。
+source "${script_path:h}/win_dlls.zsh"
+rt_rc=0
+rt_bin=$(swift_tar_win_runtime "$exe") || rt_rc=$?
+(( rt_rc != 1 )) || die "$exe.runtime is missing; rebuild with ./compile_tar-win.zsh, which records the Swift runtime it used"
+(( rt_rc == 0 )) || die "the Swift runtime recorded in $exe.runtime has no swiftCore.dll any more; rebuild"
+printf 'Swift runtime: %s\n' "$rt_bin"
 
 stage_root=${out:h}/swift_tar_win_stage
 stage_dir=$stage_root/swift_tar-win

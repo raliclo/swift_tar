@@ -54,6 +54,22 @@ mkdir -p "$TMP/zsrc/j"
 print -n pwned > "$TMP/zsrc/j/evil.txt"
 print -n fine > "$TMP/zsrc/ok.txt"
 ( cd "$TMP/zsrc" && "$ST" -c --zip -f "$TMP/j.zip" j/evil.txt ok.txt )
+# Two more ZIPs for the bridge's walk (2026-10-30 review, finding A). long.zip names
+# `j/<5 x 240 a>/evil.txt`, 1217 characters: the walk returned "not blocked" for any name past its
+# 1040-character buffer, and that member was written outside with exit 0. dot.zip names
+# `./j/evil.txt`, so the `\\?\` lookup that fixed it must still skip `.` the way libarchive does.
+# Windows' own bsdtar builds long.zip from an mtree spec; relative names, as everywhere here.
+# 另兩個 ZIP 給橋接層的走訪（2026-10-30 審查，發現 A）。long.zip 的成員是 `j/<5 x 240 個 a>/evil.txt`，
+# 1217 字元：走訪對超過 1040 字元緩衝區的名稱一律回傳「沒擋住」，該成員被寫到外部並以 0 結束。
+# dot.zip 的成員是 `./j/evil.txt`，修好它的 `\\?\` 查詢仍須像 libarchive 一樣略過 `.`。long.zip 以
+# Windows 內建的 bsdtar 從 mtree 規格建立；與本檔其他地方一樣只用相對名稱。
+seg=$(printf 'a%.0s' {1..240})
+{ printf '#mtree\n'
+  printf './j/%s/%s/%s/%s/%s/evil.txt type=file contents=j/evil.txt\n' $seg $seg $seg $seg $seg
+  printf './ok.txt type=file contents=ok.txt\n'
+} > "$TMP/zsrc/long.mtree"
+( cd "$TMP/zsrc" && /c/Windows/System32/tar.exe --format zip -cf ../long.zip @long.mtree ) </dev/null
+( cd "$TMP/zsrc" && "$ST" -c --zip -f "$TMP/dot.zip" ./j/evil.txt ok.txt ) </dev/null
 
 # Make dest/ with `j` as <kind>: J = junction, D = directory symlink, plain = ordinary directory.
 # Relative paths with the inherited cwd, never cygpath-built ones (see test_dereference.zsh).
@@ -99,6 +115,14 @@ for kind in J D; do
   fresh $kind; run "$TMP/j.tar" --no-links; must_refuse "tar --no-links via $name"
   fresh $kind; run "$TMP/j.zip";             must_refuse "zip via $name"
   fresh $kind; run "$TMP/j.zip" --no-links; must_refuse "zip --no-links via $name"
+  fresh $kind; run "$TMP/long.zip"
+  # evil.txt sits five directories down here, so look for it anywhere outside.
+  # 此處 evil.txt 在五層目錄之下，所以在外部的任何位置找它。
+  outside_hits=( "$TMP"/outside/**/evil.txt(N) )
+  (( rc != 0 && ${#outside_hits} == 0 )) \
+    && ok "zip 1217-char name via $name: refused, nothing outside / 1217 字元名稱被拒絕、外部無檔案" \
+    || { bad "zip 1217-char name via $name: rc=$rc, files outside=${#outside_hits}"; cat "$TMP/err" }
+  fresh $kind; run "$TMP/dot.zip";           must_refuse "zip ./j/ via $name"
   fresh $kind; run "$TMP/h.tar"
   (( rc != 0 )) && [[ ! -e $TMP/dest/h.txt ]] \
     && ok "tar hard link via $name: refused, not created / 硬連結被拒絕、未建立" \
@@ -113,6 +137,18 @@ for archive in j.tar j.zip; do
     && ok "${archive:e}: a plain directory j is extracted into / 一般目錄 j 照常解入" \
     || { bad "${archive:e}: plain directory: rc=$rc"; cat "$TMP/err" }
 done
+# The long name is extracted under a plain `j`: refusing every name past MAX_PATH would pass the
+# junction case above too.
+# 一般目錄 `j` 之下，長名稱照常解出：把超過 MAX_PATH 的名稱一律拒絕，也會通過上面的 junction 案例。
+fresh plain; run "$TMP/long.zip"
+inside_hits=( "$TMP"/dest/j/**/evil.txt(N) )
+(( rc == 0 && ${#inside_hits} == 1 )) \
+  && ok "zip: a 1217-char name under a plain directory j is extracted / 一般目錄 j 下的 1217 字元名稱照常解出" \
+  || { bad "zip: 1217-char name under a plain j: rc=$rc, found=${#inside_hits}"; cat "$TMP/err" }
+fresh plain; run "$TMP/dot.zip"
+(( rc == 0 )) && [[ $(cat "$TMP/dest/j/evil.txt") == pwned ]] \
+  && ok "zip: ./j/evil.txt under a plain directory j is extracted / 一般目錄 j 下的 ./j/evil.txt 照常解出" \
+  || { bad "zip: ./j/ under a plain j: rc=$rc"; cat "$TMP/err" }
 
 print -r -- "PASS: $pass  FAIL: $fail  SKIP: $skip"
 (( fail == 0 ))

@@ -338,6 +338,20 @@ done
 (( installed )) || die "could not install release/swift_tar.exe after retries / 重試多次後仍無法安裝"
 rm -f "${build_exe%.exe}.lib" "${build_exe%.exe}.exp"
 
+# Record which Swift runtime this exe was built and tested against, beside it, for release.zsh
+# to ship. release.zsh used to pick the newest runtime installed at release time, which is a
+# different one whenever Swift is upgraded between build and release, and the Windows runtime
+# has no stable ABI (2026-10-30 review, item 5). No resolved runtime means no record, so
+# release.zsh refuses rather than guesses.
+# 在 exe 旁記下它建置與測試時所用的 Swift runtime，供 release.zsh 出貨。release.zsh 原本在發布時
+# 挑「已安裝的最新版」，只要建置與發布之間升級過 Swift 就會是另一份，而 Windows 的 runtime 沒有
+# 穩定 ABI（2026-10-30 審查第 5 項）。沒有解析出 runtime 就不寫紀錄，讓 release.zsh 拒絕而不是猜。
+if [[ -n ${swift_rt:-} && -f $swift_rt/swiftCore.dll ]]; then
+    printf '%s\n' "$swift_rt" > release/swift_tar.exe.runtime
+else
+    rm -f release/swift_tar.exe.runtime
+fi
+
 note "[OK] Built release/swift_tar.exe / 已建置 release/swift_tar.exe"
 
 # ---- package / 打包 ----

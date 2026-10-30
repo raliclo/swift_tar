@@ -312,6 +312,35 @@ check "win_dlls: only the import closure ships, under the directory's own spelli
 rc=0; swift_tar_ships_msvc_runtime "$W/rt/Foundation.dll" "$W/rt/swiftCore.dll" "$W/rt/msvcp140.dll" || rc=$?; check "win_dlls: an MSVC DLL that comes last still counts" "$rc" 0
 rc=0; swift_tar_ships_msvc_runtime "$W/rt/Foundation.dll" "$W/rt/VCRUNTIME140.DLL" || rc=$?; check "win_dlls: an upper-case MSVC name counts" "$rc" 0
 rc=0; swift_tar_ships_msvc_runtime "$W/rt/Foundation.dll" "$W/rt/swiftCore.dll" || rc=$?; check "win_dlls: no MSVC DLL, no notice" "$rc" 1
+# The runtime that ships is the one recorded at build time, not the newest installed: with 6.4.0
+# recorded and 6.5.0 beside it, release.zsh used to take 6.5.0 (2026-10-30 review, item 5).
+# 出貨的 runtime 是建置時記下的那份，而非已安裝的最新版：記錄為 6.4.0、旁邊有 6.5.0 時，release.zsh
+# 原本會拿 6.5.0（2026-10-30 審查第 5 項）。
+mkdir -p "$W/Runtimes/6.4.0/usr/bin" "$W/Runtimes/6.5.0/usr/bin" "$W/Runtimes/6.3.0/usr/bin"
+: > "$W/Runtimes/6.4.0/usr/bin/swiftCore.dll"; : > "$W/Runtimes/6.5.0/usr/bin/swiftCore.dll"
+printf '%s\n' "$W/Runtimes/6.4.0/usr/bin" > "$W/swift_tar.exe.runtime"
+rc=0; got=$(swift_tar_win_runtime "$W/swift_tar.exe") || rc=$?
+check "win_runtime: the recorded runtime ships, not the newer one beside it" "$rc:$got" "0:$W/Runtimes/6.4.0/usr/bin"
+printf '%s\n' "$W/Runtimes/6.3.0/usr/bin" > "$W/swift_tar.exe.runtime"
+rc=0; swift_tar_win_runtime "$W/swift_tar.exe" >/dev/null || rc=$?
+check "win_runtime: a recorded runtime without swiftCore.dll is refused" "$rc" 2
+rm -f "$W/swift_tar.exe.runtime"
+rc=0; swift_tar_win_runtime "$W/swift_tar.exe" >/dev/null || rc=$?
+check "win_runtime: no record is refused, never guessed" "$rc" 1
+# release.zsh itself must ask the record, not glob Runtimes/ again: the cases above prove nothing
+# about a release.zsh that stopped calling the function.
+# release.zsh 本身必須問紀錄，而不是再去 glob Runtimes/：若 release.zsh 不再呼叫該函式，上面的案例
+# 什麼也證明不了。
+calls=$(grep -c 'swift_tar_win_runtime "\$BIN"' "$ROOT/release.zsh" || true)  # 0 matches is the failure being checked / 0 筆正是要檢查的失敗
+globs=$(grep -c 'Runtimes/\*' "$ROOT/release.zsh" || true)                     # 0 matches is the passing case / 0 筆才是通過
+check "release.zsh: ships the recorded runtime and globs no Runtimes/" "$calls:$globs" "1:0"
+# package_win.zsh had the same flaw the other way round: the first swiftCore.dll under Runtimes/**,
+# the OLDEST installed (2026-10-30 review, finding I).
+# package_win.zsh 有同一個缺陷、方向相反：Runtimes/** 底下第一個 swiftCore.dll，也就是「最舊」的
+# 那份（2026-10-30 審查，發現 I）。
+calls=$(grep -c 'swift_tar_win_runtime "\$exe"' "$ROOT/package_win.zsh" || true)  # 0 matches is the failure being checked / 0 筆正是要檢查的失敗
+globs=$(grep -c 'Runtimes/\*' "$ROOT/package_win.zsh" || true)                     # 0 matches is the passing case / 0 筆才是通過
+check "package_win.zsh: packages the recorded runtime and globs no Runtimes/" "$calls:$globs" "1:0"
 
 # ---------------------------------------------------------------------
 # publish_rewrite.zsh on copies of the real package files.

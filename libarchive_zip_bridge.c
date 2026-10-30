@@ -1610,8 +1610,32 @@ static int copy_archive_data_to_stdout(struct archive *reader,
  * 0x20000000，IsReparseTagNameSurrogate）——則改回傳 2。libarchive 的 SECURE_SYMLINKS 會在此
  * 拒絕 symlink，卻把 junction 當成目錄，於是 -C 之下既有、指向外部的 junction `j` 讓
  * `j/evil.txt` 寫到外部並以 0 結束（2026-10-24 審查）。規則同 swift_tar.swift 的
- * winIsNameSurrogate。併入這次走訪，使每個上層仍只被詢問一次。 */
-static int blocking_ancestor(const wchar_t *path, wchar_t *out, size_t out_count) {
+ * winIsNameSurrogate。併入這次走訪，使每個上層仍只被詢問一次。
+ *
+ * Returns 3 when the walk cannot be made (no working directory, no memory): the caller refuses
+ * the entry, since "not checked" must never read as "not blocked". On 1 or 2 `*blocker` is set
+ * to a malloc'd copy of the blocking ancestor as the archive names it, for the caller to report
+ * and free; otherwise it is NULL.
+ * 走訪無法進行時（取不到工作目錄、記憶體不足）回傳 3：呼叫端拒絕該項目，因為「沒檢查」絕不能
+ * 讀成「沒擋住」。回傳 1 或 2 時 `*blocker` 指向一份 malloc 出來、以封存中寫法表示的阻擋上層，
+ * 由呼叫端回報並釋放；其他情況為 NULL。
+ *
+ * CORRECTED 2026-10-30 (review finding A): this took a fixed 1040-character buffer and returned
+ * 0 -- "not blocked" -- for any name that did not fit, and asked GetFileAttributesW about a
+ * relative, unprefixed path, which fails past MAX_PATH since swift_tar.exe is not longPathAware.
+ * Both failed open: a ZIP member `j/<5 x 240 a>/evil.txt` under a junction `j` was written
+ * outside -C with exit 0 and nothing on stderr, while the short name was refused. Each ancestor
+ * is now asked through a heap-built absolute `\\?\` path, with no length limit, and `.` and
+ * empty components are skipped as libarchive skips them -- under `\\?\` they would be passed
+ * through literally, fail the lookup, and let `./j/evil.txt` through instead.
+ * 2026-10-30 更正（審查發現 A）：原本用固定 1040 字元的緩衝區，放不下的名稱一律回傳 0——「沒擋住」；
+ * 並以相對、未加前綴的路徑詢問 GetFileAttributesW，而 swift_tar.exe 沒有 longPathAware，超過
+ * MAX_PATH 就失敗。兩者都是失敗時放行：junction `j` 之下的 ZIP 成員 `j/<5 x 240 個 a>/evil.txt`
+ * 被寫到 -C 之外，以 0 結束且 stderr 無訊息，短名稱卻會被拒絕。現在每個上層都以堆積上組出的絕對
+ * `\\?\` 路徑詢問，沒有長度上限；`.` 與空的路徑段如 libarchive 一樣略過——在 `\\?\` 之下它們會被
+ * 原樣傳下去、查詢失敗，反而讓 `./j/evil.txt` 通過。 */
+static int blocking_ancestor(const wchar_t *path, wchar_t **blocker) {
+    *blocker = NULL;
     size_t len = wcslen(path);
     /* Only true ancestors count: a directory entry `a/` is `a` itself, not something
      * below it. On POSIX that entry replaces an existing file `a` -- libarchive's default
@@ -1625,33 +1649,84 @@ static int blocking_ancestor(const wchar_t *path, wchar_t *out, size_t out_count
      * 的 ZIP 取代了 `a`；只含 `a/b` 的回報「Could not stat a/b」並保留 `a`。若不去掉結尾
      * 分隔符，Windows 連 `a/` 項目也會拒絕。 */
     while (len > 0 && (path[len - 1] == L'/' || path[len - 1] == L'\\')) len--;
-    if (len == 0 || len >= out_count) return 0;
+    if (len == 0) return 0;
+
+    /* The absolute base: the working directory (the bridge has already chdir'd to -C) under
+     * `\\?\`, or `\\?\UNC\` for a share. GetCurrentDirectoryW(0, NULL) counts the terminator.
+     * 絕對路徑的基底：工作目錄（橋接層此時已 chdir 到 -C）加上 `\\?\`，網路共用則是 `\\?\UNC\`。
+     * GetCurrentDirectoryW(0, NULL) 的長度含結尾字元。 */
+    DWORD cwd_cap = GetCurrentDirectoryW(0, NULL);
+    if (cwd_cap == 0) return 3;
+    wchar_t *cwd = malloc(cwd_cap * sizeof *cwd);
+    /* "\\?\UNC" + cwd + one '\' per component + the member + NUL / 前綴 + cwd + 每段一個 '\' + 成員 + NUL */
+    size_t abs_cap = 7 + (size_t)cwd_cap + len + 1;
+    wchar_t *abs = malloc(abs_cap * sizeof *abs);
+    wchar_t *rel = malloc((len + 1) * sizeof *rel);
+    DWORD cwd_len = cwd != NULL ? GetCurrentDirectoryW(cwd_cap, cwd) : 0;
+    if (cwd == NULL || abs == NULL || rel == NULL || cwd_len == 0 || cwd_len >= cwd_cap) {
+        free(cwd); free(abs); free(rel);
+        return 3;
+    }
+    static const wchar_t plain_prefix[] = L"\\\\?\\";
+    static const wchar_t unc_prefix[] = L"\\\\?\\UNC";
+    const wchar_t *prefix = plain_prefix;
+    const wchar_t *base = cwd;
+    if (cwd_len >= 4 && cwd[0] == L'\\' && cwd[1] == L'\\' && cwd[2] == L'?' && cwd[3] == L'\\') {
+        prefix = L"";                     /* already `\\?\` / 已帶 `\\?\` */
+    } else if (cwd_len >= 2 && cwd[0] == L'\\' && cwd[1] == L'\\') {
+        prefix = unc_prefix;              /* \\server\share -> \\?\UNC\server\share */
+        base = cwd + 1;
+    }
+    size_t pos = 0;
+    for (const wchar_t *p = prefix; *p != L'\0'; p++) abs[pos++] = *p;
+    for (const wchar_t *p = base; *p != L'\0'; p++) abs[pos++] = *p;
+    while (pos > 0 && abs[pos - 1] == L'\\') pos--;    /* "C:\" ends in one / "C:\" 結尾就有一個 */
+
     /* memcpy, not wmemcpy: the UCRT defines wmemcpy inline in <wchar.h> with no exported
      * symbol, so a call without that header fails to link (LNK2019, measured).
      * 用 memcpy 而非 wmemcpy：UCRT 把 wmemcpy 以 inline 定義在 <wchar.h>，沒有匯出符號，
      * 未引入該標頭時呼叫會連結失敗（LNK2019，實測）。 */
-    memcpy(out, path, len * sizeof *out);
-    out[len] = L'\0';   /* len may stop short of the original terminator / len 可能已去掉結尾分隔符 */
-    for (size_t i = 1; i < len; i++) {
-        if (out[i] != L'/' && out[i] != L'\\') continue;
-        wchar_t sep = out[i];
-        out[i] = L'\0';
-        DWORD attrs = GetFileAttributesW(out);
+    memcpy(rel, path, len * sizeof *rel);
+    rel[len] = L'\0';   /* len may stop short of the original terminator / len 可能已去掉結尾分隔符 */
+    int result = 0;
+    size_t i = 0;
+    while (i < len) {
+        size_t start = i;
+        while (i < len && rel[i] != L'/' && rel[i] != L'\\') i++;
+        if (i >= len) break;   /* the last component is the entry itself / 最後一段是項目本身 */
+        size_t clen = i - start;
+        if (clen == 0 || (clen == 1 && rel[start] == L'.')) { i++; continue; }
+        /* SECURE_NODOTDOT refuses the whole entry downstream. / 下游的 SECURE_NODOTDOT 會拒絕整個項目。 */
+        if (clen == 2 && rel[start] == L'.' && rel[start + 1] == L'.') break;
+        abs[pos++] = L'\\';
+        memcpy(abs + pos, rel + start, clen * sizeof *abs);
+        pos += clen;
+        abs[pos] = L'\0';
+        DWORD attrs = GetFileAttributesW(abs);
         if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) {
             /* Only a reparse point pays for the tag lookup. / 只有 reparse point 才查 tag。 */
             WIN32_FIND_DATAW data;
-            HANDLE h = FindFirstFileW(out, &data);
+            HANDLE h = FindFirstFileW(abs, &data);
             if (h != INVALID_HANDLE_VALUE) {
                 FindClose(h);
-                if (data.dwReserved0 & 0x20000000u) return 2;
+                if (data.dwReserved0 & 0x20000000u) { result = 2; break; }
             }
         }
         if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-            return 1;
+            result = 1;
+            break;
         }
-        out[i] = sep;
+        i++;
     }
-    return 0;
+    free(cwd);
+    free(abs);
+    if (result != 0) {
+        rel[i] = L'\0';
+        *blocker = rel;
+    } else {
+        free(rel);
+    }
+    return result;
 }
 #endif
 
@@ -1899,19 +1974,20 @@ int swift_tar_zip_read(const char *archive_path,
                 /* Wide path: the narrow one goes through the ANSI code page and would
                  * mangle a non-ASCII name. / 用寬字元路徑：窄字元會經 ANSI 字碼頁而弄壞非 ASCII 名稱。 */
                 const wchar_t *wpath = archive_entry_pathname_w(entry);
-                wchar_t blocker[MAX_PATH * 4];
-                int blocked = wpath != NULL
-                    ? blocking_ancestor(wpath, blocker, sizeof blocker / sizeof blocker[0]) : 0;
-                if (blocked == 2) {
+                wchar_t *blocker = NULL;
+                int blocked = wpath != NULL ? blocking_ancestor(wpath, &blocker) : 0;
+                if (blocked == 3) {
+                    fprintf(stderr, "swift_tar: %s: Cannot check the path for links or files in the way\n",
+                            path != NULL ? path : "");
+                } else if (blocked == 2) {
                     fprintf(stderr, "swift_tar: %s: Cannot extract through symlink or junction '%ls'\n",
                             path != NULL ? path : "", blocker);
-                    archive_read_data_skip(reader);
-                    skipped++;
-                    continue;
-                }
-                if (blocked) {
+                } else if (blocked) {
                     fprintf(stderr, "swift_tar: %s: Can't create directory '%ls': a file is in the way\n",
                             path != NULL ? path : "", blocker);
+                }
+                free(blocker);
+                if (blocked) {
                     archive_read_data_skip(reader);
                     skipped++;
                     continue;

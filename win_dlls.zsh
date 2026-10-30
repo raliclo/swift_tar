@@ -37,6 +37,24 @@ swift_tar_win_dlls() {
   return 0
 }
 
+# swift_tar_win_runtime <pe> -- print the Swift runtime bin directory <pe> was built against, read
+#   from <pe>.runtime, which compile_tar-win.zsh writes beside the exe. Returns 1 when there is no
+#   record and 2 when the recorded directory no longer holds swiftCore.dll. Never falls back to the
+#   newest installed runtime: that fallback is what shipped another runtime's DLLs whenever Swift
+#   was upgraded between build and release (2026-10-30 review, item 5).
+# swift_tar_win_runtime <pe> —— 印出 <pe> 建置時所用的 Swift runtime bin 目錄，讀自 compile_tar-win.zsh
+#   寫在 exe 旁的 <pe>.runtime。沒有紀錄回傳 1，紀錄的目錄已沒有 swiftCore.dll 回傳 2。絕不退回
+#   「已安裝的最新版」：建置與發布之間升級 Swift 時，正是這個退路帶上了另一份 runtime 的 DLL
+#   （2026-10-30 審查第 5 項）。
+swift_tar_win_runtime() {
+  emulate -L zsh
+  local record=$1.runtime rt
+  [[ -r $record ]] || return 1
+  rt=$(<$record)
+  [[ -n $rt && -f $rt/swiftCore.dll ]] || return 2
+  printf '%s\n' "$rt"
+}
+
 # swift_tar_ships_msvc_runtime <path>... -- true if any of them is a Microsoft Visual C++ runtime
 # DLL. Each path is tested on its own: the first version tested a hash's keys inside (( )), where
 # they were joined into one string, so the answer depended on which key came first.

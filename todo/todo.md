@@ -251,6 +251,87 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
+## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🔴 部分處理（H1–H8、M11 已修）/ Whole-tree code review of v0.1.4 ▸ partly fixed
+
+**進度 / Progress**
+- ✅ H1–H7 已修（macOS）：`test/test_review_20261031.zsh` 27 項，對 0.1.4 失敗 22 項（H7 的競態在 0.1.4 上兩次執行皆
+  重現外洩），對修正後連跑 3 次皆 27/0。Windows／Linux 未驗。H3 一併修正：清除迴圈對絕對路徑丟掉開頭的 `/`，
+  改看工作目錄下的相對路徑。H6 一併修正：不滿一個區塊的檔案會被截成 0 位元組。
+  Fixed on macOS; the new test fails 22 checks on 0.1.4 and passes 27/27 three runs in a row.
+- ✅ H8、M11 由 Windows 端修於 `82e7e7a`（橋接層祖先走訪改用 `\\?\`，無法檢查時拒絕；`winSetPathMtime` 經
+  `winUcrtPath`）；UNC 路徑（`dcf0a94`）與 `package_win.zsh` 的 runtime 選擇（`82e7e7a`）亦同。
+  Fixed by the Windows side in 82e7e7a / dcf0a94.
+
+七段並行審查後逐條複核。「重現」＝以已安裝的 0.1.4（`20261030-150730`，macOS）實際跑過；「讀碼」＝追過
+程式路徑、未執行。行號以 `4c68c05` 為準。每一條修好時，在該條加上 ✅、commit 與測試名稱。
+Reviewed in seven parallel parts, then each item re-checked. "Reproduced" = run against the
+installed 0.1.4 on macOS; "read" = code path traced, not run. Line numbers are at `4c68c05`.
+
+### 高：安全或資料遺失 / High: security or data loss
+
+- **H1 重現** symlink／hardlink／FIFO 成員以 `removeItem` 遞迴刪掉同名的非空目錄（`swift_tar.swift:5836`、
+  `6014`、`5948`）。只含 symlink `Documents -> /nonexistent` 的封存解進含 `Documents/file` 的目錄：目錄被刪、
+  rc=0。bsdtar：`Can't replace existing directory with non-directory: Directory not empty`，rc=1。
+  A link/FIFO member recursively deletes a non-empty directory of the same name.
+- **H2 重現** 目錄成員穿過先前的 symlink 成員，chmod `-C` 之外的目錄（`5818–5826`：`passesThroughSymlink`
+  只查上層，`fileExists` 跟隨連結，`chmod` 也跟隨）。`l -> <外部>` 後接 `l/`（0777）：外部目錄變
+  `drwxrwxrwx`，rc=0。A directory member chmods the target of an earlier symlink member, outside -C.
+- **H3 重現** `ensureDirectory` 的阻擋物清除迴圈從路徑第一段開始刪非目錄（`3312–3321`），不限於 `-C` 之下。
+  `-x -C thesis.docx/restore`：`thesis.docx` 被刪、換成目錄，rc=0。The blocker sweep deletes a file above -C.
+- **H4 重現** mode ≥ 0x10000 在 macOS 上當掉（`5532` 未 `& 0o7777`，Darwin 的 `mode_t` 是 UInt16）。mode 欄位
+  寫 `0200000` 的 ustar 成員：rc=133。A mode >= 0x10000 traps on macOS.
+- **H5 重現** 需要值的選項放在最後、值不見時無聲忽略（`7446–7470`、`optValue` `7620`）。
+  `-c --zstd -f s.tar.zst d --keyfile`（`$KEY` 為空）寫出**未加密**的 zstd，rc=0；`-C $DEST` 為空亦同。
+  A trailing value option with no value is dropped; with --keyfile the archive is written in plaintext.
+- **H6 重現** `-r`/`-u` 對非 tar 檔截斷後追加（`scanTarEntries` `8124–8226` 不驗 checksum／magic，
+  `runAppend` `8252` 先截斷）。`-rf notes.txt d/a.txt`：692 → 4096 bytes、原尾段遺失，rc=0。
+  -r/-u on a non-tar file truncates it and appends.
+- **H7 讀碼**（兩段審查各自找到）寫入池競態：`d/x`（≤4 MiB）已排入 `FileWriterPool`，其後的 symlink 成員
+  `d -> <外部>` 只在 `submitted.contains(dest)` 時排空（`5835`），worker 稍後 `open(O_CREAT)` 穿過連結寫到外部。
+  A queued write below a path can land through a symlink that later replaces the path.
+- **H8 讀碼，僅 Windows** ZIP 解壓：路徑 ≥ 1040 寬字元時 `blocking_ancestor` 回傳 0「沒有阻擋」
+  （`libarchive_zip_bridge.c:1614–1634`、`1902`），fb86de8 的 junction 防護被繞過。
+  Long ZIP member paths skip the junction check.
+- **H9 讀碼，僅 Windows** 無 `-C` 時 `/C:/Windows/x`、`\C:\x`、`C:C:/x` 經 `safeRelativePath`（`5181–5188`）
+  變成絕對磁碟路徑。Drive prefixes survive sanitising when stripped only once.
+- **H10 讀碼** crypto：解密不檢查標頭 `kdf` 與使用者密碼種類一致（`crypto.swift:543–571`、`810`）；`kdf=2` 時
+  logN/r/p 不受限，passphrase 下 `r=0` 使 `blockMix` 當掉、logN 過大吃光記憶體，皆在驗證之前。`kdf=1` 的上限
+  `logN=22,r=32` 本身就是 16 GiB。A header kdf mismatch sends unvalidated scrypt parameters before authentication.
+
+### 中 / Medium
+
+- **M1 重現** `-c` 第一個 stat 失敗就整個中止（`4844–4846`；Windows `4555`）：`-cf x.tar d missing b` 未收 `b`；
+  bsdtar 略過 `missing`、收 `b`、rc=1。`-r`/`-u` 下會留下沒有結尾的既有封存。讀取中檔案縮小（`4059`）同樣中止。
+- **M2 重現** 截斷的 `.tar.bz2` 列出 0 個成員、rc=0（`1313/1344/1355`，`atBoundary` 無 sawInput 檢查；gzip 已於
+  48a44ec 修過同形）。`head -c 500 a.tar.bz2`：bsdtar `truncated bzip2 input` rc=1。
+- **M3 重現** uu 內容含控制字元當掉（`1904`、`1908`，UInt8 下溢）：`begin 644 x\n\tAB\nend\n` → rc=133。
+- **M4 重現** POSIX 上 `archiveName` 把 `\` 換成 `/`、去掉 `X:`（`4312–4315`）：`foo\bar.txt` 存成 `foo/bar.txt`。
+- **M5 重現** `cfv out.tar d` 把封存寫進名為 `-v` 的檔案（群組展開 `7337–7338`）。
+- **M6 讀碼** uid/gid > 2097151 被截斷（`4130`、`octalField` `2390`），無 pax／base-256。
+- **M7 讀碼** `-t` 與 `-x` 對資料區的略過不一致（`5685` 對 `6037–6046`），可藏 `-t` 看不見、`-x` 會寫出的成員。
+- **M8 讀碼** `--no-same-permissions` 不作用於目錄、>4 MiB 檔、FIFO（`5824`、`6157`、`5970`）。
+- **M9 讀碼** `ByteReader` 在 `removeFirst` 後 `peek`/`readSome` 用相對位置取絕對索引（`1162`、`1170`、`1194`），
+  RPM `--cat` 輸出錯位資料、rc=0。
+- **M10 讀碼** `--zstd-parallel` 對大小未知的 frame 無上限地倍增輸出緩衝（`1527–1548`）。
+- **M11 讀碼，Windows** `winSetPathMtime` 未經 `winUcrtPath`（`2771`），長路徑 mtime 無聲遺失；3926fca 帶入的回歸。
+- **M12 讀碼，Windows** 不加 `-h` 時指回上層的 junction 讓 `-c` 無限遞迴（`4643–4653`）。
+- **M13 讀碼** hardlink 目標不存在（或被 `--exclude`）時整個解壓中止（`6032`），與 `5980` 註解不符。
+- **M14 讀碼** `--delete` 用新檔替換，權限變寬（0600→0644）且非原子（`8329`、`8474`）。
+- **M15 讀碼** 只有第一個 `-C` 生效（`7758`）。
+- **M16 讀碼** POSIX 上以裸名稱執行 `-test` 找不到自己（`6862–6869`）。
+- **M17 讀碼** pax `path=`／GNU `L` 名稱內嵌 NUL 可繞過 `..` 檢查（`5181`、`5644`）。
+- **S1 讀碼** `test/test_lzfse_cross_group.zsh:57`：編碼器任何失敗都變 SKIP、rc=0。
+- **S2 讀碼** `verify_release.zsh:53`（與 `compile_tar-linux.zsh:479`）：`! readelf | grep -q` 在 readelf 失敗時通過。
+- **S3 讀碼** `release.zsh:322–343` Windows 驗證借用 PATH 上的 DLL；`win_dlls.zsh:28` 不檢查 objdump 退出碼。
+
+### 低 / Low
+
+ZIP 建立時檔案縮小無聲存短（bridge `231`、`552`）；Windows 錯誤訊息非 ANSI 名稱顯示 `(null)`（bridge `337` 等）；
+`-u` 只比整秒（`4076`）；1970 前 mtime 夾成 0（`4881`）；成員名不跳脫控制字元（`5684`）；`-c --zip` 運算元過多
+堆疊溢位（`withCStrings` `182`）；`-test` 暫存目錄名可預測（`6901`）；`package_win.zsh:66` 挑到較舊 runtime；
+symlink 目標讀不到時略過但 rc=0（`4932`）；`--zstd-level` 配非 zstd 編碼無聲忽略（`7655`）；
+`--identify --zip` 不開檔即回答（`7648`）。
+
 ## 2026-10-23 `test_release.zsh` 在 glibc Linux（WSL）上 9 項失敗 ▸ ✅ 已修 2026-10-23（測試端）/ `test_release.zsh` fails 9 checks on glibc Linux (WSL) ▸ fixed the same day, in the test
 
 **現象**：Swift_tar-Win 在 WSL 跑 4a9c06c 的整套測試，只有 `test_release.zsh` 不過（30/9）。9 項

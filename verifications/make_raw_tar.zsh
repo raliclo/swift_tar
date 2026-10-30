@@ -7,6 +7,7 @@
 #   ./make_raw_tar.zsh <out.tar> hard <name> <linkname>      # hardlink
 #   ./make_raw_tar.zsh <out.tar> link <name> <linkname> file <name> <content> ...
 #   RAW_TAR_MTIME=452013710000 ./make_raw_tar.zsh <out.tar> file <name> <content>
+#   RAW_TAR_MODE=0000777 ./make_raw_tar.zsh <out.tar> dir <name> -   # mode field, octal
 #   ./make_raw_tar.zsh --help
 #
 # Every tar CLI sanitises names like "../x" at creation time, so a fixture for
@@ -37,7 +38,7 @@ set -euo pipefail
 
 script_path="${0:A}"
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then
-  sed -n '2,13p' "$script_path" | sed 's/^# \{0,1\}//'
+  sed -n '2,14p' "$script_path" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 
@@ -65,6 +66,8 @@ emit_entry() {
         # A FIFO carries no data and no link target -- the header alone is the
         # whole entry. / FIFO 不帶資料也無連結目標——整個項目就只有標頭。
         fifo) typeflag='6'; linkname=''; content='';  size=0 ;;
+        # A directory, typeflag '5'; <arg> is ignored. / 目錄，typeflag '5'；<arg> 不使用。
+        dir)  typeflag='5'; linkname=''; content='';  size=0 ;;
         # A pax extended header: typeflag 'x', payload is "<len> key=value\n"
         # where <len> counts its own digits. The caller passes "key=value" and
         # the length is computed here, because getting that self-reference wrong
@@ -88,7 +91,7 @@ emit_entry() {
     local hdr; hdr=$(mktemp)
     {
         emit_field "$name" 100
-        emit_field "0000644" 8
+        emit_field "${RAW_TAR_MODE:-0000644}" 8
         emit_field "0000000" 8
         emit_field "0000000" 8
         emit_field "$(printf '%011o' $size)" 12

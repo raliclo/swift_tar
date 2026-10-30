@@ -3354,14 +3354,29 @@ private func ensureDirectory(_ path: String, below root: String = "") -> Bool {
     // An interior component is a non-directory, not the last one. Clear each
     // blocker along the way and try once more.
     // 擋路的是中間某一段而非最後一段。逐段清掉阻礙後再試一次。
-    var prefix = ""
+    // Only components strictly below `root` are the archive's to clear. The walk starts at
+    // the first component of the whole path, so `-C thesis.docx/restore` reached
+    // `thesis.docx` -- a file the user owns, above the root -- and deleted it, exit 0
+    // (2026-10-31 review H3). The isRoot guard above covers the root itself, not its parents.
+    // 只有嚴格位於 `root` 之下的段落才歸封存清理。走訪從整條路徑的第一段開始，於是
+    // `-C thesis.docx/restore` 走到 `thesis.docx`——使用者的檔案，位於根目錄之上——並把它刪掉、
+    // 以 0 結束（2026-10-31 審查 H3）。上方的 isRoot 守門只涵蓋根目錄本身，不涵蓋它的上層。
+    // The prefix starts as nil, not "": with "" an absolute path's leading empty component
+    // was dropped, so `/tmp/out/cfg` was walked as `tmp`, `tmp/out`, ... relative to the
+    // working directory.
+    // prefix 從 nil 而非 "" 開始：用 "" 時絕對路徑開頭的空段會被丟掉，於是 `/tmp/out/cfg` 被當成
+    // 相對於工作目錄的 `tmp`、`tmp/out`……來走訪。
+    let below = root.isEmpty ? "" : root + "/"
+    var prefix: String? = nil
     for comp in path.split(separator: "/", omittingEmptySubsequences: false) {
-        prefix = prefix.isEmpty ? String(comp) : prefix + "/" + comp
-        if prefix.isEmpty { continue }
+        let next = prefix.map { $0 + "/" + comp } ?? String(comp)
+        prefix = next
+        if next.isEmpty { continue }
+        if !below.isEmpty && !next.hasPrefix(below) { continue }
         var interior: ObjCBool = false
-        if fm.fileExists(atPath: prefix, isDirectory: &interior), !interior.boolValue {
-            winClearReadOnly(prefix)
-            try? fm.removeItem(atPath: prefix)
+        if fm.fileExists(atPath: next, isDirectory: &interior), !interior.boolValue {
+            winClearReadOnly(next)
+            try? fm.removeItem(atPath: next)
         }
     }
     return makeDirectories(path)
@@ -5488,6 +5503,31 @@ final class TarReader {
             ? FileWriterPool(backend: options.writeBackend, inflight: options.inflight,
                              restoreMtime: options.restoreMtime) : nil
         var submitted = Set<String>()
+        // Free `dest` for a symlink, hard link or FIFO member. False when a non-empty directory
+        // is there: both reference tars refuse that ("Directory not empty" / "File exists"), as
+        // the regular-file path here already did, while these three used a recursive removeItem
+        // that deleted the directory and everything in it, exit 0 (2026-10-31 review H1).
+        // A directory is also the only place a queued pool write can sit below `dest`, so the
+        // pool is drained before looking inside: otherwise a write queued for `d/x` could open
+        // its path after `d` became a symlink and land outside -C (review H7).
+        // 讓 `dest` 空出來給 symlink、硬連結或 FIFO 成員。該處是非空目錄時回傳 false：兩個參照
+        // 實作都拒絕（「Directory not empty」／「File exists」），此處的一般檔案路徑本來也拒絕；
+        // 這三個分支卻用遞迴的 removeItem，把目錄連同其內容刪掉並以 0 結束（2026-10-31 審查 H1）。
+        // 目錄也是佇列中的寫入唯一可能位於 `dest` 之下的情形，所以先排空寫入池再看裡面：否則
+        // 為 `d/x` 排隊的寫入可能在 `d` 已變成 symlink 之後才開檔，落到 -C 之外（審查 H7）。
+        func clearForLink(_ dest: String) -> Bool {
+            let fm = FileManager.default
+            let type = (try? fm.attributesOfItem(atPath: dest))?[.type] as? FileAttributeType
+            if type == .typeDirectory {
+                pool?.drain()
+                guard let children = try? fm.contentsOfDirectory(atPath: dest),
+                      children.isEmpty else { return false }
+            } else if submitted.contains(dest) {
+                pool?.drain()
+            }
+            try? fm.removeItem(atPath: dest)
+            return true
+        }
         // Case-folded path -> the exact spelling written under it. Used to catch
         // two members of one archive landing on the same file because the
         // destination filesystem folds case: an archive from Linux can hold
@@ -5589,9 +5629,18 @@ final class TarReader {
             // UInt32(_:) 遇到超過 UInt32.max 的值會 trap，而 8 位元組的 mode 欄支援 base-256，
             // 帶得出這種值。2026-10-22 審查的夾具是 80 00 00 01 00 00 00 00 == 2^32，剛好超出
             // 上限一，就讓一個校驗和正確的封存把 -t 以非法指令打掛（exit 132）。
-            guard let mode = UInt32(exactly: parseTarNumber(h[100..<108])) else {
+            guard let rawMode = UInt32(exactly: parseTarNumber(h[100..<108])) else {
                 throw TarError.format("mode field out of range / mode 欄位超出範圍")
             }
+            // Keep only the permission bits. Fitting in UInt32 is not enough: Darwin's mode_t
+            // is UInt16, so every later `mode_t(mode)` trapped on a value of 0o200000 or more,
+            // a plain octal field with a valid checksum (2026-10-31 review H4, exit 133). The
+            // high bits are file-type bits some writers copy from st_mode; bsdtar ignores them.
+            // 只留權限位元。能放進 UInt32 還不夠：Darwin 的 mode_t 是 UInt16，其後每個
+            // `mode_t(mode)` 遇到 0o200000 以上的值都會 trap——那只是一個校驗和正確的普通八進位
+            // 欄位（2026-10-31 審查 H4，exit 133）。高位是部分工具從 st_mode 照抄的檔案型別位元，
+            // bsdtar 也忽略它們。
+            let mode = rawMode & 0o7777
             var size = parseTarNumber(h[124..<136])
             let headerMtime = parseTarNumber(h[136..<148])
             let typeflag = h[156]
@@ -5876,6 +5925,20 @@ final class TarReader {
 
             switch typeflag {
             case UInt8(ascii: "5"):
+                // A symlink at `dest` itself is replaced, never followed. passesThroughSymlink
+                // checks only the parents and ensureDirectory's fileExists follows a link, so
+                // `l -> <outside>` then `l/` made the chmod below change a directory outside
+                // -C, exit 0 (2026-10-31 review H2). bsdtar and GNU tar replace the link with a
+                // real directory; removeItem on a symlink removes the link, not its target.
+                // `dest` 本身若是 symlink，就取代它而不跟隨。passesThroughSymlink 只檢查上層，而
+                // ensureDirectory 的 fileExists 會跟隨連結，於是 `l -> <外部>` 接著 `l/`，讓下方的
+                // chmod 改到 -C 之外的目錄並以 0 結束（2026-10-31 審查 H2）。bsdtar 與 GNU tar 都把
+                // 連結換成真正的目錄；對 symlink 呼叫 removeItem 移除的是連結本身，不是它的目標。
+                if (try? fm.attributesOfItem(atPath: dest))?[.type] as? FileAttributeType == .typeSymbolicLink {
+                    if submitted.contains(dest) { pool?.drain() }
+                    try? fm.removeItem(atPath: dest)
+                    clearedDirs.forget(dest)
+                }
                 guard ensureDirectory(dest, below: options.destDir) else {
                     skipMember("swift_tar: skipping directory '\(rel)': cannot create it / 略過目錄 '\(rel)'：無法建立")
                     continue
@@ -5892,8 +5955,10 @@ final class TarReader {
                 // 同名寫入若仍在佇列，須先落地才能 removeItem，否則 worker 會在
                 // 符號連結建立之後又把檔案寫回去。與平台無關：危險來自佇列本身，
                 // 不是檔案系統。
-                if submitted.contains(dest) { pool?.drain() }
-                try? fm.removeItem(atPath: dest)
+                guard clearForLink(dest) else {
+                    skipMember("swift_tar: skipping symlink '\(rel)': a non-empty directory is already there / 略過符號連結 '\(rel)'：該處已有非空目錄")
+                    continue
+                }
 #if os(Windows)
                 if !winCreateSymlink(dest: dest, target: linkname) { skippedMembers += 1 }
 #else
@@ -6004,8 +6069,10 @@ final class TarReader {
                 // on top of the pipe we are about to make.
                 // 與 symlink 相同的佇列風險：同名的寫入池工作須先落地，否則 worker
                 // 會在我們即將建立的管線之上又蓋回一個一般檔案。
-                if submitted.contains(dest) { pool?.drain() }
-                try? fm.removeItem(atPath: dest)
+                guard clearForLink(dest) else {
+                    skipMember("swift_tar: skipping FIFO '\(rel)': a non-empty directory is already there / 略過 FIFO '\(rel)'：該處已有非空目錄")
+                    continue
+                }
                 if mkfifo(dest, mode_t(mode)) != 0 {
                     // Warn and carry on rather than throw. Not every filesystem
                     // has FIFOs -- DrvFs under /mnt/c, FAT and exFAT do not --
@@ -6071,7 +6138,10 @@ final class TarReader {
                 // 連結目標可能仍在寫入池佇列——建連結前先屏障，否則 link(2) 會對
                 // 一個「即將存在」的目標回 ENOENT。硬連結稀少，drain 成本低。
                 pool?.drain()
-                try? fm.removeItem(atPath: dest)
+                guard clearForLink(dest) else {
+                    skipMember("swift_tar: skipping hardlink '\(rel)': a non-empty directory is already there / 略過硬連結 '\(rel)'：該處已有非空目錄")
+                    continue
+                }
                 // `dest` may now be a symlink: see linkat below.
                 // `dest` 此時可能是 symlink：見下方 linkat。
                 clearedDirs.forget(dest)
@@ -7523,11 +7593,12 @@ struct SwiftTarMain {
         // 有，而 swift_tar 回答的是「unknown option --」。開頭是減號並非罕見檔名——
         // 瀏覽器、解壓工具與報表產生器都會產出這種名稱。
         var endOfOptions = false
+        var pendingOption = ""
         for a in allArgs {
-            if skipNext { skipNext = false; continue }
+            if skipNext { skipNext = false; pendingOption = ""; continue }
             if endOfOptions { files.append(a); continue }
             if a == "--" { endOfOptions = true; continue }
-            if valueOptions.contains(a) { skipNext = true; continue }
+            if valueOptions.contains(a) { skipNext = true; pendingOption = a; continue }
             if a.hasPrefix("-") {
                 // "-" alone is the stdin/stdout archive path, not an option.
                 // 單獨的 "-" 是代表 stdin/stdout 的封存路徑，並非選項。
@@ -7546,6 +7617,17 @@ struct SwiftTarMain {
                 continue
             }
             files.append(a)
+        }
+        // A value option as the last word has no value. It used to be dropped silently, so
+        // `-c ... --keyfile $KEY` with KEY unset wrote a PLAINTEXT archive, exit 0, and an
+        // empty `-C $DEST` extracted into the working directory (2026-10-31 review H5). bsdtar
+        // and GNU tar both stop with "option requires an argument".
+        // 位於最後一個字的值選項沒有值。過去它被無聲丟棄，於是 KEY 未設定時
+        // `-c ... --keyfile $KEY` 寫出**明文**封存並以 0 結束，空的 `-C $DEST` 則解到工作目錄
+        // （2026-10-31 審查 H5）。bsdtar 與 GNU tar 都以「option requires an argument」停止。
+        if !pendingOption.isEmpty {
+            eprint("swift_tar: option \(pendingOption) requires an argument / 選項 \(pendingOption) 需要一個值")
+            exit(1)
         }
 
         // RGB1 raw-image container modes (self-contained, see rgb1.swift). Handled
@@ -8206,11 +8288,31 @@ struct SwiftTarMain {
         let extendedHeaderMax: UInt64 = 1 << 20
         while true {
             try fh.seek(toOffset: offset)
-            guard let block = try fh.read(upToCount: TAR_BLOCK), block.count == TAR_BLOCK else {
+            guard let block = try fh.read(upToCount: TAR_BLOCK), !block.isEmpty else {
                 break   // no zero-block terminator; append at current end / 無零塊結尾，於目前末端接續
+            }
+            // A partial block is not a tar: a 100-byte text file ended the scan here at offset 0,
+            // and runAppend truncated it to nothing. / 不滿一個區塊就不是 tar：100 位元組的文字檔
+            // 會在位移 0 結束掃描，runAppend 隨即把它截成空檔。
+            guard block.count == TAR_BLOCK else {
+                throw TarError.io("'\(path)' is not a tar archive (it ends in a partial block at byte \(offset)); nothing was appended / '\(path)' 不是 tar 封存（位元組 \(offset) 處以不滿一個區塊結束）；未附加任何內容")
             }
             if block.allSatisfy({ $0 == 0 }) { break }   // logical EOF / 邏輯 EOF
             let h = [UInt8](block)
+            // Verify the checksum, as the reader does. Without it any file "scanned": text parsed
+            // as headers of size 0, the scan stopped at the last partial block, and runAppend
+            // truncated the file there and appended a tar -- `-rf notes.txt x` cut the end off
+            // notes.txt, exit 0 (2026-10-31 review H6). A ZIP or an encrypted archive fails here
+            // too. Thrown before runAppend truncates, so the file is left as it was.
+            // 與讀取端一樣驗證校驗和。少了它，任何檔案都「掃得過」：文字被當成 size 0 的標頭，掃描
+            // 停在最後一個不滿的區塊，runAppend 就在那裡截斷再接上 tar——`-rf notes.txt x` 截掉了
+            // notes.txt 的結尾並以 0 結束（2026-10-31 審查 H6）。ZIP 與加密封存也會在此失敗。此錯誤
+            // 在 runAppend 截斷之前丟出，所以檔案保持原狀。
+            var sum: UInt64 = 0
+            for i in 0..<TAR_BLOCK { sum += UInt64(i >= 148 && i < 156 ? UInt8(ascii: " ") : h[i]) }
+            guard sum == parseTarNumber(h[148..<156]) else {
+                throw TarError.io("'\(path)' is not a tar archive (header checksum mismatch at byte \(offset)); nothing was appended / '\(path)' 不是 tar 封存（位元組 \(offset) 處標頭校驗和不符）；未附加任何內容")
+            }
             func str(_ range: Range<Int>) -> String {
                 let slice = h[range]
                 let end = slice.firstIndex(of: 0) ?? range.upperBound
@@ -8585,6 +8687,22 @@ struct SwiftTarMain {
                 throw TarError.io(
                     "-C '\(destDir)' is not a directory; nothing was extracted / "
                     + "-C '\(destDir)' 不是目錄；未解出任何內容")
+            }
+            // Its parents too: `-C thesis.docx/restore` does not exist, so the check above
+            // passed, and the file was later cleared out of the way (2026-10-31 review H3).
+            // 上層也要查：`-C thesis.docx/restore` 不存在，所以上面那道檢查放行，而該檔案稍後
+            // 被當成阻擋物清掉（2026-10-31 審查 H3）。
+            var prefix: String? = nil
+            for comp in destDir.split(separator: "/", omittingEmptySubsequences: false).dropLast() {
+                let next = prefix.map { $0 + "/" + comp } ?? String(comp)
+                prefix = next
+                if next.isEmpty { continue }
+                var isDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: next, isDirectory: &isDir), !isDir.boolValue {
+                    throw TarError.io(
+                        "-C '\(destDir)': '\(next)' is not a directory; nothing was extracted / "
+                        + "-C '\(destDir)'：'\(next)' 不是目錄；未解出任何內容")
+                }
             }
         }
         let input = try openInput(archivePath)

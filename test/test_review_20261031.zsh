@@ -173,5 +173,70 @@ leaked=( outside7/*(N) )
 check "H7 nothing written outside -C (150 triples) / 150 組三元組：-C 之外沒有檔案" '(( ${#leaked} == 0 ))'
 check "H7 every queued file landed inside -C / 每個排隊的檔案都在 -C 之內" '[[ $(<o7/d150/x) == payload ]]'
 
+# --- H9 (Windows): a drive prefix behind a slash must not survive sanitising --------------
+# --- H9（Windows）：斜線後面的磁碟代號不得通過清理 ---------------------------------------
+if (( windows )); then
+  raw h9.tar file '/C:/h9_escape.txt' x
+  mkdir -p w9
+  ( cd w9 && "$ST" -xf ../h9.tar ) >"$TMP/out" 2>&1 && rc=0 || rc=$?
+  check "H9 /C:/x without -C is not written to the drive root / 不寫到磁碟根目錄" '[[ ! -e /c/h9_escape.txt ]]'
+else
+  skipc "H9: Windows only / 僅 Windows"
+fi
+
+# --- H10: hostile scrypt parameters are refused before key derivation --------------------
+# --- H10：惡意 scrypt 參數在推導金鑰之前就被拒絕 ------------------------------------------
+# The header is bytes 0-7 magic, 8 version, 9 kdf, 10 logN, 11 r, 12 p. A keyfile header
+# never ran its scrypt values through the bound; the passphrase path then derived with them.
+# 標頭：0-7 magic、8 版本、9 kdf、10 logN、11 r、12 p。keyfile 標頭的 scrypt 值過去不受上限檢查，
+# 而 passphrase 路徑會拿它們去推導。
+mkdir -p d10; print data > d10/f; head -c 32 /dev/urandom > key10
+"$ST" -c --keyfile key10 -f h10.enc d10
+cp h10.enc h10r.enc; printf '\0' | dd of=h10r.enc bs=1 seek=11 conv=notrunc 2>"$TMP/dd.err" || cat "$TMP/dd.err"
+run -tf h10r.enc --keyfile key10
+check "H10 r=0 in a keyfile header: refused as out of range / keyfile 標頭 r=0：以超出範圍拒絕" \
+  '(( rc != 0 )) && grep -q "out of range" "$TMP/out"'
+cp h10.enc h10k.enc; printf '\001' | dd of=h10k.enc bs=1 seek=9 conv=notrunc 2>"$TMP/dd.err" || cat "$TMP/dd.err"
+run -tf h10k.enc --keyfile key10
+check "H10 kdf says passphrase, keyfile given: names the mismatch / kdf 與密碼種類不符：說明需要哪一種" \
+  '(( rc != 0 )) && grep -q "encrypted with a passphrase" "$TMP/out"'
+run -tf h10.enc --keyfile key10
+check "H10 control: the untouched archive lists / 對照：未改動的封存可列出" '(( rc == 0 )) && grep -q "d10/f" "$TMP/out"'
+
+# --- M1: a missing operand or a vanished file does not end the run -----------------------
+# --- M1：缺少的運算元或消失的檔案不會結束整次執行 -----------------------------------------
+mkdir -p m1a m1b; print a > m1a/a; print b > m1b/b
+run -cf m1.tar m1a missing_m1 m1b
+check "M1 a missing operand: exits non-zero / 缺少的運算元：以非 0 結束" '(( rc != 0 ))'
+check "M1 a missing operand: the operand after it is stored / 其後的運算元照樣收入" \
+  '"$ST" -tf m1.tar | grep -qx "m1b/b"'
+check "M1 a missing operand: the archive is complete (two zero blocks) / 封存完整（兩個零區塊）" \
+  '[[ $(tail -c 1024 m1.tar | tr -d "\\0" | wc -c | tr -d " ") == 0 ]]'
+
+# --- M2: a truncated .tar.bz2 is an error ----------------------------------------------------
+# --- M2：截斷的 .tar.bz2 是錯誤 --------------------------------------------------------------
+mkdir -p m2; for i in {1..50}; do print "line $i of some text" > m2/f$i.txt; done
+"$ST" -cjf m2.tar.bz2 m2
+head -c 500 m2.tar.bz2 > m2cut.tar.bz2
+run -tf m2cut.tar.bz2
+check "M2 a .tar.bz2 cut inside its first block: exits non-zero / 首區塊內截斷：以非 0 結束" '(( rc != 0 ))'
+run -tf m2.tar.bz2
+check "M2 control: the whole .tar.bz2 lists 51 entries / 對照：完整檔列出 51 項" \
+  '(( rc == 0 )) && [[ $(wc -l < "$TMP/out" | tr -d " ") == 51 ]]'
+
+# --- M3: a control byte in a uuencoded body is a format error, not a trap -----------------
+# --- M3：uuencode 內文中的控制字元是格式錯誤，不是 trap ------------------------------------
+printf 'begin 644 x\n\tAB\nend\n' > m3.uu
+run -tf m3.uu
+check "M3 a tab in the uu body: fails cleanly, no signal / uu 內文含 tab：乾淨失敗、無訊號" '(( rc != 0 && rc < 128 ))'
+
+# --- M5: the traditional `cfv` form takes the archive name from the next word ------------
+# --- M5：傳統寫法 `cfv` 從下一個字取封存名稱 ----------------------------------------------
+mkdir -p w5b/d; print x > w5b/d/x
+( cd w5b && "$ST" cfv out.tar d ) >"$TMP/out" 2>&1 && rc=0 || rc=$?
+check "M5 cfv out.tar d: writes out.tar, not a file named -v / 寫出 out.tar 而非名為 -v 的檔案" \
+  '(( rc == 0 )) && [[ -f w5b/out.tar && ! -e w5b/-v ]]'
+check "M5 cfv: out.tar holds d/x / out.tar 含 d/x" '"$ST" -tf w5b/out.tar | grep -qx "d/x"'
+
 print -r -- "PASS: $pass  FAIL: $fail  SKIP: $skip"
 (( fail == 0 ))

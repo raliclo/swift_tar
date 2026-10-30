@@ -1318,6 +1318,7 @@ func bzip2DecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> B
             while consumed < ib.count {
                 var rc: Int32 = BZ_OK
                 var produced = 0
+                let consumedBefore = consumed
                 outBuf.withUnsafeMutableBufferPointer { ob in
                     withUnsafeMutablePointer(to: &strm) { sp in
                         sp.pointee.next_in = UnsafeMutableRawPointer(ib.baseAddress! + consumed)
@@ -1331,6 +1332,16 @@ func bzip2DecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> B
                         produced = ob.count - Int(sp.pointee.avail_out)
                     }
                 }
+                // Consuming input leaves the boundary, not only producing output: libbz2 emits
+                // nothing until a whole block (up to 900k) is in, so a stream cut inside its first
+                // block consumed everything, produced nothing, and was reported as a clean end --
+                // `head -c 500 x.tar.bz2` listed 0 members with exit 0 (2026-10-31 review M2; gzip
+                // had the same shape, fixed in 48a44ec).
+                // 吃進輸入就離開了邊界，不只產生輸出時才算：libbz2 要等整個區塊（最多 900k）到齊才吐出
+                // 資料，所以在第一個區塊內截斷的串流會吃光輸入、什麼也不產生，並被當成正常結束——
+                // `head -c 500 x.tar.bz2` 列出 0 個成員並以 0 結束（2026-10-31 審查 M2；gzip 有同形
+                // 問題，已於 48a44ec 修正）。
+                if consumed > consumedBefore { atBoundary = false }
                 if produced > 0 {
                     if (try? output.write(contentsOf: Data(bytes: outBuf, count: produced))) == nil { return false }
                     atBoundary = false
@@ -1898,8 +1909,17 @@ func uuDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bool
             guard let d = Data(base64Encoded: line) else { return false }
             if (try? output.write(contentsOf: d)) == nil { return false }
         } else {
-            if line == "end" { inBody = false; wroteAny = true; continue }
-            let bytes = Array(line.utf8)
+            if line == "end" || line == "end\r" { inBody = false; wroteAny = true; continue }
+            var bytes = Array(line.utf8)
+            if bytes.last == 0x0D { bytes.removeLast() }   // CRLF line / CRLF 行
+            // Every body byte must be a uuencode character, 0x20...0x60. The decode below
+            // subtracts 0x20 from a UInt8, which traps on anything lower: a tab in the body
+            // killed -t with exit 133 instead of a format error (2026-10-31 review M3).
+            // libarchive refuses such a byte through its uuchar table.
+            // 內文每個位元組都必須是 uuencode 字元 0x20...0x60。下方解碼對 UInt8 減 0x20，遇到更小的
+            // 值會 trap：內文裡的一個 tab 讓 -t 以 133 結束，而非回報格式錯誤（2026-10-31 審查 M3）。
+            // libarchive 以其 uuchar 表拒絕這種位元組。
+            guard bytes.allSatisfy({ $0 >= 0x20 && $0 <= 0x60 }) else { return false }
             guard let first = bytes.first else { continue }
             let len = Int((first - 0x20) & 0x3F)
             if len == 0 { continue }                    // "`" length-0 line / 長度 0 行
@@ -4124,6 +4144,7 @@ final class TarWriter {
         case .handle(let fh):
             defer { try? fh.close() }
             var remaining = size
+            var shrankBy: UInt64 = 0
             while remaining > 0 {
                 // autoreleasepool: FileHandle.read returns autoreleased buffers;
                 // without draining per chunk, RSS grows to ~corpus size.
@@ -4131,12 +4152,31 @@ final class TarWriter {
                 // 不逐塊排空的話 RSS 會膨脹到接近整個語料大小。
                 try autoreleasepool {
                     let want = Int(min(remaining, UInt64(TAR_CHUNK_SIZE)))
-                    guard let part = try fh.read(upToCount: want), !part.isEmpty else {
-                        throw TarError.io("short read on '\(path)' / 讀取 '\(path)' 時提前結束")
+                    if let part = try fh.read(upToCount: want), !part.isEmpty {
+                        try sink.write(part)
+                        remaining -= UInt64(part.count)
+                    } else {
+                        // The file shrank after its header promised `size` bytes. Pad with zeros
+                        // so the archive stays well-formed, as GNU tar does, and count it. This
+                        // used to throw after the header was out, leaving a short member and no
+                        // terminator -- and under -r/-u, inside the user's existing archive
+                        // (2026-10-31 review M1).
+                        // 標頭宣告了 `size` 位元組之後檔案縮小了。與 GNU tar 相同，以零補齊讓封存保持
+                        // 格式正確，並計數。過去此處在標頭寫出之後才丟出例外，留下短少的成員且沒有結尾
+                        // ——在 -r/-u 下就落在使用者既有的封存裡（2026-10-31 審查 M1）。
+                        shrankBy = remaining
+                        let zeros = Data(count: want)
+                        while remaining > 0 {
+                            let n = Int(min(remaining, UInt64(want)))
+                            try sink.write(n == want ? zeros : zeros.prefix(n))
+                            remaining -= UInt64(n)
+                        }
                     }
-                    try sink.write(part)
-                    remaining -= UInt64(part.count)
                 }
+            }
+            if shrankBy > 0 {
+                unreadableCount += 1
+                eprint("swift_tar: \(path): file shrank by \(shrankBy) bytes; padded with zeros / 檔案縮小了 \(shrankBy) 位元組；以零補齊")
             }
         }
         let rem = Int(size % UInt64(TAR_BLOCK))
@@ -4627,8 +4667,11 @@ final class TarWriter {
         // measured against bsdtar, where it is the one shape of six that reveals the gap.
         let excludedAsDirectory = { Self.isExcluded(name + "/") }
 #if os(Windows)
+        // Report and go on, as on POSIX below (2026-10-31 review M1). / 回報後繼續，同下方 POSIX。
         guard var st = winStat(incomingReadPath) else {
-            throw TarError.io("cannot stat '\(path)' / 無法讀取 '\(path)' 的檔案資訊")
+            unreadableCount += 1
+            eprint("swift_tar: \(name): Cannot stat / 無法讀取檔案資訊")
+            return
         }
         // -h：與 POSIX 分支相同——跟隨後連結即被當成其目標，下方各分支不需改動。直到
         // 2026-10-07 此分支完全不看 dereference，Windows 上的 -h 一律存成連結。
@@ -4916,8 +4959,20 @@ final class TarWriter {
                 st = own
             }
         }
+        // Report, count, and go on to the next entry, as for an unreadable file. Throwing here
+        // ended the whole run: `-cf x.tar d missing b` never stored b, left no end blocks, and
+        // under -r/-u left the existing archive without a terminator; a file deleted between
+        // listing its directory and this lstat did the same to a live tree (2026-10-31 review
+        // M1). bsdtar and GNU tar warn, store the rest, and exit 1, which failIfUnreadable does.
+        // 回報、計數，然後繼續下一項，與讀不到的檔案相同。在此丟出例外會結束整次執行：
+        // `-cf x.tar d missing b` 永遠收不到 b、也沒有結尾區塊，在 -r/-u 下更讓既有封存失去結尾；
+        // 列出目錄之後、lstat 之前被刪掉的檔案，對一棵正在變動的樹也是如此（2026-10-31 審查 M1）。
+        // bsdtar 與 GNU tar 都是警告、收入其餘並以 1 結束，failIfUnreadable 正是這樣做。
         guard statRC == 0 else {
-            throw TarError.io("cannot stat '\(path)' / 無法讀取 '\(path)' 的檔案資訊")
+            let reason = String(cString: strerror(errno))
+            unreadableCount += 1
+            eprint("swift_tar: \(name): Cannot stat: \(reason) / 無法讀取檔案資訊：\(reason)")
+            return
         }
         // 迴圈偵測只在跟隨模式需要，且只對目錄——檔案再怎麼重複收錄都會終止。
         // Cycle detection is needed only in follow mode and only for directories.
@@ -5257,12 +5312,28 @@ final class TarReader {
         var p = name.replacingOccurrences(of: "\\", with: "/")
         // Drive-relative and drive-absolute forms both start "X:"; drop it.
         // "X:" 開頭涵蓋磁碟機相對與絕對兩種形式，一律去除。
-        if p.count >= 2, p[p.startIndex].isLetter, p[p.index(after: p.startIndex)] == ":" {
-            p.removeFirst(2)
+        // Repeat until nothing changes: done once, `/C:/Windows/x`, `\C:\x` and `C:C:/x` all
+        // came out as `C:/...`, an absolute drive path, which without -C is used as the
+        // destination itself (2026-10-31 review H9).
+        // 重複到不再變化為止：只做一次時，`/C:/Windows/x`、`\C:\x` 與 `C:C:/x` 都會變成
+        // `C:/...`——絕對磁碟路徑，而沒有 -C 時它就直接成為目的地（2026-10-31 審查 H9）。
+        while true {
+            let before = p
+            if p.count >= 2, p[p.startIndex].isLetter, p[p.index(after: p.startIndex)] == ":" {
+                p.removeFirst(2)
+            }
+            while p.hasPrefix("/") { p.removeFirst() }
+            if p == before { break }
         }
-        while p.hasPrefix("/") { p.removeFirst() }
         var comps = p.split(separator: "/")
         if comps.contains("..") { return nil }
+#if os(Windows)
+        // On Windows a colon in any component is a drive (`./C:/x` once "." is dropped) or an
+        // alternate data stream (`a:b` writes stream b of file a); neither is a plain name.
+        // Windows 上任何一段含冒號，不是磁碟代號（去掉 "." 之後的 `./C:/x`）就是替代資料流
+        // （`a:b` 寫進檔案 a 的資料流 b）；兩者都不是單純的名稱。
+        if comps.contains(where: { $0.contains(":") }) { return nil }
+#endif
         // Drop "." components. They carry no meaning in a path, and keeping them
         // made `./` -- the first entry in every archive written as
         // `tar -C dir .` -- resolve to a destination of exactly ".", which
@@ -7427,7 +7498,22 @@ struct SwiftTarMain {
             // -r -e -p -o -r -t …，而使用者收到的是關於一個本工具根本沒有的旗標
             // 「unknown option -e」。
             var pastEndOfOptions = false
+            // In the traditional form each value letter takes the next words in order:
+            // `cfv out.tar dir` is -c -v -f out.tar dir. Expanding it in place gave
+            // -c -f -v out.tar, and the archive was written to a file named "-v" with
+            // out.tar taken as an input (2026-10-31 review M5). bsdtar and GNU tar both
+            // read it this way. Only the traditional form: in `-cfv` GNU tar takes "v"
+            // as the archive name, which is a different rule.
+            // 傳統寫法裡每個帶值的字母依序取後面的字：`cfv out.tar dir` 是 -c -v -f out.tar dir。
+            // 原地展開會得到 -c -f -v out.tar，封存被寫進名為 "-v" 的檔案，out.tar 反成輸入
+            // （2026-10-31 審查 M5）。bsdtar 與 GNU tar 都這樣讀。只限傳統寫法：`-cfv` 在 GNU tar
+            // 裡把 "v" 當成封存名稱，那是另一條規則。
+            let valueLetters: Set<Character> = ["f", "C", "n"]
+            var deferredValueFlags: [String] = []
             for (idx, a) in CommandLine.arguments.dropFirst().enumerated() {
+                if !deferredValueFlags.isEmpty && a != "--" {
+                    out.append(deferredValueFlags.removeFirst()); out.append(a); continue
+                }
                 if pastEndOfOptions { out.append(a); continue }
                 if a == "--" { pastEndOfOptions = true; out.append(a); continue }
                 // Single-dash flags that are words, not clusters of short
@@ -7465,11 +7551,17 @@ struct SwiftTarMain {
                     && !isNegativeNumber {
                     for ch in a.dropFirst() { out.append("-\(ch)") }
                 } else if idx == 0 && !a.hasPrefix("-") && a.count > 1 && a.allSatisfy({ $0.isLetter }) {
-                    for ch in a { out.append("-\(ch)") }
+                    for ch in a {
+                        if valueLetters.contains(ch) { deferredValueFlags.append("-\(ch)") }
+                        else { out.append("-\(ch)") }
+                    }
                 } else {
                     out.append(a)
                 }
             }
+            // A value letter left without a word stays a bare flag; the option check reports it.
+            // 沒有字可取的帶值字母保持為單獨的旗標，由選項檢查回報缺值。
+            out += deferredValueFlags
             return out
         }()
         // Options are read from the part before a bare "--" only. The cluster expansion

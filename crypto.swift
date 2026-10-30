@@ -541,13 +541,26 @@ enum TarCrypto {
                 throw TarCryptoError.badHeader("unknown kdf \(kdf)")
             }
             let logN = b[10], r = b[11], p = b[12]
-            if kdf == kdfScrypt {
-                // Bound the cost so a hostile header cannot force a huge allocation.
-                // 限制成本，避免惡意標頭迫使程式配置巨量記憶體。
-                guard logN >= 10 && logN <= 22 else { throw TarCryptoError.badHeader("logN \(logN) out of range") }
-                guard r >= 1 && r <= 32 && p >= 1 && p <= 16 else {
-                    throw TarCryptoError.badHeader("scrypt r/p out of range")
-                }
+            // Bound the cost for EVERY kdf, not only kdf 1: contentKey picks scrypt from the
+            // user's secret, not from this byte, so a header saying kdf 2 sent unchecked values
+            // into scrypt whenever a passphrase was typed -- r=0 trapped in blockMix, a large
+            // logN ran memory out, both before authentication (2026-10-31 review H10). Our own
+            // keyfile headers carry the scrypt defaults, so they pass.
+            // The memory bound is the V array, 128*r*2^logN bytes: logN<=22 and r<=32 alone
+            // still allowed 16 GiB, which is not "bounded" in any useful sense. 1 GiB is 32
+            // times the default (2^15 * 128 * 8 = 32 MiB).
+            // 對**每一種** kdf 都限制成本，不只 kdf 1：contentKey 依使用者的密碼種類選 scrypt，而不是依
+            // 這個位元組，所以標頭寫 kdf 2 時，只要使用者輸入 passphrase，未檢查的值就進了 scrypt——r=0
+            // 在 blockMix 裡 trap、過大的 logN 吃光記憶體，兩者都在驗證之前（2026-10-31 審查 H10）。
+            // 本工具自己的 keyfile 標頭帶的是 scrypt 預設值，因此通過。
+            // 記憶體上限針對 V 陣列，128*r*2^logN 位元組：單靠 logN<=22 與 r<=32 仍允許 16 GiB，
+            // 稱不上有上限。1 GiB 是預設值（2^15 * 128 * 8 = 32 MiB）的 32 倍。
+            guard logN >= 10 && logN <= 22 else { throw TarCryptoError.badHeader("logN \(logN) out of range") }
+            guard r >= 1 && r <= 32 && p >= 1 && p <= 16 else {
+                throw TarCryptoError.badHeader("scrypt r/p out of range")
+            }
+            guard (UInt64(128) * UInt64(r)) << UInt64(logN) <= (1 << 30) else {
+                throw TarCryptoError.badHeader("scrypt memory 128*r*2^logN above 1 GiB")
             }
             let cs = (UInt32(b[40]) << 24) | (UInt32(b[41]) << 16) | (UInt32(b[42]) << 8) | UInt32(b[43])
             guard cs >= 1024 && cs <= (1 << 26) else { throw TarCryptoError.badHeader("chunk size \(cs)") }
@@ -807,6 +820,15 @@ enum TarCrypto {
 
         let hb = try need(headerSize)
         let header = try Header.parse(hb)
+        // The header names the kind of secret it was sealed with; a different kind can only
+        // fail authentication, so say which one is needed instead of running scrypt for it.
+        // 標頭記載了封存時用的是哪一種密碼；種類不同只會驗證失敗，所以直接說出需要哪一種，
+        // 不必為此跑一次 scrypt。
+        guard header.kdf == secret.kdfID else {
+            throw TarCryptoError.badHeader(header.kdf == kdfRawKeyfile
+                ? "this archive was encrypted with a keyfile; pass --keyfile / 此封存以 keyfile 加密，請加 --keyfile"
+                : "this archive was encrypted with a passphrase, not a keyfile / 此封存以 passphrase 加密，不是 keyfile")
+        }
         let key = contentKey(secret: secret, header: header)
 
         // Framing is parsed sequentially — a chunk's length must be read before

@@ -251,13 +251,17 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🔴 部分處理（H1–H8、M11 已修）/ Whole-tree code review of v0.1.4 ▸ partly fixed
+## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🔴 部分處理（H1–H10、M1–M3、M5、M11 已修）/ Whole-tree code review of v0.1.4 ▸ partly fixed
 
 **進度 / Progress**
 - ✅ H1–H7 已修（macOS）：`test/test_review_20261031.zsh` 27 項，對 0.1.4 失敗 22 項（H7 的競態在 0.1.4 上兩次執行皆
   重現外洩），對修正後連跑 3 次皆 27/0。Windows／Linux 未驗。H3 一併修正：清除迴圈對絕對路徑丟掉開頭的 `/`，
   改看工作目錄下的相對路徑。H6 一併修正：不滿一個區塊的檔案會被截成 0 位元組。
   Fixed on macOS; the new test fails 22 checks on 0.1.4 and passes 27/27 three runs in a row.
+- ✅ H9、H10、M1、M2、M3、M5 已修（macOS）：同一支測試再加 12 項，對 0.1.4 全部失敗、對修正後通過（38/0，H9 僅
+  Windows 而略過）。M1 的「讀取中檔案縮小」改為以零補齊並計數，沒有可穩定重現的測試，只讀碼確認。H9 只能在
+  Windows 上驗證。Fixed on macOS; 12 more checks, all failing on 0.1.4. H9 needs Windows; M1's
+  shrinking-file half has no deterministic test.
 - ✅ H8、M11 由 Windows 端修於 `82e7e7a`（橋接層祖先走訪改用 `\\?\`，無法檢查時拒絕；`winSetPathMtime` 經
   `winUcrtPath`）；UNC 路徑（`dcf0a94`）與 `package_win.zsh` 的 runtime 選擇（`82e7e7a`）亦同。
   Fixed by the Windows side in 82e7e7a / dcf0a94.

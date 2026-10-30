@@ -1,0 +1,99 @@
+swift_tar 0.1.4 release verification / 0.1.4 發布驗證
+tag v0.1.4 = 706c09bc, swift_tar_source=a7f406d9029eca88b0c55a01600286f156581297
+All four archives are public builds (lzfse2=excluded). / 四份封存皆為公開版（不含 LZFSE）。
+Collected 2026-10-30 from Mac M4, the aarch64 VM, Windows, WSL and LinuxVM (LinuxCS).
+2026-10-30 彙整自 Mac M4、aarch64 VM、Windows、WSL 與 LinuxVM（LinuxCS）。
+Published: https://github.com/raliclo/swift_tar/releases/tag/v0.1.4
+
+What changed since 0.1.3 / 與 0.1.3 的差異:
+  fb86de8  -x refuses members through an existing junction under -C (Windows); ZIP --no-links
+           exits 1 on unsafe link names / -x 拒絕穿過 -C 下既有 junction 的成員；ZIP --no-links
+           遇不安全連結名稱以 1 結束
+  12c6f58  ZIP bridge: Windows CRT deprecation warnings fixed at the cause / 修正 Windows CRT 警告
+  0b693bc  Windows: zstd, zlib, libarchive and the bridge built with the Swift toolchain's clang
+           / Windows 依賴改用 Swift 工具鏈的 clang 建置
+
+== Archives / 封存 ==
+b7a29168849b6e18ca99fbd340b78d116961e8dc2d23c88d5d0564be834f6518  swift_tar-0.1.4-macos-arm64.tar.zst
+c8540b5989d51898b35c58441c93ebc6ff1c3a2001441f011f6e0a5be35b48f8  swift_tar-0.1.4-linux-aarch64.tar.zst
+90bb539b41aad5c528f591a3e656998ca37378be4c24fcd92a1fd9663f647f7b  swift_tar-0.1.4-linux-x86_64.tar.zst
+617f98b7fc49fd589ec61cc8aaf3beb90413da0094eef9eeb34ea70bf3b5b63c  swift_tar-0.1.4-windows-x86_64.tar.zst
+publish.zsh downloaded all four back from the public URL and compared them with these files.
+publish.zsh 已從公開網址下載四份並與上列檔案比對一致。
+
+== Whole test suite at 095f642 / 於 095f642 的整套測試 ==
+The suite ran at 095f642. The tag 706c09b adds only the VERSION bump and the version files on
+top of it, so the source compiled into the release is the same; the suite was not rerun at
+the tag. / 整套測試跑在 095f642。tag 706c09b 在其上只多了改版號與版本檔兩個 commit，發布版
+編進去的原始碼相同，因此沒有在 tag 上重跑。
+
+macOS (Mac M4, Apple Swift 6.4, swiftlang-6.4.0.34.1; build warnings 0)
+  32 files, every rc=0, FAIL 0. 27 files print counts: 879 PASS; test_record_zlib 3/0.
+  test_no_links 30/0 (ZIP unsafe-name cases included); test_junction_extract SKIP (Windows only).
+  32 支，皆 rc=0、0 失敗；有計數的 27 支共 879 通過，test_record_zlib 3/0。
+
+Windows (Swift 6.4.1, x86_64-unknown-windows-msvc), reported by Swift_tar-W11
+  32 files, every rc=0: TOTAL PASS 803, FAIL 0. test_junction_extract 28/0, test_no_links 30/0.
+  32 支皆 rc=0：合計 803 通過、0 失敗。
+
+WSL (Swift 6.4.1, x86_64-unknown-linux-gnu; build warnings 0), reported by Swift_tar-W11
+  32 files, every rc=0: TOTAL PASS 850, FAIL 0. test_no_links 30/0.
+  32 支皆 rc=0：合計 850 通過、0 失敗。
+
+Before the fix (1540ab5 sources, fb86de8 tests, on Windows): test_junction_extract 19/9,
+test_no_links 27/3. The mklink /D symlink control cases passed before the fix too, so the test
+tells a junction from a symlink. Raw logs: ~/tmp/swift_tar-fb86de8-test/ on the Mac
+(SHA256SUMS 11/11 OK). / 修正前（1540ab5 原始碼、fb86de8 測試，Windows）：
+test_junction_extract 19/9、test_no_links 27/3。原始 log 在 Mac 的 ~/tmp/swift_tar-fb86de8-test/。
+
+== macos-arm64 (built and run on the Mac M4) ==
+build warnings / 建置警告: 0
+release.zsh:
+swift_tar 0.1.4 (v0.1.4 / 706c09bc) 20261030-150730
+verified: extracted, ran, round-tripped a .tar.gz, refused LZFSE / 已驗證：解開、執行、完成 .tar.gz 往返、拒絕 LZFSE
+
+== linux-aarch64 (musl static, built on the Mac; run in the VM) ==
+toolchain: Apple Swift version 6.4 (swift-6.4-RELEASE), swift-6.4.0-RELEASE_static-linux-0.1.0
+build warnings / 建置警告: 0
+VM: ~/projWin/VM-test, kernel 7.3.0-dirty
+VERIFIED swift_tar-0.1.4-linux-aarch64.tar.zst
+  sha256  c8540b5989d51898b35c58441c93ebc6ff1c3a2001441f011f6e0a5be35b48f8
+  version swift_tar 0.1.4 (v0.1.4 / 706c09bc) 20261030-150744
+  machine Linux 7.3.0-dirty aarch64
+  checks  static, ran in an empty environment, .tar.gz round trip, LZFSE refused, --crypto-selftest, -test
+VERIFY_RC=0
+
+== linux-x86_64 (musl static, built on the Mac; run on WSL) ==
+toolchain: Apple Swift version 6.4 (swift-6.4-RELEASE), swift-6.4.0-RELEASE_static-linux-0.1.0
+build warnings / 建置警告: 0
+VERIFIED swift_tar-0.1.4-linux-x86_64.tar.zst
+  sha256  90bb539b41aad5c528f591a3e656998ca37378be4c24fcd92a1fd9663f647f7b
+  version swift_tar 0.1.4 (v0.1.4 / 706c09bc) 20261030-150758
+  machine Linux 6.18.54.1-microsoft-standard-WSL2 x86_64
+  checks  static, ran in an empty environment, .tar.gz round trip, LZFSE refused, --crypto-selftest, -test
+rc=0
+
+== windows-x86_64 (built and run on Windows) ==
+toolchain: Swift version 6.4.1 (swift-6.4.1-RELEASE), Target: x86_64-unknown-windows-msvc
+dependencies: zlib and zstd rebuilt from scratch with clang (nmake), then libarchive and the bridge
+依賴：zlib 與 zstd 以 clang（nmake）從頭重建，libarchive 與 bridge 隨後建置
+build warnings / 建置警告: linker 0 (0.1.3 had 22: 11 LNK4217 + 11 LNK4286);
+  3 upstream zstd -Wunused-function (HUF_isSorted, ZSTDMT_createCCtx_advanced_internal,
+  ZSTD_isAligned), new with clang, left as they are pending a decision.
+  連結器 0 個（0.1.3 為 22 個）；另有 3 個 zstd 上游 -Wunused-function，為改用 clang 後新出現，
+  待決定，未壓制。
+release.zsh:
+swift_tar 0.1.4 (v0.1.4 / 706c09bc) 20261030-151608
+verified: extracted, ran, round-tripped a .tar.gz, refused LZFSE / 已驗證：解開、執行、完成 .tar.gz 往返、拒絕 LZFSE
+--crypto-selftest: PASS: 51  FAIL: 0
+-test: rc=0, both write back ends (foundation, ucrt) extracted and compared
+
+== Installed from the release on each node / 各節點由發布版安裝 ==
+macOS    brew            /opt/homebrew/bin/swift_tar              swift_tar 0.1.4 (v0.1.4 / 706c09bc) 20261030-150730
+Windows  scoop           scoop/shims/swift_tar                    swift_tar 0.1.4 (v0.1.4 / 706c09bc) 20261030-151608
+WSL      Release + curl  ~/.local/bin/swift_tar (VERIFIED again)  swift_tar 0.1.4 (v0.1.4 / 706c09bc) 20261030-150758
+LinuxVM  LinuxCS pin     /workspace/opt/swift_tar (ec6b440)       swift_tar 0.1.4 (v0.1.4 / 706c09bc) 20261030-150744
+On LinuxVM, /usr/bin/tar --version after a prepare reports the same 0.1.4 build; the tar wrapper
+was not changed, since knownOptions is identical between v0.1.3 and v0.1.4.
+LinuxVM 經 prepare 後，/usr/bin/tar --version 回報同一份 0.1.4；tar wrapper 未改動，因為
+v0.1.3 與 v0.1.4 的 knownOptions 完全相同。

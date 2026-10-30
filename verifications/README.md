@@ -728,3 +728,25 @@ archived. The upstream zstd build carries 3 `-Wunused-function` warnings, left a
 
 Whole suite on the all-clang build: Windows 803/0, the same count as before the change. The
 bridge is shared with the other platforms, so WSL was rebuilt with it too: no warnings, 850/0.
+
+## Release 0.1.4: the four archives, Windows built with clang
+
+[`release_0.1.4_output.txt`](release_0.1.4_output.txt) collects the verification of the four
+public archives built at tag `v0.1.4` (`706c09bc`). The release carries the junction fix
+(`fb86de8`: `-x` refuses members through a junction already under `-C`; ZIP `--no-links`
+exits 1 on unsafe link names) and the first Windows build whose C dependencies are compiled
+with clang (section above).
+
+| Platform | Whole suite at `095f642` | Archive | Run on | Result |
+|---|---|---|---|---|
+| macOS | 32 files, FAIL 0 (879 counted PASS + `record_zlib` 3/0) | macos-arm64 | Mac M4 | `release.zsh` verified |
+| Windows | 32 files, 803/0 (`junction_extract` 28/0) | windows-x86_64 | Windows, Swift 6.4.1 | `release.zsh` verified; crypto 51/0 |
+| Linux | WSL: 32 files, 850/0 | linux-x86_64 | WSL2 x86_64 | `verify_release.zsh` VERIFIED, rc=0 |
+| Linux | — | linux-aarch64 | aarch64 VM | `verify_release.zsh` VERIFIED, rc=0 |
+
+The suite ran at `095f642`; the tag adds only the VERSION bump and the version files, so it
+was not rerun there. Before the fix, `test_junction_extract` failed 9 checks and
+`test_no_links` 3 on Windows. The Windows build has no linker warnings now (22 in 0.1.3) but
+3 upstream zstd `-Wunused-function` warnings, left as they are. Each node installed the
+published archive (brew, scoop, `~/.local/bin` on WSL, LinuxCS's pin on the VM) and reported
+`swift_tar 0.1.4 (v0.1.4 / 706c09bc)`.

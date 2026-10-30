@@ -640,3 +640,23 @@ swift_tar 端到端（`win_clang_deps.zsh`），相對全 MSVC 版：
 
 全 clang 版的整套測試：Windows 803/0，與改動前相同。bridge 與其他平台共用，因此 WSL 也以它重建：
 沒有警告，850/0。
+
+## 0.1.4 發布：四份封存，Windows 改以 clang 建置
+
+[`release_0.1.4_output.txt`](release_0.1.4_output.txt) 彙整了在 tag `v0.1.4`（`706c09bc`）
+建出的四份公開版封存的驗證結果。這一版帶有 junction 修正（`fb86de8`：`-x` 拒絕穿過 `-C`
+底下既有 junction 的成員；ZIP `--no-links` 遇不安全的連結名稱以 1 結束），也是第一份 C 相依
+以 clang 建置的 Windows 版（見上一節）。
+
+| 平台 | `095f642` 整套測試 | 封存 | 執行於 | 結果 |
+|---|---|---|---|---|
+| macOS | 32 支，0 失敗（有計數者 879 通過，另 `record_zlib` 3/0） | macos-arm64 | Mac M4 | `release.zsh` 驗證通過 |
+| Windows | 32 支，803/0（`junction_extract` 28/0） | windows-x86_64 | Windows，Swift 6.4.1 | `release.zsh` 驗證通過；加密自測 51/0 |
+| Linux | WSL：32 支，850/0 | linux-x86_64 | WSL2 x86_64 | `verify_release.zsh` VERIFIED，rc=0 |
+| Linux | — | linux-aarch64 | aarch64 VM | `verify_release.zsh` VERIFIED，rc=0 |
+
+整套測試跑在 `095f642`；tag 只多了改版號與版本檔，因此沒有在 tag 上重跑。修正前，Windows 上
+`test_junction_extract` 有 9 項失敗、`test_no_links` 有 3 項。Windows 建置現在沒有連結器警告
+（0.1.3 為 22 個），但有 3 個 zstd 上游的 `-Wunused-function`，維持原樣。之後各節點都安裝了
+發布版（brew、scoop、WSL 的 `~/.local/bin`、VM 上 LinuxCS 的釘選），回報皆為
+`swift_tar 0.1.4 (v0.1.4 / 706c09bc)`。

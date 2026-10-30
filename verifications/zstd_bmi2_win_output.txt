@@ -1,0 +1,97 @@
+[Info] date: 2026-10-30 12:01:43 TST
+[Info] os: MINGW64_NT-10.0-26300 3.6.11-00eb8435.x86_64   cpu: AMD Ryzen 5 7535HS with Radeon Graphics
+[Info] zstd: v1.5.7   swift_tar: v0.1.3-5-gfb86de8-dirty
+[Info] clang: clang version 21.1.6
+[Info] corpus: ../claw-code (1351 MB, 5403 files)   rounds: 5
+
+=== build / 建置 ===
+
+=== size and BMI2 instructions (llvm-objdump) / 大小與 BMI2 指令數 ===
+  var      bytes      .text   shlx   shrx   bzhi warnings
+  a      653312     547900      0      0      0        1
+  b      762368     691318      0      0      0        3
+  c      814080     742790      0      0      0        3
+  d      803840     722790      0      0      0        3
+  e      856064     774982      0      0      0        3
+  f      807424     727014    758   1299     97        3
+
+=== zstd -b -B4M --single-thread, interleaved / 交錯執行 (corpus tar 1409474560 bytes) ===
+  r1 L9 a  x3.509     44.2 MB/s    656.1 MB/s
+  r1 L9 b  x3.509     52.5 MB/s    711.3 MB/s
+  r1 L9 c  x3.509     51.7 MB/s    771.5 MB/s
+  r1 L9 d  x3.509     54.1 MB/s    748.7 MB/s
+  r1 L9 e  x3.509     55.2 MB/s    783.8 MB/s
+  r1 L9 f  x3.509     56.1 MB/s    810.5 MB/s
+  r1 L3 a  x3.246    180.4 MB/s    624.7 MB/s
+  r1 L3 b  x3.246    191.9 MB/s    703.8 MB/s
+  r1 L3 c  x3.246    191.4 MB/s    702.7 MB/s
+  r1 L3 d  x3.246    189.5 MB/s    706.9 MB/s
+  r1 L3 e  x3.246    192.4 MB/s    731.0 MB/s
+  r1 L3 f  x3.246    183.6 MB/s    748.8 MB/s
+  r2 L9 a  x3.509     44.3 MB/s    677.4 MB/s
+  r2 L9 b  x3.509     51.3 MB/s    757.7 MB/s
+  r2 L9 c  x3.509     53.2 MB/s    771.3 MB/s
+  r2 L9 d  x3.509     53.8 MB/s    753.3 MB/s
+  r2 L9 e  x3.509     53.7 MB/s    771.3 MB/s
+  r2 L9 f  x3.509     52.1 MB/s    794.7 MB/s
+  r2 L3 a  x3.246    178.8 MB/s    602.2 MB/s
+  r2 L3 b  x3.246    190.5 MB/s    694.9 MB/s
+  r2 L3 c  x3.246    189.8 MB/s    709.6 MB/s
+  r2 L3 d  x3.246    184.9 MB/s    695.3 MB/s
+  r2 L3 e  x3.246    190.8 MB/s    722.3 MB/s
+  r2 L3 f  x3.246    185.6 MB/s    750.2 MB/s
+  r3 L9 a  x3.509     43.5 MB/s    561.3 MB/s
+  r3 L9 b  x3.509     54.9 MB/s    755.9 MB/s
+  r3 L9 c  x3.509     51.2 MB/s    776.6 MB/s
+  r3 L9 d  x3.509     52.5 MB/s    734.2 MB/s
+  r3 L9 e  x3.509     53.8 MB/s    774.2 MB/s
+  r3 L9 f  x3.509     51.9 MB/s    721.5 MB/s
+  r3 L3 a  x3.246    173.4 MB/s    510.6 MB/s
+  r3 L3 b  x3.246    170.3 MB/s    569.9 MB/s
+  r3 L3 c  x3.246    165.7 MB/s    551.2 MB/s
+  r3 L3 d  x3.246    169.2 MB/s    600.0 MB/s
+  r3 L3 e  x3.246    166.7 MB/s    625.8 MB/s
+  r3 L3 f  x3.246    165.2 MB/s    628.2 MB/s
+  r4 L9 a  x3.509     39.3 MB/s    581.5 MB/s
+  r4 L9 b  x3.509     46.1 MB/s    705.1 MB/s
+  r4 L9 c  x3.509     52.4 MB/s    771.7 MB/s
+  r4 L9 d  x3.509     54.3 MB/s    746.8 MB/s
+  r4 L9 e  x3.509     53.3 MB/s    737.1 MB/s
+  r4 L9 f  x3.509     47.5 MB/s    752.4 MB/s
+  r4 L3 a  x3.246    167.2 MB/s    596.8 MB/s
+  r4 L3 b  x3.246    190.1 MB/s    649.3 MB/s
+  r4 L3 c  x3.246    187.3 MB/s    709.6 MB/s
+  r4 L3 d  x3.246    185.7 MB/s    700.3 MB/s
+  r4 L3 e  x3.246    185.4 MB/s    723.6 MB/s
+  r4 L3 f  x3.246    182.4 MB/s    743.9 MB/s
+  r5 L9 a  x3.509     39.2 MB/s    635.1 MB/s
+  r5 L9 b  x3.509     47.3 MB/s    712.9 MB/s
+  r5 L9 c  x3.509     43.9 MB/s    615.6 MB/s
+  r5 L9 d  x3.509     44.0 MB/s    651.1 MB/s
+  r5 L9 e  x3.509     44.4 MB/s    653.7 MB/s
+  r5 L9 f  x3.509     46.3 MB/s    711.5 MB/s
+  [Warn] r5 L3 a attempt 1: zstd rc=0, no compression result:  /-corpus.tar        :1409474560 ->4294967295 (x0.000),   0.00 MB/s,  506.5 MB/s
+  r5 L3 a  x3.246    152.5 MB/s    534.9 MB/s
+  r5 L3 b  x3.246    170.2 MB/s    563.3 MB/s
+  r5 L3 c  x3.246    179.1 MB/s    691.9 MB/s
+  r5 L3 d  x3.246    171.2 MB/s    670.8 MB/s
+  r5 L3 e  x3.246    161.9 MB/s    593.1 MB/s
+  r5 L3 f  x3.246    161.3 MB/s    675.4 MB/s
+
+[Info] zstd -b runs retried for a lost compression result / 因遺失壓縮結果而重試的次數: 1
+
+=== best of 5 rounds / 5 輪最佳值 (zstd_bmi2_win.csv2) ===
+|level<br>等級|variant<br>版本|exe_bytes<br>執行檔位元組|ratio<br>壓縮比|best_comp_MBps<br>最佳壓縮MB/s|best_decomp_MBps<br>最佳解壓MB/s|comp_vs_a_pct<br>壓縮相對a%|decomp_vs_a_pct<br>解壓相對a%|
+|---|---|---|---|---|---|---|---|
+|9|a|653312|3.509|44.3|677.4|+0.0|+0.0|
+|9|b|762368|3.509|54.9|757.7|+23.9|+11.9|
+|9|c|814080|3.509|53.2|776.6|+20.1|+14.6|
+|9|d|803840|3.509|54.3|753.3|+22.6|+11.2|
+|9|e|856064|3.509|55.2|783.8|+24.6|+15.7|
+|9|f|807424|3.509|56.1|810.5|+26.6|+19.6|
+|3|a|653312|3.246|180.4|624.7|+0.0|+0.0|
+|3|b|762368|3.246|191.9|703.8|+6.4|+12.7|
+|3|c|814080|3.246|191.4|709.6|+6.1|+13.6|
+|3|d|803840|3.246|189.5|706.9|+5.0|+13.2|
+|3|e|856064|3.246|192.4|731.0|+6.7|+17.0|
+|3|f|807424|3.246|185.6|750.2|+2.9|+20.1|

@@ -1,0 +1,127 @@
+[Info] date: 2026-10-30 13:32:09 TST
+[Info] os: MINGW64_NT-10.0-26300 3.6.11-00eb8435.x86_64   cpu: AMD Ryzen 5 7535HS with Radeon Graphics   cores: 12
+[Info] corpus: /c/Users/lowei/proj/lzfse2/claw-code (5403 files, tar 1409474560 bytes)   rounds: 5
+[Info] msvc     /c/Users/lowei/tmp/zclang/swift_tar.msvc-zstd.exe  1619456 bytes  swift_tar 0.1.3 (v0.1.3-5-gfb86de88) 20261029-190911
+[Info] zstdclang /c/Users/lowei/tmp/zclang/swift_tar.A-zstdclang.exe  1756160 bytes  swift_tar 0.1.3 (v0.1.3-5-gfb86de88-dirty) 20261030-125135
+[Info] allclang /c/Users/lowei/tmp/zclang/swift_tar.allclang.exe  1767424 bytes  swift_tar 0.1.3 (v0.1.3-5-gfb86de88-dirty) 20261030-132659
+
+=== interleaved runs (seconds) / 交錯執行（秒） ===
+  r1 tgz-c  msvc        7.926 s
+  r1 tgz-c  zstdclang    7.907 s
+  r1 tgz-c  allclang    7.157 s
+  r1 tgz-d  msvc        5.567 s
+  r1 tgz-d  zstdclang    5.950 s
+  r1 tgz-d  allclang    5.797 s
+  r1 zst-c  msvc        6.363 s
+  r1 zst-c  zstdclang    6.270 s
+  r1 zst-c  allclang    6.168 s
+  r1 zst-d  msvc        2.920 s
+  r1 zst-d  zstdclang    2.705 s
+  r1 zst-d  allclang    2.615 s
+  r1 zip-c  msvc       84.203 s
+  r1 zip-c  zstdclang   73.602 s
+  r1 zip-c  allclang   67.946 s
+  r1 zip-x  msvc       13.546 s
+  r1 zip-x  zstdclang   13.366 s
+  r1 zip-x  allclang   13.479 s
+  -- archives vs msvc / 與 msvc 的封存比對 --
+  zstdclang a.tgz   identical (491611196 bytes)
+  zstdclang a.tzst  identical (401498392 bytes)
+  zstdclang a.zip   identical (493929789 bytes)
+  allclang a.tgz   identical (491611196 bytes)
+  allclang a.tzst  identical (401498392 bytes)
+  allclang a.zip   identical (493929789 bytes)
+  r2 tgz-c  msvc        7.979 s
+  r2 tgz-c  zstdclang    7.989 s
+  r2 tgz-c  allclang    7.527 s
+  r2 tgz-d  msvc        5.491 s
+  r2 tgz-d  zstdclang    5.492 s
+  r2 tgz-d  allclang    5.573 s
+  r2 zst-c  msvc        6.256 s
+  r2 zst-c  zstdclang    6.035 s
+  r2 zst-c  allclang    6.144 s
+  r2 zst-d  msvc        2.770 s
+  r2 zst-d  zstdclang    2.606 s
+  r2 zst-d  allclang    2.549 s
+  r2 zip-c  msvc       76.778 s
+  r2 zip-c  zstdclang   76.870 s
+  r2 zip-c  allclang   69.212 s
+  r2 zip-x  msvc       13.689 s
+  r2 zip-x  zstdclang   13.246 s
+  r2 zip-x  allclang   13.575 s
+  r3 tgz-c  msvc        8.027 s
+  r3 tgz-c  zstdclang    8.177 s
+  r3 tgz-c  allclang    7.865 s
+  r3 tgz-d  msvc        5.469 s
+  r3 tgz-d  zstdclang    5.416 s
+  r3 tgz-d  allclang    5.599 s
+  r3 zst-c  msvc        6.364 s
+  r3 zst-c  zstdclang    5.988 s
+  r3 zst-c  allclang    5.978 s
+  r3 zst-d  msvc        2.782 s
+  r3 zst-d  zstdclang    2.612 s
+  r3 zst-d  allclang    2.572 s
+  r3 zip-c  msvc       73.305 s
+  r3 zip-c  zstdclang   73.383 s
+  r3 zip-c  allclang   67.403 s
+  r3 zip-x  msvc       13.387 s
+  r3 zip-x  zstdclang   13.293 s
+  r3 zip-x  allclang   13.489 s
+  r4 tgz-c  msvc        8.246 s
+  r4 tgz-c  zstdclang    7.953 s
+  r4 tgz-c  allclang    7.484 s
+  r4 tgz-d  msvc        5.510 s
+  r4 tgz-d  zstdclang    5.456 s
+  r4 tgz-d  allclang    5.611 s
+  r4 zst-c  msvc        6.323 s
+  r4 zst-c  zstdclang    6.032 s
+  r4 zst-c  allclang    6.082 s
+  r4 zst-d  msvc        2.737 s
+  r4 zst-d  zstdclang    2.611 s
+  r4 zst-d  allclang    2.552 s
+  r4 zip-c  msvc       73.011 s
+  r4 zip-c  zstdclang   73.615 s
+  r4 zip-c  allclang   75.681 s
+  r4 zip-x  msvc       13.422 s
+  r4 zip-x  zstdclang   13.180 s
+  r4 zip-x  allclang   13.453 s
+  r5 tgz-c  msvc        8.172 s
+  r5 tgz-c  zstdclang    8.312 s
+  r5 tgz-c  allclang    7.475 s
+  r5 tgz-d  msvc        5.461 s
+  r5 tgz-d  zstdclang    5.398 s
+  r5 tgz-d  allclang    5.621 s
+  r5 zst-c  msvc        6.294 s
+  r5 zst-c  zstdclang    6.050 s
+  r5 zst-c  allclang    6.033 s
+  r5 zst-d  msvc        2.752 s
+  r5 zst-d  zstdclang    2.660 s
+  r5 zst-d  allclang    2.568 s
+  r5 zip-c  msvc       73.118 s
+  r5 zip-c  zstdclang   73.456 s
+  r5 zip-c  allclang   67.395 s
+  r5 zip-x  msvc       13.248 s
+  r5 zip-x  zstdclang   13.389 s
+  r5 zip-x  allclang   13.620 s
+
+=== best of 5 rounds / 5 輪最佳值 (win_clang_deps.csv2; +% = faster than msvc) ===
+|op<br>操作|binary<br>執行檔|best_seconds<br>最佳秒數|MBps<br>MB/s|vs_msvc_pct<br>相對msvc%|
+|---|---|---|---|---|
+|tgz-c|msvc|7.926|177.8|+0.0|
+|tgz-c|zstdclang|7.907|178.3|+0.2|
+|tgz-c|allclang|7.157|196.9|+10.7|
+|tgz-d|msvc|5.461|258.1|+0.0|
+|tgz-d|zstdclang|5.398|261.1|+1.2|
+|tgz-d|allclang|5.573|252.9|-2.0|
+|zst-c|msvc|6.256|225.3|+0.0|
+|zst-c|zstdclang|5.988|235.4|+4.5|
+|zst-c|allclang|5.978|235.8|+4.7|
+|zst-d|msvc|2.737|515.0|+0.0|
+|zst-d|zstdclang|2.606|540.9|+5.0|
+|zst-d|allclang|2.549|553.0|+7.4|
+|zip-c|msvc|73.011|19.3|+0.0|
+|zip-c|zstdclang|73.383|19.2|-0.5|
+|zip-c|allclang|67.395|20.9|+8.3|
+|zip-x|msvc|13.248|106.4|+0.0|
+|zip-x|zstdclang|13.180|106.9|+0.5|
+|zip-x|allclang|13.453|104.8|-1.5|

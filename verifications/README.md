@@ -656,3 +656,75 @@ the suite. The macOS and Linux builds had no warnings; the Windows build has the
 same 22 linker warnings as 0.1.2. Each node then installed the published archive
 (brew, scoop, `~/.local/bin` on WSL, LinuxCS's pin on the VM) and reported
 `swift_tar 0.1.3 (v0.1.3 / 6b96dc37)`.
+
+## Windows: C dependencies built with clang instead of MSVC
+
+`zstd_bmi2_win.zsh` → `zstd_bmi2_win_output.txt`, `zstd_bmi2_win.csv2`
+`win_clang_deps.zsh` → `win_clang_deps_output.txt`, `win_clang_deps.csv2`
+
+```sh
+zsh verifications/zstd_bmi2_win.zsh ../claw-code
+zsh verifications/win_clang_deps.zsh ../claw-code msvc=OLD.exe zstdclang=MID.exe allclang=release/swift_tar.exe
+```
+
+Measured 2026-10-30 on a Ryzen 5 7535HS (Zen 3+, BMI2 and AVX2), Swift 6.4.1 toolchain,
+claw-code (1351 MB, 5403 files), best of 5 interleaved rounds. Since then zstd, zlib and
+libarchive are built with the Swift toolchain's clang/clang-cl (`build_zstd-win.zsh`,
+`build_zlib-win.zsh`, `build_libarchive-win.zsh`), and `libarchive_zip_bridge.c` with clang-cl.
+They build through `win_clang_cmake.zsh` with the VS build tools' nmake rather than Ninja, which
+the Swift toolchain does not ship; a rebuild that way gave the same `.text`, 1,522,484 bytes.
+
+**The premise was BMI2, and BMI2 does not happen.** zstd's `portability_macros.h` sets
+`DYNAMIC_BMI2=1` for any clang, but `compiler.h` defines `TARGET_ATTRIBUTE` only under
+`__GNUC__`, which clang does not define when it targets MSVC -- neither clang-cl nor the GNU
+driver. The `_bmi2` copies are therefore compiled as plain x86-64: `llvm-objdump` counts 0
+`shlx`/`shrx`/`bzhi` in every Windows variant except the `-mbmi2` reference (758/1299/97).
+zstd's CMake also adds `-DZSTD_DISABLE_ASM` on Windows, so the BMI2 assembly Huffman decoder is
+off throughout. The gain below is clang's code generation.
+
+`zstd -b -B4M --single-thread` (libzstd alone, 4 MiB blocks as in swift_tar), relative to MSVC:
+
+| variant | L9 compress | L9 decompress | L3 compress | L3 decompress | zstd.exe bytes |
+|---|---:|---:|---:|---:|---:|
+| a MSVC (before) | 44.3 MB/s | 677.4 MB/s | 180.4 MB/s | 624.7 MB/s | 653,312 |
+| d clang, `-DDYNAMIC_BMI2=0` | +22.6% | +11.2% | +5.0% | +13.2% | 803,840 |
+| **e clang, default (chosen)** | **+24.6%** | **+15.7%** | **+6.7%** | **+17.0%** | 856,064 |
+| f clang `-mbmi2` (needs a BMI2 CPU; ceiling only) | +26.6% | +19.6% | +2.9% | +20.1% | 807,424 |
+
+e decodes about 4 points faster than d (4.5 at level 9, 3.8 at level 3) although neither holds a BMI2 instruction; the dispatch
+flag selects different code paths. Not investigated further. About one `zstd -b` run in 60
+lost its compression result (`->4294967295 (x0.000), 0.00 MB/s`), on MSVC and clang builds
+alike; the script retries such a run and prints each retry (1 in the recorded run).
+
+swift_tar end to end (`win_clang_deps.zsh`), relative to the all-MSVC build:
+
+| operation | all MSVC | zstd only clang | **all clang** |
+|---|---:|---:|---:|
+| tgz create | 177.8 MB/s | +0.2% | **+10.7%** |
+| tgz `--cat` | 258.1 MB/s | +1.2% | **−2.0%** |
+| zstd create (level 9) | 225.3 MB/s | +4.5% | **+4.7%** |
+| zstd `--cat` | 515.0 MB/s | +5.0% | **+7.4%** |
+| zip create | 19.3 MB/s | −0.5% | **+8.3%** |
+| zip extract (writes files) | 106.4 MB/s | +0.5% | **−1.5%** |
+
+All three builds write byte-identical `.tgz`, `.tzst` and `.zip`. zlib's deflate gains about
+10% under clang and its inflate loses 1.5--2%, slower in every one of the five rounds, so that
+is real rather than noise; the trade was taken for the encode gain. zstd gains far less inside
+swift_tar than in `zstd -b`: compression runs on parallel chunks, and reading, tar framing and
+coordination dilute the codec's share. ZIP create at 19 MB/s is single-threaded on Windows, a
+separate matter.
+
+Size: swift_tar.exe 1,619,456 → 1,767,424 bytes (+9.1%), all in `.text`. Without
+`-ffunction-sections -fdata-sections` (the counterpart of the `/Gy` that MSVC's `/O2` implies)
+the zstd-only build was 1,808,384; with them, 1,756,160. The rest is clang `-O3` inlining:
+the zstd level is chosen at run time, so every strategy stays reachable.
+
+Warnings: the 22 linker warnings of every earlier Windows build (LNK4217/LNK4286 x11 each) are
+gone, and clang-cl showed 7 `-Wdeprecated-declarations` in `libarchive_zip_bridge.c` that cl's
+`/W1` had hidden (C4996). They were fixed, not silenced: `strerror_s` behind an `error_text()`
+helper, and `_wfsopen`/`_fsopen` with `_SH_DENYNO` -- not `_wfopen_s`, whose `_SH_SECURE`
+denies other writers on a read-only open and would stop a file still being written from being
+archived. The upstream zstd build carries 3 `-Wunused-function` warnings, left as they are.
+
+Whole suite on the all-clang build: Windows 803/0, the same count as before the change. The
+bridge is shared with the other platforms, so WSL was rebuilt with it too: no warnings, 850/0.

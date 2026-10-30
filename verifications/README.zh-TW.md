@@ -574,3 +574,69 @@ claw-code（1.4 GB，5,448 個檔案）：
 工具鏈，所以那裡執行的是發布版執行檔，而不是整套測試。macOS 與 Linux 的建置沒有警告；Windows
 建置有與 0.1.2 相同的 22 個連結器警告。之後各節點都安裝了發布版（brew、scoop、WSL 的
 `~/.local/bin`、VM 上 LinuxCS 的釘選），回報皆為 `swift_tar 0.1.3 (v0.1.3 / 6b96dc37)`。
+
+## Windows：C 相依改用 clang 而非 MSVC 建置
+
+`zstd_bmi2_win.zsh` → `zstd_bmi2_win_output.txt`、`zstd_bmi2_win.csv2`
+`win_clang_deps.zsh` → `win_clang_deps_output.txt`、`win_clang_deps.csv2`
+
+```sh
+zsh verifications/zstd_bmi2_win.zsh ../claw-code
+zsh verifications/win_clang_deps.zsh ../claw-code msvc=OLD.exe zstdclang=MID.exe allclang=release/swift_tar.exe
+```
+
+2026-10-30 於 Ryzen 5 7535HS（Zen 3+，具 BMI2 與 AVX2）量測，Swift 6.4.1 工具鏈，claw-code（1351 MB、
+5403 個檔案），5 輪交錯取最佳值。自此 zstd、zlib、libarchive 改以 Swift 工具鏈的 clang／clang-cl 建置
+（`build_zstd-win.zsh`、`build_zlib-win.zsh`、`build_libarchive-win.zsh`），`libarchive_zip_bridge.c`
+改用 clang-cl。它們經由 `win_clang_cmake.zsh` 以 VS 建置工具的 nmake 建置，而非 Swift 工具鏈不附的
+Ninja；以此方式重建得到相同的 `.text`，1,522,484 位元組。
+
+**出發點是 BMI2，而 BMI2 並沒有發生。** zstd 的 `portability_macros.h` 對所有 clang 設
+`DYNAMIC_BMI2=1`，但 `compiler.h` 只在 `__GNUC__` 下定義 `TARGET_ATTRIBUTE`，而 clang 以 MSVC 為目標時
+不定義它——clang-cl 與 GNU 驅動皆然。於是 `_bmi2` 副本照一般 x86-64 編譯：除了 `-mbmi2` 參考版
+（758／1299／97）之外，每個 Windows 版本以 `llvm-objdump` 數出的 `shlx`／`shrx`／`bzhi` 都是 0。zstd 的
+CMake 在 Windows 也會加 `-DZSTD_DISABLE_ASM`，組語版 BMI2 Huffman 解碼器全程是關的。下表的收益來自 clang
+的程式碼生成。
+
+`zstd -b -B4M --single-thread`（只量 libzstd，4 MiB 區塊同 swift_tar），相對 MSVC：
+
+| 版本 | L9 壓縮 | L9 解壓 | L3 壓縮 | L3 解壓 | zstd.exe 位元組 |
+|---|---:|---:|---:|---:|---:|
+| a MSVC（原本） | 44.3 MB/s | 677.4 MB/s | 180.4 MB/s | 624.7 MB/s | 653,312 |
+| d clang，`-DDYNAMIC_BMI2=0` | +22.6% | +11.2% | +5.0% | +13.2% | 803,840 |
+| **e clang 預設（採用）** | **+24.6%** | **+15.7%** | **+6.7%** | **+17.0%** | 856,064 |
+| f clang `-mbmi2`（需 BMI2 CPU；僅為上限） | +26.6% | +19.6% | +2.9% | +20.1% | 807,424 |
+
+e 與 d 都沒有 BMI2 指令，e 的解壓卻快約 4 個百分點（等級 9 為 4.5、等級 3 為 3.8）；分派旗標會選到不同的程式路徑，未再深究。約每 60 次
+`zstd -b` 有一次遺失壓縮結果（`->4294967295 (x0.000), 0.00 MB/s`），MSVC 與 clang 版皆然；腳本會重試並
+印出每次重試（紀錄中的那次執行共 1 次）。
+
+swift_tar 端到端（`win_clang_deps.zsh`），相對全 MSVC 版：
+
+| 操作 | 全 MSVC | 只有 zstd 用 clang | **全 clang** |
+|---|---:|---:|---:|
+| tgz 建立 | 177.8 MB/s | +0.2% | **+10.7%** |
+| tgz `--cat` | 258.1 MB/s | +1.2% | **−2.0%** |
+| zstd 建立（等級 9） | 225.3 MB/s | +4.5% | **+4.7%** |
+| zstd `--cat` | 515.0 MB/s | +5.0% | **+7.4%** |
+| zip 建立 | 19.3 MB/s | −0.5% | **+8.3%** |
+| zip 解出（會寫檔） | 106.4 MB/s | +0.5% | **−1.5%** |
+
+三個版本寫出的 `.tgz`、`.tzst`、`.zip` 逐位元組相同。zlib 的 deflate 在 clang 下快約 10%，inflate 慢
+1.5–2%，五輪每一輪都較慢，是真的而非雜訊；為了編碼端的收益接受這個交換。zstd 在 swift_tar 內的收益遠小於
+`zstd -b`：壓縮在平行 chunk 上進行，讀檔、tar 封裝與協調稀釋了 codec 所佔的比例。Windows 上 ZIP 建立
+只有 19 MB/s 是單執行緒，屬另一件事。
+
+大小：swift_tar.exe 1,619,456 → 1,767,424 位元組（+9.1%），全在 `.text`。沒有
+`-ffunction-sections -fdata-sections`（對應 MSVC `/O2` 隱含的 `/Gy`）時，只換 zstd 的版本為
+1,808,384；加上後為 1,756,160。其餘來自 clang `-O3` 的 inline：zstd 等級在執行時才決定，所有策略都
+可能被呼叫。
+
+警告：以往每次 Windows 建置都有的 22 個連結器警告（LNK4217／LNK4286 各 11）消失；clang-cl 則在
+`libarchive_zip_bridge.c` 顯示了 7 個 `-Wdeprecated-declarations`，那是 cl 的 `/W1` 原本隱藏的 C4996。
+這些是修掉而非關掉：以 `error_text()` helper 包住 `strerror_s`，並改用 `_wfsopen`／`_fsopen` 加
+`_SH_DENYNO`——不用 `_wfopen_s`，因為它的 `_SH_SECURE` 在唯讀開啟時拒絕其他寫入者，會使仍在寫入中的檔案
+無法封存。上游 zstd 的建置有 3 個 `-Wunused-function` 警告，維持原樣。
+
+全 clang 版的整套測試：Windows 803/0，與改動前相同。bridge 與其他平台共用，因此 WSL 也以它重建：
+沒有警告，850/0。

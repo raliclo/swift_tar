@@ -12,6 +12,7 @@
 #ifdef _WIN32
 #include <direct.h>
 #include <io.h>
+#include <share.h>
 #include <windows.h>
 #define swift_tar_chdir _chdir
 #define swift_tar_getcwd _getcwd
@@ -26,6 +27,24 @@
 #define swift_tar_chdir chdir
 #define swift_tar_getcwd getcwd
 #endif
+
+/* The text for an errno value, written into `buffer`. On Windows strerror is declared
+ * deprecated (C4996, shown by clang-cl's default warning level and hidden by cl's /W1), so
+ * that platform uses strerror_s; elsewhere strerror is copied, keeping its wording unchanged.
+ * Copying also means the result never points at the static buffer strerror may share.
+ * errno 值的說明文字，寫入 `buffer`。Windows 上 strerror 被宣告為 deprecated（C4996，clang-cl
+ * 的預設警告等級會顯示，cl 的 /W1 則隱藏），故該平台改用 strerror_s；其他平台複製 strerror 的
+ * 結果，措辭不變。複製也使結果不會指向 strerror 可能共用的靜態緩衝區。 */
+static const char *error_text(int error_number, char *buffer, size_t capacity) {
+#ifdef _WIN32
+    if (strerror_s(buffer, capacity, error_number) != 0) {
+        snprintf(buffer, capacity, "error %d", error_number);
+    }
+#else
+    snprintf(buffer, capacity, "%s", strerror(error_number));
+#endif
+    return buffer;
+}
 
 /* Identify a file by identity rather than by its path, so the walk can recognise
  * the archive it is writing however that file is spelled.
@@ -149,7 +168,9 @@ static void set_archive_error(char *buffer, size_t capacity,
  * 最後以 1 結束。 */
 static void note_unreadable(long *unreadable, const char *name, const char *what,
                             const char *what_zh, int error_number) {
-    const char *reason = error_number != 0 ? strerror(error_number) : "unknown error";
+    char text[256];
+    const char *reason = error_number != 0 ? error_text(error_number, text, sizeof(text))
+                                           : "unknown error";
     fprintf(stderr, "swift_tar: %s: %s: %s / %s：%s\n",
             name != NULL ? name : "<unknown>", what, reason, what_zh, reason);
     ++*unreadable;
@@ -159,9 +180,17 @@ static void note_unreadable(long *unreadable, const char *name, const char *what
  * 開啟一般檔案的資料以供讀取；失敗時回傳 NULL 並設好 errno。 */
 static FILE *open_entry_source(struct archive_entry *entry) {
 #ifdef _WIN32
+    /* _wfsopen/_fsopen with _SH_DENYNO rather than the deprecated _wfopen/fopen (C4996). Not
+     * _wfopen_s/fopen_s: those open with _SH_SECURE, which for a read-only open denies other
+     * writers, so a file another process is still writing (a log, say) would stop being
+     * archivable. _SH_DENYNO is the sharing _wfopen/fopen always had, and errno is set as before.
+     * 以 _wfsopen／_fsopen 加 _SH_DENYNO 取代 deprecated 的 _wfopen／fopen（C4996）。不用
+     * _wfopen_s／fopen_s：它們以 _SH_SECURE 開啟，唯讀開啟時會拒絕其他寫入者，於是另一個行程
+     * 仍在寫入的檔案（例如日誌）就無法再被封存。_SH_DENYNO 正是 _wfopen／fopen 一直以來的共用
+     * 模式，errno 也照舊設定。 */
     const wchar_t *wide_path = archive_entry_sourcepath_w(entry);
-    return wide_path != NULL ? _wfopen(wide_path, L"rb") :
-                               fopen(archive_entry_sourcepath(entry), "rb");
+    return wide_path != NULL ? _wfsopen(wide_path, L"rb", _SH_DENYNO) :
+                               _fsopen(archive_entry_sourcepath(entry), "rb", _SH_DENYNO);
 #else
     return fopen(archive_entry_sourcepath(entry), "rb");
 #endif
@@ -1436,8 +1465,9 @@ int swift_tar_zip_create(const char *archive_path,
         original_dir = swift_tar_getcwd(NULL, 0);
         if (original_dir == NULL || swift_tar_chdir(change_dir) != 0) {
             if (error_buffer != NULL && error_capacity > 0) {
+                char text[256];
                 snprintf(error_buffer, error_capacity, "cannot chdir to '%s': %s",
-                         change_dir, strerror(errno));
+                         change_dir, error_text(errno, text, sizeof(text)));
             }
             goto cleanup;
         }
@@ -1522,7 +1552,9 @@ static int copy_archive_data_to_stdout(struct archive *reader,
     while ((count = archive_read_data(reader, buffer, sizeof(buffer))) > 0) {
         if (fwrite(buffer, 1, (size_t)count, stdout) != (size_t)count) {
             if (error_buffer != NULL && error_capacity > 0) {
-                snprintf(error_buffer, error_capacity, "write stdout: %s", strerror(errno));
+                char text[256];
+                snprintf(error_buffer, error_capacity, "write stdout: %s",
+                         error_text(errno, text, sizeof(text)));
             }
             return -1;
         }
@@ -1726,8 +1758,9 @@ int swift_tar_zip_read(const char *archive_path,
             original_dir = swift_tar_getcwd(NULL, 0);
             if (original_dir == NULL || swift_tar_chdir(destination_dir) != 0) {
                 if (error_buffer != NULL && error_capacity > 0) {
+                    char text[256];
                     snprintf(error_buffer, error_capacity, "cannot chdir to '%s': %s",
-                             destination_dir, strerror(errno));
+                             destination_dir, error_text(errno, text, sizeof(text)));
                 }
                 goto cleanup;
             }
@@ -1907,7 +1940,9 @@ int swift_tar_zip_read(const char *archive_path,
     }
     if (to_stdout && fflush(stdout) != 0) {
         if (error_buffer != NULL && error_capacity > 0) {
-            snprintf(error_buffer, error_capacity, "flush stdout: %s", strerror(errno));
+            char text[256];
+            snprintf(error_buffer, error_capacity, "flush stdout: %s",
+                     error_text(errno, text, sizeof(text)));
         }
         goto cleanup;
     }

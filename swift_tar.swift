@@ -2443,6 +2443,20 @@ private func tarPaddedLength(_ size: UInt64) -> Int? {
     return Int(exactly: (sum / 512) * 512)
 }
 
+/// The largest extended header (pax x/g, GNU L/K) read into memory. Those are read whole, so
+/// without a bound the archive's own size field picks the allocation: a few-KB .tar.gz
+/// declaring 2^40 made -t hold everything it read, measured at about twice the declared size
+/// (2026-10-30 review). 16 MiB is libarchive's xattr_limit, so any record it accepts fits.
+/// Past it the archive is refused, not skipped: dropping a pax header would silently change
+/// the next member's name or size, and a wrong size desynchronizes the rest of the stream.
+///
+/// 讀進記憶體的擴充標頭（pax x/g、GNU L/K）的上限。這些標頭整段讀入，沒有上限時就由封存自己的
+/// size 欄位決定配置多少：一個宣告 2^40 的數 KB .tar.gz 會讓 -t 留住讀到的一切，實測約為宣告
+/// 長度的兩倍（2026-10-30 審查）。16 MiB 是 libarchive 的 xattr_limit，它接受的記錄都放得下。
+/// 超過時拒絕整個封存而非略過：丟掉一個 pax 標頭會悄悄改變下一個成員的名稱或長度，而長度錯了
+/// 會讓後續整條串流錯位。
+private let tarExtendedHeaderMax: UInt64 = 16 << 20
+
 // =================================================================
 // MARK: - Windows file identity (stat/lstat/symlink/link replacement)
 // MARK: - Windows 版檔案識別（取代 stat/lstat/symlink/link）
@@ -5528,6 +5542,9 @@ final class TarReader {
                 guard let padded = tarPaddedLength(size) else {
                     throw TarError.format("pax header size out of range / pax 標頭長度超出範圍")
                 }
+                guard size <= tarExtendedHeaderMax else {
+                    throw TarError.format("pax header too large (\(size) bytes) / pax 標頭過大（\(size) 位元組）")
+                }
                 guard let data = readExactly(padded) else {
                     throw TarError.format("truncated pax header / pax 標頭不完整")
                 }
@@ -5618,6 +5635,9 @@ final class TarReader {
                 guard let padded = tarPaddedLength(size) else {
                     throw TarError.format("GNU longname size out of range / GNU 長檔名長度超出範圍")
                 }
+                guard size <= tarExtendedHeaderMax else {
+                    throw TarError.format("GNU longname too large (\(size) bytes) / GNU 長檔名過大（\(size) 位元組）")
+                }
                 guard let data = readExactly(padded) else {
                     throw TarError.format("truncated GNU longname / GNU 長檔名不完整")
                 }
@@ -5627,6 +5647,9 @@ final class TarReader {
             case UInt8(ascii: "K"):     // GNU long linkname / GNU 長連結名
                 guard let padded = tarPaddedLength(size) else {
                     throw TarError.format("GNU longlink size out of range / GNU 長連結名長度超出範圍")
+                }
+                guard size <= tarExtendedHeaderMax else {
+                    throw TarError.format("GNU longlink too large (\(size) bytes) / GNU 長連結名過大（\(size) 位元組）")
                 }
                 guard let data = readExactly(padded) else {
                     throw TarError.format("truncated GNU longlink / GNU 長連結名不完整")
@@ -8353,6 +8376,9 @@ struct SwiftTarMain {
             case UInt8(ascii: "x"), UInt8(ascii: "L"), UInt8(ascii: "K"):
                 // Per-entry extended header: buffer header + data, decode name.
                 // 逐項目擴充標頭：緩衝標頭＋資料，並解出名稱。
+                guard size <= tarExtendedHeaderMax else {
+                    throw TarError.format("extended header too large (\(size) bytes) / 擴充標頭過大（\(size) 位元組）")
+                }
                 guard let data = try readFull(dataLen), data.count == dataLen else {
                     throw TarError.format("truncated extended header / 擴充標頭不完整")
                 }
@@ -8386,6 +8412,9 @@ struct SwiftTarMain {
             case UInt8(ascii: "g"):
                 // Global pax header: applies to all following entries, always keep.
                 // 全域 pax 標頭：作用於後續所有項目，一律保留。
+                guard size <= tarExtendedHeaderMax else {
+                    throw TarError.format("global header too large (\(size) bytes) / 全域標頭過大（\(size) 位元組）")
+                }
                 guard let data = try readFull(dataLen), data.count == dataLen else {
                     throw TarError.format("truncated global header / 全域標頭不完整")
                 }

@@ -74,19 +74,38 @@ emit "$TMP/xsize.tar" "$(header pax "$M644" "$HUGE12" x)"
 emit "$TMP/lsize.tar" "$(header ././@LongLink "$M644" "$HUGE12" L)"
 emit "$TMP/fsize.tar" "$(header a "$M644" "$HUGE12" 0)"
 emit "$TMP/paxsize.tar" "$(header pax "$M644" "$(field 00000000035 12)" x)$(field "$REC" 512)$(header a "$M644" "$S0" 0)"
+# Extended headers declaring 64 MiB, past the 16 MiB cap, with no data behind them.
+# 宣告 64 MiB（超過 16 MiB 上限）、後面沒有資料的擴充標頭。
+BIG=$(field 00400000000 12)
+emit "$TMP/bigx.tar" "$(header pax "$M644" "$BIG" x)"
+emit "$TMP/bigl.tar" "$(header ././@LongLink "$M644" "$BIG" L)"
+emit "$TMP/bigk.tar" "$(header ././@LongLink "$M644" "$BIG" K)"
+emit "$TMP/bigg.tar" "$(header pax "$M644" "$BIG" g)"
+# The other side of the cap: a 1.5 MiB pax header, past the -u scanner's 1 MiB but well inside
+# 16 MiB, must still read, or a lowered cap would refuse archives libarchive accepts. One record,
+# "1572864 comment=aaa...\n"; the data is written raw, as emit's per-byte printf is too slow.
+# 上限的另一側：1.5 MiB 的 pax 標頭（超過 -u 掃描器的 1 MiB，但遠在 16 MiB 之內）仍須讀得出來，
+# 否則把上限調低就會拒絕 libarchive 接受的封存。單一筆記錄 "1572864 comment=aaa...\n"；資料直接
+# 寫出，因為 emit 逐位元組 printf 太慢。
+MIDLEN=1572864
+{ emit "$TMP/midhdr.bin" "$(header pax "$M644" "$(field $(printf '%011o' $MIDLEN) 12)" x)"
+  head -c 512 "$TMP/midhdr.bin"
+  printf '%d comment=' $MIDLEN; head -c $(( MIDLEN - 17 )) /dev/zero | tr '\0' a; printf '\n'
+  emit "$TMP/midtail.bin" "$(header mid.txt "$M644" "$S0" 0)"; cat "$TMP/midtail.bin"
+} > "$TMP/mid.tar"
 
 # rc 1 with a message is the wanted outcome; >= 128 is a signal. Each mode gets its own copy,
 # as -u and --delete write to the archive.
 # 想要的結果是 rc 1 並附訊息；>= 128 表示被訊號終止。每種操作各用一份複本，因為 -u 與 --delete
 # 會寫入封存。
-run() {      # run <archive> <op>
-  local a="$TMP/$1.tar" w="$TMP/w_$1_${2//-/}" rc=0
+run() {      # run <archive> <op> [member for --delete, default zzz]
+  local a="$TMP/$1.tar" w="$TMP/w_$1_${2//-/}" rc=0 del=${3:-zzz}
   mkdir -p "$w"; cp "$a" "$w/a.tar"; print x > "$w/m"
   case $2 in
     -t)       "$ST" -tvf "$w/a.tar" ;;
     -x)       "$ST" -xf "$w/a.tar" -C "$w" ;;
     -u)       ( cd "$w" && "$ST" -uf a.tar m ) ;;
-    --delete) "$ST" --delete -f "$w/a.tar" zzz ;;
+    --delete) "$ST" --delete -f "$w/a.tar" "$del" ;;
   esac > "$w/out" 2>&1 || rc=$?
   print -r -- "$rc"
 }
@@ -116,6 +135,37 @@ for op in -t -x -u --delete; do
   expect_error lsize   "$op" "base-256 size on a GNU long name"
   expect_error fsize   "$op" "base-256 size on a file"
 done
+
+# An extended header is read whole, so its size must be capped before the read, or the archive
+# picks the allocation (2026-10-30 review: -t held about twice the declared size). These archives
+# end right after the header, so without the cap the read fails as "truncated" -- also rc 1 --
+# which is why the check is the "too large" message, not the exit code. -u and --delete's
+# typeflag g are covered too: the -u scanner already skips past its own 1 MiB cap, and
+# --delete read g whole like x, L and K. The main reader streams g, so -t and -x skip it.
+# 擴充標頭是整段讀入的，所以長度必須在讀取之前設限，否則由封存決定配置多少（2026-10-30 審查：
+# -t 留住約為宣告長度兩倍的記憶體）。這些封存在標頭之後就結束，沒有上限時讀取會以「不完整」
+# 失敗——同樣是 rc 1——所以這裡檢查的是 "too large" 訊息，而不是退出碼。
+expect_too_large() {   # expect_too_large <archive> <op> <what>
+  local rc out
+  rc=$(run "$1" "$2"); out="$TMP/w_$1_${2//-/}/out"
+  if [ "$rc" = 1 ] && grep -q 'too large' "$out"; then ok "$3: $2 refuses it as too large, rc 1"
+  else bad "$3: $2 refuses it as too large, rc 1 (got rc $rc: $(tail -1 "$out"))"; fi
+}
+for op in -t -x --delete; do
+  expect_too_large bigx "$op" "pax header declaring 64 MiB"
+  expect_too_large bigl "$op" "GNU long name declaring 64 MiB"
+  expect_too_large bigk "$op" "GNU long link declaring 64 MiB"
+done
+expect_too_large bigg --delete "global pax header declaring 64 MiB"
+# --delete removes mid.txt itself: deleting a member that is not there exits 1 by design.
+# --delete 刪的是 mid.txt 本身：刪除不存在的成員依設計以 1 結束。
+for op in -t -x --delete; do
+  rc=$(run mid "$op" mid.txt); out="$TMP/w_mid_${op//-/}/out"
+  [ "$rc" = 0 ] && ok "a 1.5 MiB pax header is within the cap: $op succeeds" \
+    || bad "a 1.5 MiB pax header is within the cap: $op succeeds (got rc $rc: $(tail -1 "$out"))"
+done
+grep -q 'mid.txt' "$TMP/w_mid_t/out" && ok "a 1.5 MiB pax header is within the cap: -t lists the member after it" \
+  || bad "a 1.5 MiB pax header is within the cap: -t lists the member after it ($(tail -1 "$TMP/w_mid_t/out"))"
 
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"

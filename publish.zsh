@@ -95,8 +95,15 @@ dirty=$(git status --porcelain --untracked-files=no -- . ':(exclude)version-*.tx
 [[ -r $MANIFEST ]] || die "$MANIFEST is missing; the scoop bucket lives in the parent lzfse2 repository (or set SWIFT_TAR_SCOOP_MANIFEST)" \
                           "缺少 $MANIFEST；scoop bucket 在上層 lzfse2 repo（或設定 SWIFT_TAR_SCOOP_MANIFEST）"
 git fetch -q --tags origin
-[[ -z "$(git rev-list @{upstream}..HEAD 2>/dev/null)" ]] || die "HEAD is ahead of origin; push first, or the tag names a commit nobody can fetch" \
-                                                               "HEAD 領先 origin；請先推送，否則 tag 指向一個沒人抓得到的 commit"
+# Ask whether origin has HEAD, not whether HEAD is ahead of its upstream: building at the tag
+# means a detached HEAD, which has no upstream, and the old `rev-list @{upstream}..HEAD
+# 2>/dev/null` then failed silently, printed nothing and let an unpushed commit through. A git
+# error here also prints nothing, so this fails closed.
+# 問 origin 有沒有 HEAD，而不是問 HEAD 是否領先它的 upstream：在 tag 上建置就是 detached HEAD，
+# 它沒有 upstream，舊的 `rev-list @{upstream}..HEAD 2>/dev/null` 於是靜默失敗、什麼都不印，讓
+# 未推送的 commit 通過。git 在這裡出錯同樣什麼都不印，所以這道檢查是失敗即擋下。
+[[ -n "$(git branch -r --list 'origin/*' --contains HEAD)" ]] || die "HEAD is on no origin branch; push first, or the tag names a commit nobody can fetch" \
+                                                                    "HEAD 不在 origin 的任何分支上；請先推送，否則 tag 指向一個沒人抓得到的 commit"
 # What is refused is a published release, not an existing tag: archives must be built AT the
 # tag for their build id to say the version, so the order is tag, build, collect, publish.
 # 要拒絕的是已發布的 release，不是已存在的 tag：封存必須在 tag 上建置，build id 才說得出版本號，

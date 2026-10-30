@@ -50,8 +50,12 @@ rewrite_version() {   # rewrite_version <file> <kind>
   while IFS= read -r line; do
     lineno+=1
     [[ -n ${prose[$lineno]-} || $line != *version* ]] && continue
-    [[ $line == (#b)*([0-9]##.[0-9]##.[0-9]##)* ]] || continue
-    old=$match[1]; break
+    # A regex, not `(#b)*(X.Y.Z)*`: that glob's leading `*` took as much as it could, so
+    # "10.2.3" captured "0.2.3". =~ finds the leftmost match and extends it as far as it goes.
+    # 用正規式而非 `(#b)*(X.Y.Z)*`：那個 glob 開頭的 `*` 會盡量多吃，於是 "10.2.3" 抓到的是
+    # "0.2.3"。=~ 找最左邊的符合處，並盡量延伸。
+    [[ $line =~ '[0-9]+\.[0-9]+\.[0-9]+' ]] || continue
+    old=$MATCH; break
   done < $file
   [[ -n $old ]] || die "${file:t}: no version line" "${file:t}：找不到版本行"
   [[ $old == $VERSION ]] && return 0

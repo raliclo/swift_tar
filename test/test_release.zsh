@@ -333,6 +333,13 @@ grep '^  url ' "$P/swift_tar.rb" > "$TMP/url.line"
 cat "$TMP/url.line" >> "$P/swift_tar.rb"
 rc=0; rw 0.2.0 rewrite_pair "$P/swift_tar.rb" swift_tar-0.2.0-macos-arm64.tar.zst "$H1" || rc=$?
 check "Formula: two urls for one platform are refused" "$rc:$(grep -c 'expected one url' "$TMP/rw.out")" "1:1"
+# A two-digit major: the old glob read "10.2.3" as "0.2.3", rewrote it to "110.2.4" and then died
+# on its own leftover check -- after gh release create, so the release was already public.
+# 兩位數的主版號：舊的 glob 把 "10.2.3" 讀成 "0.2.3"，改寫成 "110.2.4" 後被自己的殘留檢查擋下——
+# 而那發生在 gh release create 之後，release 已經公開。
+sed "s/$CUR/10.2.3/g" "$FORMULA_SRC" > "$P/ten.rb"
+rc=0; rw 10.2.4 rewrite_version "$P/ten.rb" rb || rc=$?
+check "Formula: a two-digit major version is read whole" "$rc:$(grep -c '110\.2\.4' "$P/ten.rb"):$(grep -c '10\.2\.4' "$P/ten.rb")" "0:0:3"
 if [ -r "$P/swift_tar.json" ]; then
   rc=0; rw 0.2.0 rewrite_version "$P/swift_tar.json" json || rc=$?
   check "scoop: version, url and extract_dir move to 0.2.0" "$rc:$(grep -c '0\.2\.0' "$P/swift_tar.json")" "0:3"
@@ -358,6 +365,33 @@ check "publish.zsh refuses an option where the version goes" "$rc" 2
 rc=0; out=$("$ROOT/publish.zsh" 9.9.9 2>&1) || rc=$?
 if [ "$rc" = 1 ] && [[ $out == *"VERSION says"* ]]; then ok "publish.zsh refuses a version that is not VERSION's"
 else bad "publish.zsh refuses a version that is not VERSION's (rc $rc: $out)"; fi
+# An unpushed commit on a detached HEAD, which is what building at a tag looks like. The old guard
+# asked `rev-list @{upstream}..HEAD 2>/dev/null`; a detached HEAD has no upstream, so it printed
+# nothing and let the commit through. Run in a clone whose origin is this repository, so the
+# fetch stays local and the commit never reaches it. Only the refusal is tested: past the guard
+# publish.zsh goes on to gh.
+# detached HEAD 上一個未推送的 commit——在 tag 上建置就是這個樣子。舊的檢查問的是
+# `rev-list @{upstream}..HEAD 2>/dev/null`；detached HEAD 沒有 upstream，於是什麼都不印，讓那個
+# commit 通過。在一個 origin 指向本 repo 的 clone 裡跑，fetch 留在本機，commit 也不會到達本 repo。
+# 只測拒絕：通過這道檢查之後 publish.zsh 會接著去碰 gh。
+# A fake gh comes first on PATH, so that a guard that regressed stops at "gh is not
+# authenticated" instead of reaching GitHub. / PATH 最前面放一個假的 gh，退化的檢查就會停在
+# 「gh 尚未登入」，而不會碰到 GitHub。
+if [ -r "$MANIFEST_SRC" ]; then
+  mkdir -p "$TMP/fakebin"
+  printf '#!/bin/sh\necho "fake gh: $*" >&2\nexit 1\n' > "$TMP/fakebin/gh"; chmod +x "$TMP/fakebin/gh"
+  C=$TMP/pubclone
+  git clone -q --shared "$ROOT" "$C"
+  git -C "$C" checkout -q --detach
+  # The unpushed commit carries this tree's publish.zsh, so it is the script under test that
+  # runs, not the committed one. / 未推送的 commit 帶著本工作區的 publish.zsh，所以跑的是受測的
+  # 腳本，而不是已提交的那份。
+  cp "$ROOT/publish.zsh" "$C/publish.zsh"
+  git -C "$C" -c user.name=test -c user.email=test@invalid commit -q --allow-empty -am unpushed
+  rc=0; out=$(PATH="$TMP/fakebin:$PATH" SWIFT_TAR_SCOOP_MANIFEST=$MANIFEST_SRC "$C/publish.zsh" "$(<"$C/VERSION")" 2>&1) || rc=$?
+  if [ "$rc" = 1 ] && [[ $out == *"HEAD is on no origin branch"* ]]; then ok "publish.zsh refuses an unpushed commit on a detached HEAD"
+  else bad "publish.zsh refuses an unpushed commit on a detached HEAD (rc $rc: $out)"; fi
+fi
 
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"

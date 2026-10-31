@@ -187,6 +187,71 @@ else
   echo "SKIP: grow case (no mkfifo on this platform)"
 fi
 
+# Non-ASCII names on the command line. Measured on Windows 2026-10-31 (0.1.4 too): `-c --zip
+# -f z.zip 資料.txt` exited 1 with "swift_tar: : Couldn't visit directory: left out", while
+# `-cf t.tar 資料.txt` worked and a CJK name *inside* a directory operand was stored fine. The
+# bridge opened each operand, and the archive itself, through libarchive's narrow API, which
+# on Windows reads char* in the ANSI codepage, not as the UTF-8 Swift passes. The archive came
+# out as `æªæ¡.zip` and `-t --zip -f 檔案.zip` could not open it. A missing operand was
+# reported under libarchive's name for it, which is empty or stray memory there, so the
+# message named the wrong file or none. POSIX passed all of this already; it runs everywhere.
+# 命令列上的非 ASCII 名稱。2026-10-31 於 Windows 實測（0.1.4 亦然）：`-c --zip -f z.zip
+# 資料.txt` 以 1 結束並印出「swift_tar: : Couldn't visit directory: left out」，而
+# `-cf t.tar 資料.txt` 正常，目錄運算元「裡面」的中文名稱也存得好好的。bridge 以 libarchive 的
+# 窄字元 API 開啟每個運算元與封存本身，而它在 Windows 上把 char* 當 ANSI 代碼頁讀，不是 Swift
+# 傳入的 UTF-8。封存檔變成 `æªæ¡.zip`，`-t --zip -f 檔案.zip` 也開不了。不存在的運算元以
+# libarchive 對它的名稱回報，在那裡是空字串或記憶體殘渣，於是訊息指錯檔案或沒有名稱。POSIX
+# 本來就全部通過；這段在每個平台都執行。
+CJK="$TMP/cjk"
+mkdir -p "$CJK"
+print -r -- data > "$CJK/資料.txt"
+for v in "" "--zip-unsorted"; do
+  label="--zip${v:+ $v}"
+  rm -f -- "$CJK"/*.zip(N)
+  rc=0; ( cd -q "$CJK" && "$ST" -c --zip ${=v} -f z.zip 資料.txt ) >/dev/null 2>"$TMP/cjk.err" || rc=$?
+  eq "$label CJK operand: -c exits 0" 0 "$rc"
+  [ -s "$TMP/cjk.err" ] && bad "$label CJK operand: -c says nothing on stderr ($(head -c 160 "$TMP/cjk.err"))" \
+    || ok "$label CJK operand: -c says nothing on stderr"
+  eq "$label CJK operand: -t lists it" 資料.txt "$(cd -q "$CJK" && "$ST" -t --zip -f z.zip 2>&1)"
+  # General purpose bit 11 (UTF-8 names) is bit 3 of the flag word's high byte, offset 7 of the
+  # first local header. / 通用旗標第 11 位元（UTF-8 名稱）是旗標字高位元組的第 3 位元，位於第一個
+  # 本地標頭的位移 7。
+  flags_hi=$(od -A n -t u1 -j 7 -N 1 "$CJK/z.zip" 2>/dev/null | tr -d ' ')
+  (( ${flags_hi:-0} & 8 )) && ok "$label CJK operand: the UTF-8 flag (bit 11) is set" \
+    || bad "$label CJK operand: the UTF-8 flag (bit 11) is set (high flag byte '${flags_hi}')"
+
+  rc=0; ( cd -q "$CJK" && "$ST" -c --zip ${=v} -f 檔案.zip 資料.txt ) >/dev/null 2>"$TMP/cjk.err" || rc=$?
+  [ "$rc" = 0 ] && [ -f "$CJK/檔案.zip" ] && ok "$label CJK archive name: written under that name" \
+    || bad "$label CJK archive name: written under that name (rc $rc; $(cd -q "$CJK" && print -r -- *.zip(N)))"
+  eq "$label CJK archive name: -t opens it" 資料.txt "$(cd -q "$CJK" && "$ST" -t --zip -f 檔案.zip 2>&1)"
+
+  rc=0; ( cd -q "$CJK" && "$ST" -c --zip ${=v} -f z2.zip 資料.txt 不存在的檔案.txt ) >/dev/null 2>"$TMP/cjk.err" || rc=$?
+  eq "$label missing CJK operand: exits 1" 1 "$rc"
+  grep -qF '不存在的檔案.txt: ' "$TMP/cjk.err" && ok "$label missing CJK operand: stderr names it" \
+    || bad "$label missing CJK operand: stderr names it ($(head -c 200 "$TMP/cjk.err"))"
+  grep -qF '資料.txt' "$TMP/cjk.err" && bad "$label missing CJK operand: the file that exists is not blamed" \
+    || ok "$label missing CJK operand: the file that exists is not blamed"
+  eq "$label missing CJK operand: the rest is stored" 資料.txt "$(cd -q "$CJK" && "$ST" -t --zip -f z2.zip 2>&1)"
+
+  # The archive inside the tree it archives is left out by identity; on Windows the walk's
+  # name for it went through the "C" locale and matched nothing, so it was stored in itself.
+  # 位於被封存樹內的封存檔以身分排除；Windows 上走訪對它的名稱經過 "C" locale，什麼也比對
+  # 不到，於是它被存進了自己。
+  mkdir -p "$CJK/self"; print -r -- y > "$CJK/self/f.txt"; rm -f "$CJK/self/封存.zip"
+  rc=0; ( cd -q "$CJK/self" && "$ST" -c --zip ${=v} -f 封存.zip . ) >/dev/null 2>"$TMP/cjk.err" || rc=$?
+  ( cd -q "$CJK/self" && "$ST" -t --zip -f 封存.zip ) 2>&1 | grep -qF '封存.zip' \
+    && bad "$label CJK archive name inside the tree: not stored in itself" \
+    || ok "$label CJK archive name inside the tree: not stored in itself"
+  grep -qF "封存.zip: Can't add archive to itself" "$TMP/cjk.err" \
+    && ok "$label CJK archive name inside the tree: stderr says so" \
+    || bad "$label CJK archive name inside the tree: stderr says so ($(head -c 200 "$TMP/cjk.err"))"
+done
+# A missing CJK archive is named as it was typed, not as '??.zip' (Windows, 2026-10-31).
+# 不存在的中文封存檔以輸入時的名稱回報，而不是 '??.zip'（Windows，2026-10-31）。
+rc=0; ( cd -q "$CJK" && "$ST" -t --zip -f 沒有.zip ) >/dev/null 2>"$TMP/cjk.err" || rc=$?
+[ "$rc" != 0 ] && grep -qF "'沒有.zip'" "$TMP/cjk.err" && ok "missing CJK archive: stderr names it" \
+  || bad "missing CJK archive: stderr names it (rc $rc; $(head -c 200 "$TMP/cjk.err"))"
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

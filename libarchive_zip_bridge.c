@@ -75,29 +75,36 @@ static const char *error_text(int error_number, char *buffer, size_t capacity) {
 #ifdef _WIN32
 typedef struct { DWORD volume; DWORD index_high; DWORD index_low; int valid; } file_id;
 
-static file_id file_identity(const char *path) {
+/* A UTF-8 string as a newly allocated wide string, or NULL. Every path Swift hands this file
+ * is UTF-8, and libarchive's char* functions on Windows read the ANSI codepage instead, so a
+ * path is converted here and given to the _w function. Until 2026-10-31 the operands and the
+ * archive path went in narrow: `-c --zip -f z.zip 資料.txt` exited 1 ("Couldn't visit
+ * directory"), and `-f 檔案.zip` wrote `æªæ¡.zip` (0.1.4 too).
+ * UTF-8 字串轉為新配置的寬字元字串，失敗回 NULL。Swift 交給本檔的路徑都是 UTF-8，而 Windows
+ * 上 libarchive 的 char* 函式讀的是 ANSI 代碼頁，所以路徑在這裡轉好再交給 _w 函式。2026-10-31
+ * 之前運算元與封存路徑以窄字元傳入：`-c --zip -f z.zip 資料.txt` 以 1 結束（"Couldn't visit
+ * directory"），`-f 檔案.zip` 則寫出 `æªæ¡.zip`（0.1.4 亦然）。 */
+static wchar_t *wide_from_utf8(const char *text) {
+    wchar_t *wide;
+    int wide_len = MultiByteToWideChar(CP_UTF8, 0, text, -1, NULL, 0);
+
+    if (wide_len <= 0) return NULL;
+    wide = (wchar_t *)malloc((size_t)wide_len * sizeof(wchar_t));
+    if (wide == NULL) return NULL;
+    if (MultiByteToWideChar(CP_UTF8, 0, text, -1, wide, wide_len) <= 0) {
+        free(wide);
+        return NULL;
+    }
+    return wide;
+}
+
+static file_id file_identity_w(const wchar_t *wide) {
     file_id id;
     HANDLE handle;
     BY_HANDLE_FILE_INFORMATION info;
-    wchar_t *wide;
-    int wide_len;
 
     id.volume = 0; id.index_high = 0; id.index_low = 0; id.valid = 0;
-    if (path == NULL) return id;
-
-    /* 名稱以 UTF-8 傳遞（見下方 hdrcharset 的說明），故用 CP_UTF8 而非 ANSI 代碼頁；
-     * 用 CreateFileA 會讓非 ASCII 檔名比對不到自己。
-     * Names travel as UTF-8 (see the hdrcharset note below), so convert with CP_UTF8 and
-     * not the ANSI codepage: CreateFileA would fail to match a non-ASCII name against
-     * itself. */
-    wide_len = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
-    if (wide_len <= 0) return id;
-    wide = (wchar_t *)malloc((size_t)wide_len * sizeof(wchar_t));
     if (wide == NULL) return id;
-    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, wide_len) <= 0) {
-        free(wide);
-        return id;
-    }
 
     /* 存取權限 0 只查詢不讀取，且三個 SHARE 旗標齊備——這個檔案此刻正被 writer 開著寫入，
      * 少了任何一個都會拿不到 handle，而那會讓檢查靜默失效。
@@ -107,7 +114,6 @@ static file_id file_identity(const char *path) {
     handle = CreateFileW(wide, 0,
                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                          NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
-    free(wide);
     if (handle == INVALID_HANDLE_VALUE) return id;
     if (GetFileInformationByHandle(handle, &info)) {
         id.volume = info.dwVolumeSerialNumber;
@@ -116,6 +122,19 @@ static file_id file_identity(const char *path) {
         id.valid = 1;
     }
     CloseHandle(handle);
+    return id;
+}
+
+/* 名稱以 UTF-8 傳遞（見下方 hdrcharset 的說明），故用 CP_UTF8 而非 ANSI 代碼頁；
+ * 用 CreateFileA 會讓非 ASCII 檔名比對不到自己。
+ * Names travel as UTF-8 (see the hdrcharset note below), so convert with CP_UTF8 and
+ * not the ANSI codepage: CreateFileA would fail to match a non-ASCII name against
+ * itself. */
+static file_id file_identity(const char *path) {
+    wchar_t *wide = path != NULL ? wide_from_utf8(path) : NULL;
+    file_id id = file_identity_w(wide);
+
+    free(wide);
     return id;
 }
 
@@ -166,6 +185,35 @@ static void set_archive_error(char *buffer, size_t capacity,
                               const char *operation, struct archive *archive) {
     if (buffer == NULL || capacity == 0) return;
     snprintf(buffer, capacity, "%s: %s", operation, archive_reason(archive));
+}
+
+/* set_archive_error for opening the archive file at UTF-8 `path`. On Windows libarchive quotes
+ * the wide name with %ls, which in the "C" locale this library leaves alone comes out as one
+ * '?' per non-ASCII character: `-t --zip -f 沒有.zip` said "Failed to open '??.zip'"
+ * (2026-10-31). A reason shaped "<verb> '<name>'" -- the only name in it is the path we
+ * passed -- keeps libarchive's verb and takes the UTF-8 name; anything else ("Unrecognized
+ * archive format") is left as it is. POSIX quotes the name it was given, so it is unchanged.
+ * 開啟位於 UTF-8 `path` 的封存檔時用的 set_archive_error。Windows 上 libarchive 以 %ls 引用
+ * 寬字元名稱，而在本函式庫不去更動的 "C" locale 下，每個非 ASCII 字元都印成一個 '?'：
+ * `-t --zip -f 沒有.zip` 說的是「Failed to open '??.zip'」（2026-10-31）。形如「<動詞>
+ * '<名稱>'」的原因——其中唯一的名稱就是我們傳入的路徑——保留 libarchive 的動詞、換上 UTF-8
+ * 名稱；其他原因（"Unrecognized archive format"）原樣保留。POSIX 引用的就是傳入的名稱，故不變。 */
+static void set_open_error(char *buffer, size_t capacity, const char *operation,
+                           struct archive *archive, const char *path) {
+#ifdef _WIN32
+    const char *reason = archive_reason(archive);
+    const char *quote = strchr(reason, '\'');
+    size_t reason_len = strlen(reason);
+
+    if (buffer != NULL && capacity != 0 && path != NULL && quote != NULL &&
+        quote != reason + reason_len - 1 && reason[reason_len - 1] == '\'') {
+        snprintf(buffer, capacity, "%s: %.*s'%s'", operation, (int)(quote - reason), reason, path);
+        return;
+    }
+#else
+    (void)path;
+#endif
+    set_archive_error(buffer, capacity, operation, archive);
 }
 
 /* Report an entry left out because it could not be read, and count it. The wording is the
@@ -878,7 +926,15 @@ static int skip_entry(struct archive_entry *entry,
      * reports it. The wording is libarchive's own, so stderr reads the same on both
      * platforms -- which is what the test asserts. */
     if (archive_id.valid) {
+#ifdef _WIN32
+        /* The wide source path: the narrow one is converted to the "C" locale, which has no
+         * CJK, so `-c --zip -f 封存.zip .` stored 封存.zip inside itself (2026-10-31).
+         * 用寬字元的來源路徑：窄字元版本是轉成 "C" locale，而它沒有中日韓字元，於是
+         * `-c --zip -f 封存.zip .` 把 封存.zip 存進了它自己（2026-10-31）。 */
+        file_id entry_id = file_identity_w(archive_entry_sourcepath_w(entry));
+#else
         file_id entry_id = file_identity(archive_entry_sourcepath(entry));
+#endif
         if (same_file(entry_id, archive_id)) {
             fprintf(stderr, "swift_tar: %s: Can't add archive to itself\n",
                     entry_sort_name(entry));
@@ -928,8 +984,22 @@ typedef struct {
  * 回報的 "Couldn't visit directory"，其自身的項目已經交付——而 libarchive 下一次呼叫會繼續處理
  * 其餘的：回報、計數、略過。ARCHIVE_WARN 代表項目可用：說出原因，照常使用。與讀取端
  * （swift_tar_zip_read）及 write_entry_header 同一條規則。2026-10-22 之前，凡低於 ARCHIVE_OK
- * 都會在這裡結束整次執行。 */
+ * 都會在這裡結束整次執行。
+ *
+ * `visiting` is the UTF-8 name of the directory (or operand) the reader is about to list, the
+ * only thing a "Couldn't visit directory" can be about. Windows uses it in place of the name
+ * libarchive puts in that message: archive_read_disk_windows.c pops the path off its stack
+ * before formatting the message, so the name came out empty -- or, measured 2026-10-31, as
+ * stray memory (environment strings) -- and a missing `不存在的檔案.txt` was reported as
+ * "swift_tar: : Couldn't visit directory". The POSIX reader keeps the name, so POSIX is
+ * unchanged.
+ * `visiting` 是 reader 即將列出的目錄（或運算元）的 UTF-8 名稱，也是 "Couldn't visit directory"
+ * 唯一可能指的對象。Windows 以它取代 libarchive 放在該訊息裡的名稱：archive_read_disk_windows.c
+ * 先把路徑從堆疊彈出才格式化訊息，於是名稱是空的——或者，2026-10-31 實測，是記憶體殘渣（環境
+ * 變數字串）——不存在的 `不存在的檔案.txt` 被回報成「swift_tar: : Couldn't visit directory」。
+ * POSIX 的 reader 保留名稱，所以 POSIX 不變。 */
 static int next_header_action(int status, struct archive *disk, zip_pipeline *pipeline,
+                              const char *visiting,
                               char *error_buffer, size_t error_capacity) {
     if (status == ARCHIVE_OK) return 1;
     if (status == ARCHIVE_WARN) {
@@ -937,6 +1007,23 @@ static int next_header_action(int status, struct archive *disk, zip_pipeline *pi
         return 1;
     }
     if (status == ARCHIVE_FAILED || status == ARCHIVE_RETRY) {
+#ifdef _WIN32
+        static const char visit_failed[] = "Couldn't visit directory";
+        const char *reason = archive_reason(disk);
+        size_t reason_len = strlen(reason);
+
+        if (visiting != NULL && reason_len >= sizeof(visit_failed) - 1 &&
+            strcmp(reason + reason_len - (sizeof(visit_failed) - 1), visit_failed) == 0) {
+            char named[1024];
+
+            snprintf(named, sizeof(named), "%s: %s", visiting, visit_failed);
+            note_unreadable(&pipeline->unreadable, named, "left out", "未收入",
+                            archive_errno(disk));
+            return 0;
+        }
+#else
+        (void)visiting;
+#endif
         note_unreadable(&pipeline->unreadable, archive_reason(disk),
                         "left out", "未收入", archive_errno(disk));
         return 0;
@@ -1000,6 +1087,27 @@ static struct archive_entry *read_child_entry(sorted_walk *walk,
     return entry;
 }
 
+/* Open the disk reader on an operand, which arrives from Swift as UTF-8. Windows goes through
+ * the wide function; see wide_from_utf8 for why.
+ * 以運算元開啟 disk reader；運算元從 Swift 以 UTF-8 傳來。Windows 走寬字元函式，理由見
+ * wide_from_utf8。 */
+static int open_disk_utf8(struct archive *disk, const char *path) {
+#ifdef _WIN32
+    wchar_t *wide = wide_from_utf8(path);
+    int status;
+
+    if (wide == NULL) {
+        archive_set_error(disk, EINVAL, "cannot convert '%s' to UTF-16", path);
+        return ARCHIVE_FATAL;
+    }
+    status = archive_read_disk_open_w(disk, wide);
+    free(wide);
+    return status;
+#else
+    return archive_read_disk_open(disk, path);
+#endif
+}
+
 /* The sorted order (the default): write `path` (or, below the argument itself, the directory `from`) and
  * everything under it, each directory's names in sorted order.
  *
@@ -1041,7 +1149,9 @@ static int add_sorted_tree(sorted_walk *walk, const char *path, const sorted_chi
     int result = -1;
     int status;
 
-    if (from == NULL) status = archive_read_disk_open(walk->disk, path);
+    const char *visiting = from == NULL ? path : from->sort_name;
+
+    if (from == NULL) status = open_disk_utf8(walk->disk, path);
 #ifdef _WIN32
     else status = archive_read_disk_open_w(walk->disk, from->pathname);
 #else
@@ -1068,7 +1178,7 @@ static int add_sorted_tree(sorted_walk *walk, const char *path, const sorted_chi
             entry = NULL;
             break;
         }
-        status = next_header_action(status, walk->disk, walk->pipeline,
+        status = next_header_action(status, walk->disk, walk->pipeline, visiting,
                                     walk->error_buffer, walk->error_capacity);
         if (status < 0) goto close_reader;
         if (status == 0) {
@@ -1201,6 +1311,7 @@ static int add_path(zip_pipeline *pipeline,
     struct archive *disk = archive_read_disk_new();
     struct archive *stat_disk = NULL;
     struct archive_entry *entry = NULL;
+    char *descended = NULL;
     int result = -1;
     int status;
 
@@ -1275,7 +1386,7 @@ static int add_path(zip_pipeline *pipeline,
         goto cleanup;
     }
 
-    status = archive_read_disk_open(disk, path);
+    status = open_disk_utf8(disk, path);
     if (status != ARCHIVE_OK) {
         set_archive_error(error_buffer, error_capacity, "archive_read_disk_open", disk);
         goto cleanup;
@@ -1301,7 +1412,12 @@ static int add_path(zip_pipeline *pipeline,
             entry = NULL;
             break;
         }
-        status = next_header_action(status, disk, pipeline, error_buffer, error_capacity);
+        /* The directory listed next is the operand at first, then the one last descended
+         * into; see next_header_action. / 接下來要列出的目錄，起初是運算元，之後是最近一次
+         * descend 進去的那個；見 next_header_action。 */
+        status = next_header_action(status, disk, pipeline,
+                                    descended != NULL ? descended : path,
+                                    error_buffer, error_capacity);
         if (status < 0) goto cleanup;
         if (status == 0) {
             archive_entry_free(entry);
@@ -1315,7 +1431,15 @@ static int add_path(zip_pipeline *pipeline,
             continue;
         }
 
-        if (archive_read_disk_can_descend(disk)) archive_read_disk_descend(disk);
+        if (archive_read_disk_can_descend(disk)) {
+            free(descended);
+            descended = copy_string(entry_sort_name(entry));
+            if (descended == NULL) {
+                set_error(error_buffer, error_capacity, "out of memory while listing files");
+                goto cleanup;
+            }
+            archive_read_disk_descend(disk);
+        }
 
         status = pipeline_add(pipeline, entry);
         entry = NULL;
@@ -1325,6 +1449,7 @@ static int add_path(zip_pipeline *pipeline,
 
 cleanup:
     if (entry != NULL) archive_entry_free(entry);
+    free(descended);
     if (stat_disk != NULL) archive_read_free(stat_disk);
     archive_read_free(disk);
     return result;
@@ -1492,10 +1617,28 @@ int swift_tar_zip_create(const char *archive_path,
         archive_clear_error(writer);
     }
 
+#ifdef _WIN32
+    /* Wide on Windows, as for the operands (see wide_from_utf8); NULL is stdout either way.
+     * Windows 上用寬字元，與運算元相同（見 wide_from_utf8）；NULL 在兩者都是 stdout。 */
+    if (archive_path != NULL && strcmp(archive_path, "-") != 0) {
+        wchar_t *wide_archive = wide_from_utf8(archive_path);
+
+        if (wide_archive == NULL) {
+            set_error(error_buffer, error_capacity, "cannot convert the archive path to UTF-16");
+            goto cleanup;
+        }
+        status = archive_write_open_filename_w(writer, wide_archive);
+        free(wide_archive);
+    } else {
+        status = archive_write_open_filename_w(writer, NULL);
+    }
+#else
     status = archive_write_open_filename(writer,
         archive_path != NULL && strcmp(archive_path, "-") != 0 ? archive_path : NULL);
+#endif
     if (status != ARCHIVE_OK) {
-        set_archive_error(error_buffer, error_capacity, "archive_write_open_filename", writer);
+        set_open_error(error_buffer, error_capacity, "archive_write_open_filename", writer,
+                       archive_path);
         goto cleanup;
     }
 
@@ -1883,11 +2026,30 @@ int swift_tar_zip_read(const char *archive_path,
         }
     }
 
+#ifdef _WIN32
+    /* Wide, as on the create side: `-t --zip -f 檔案.zip` failed to open a file that exists
+     * (2026-10-31). / 寬字元，與建立端相同：`-t --zip -f 檔案.zip` 開不了一個存在的檔案
+     *（2026-10-31）。 */
+    if (archive_path != NULL && strcmp(archive_path, "-") != 0) {
+        wchar_t *wide_archive = wide_from_utf8(archive_path);
+
+        if (wide_archive == NULL) {
+            set_error(error_buffer, error_capacity, "cannot convert the archive path to UTF-16");
+            goto cleanup;
+        }
+        status = archive_read_open_filename_w(reader, wide_archive, 64 * 1024);
+        free(wide_archive);
+    } else {
+        status = archive_read_open_filename_w(reader, NULL, 64 * 1024);
+    }
+#else
     status = archive_read_open_filename(reader,
         archive_path != NULL && strcmp(archive_path, "-") != 0 ? archive_path : NULL,
         64 * 1024);
+#endif
     if (status != ARCHIVE_OK) {
-        set_archive_error(error_buffer, error_capacity, "archive_read_open_filename", reader);
+        set_open_error(error_buffer, error_capacity, "archive_read_open_filename", reader,
+                       archive_path);
         goto cleanup;
     }
 

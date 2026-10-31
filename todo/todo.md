@@ -311,6 +311,16 @@ file has to exist for that reference to mean anything.
     橋接層訊息以 UTF-8 名稱取代 `(null)`（Windows，無測試）。
   Second round: N4, N5, M12, S3 and the remaining low items. M12 and S3's Windows paths are not
   run here. The reader does not restore a negative mtime yet.
+- ✅ v0.1.5 之前補完（macOS）：
+  - 讀取端還原 1970 年以前的時間：pax 負值（含小數借位）與 GNU 負的 base-256 欄位。解出端的時間型別一律改為 `Int64`；
+    Windows 的 FILETIME 可回溯到 1601。swift_tar 與 GNU tar 1.35 互相解出時逐奈秒相同。bsdtar 3.5.3 對帶小數的
+    負時間採不同寫法（`-301266000.25` 對應 timespec(-301266000, 250000000)），與 GNU 和本工具差不到 1 秒，屬 bsdtar 端。
+  - ZIP 檔案縮小：兩條路徑都已實跑，各 3 次皆回報、rc=1、`unzip -t` 通過；0.1.4 兩者皆 rc=0 且不作聲。已做成測試，
+    截斷時程序若已結束則 SKIP。
+  - M12、S3 的 Windows 分支與 `(null)` 訊息：仍待 Windows 端（Swift_tar-W11）實跑。
+  Pre-1970 times are restored (pax negatives with the fraction borrow, GNU negative base-256);
+  swift_tar and GNU tar agree to the nanosecond, bsdtar differs on negative fractions. ZIP
+  shrink is now run and tested on both paths. M12, S3 and "(null)" still await Windows.
 - ✅ H8、M11 由 Windows 端修於 `82e7e7a`（橋接層祖先走訪改用 `\\?\`，無法檢查時拒絕；`winSetPathMtime` 經
   `winUcrtPath`）；UNC 路徑（`dcf0a94`）與 `package_win.zsh` 的 runtime 選擇（`82e7e7a`）亦同。
   Fixed by the Windows side in 82e7e7a / dcf0a94.

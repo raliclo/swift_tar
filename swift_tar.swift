@@ -977,6 +977,18 @@ let zstdCompressionLevelBox = Mutex<Int32>(9)
 let tarDotDotWarned = Mutex<Set<String>>([])
 /// -u 的封存端時間：秒與奈秒。/ -u's archived time: seconds and nanoseconds.
 typealias TarUpdateStamp = (sec: UInt64, nanos: UInt32)
+/// A pax mtime too large even for Int64. The reader stores it as this value, and
+/// restorableTime refuses it, so the member reports "out of range" as it did when times were
+/// UInt64 -- the kernel itself accepts Int64.max seconds silently (measured on macOS 27.2).
+/// pax mtime 連 Int64 都放不下時，讀取端存成這個值，restorableTime 拒絕它，所以該成員一如時間為
+/// UInt64 時回報「超出範圍」——核心本身會默默接受 Int64.max 秒（macOS 27.2 實測）。
+let tarMtimeOutOfRange = Int64.max
+#if !os(Windows)
+/// The time_t to restore, or nil when out of range. / 要還原的 time_t；超出範圍時為 nil。
+func restorableTime(_ seconds: Int64) -> time_t? {
+    seconds == tarMtimeOutOfRange ? nil : time_t(exactly: seconds)
+}
+#endif
 var zstdCompressionLevel: Int32 {
     get { zstdCompressionLevelBox.withLock { $0 } }
     set { zstdCompressionLevelBox.withLock { $0 = newValue } }
@@ -2784,9 +2796,13 @@ private func winCreateSymlink(dest: String, target: String) -> Bool {
 /// 部分被截去——那是 NTFS 自身的粒度，不是這裡引入的損失：touch 成 `.123456789` 的檔案，經
 /// Win32 路徑讀回來就是 `.123456700`。改用 Date 傳遞反而損失更大：Date 是 double，在今日的
 /// 時間值上只分辨得出約 238ns。
-private func winFileTime(_ mtime: UInt64, _ nanos: UInt32 = 0) -> FILETIME? {
-    let (secs, addOverflow) = mtime.addingReportingOverflow(11_644_473_600)
-    guard !addOverflow else { return nil }
+private func winFileTime(_ mtime: Int64, _ nanos: UInt32 = 0) -> FILETIME? {
+    // Signed since 2026-10-31, so a time before 1970 (back to 1601, FILETIME's epoch) is
+    // restored rather than unrepresentable. / 自 2026-10-31 起為有號數，1970 年以前（可回溯到
+    // FILETIME 起點 1601 年）的時間也能還原。
+    let (signedSecs, addOverflow) = mtime.addingReportingOverflow(11_644_473_600)
+    guard !addOverflow, signedSecs >= 0 else { return nil }
+    let secs = UInt64(signedSecs)
     let (base, mulOverflow) = secs.multipliedReportingOverflow(by: 10_000_000)
     guard !mulOverflow else { return nil }
     let (ticks, tickOverflow) = base.addingReportingOverflow(UInt64(nanos / 100))
@@ -2819,7 +2835,7 @@ private func winFileTime(_ mtime: UInt64, _ nanos: UInt32 = 0) -> FILETIME? {
 /// Windows 上都還原成 `.000000000`。SetFileTime 收 FILETIME，其 100ns 單位足以容納 NTFS
 /// 存得下的一切。
 @discardableResult
-private func winSetPathMtime(_ path: String, _ mtime: UInt64, _ nanos: UInt32 = 0) -> String? {
+private func winSetPathMtime(_ path: String, _ mtime: Int64, _ nanos: UInt32 = 0) -> String? {
     guard var ft = winFileTime(mtime, nanos) else { return "out of range: \(mtime)" }
     // winUcrtPath, not the raw path: without `\\?\` a path past MAX_PATH fails to open, and a
     // member named `nul` or `con` opens the device -- the same two failures winUcrtPath was
@@ -2849,7 +2865,7 @@ private func winSetPathMtime(_ path: String, _ mtime: UInt64, _ nanos: UInt32 = 
 /// access and write time, and that difference is kept rather than quietly aligned.
 /// 供「mtime 設定失敗時沿既有政策靜默略過」的呼叫端使用的薄包裝。一如既往只設寫入時間——
 /// `winWriteFile` 會同時設存取與寫入時間，該差異予以保留，不順手對齊。
-private func winSetLinkMtime(_ path: String, _ mtime: UInt64, _ nanos: UInt32 = 0) {
+private func winSetLinkMtime(_ path: String, _ mtime: Int64, _ nanos: UInt32 = 0) {
     _ = winSetPathMtime(path, mtime, nanos)
 }
 
@@ -3121,7 +3137,7 @@ private func winMakeDirectories(_ path: String) -> Bool {
 /// workers (distinct paths only, no shared state).
 /// 以選定後端寫出一個解壓檔案；失敗回傳錯誤訊息，成功回傳 nil。由
 /// FileWriterPool 的 worker 呼叫（路徑各自獨立，無共享狀態）。
-private func winWriteFile(dest: String, data: Data, mtime: UInt64, mtimeNanos: UInt32 = 0,
+private func winWriteFile(dest: String, data: Data, mtime: Int64, mtimeNanos: UInt32 = 0,
                           backend: WriteBackend, restoreMtime: Bool = true) -> String? {
     clearNonRegular(dest)
     switch backend {
@@ -3524,8 +3540,8 @@ private func extractedMode(_ mode: UInt32) -> mode_t {
 /// 值超出範圍或呼叫失敗時回傳 false；呼叫端維持原本「略過而不回報」的政策，與
 /// `try? setAttributes` 相同。
 @discardableResult
-private func posixSetTimes(_ path: String, _ seconds: UInt64, _ nanos: UInt32) -> Bool {
-    guard let t = time_t(exactly: seconds) else { return false }
+private func posixSetTimes(_ path: String, _ seconds: Int64, _ nanos: UInt32) -> Bool {
+    guard let t = restorableTime(seconds) else { return false }
     var ts = [timespec(tv_sec: t, tv_nsec: Int(nanos)),
               timespec(tv_sec: t, tv_nsec: Int(nanos))]
     return utimensat(AT_FDCWD, path, &ts, AT_SYMLINK_NOFOLLOW) == 0
@@ -3555,7 +3571,7 @@ private func posixSetTimes(_ path: String, _ seconds: UInt64, _ nanos: UInt32) -
 /// worker 競態。權限必須明確套用而不能依賴 open 的 mode 參數：後者受 umask
 /// 遮罩且僅在建立時生效，因此標記為 0755 的成員會變成 0755 & ~umask，覆蓋既有
 /// 檔案時更完全不會被修正。
-private func posixWriteFile(dest: String, data: Data, mtime: UInt64, mtimeNanos: UInt32 = 0,
+private func posixWriteFile(dest: String, data: Data, mtime: Int64, mtimeNanos: UInt32 = 0,
                             mode: UInt32, restoreMtime: Bool) -> String? {
     // Apply the umask when permissions are not being restored. Both the open()
     // and the fchmod() below have to use the same value: open() alone would be
@@ -3662,7 +3678,7 @@ private func posixWriteFile(dest: String, data: Data, mtime: UInt64, mtimeNanos:
         // 整次解壓就此中斷。GNU tar 回報「Archive base-256 value is out of time_t range」
         // 並繼續。`exactly:` 把 trap 變成該成員的錯誤，與其他還原失敗一樣回報。
         // winWriteFile 與 symlink 還原處的同一個轉型亦已加上防護。
-        guard let t = time_t(exactly: mtime) else {
+        guard let t = restorableTime(mtime) else {
             return "cannot restore mtime on '\(dest)' (out of range: \(mtime))"
                  + " / 無法還原 mtime '\(dest)'"
         }
@@ -3747,7 +3763,7 @@ final class FileWriterPool {
 
     /// `mode` is ignored on Windows, which has no POSIX permission bits.
     /// `mode` 在 Windows 上被忽略：該平台沒有 POSIX 權限位元。
-    func submit(dest: String, data: Data, mtime: UInt64, mtimeNanos: UInt32 = 0, mode: UInt32) {
+    func submit(dest: String, data: Data, mtime: Int64, mtimeNanos: UInt32 = 0, mode: UInt32) {
         sem.wait()                            // backpressure / 反壓
         group.enter()
         let restoreMtime = self.restoreMtime
@@ -5690,11 +5706,11 @@ final class TarReader {
         let selection = options.members.map(TarReader.selectionKey)
         var selected = Set<String>()
         var paxPath: String? = nil, paxLink: String? = nil, paxSize: UInt64? = nil
-        var paxMtime: UInt64? = nil
+        var paxMtime: Int64? = nil
         var paxMtimeNanos: UInt32 = 0
         var gnuLongName: String? = nil, gnuLongLink: String? = nil
         // Deferred directory mtimes (children would bump them) / 目錄 mtime 延後套用
-        var dirTimes: [(path: String, mtime: UInt64, nanos: UInt32)] = []
+        var dirTimes: [(path: String, mtime: Int64, nanos: UInt32)] = []
         let fm = FileManager.default
         // Parallel small-file writer pool + dests already handed to it (for
         // ordering barriers: duplicate paths, hardlink targets).
@@ -5940,7 +5956,23 @@ final class TarReader {
                         case "mtime":
                             let parts = val.split(separator: ".", maxSplits: 1,
                                                   omittingEmptySubsequences: false)
-                            if let whole = parts.first, let v = UInt64(whole) {
+                            // Signed: "-1.5" is a time before 1970 and means sec -2 plus 0.5 s, so a
+                            // negative value with a fraction borrows one second. swift_tar and
+                            // bsdtar write such records; until 2026-10-31 the reader refused the
+                            // "-" and fell back to the header field, 0, so the file came out dated
+                            // 1970-01-01.
+                            // 有號：「-1.5」是 1970 年以前的時間，等於 sec -2 加 0.5 秒，所以帶小數的
+                            // 負值要借一秒。swift_tar 與 bsdtar 都會寫這種記錄；2026-10-31 之前讀取端
+                            // 不接受「-」而退回標頭欄位的 0，檔案於是被標成 1970-01-01。
+                            // A number too large for Int64 is still a number: it becomes Int64.max,
+                            // which no setter accepts, so it is reported as that member's error as
+                            // before -- not dropped in favour of the header field.
+                            // 超出 Int64 的數字仍是數字：它成為 Int64.max，任何設定函式都不接受，所以
+                            // 照舊回報為該成員的錯誤——而不是被丟掉、改用標頭欄位。
+                            if let whole = parts.first, Int64(whole) == nil, UInt64(whole) != nil {
+                                paxMtime = tarMtimeOutOfRange
+                                paxMtimeNanos = 0
+                            } else if let whole = parts.first, let v = Int64(whole) {
                                 paxMtime = v
                                 paxMtimeNanos = 0
                                 if parts.count == 2 {
@@ -5950,6 +5982,10 @@ final class TarReader {
                                         var scale: UInt32 = 1
                                         for _ in digits.count..<9 { scale *= 10 }
                                         paxMtimeNanos = n * scale
+                                        if whole.hasPrefix("-") && paxMtimeNanos != 0 {
+                                            paxMtime = v - 1
+                                            paxMtimeNanos = 1_000_000_000 - paxMtimeNanos
+                                        }
                                     }
                                 }
                             }
@@ -5995,7 +6031,7 @@ final class TarReader {
             if let p = paxPath { name = p }
             if let l = paxLink { linkname = l }
             if let s = paxSize { size = s }
-            let mtime = paxMtime ?? headerMtime
+            let mtime = paxMtime ?? Int64(bitPattern: headerMtime)
             // The header field holds whole seconds only; a fraction exists only with a pax record.
             // 標頭欄位只有整秒；只有帶 pax 記錄時才有小數。
             let mtimeNanos: UInt32 = paxMtime != nil ? paxMtimeNanos : 0

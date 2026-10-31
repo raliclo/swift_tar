@@ -576,11 +576,71 @@ check "Low --identify --zip on a text file does not say zip / 對文字檔不回
 if (( windows )); then
   skipc "Low pre-1970 mtime: POSIX writer path / 1970 前的 mtime：POSIX 寫入路徑"
 else
-  mkdir -p l70; print x > l70/old
-  touch -t 196001010000 l70/old 2>"$TMP/touch.err"
-  run -cf l70.tar l70/old
-  check "Low a 1960 file: bsdtar reads 1960 / 1960 年的檔案：bsdtar 讀到 1960" \
-    '(( rc == 0 )) && bsdtar -tvf l70.tar | grep -q " 1960 "'
+  # The exact mtime, seconds and nanoseconds, as this platform's stat prints it.
+  # 精確的 mtime（秒與奈秒），以本平台 stat 的格式。
+  if [[ $(uname -s) == Darwin ]]; then mt() { stat -f %Fm -- "$1" }; else mt() { stat -c %.9Y -- "$1" }; fi
+  mkdir -p l70; print x > l70/old; mkdir -p l70/olddir
+  touch -d 1960-06-15T12:00:00.250000000 l70/old 2>"$TMP/touch.err"
+  touch -t 195001010000 l70/olddir 2>"$TMP/touch.err"
+  run -cf l70.tar l70/old l70/olddir
+  mkdir -p o70; run -xf l70.tar -C o70
+  check "Low a 1960 file round-trips to the nanosecond (0.1.4: 1970) / 1960 年的檔案逐奈秒往返" \
+    '(( rc == 0 )) && [[ $(mt o70/l70/old) == $(mt l70/old) ]]'
+  check "Low a 1950 directory round-trips / 1950 年的目錄往返" \
+    '[[ $(mt o70/l70/olddir) == $(mt l70/olddir) ]]'
+  # GNU tar's own format writes it as a negative base-256 field, not pax.
+  # GNU tar 自己的格式以負的 base-256 欄位寫出，不是 pax。
+  gnutar=""; for t in gtar tar; do command -v $t >/dev/null && $t --version 2>&1 | grep -q 'GNU tar' && { gnutar=$t; break }; done
+  if [[ -z $gnutar ]]; then
+    skipc "Low pre-1970 base-256: no GNU tar / 沒有 GNU tar"
+  else
+    $gnutar --format=gnu -cf l70g.tar l70/olddir 2>"$TMP/gtar.err"
+    mkdir -p o70g; run -xf l70g.tar -C o70g
+    check "Low a GNU base-256 1950 time is restored / GNU base-256 的 1950 年時間被還原" \
+      '(( rc == 0 )) && [[ $(mt o70g/l70/olddir) == $(mt l70/olddir) ]]'
+  fi
+fi
+
+# --- Low: a file that shrinks while -c --zip reads it is reported -------------------------
+# --- 低：-c --zip 讀取中縮小的檔案會被回報 ---------------------------------------------------
+# 40 files of 6 MiB are truncated to 0 bytes 80 ms into the run (the threaded path), then one
+# 400 MiB file with -n 1 at 150 ms (the single path, which pads with zeros). If the run already
+# finished, every member is still whole and the case is SKIPped, not failed. 0.1.4 said nothing
+# and exited 0 on both.
+# 40 個 6 MiB 的檔案在執行 80 ms 時被截成 0 位元組（多執行緒路徑），再以 -n 1 對一個 400 MiB 的
+# 檔案在 150 ms 時截斷（單執行緒路徑，以零補齊）。若執行已先結束，每個成員都完整，該案例 SKIP
+# 而不判失敗。0.1.4 兩者皆不作聲並以 0 結束。
+if (( windows )) || ! command -v unzip >/dev/null; then
+  skipc "Low ZIP shrink: needs POSIX and unzip / ZIP 縮小：需要 POSIX 與 unzip"
+else
+  zmodload zsh/zselect
+  zshrink() {  # <label> <zip> <wait cs> <files...>; then the swift_tar args come from $zargs
+    local label=$1 zip=$2 cs=$3; shift 3
+    rm -f "$zip"
+    "$ST" "${zargs[@]}" -f "$zip" "$@" >"$TMP/zs.out" 2>&1 &
+    local pid=$! alive=0 zs=0
+    # zselect with no fds returns 1 when the timeout passes; that is the expected result.
+    # 沒有 fd 的 zselect 在逾時時回傳 1，那正是預期的結果。
+    zselect -t $cs || zs=$?
+    (( zs == 0 || zs == 1 )) || { print -u2 "zselect failed ($zs)"; exit 1 }
+    # Still running at the moment of truncation? Otherwise nothing shrank under it.
+    # 截斷那一刻它還在跑嗎？否則沒有東西在它讀取時縮小。
+    kill -0 $pid 2>"$TMP/kill.err" && alive=1
+    local f; for f in "$@"; do : > "$f"; done
+    rc=0; wait $pid || rc=$?
+    if (( ! alive )); then
+      skipc "Low ZIP shrink ($label): the run finished before the truncation / 執行在截斷前就結束"
+      return
+    fi
+    check "Low ZIP shrink ($label): reported, exits non-zero, archive intact / 回報、非 0、封存完好" \
+      '(( rc != 0 )) && grep -q "shrank" "$TMP/zs.out" && unzip -tq "$zip" >/dev/null'
+  }
+  mkdir -p zsd
+  for i in {1..40}; do dd if=/dev/urandom of=zsd/f$i bs=1048576 count=6 2>"$TMP/dd.err"; done
+  zargs=(-c --zip); zshrink threaded zs1.zip 8 zsd/f{1..40}
+  dd if=/dev/urandom of=zsd/big bs=1048576 count=400 2>"$TMP/dd.err"
+  zargs=(-c --zip -n 1); zshrink single zs2.zip 15 zsd/big
+  rm -rf zsd zs1.zip zs2.zip
 fi
 
 print -r -- "PASS: $pass  FAIL: $fail  SKIP: $skip"

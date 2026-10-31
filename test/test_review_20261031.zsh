@@ -597,8 +597,21 @@ else
   # 精確的 mtime（秒與奈秒），以本平台 stat 的格式。
   if [[ $(uname -s) == Darwin ]]; then mt() { stat -f %Fm -- "$1" }; else mt() { stat -c %.9Y -- "$1" }; fi
   mkdir -p l70; print x > l70/old; mkdir -p l70/olddir
-  touch -d 1960-06-15T12:00:00.250000000 l70/old 2>"$TMP/touch.err"
-  touch -t 195001010000 l70/olddir 2>"$TMP/touch.err"
+  # macOS and GNU touch take a fraction; busybox 1.37 takes neither the "T" nor a fraction,
+  # only "1960-06-15 12:00:00" (whole seconds). A touch that takes no form SKIPs the case
+  # rather than ending the test under set -e (LinuxCS guest, 2026-10-31).
+  # macOS 與 GNU touch 接受小數；busybox 1.37 兩者都不接受，只接受「1960-06-15 12:00:00」
+  # （整秒）。三種寫法都不接受的 touch 讓此案例 SKIP，而不是在 set -e 下結束整支測試
+  #（LinuxCS guest，2026-10-31）。
+  l70ok=0
+  if touch -d 1960-06-15T12:00:00.250000000 l70/old 2>"$TMP/touch.err" \
+     || touch -d '1960-06-15 12:00:00' l70/old 2>"$TMP/touch.err"; then
+    touch -t 195001010000 l70/olddir 2>"$TMP/touch.err" && l70ok=1
+  fi
+fi
+if (( ! windows )) && (( ! l70ok )); then
+  skipc "Low pre-1970 mtime: this touch cannot set a 1960 date / 此 touch 設不了 1960 年的日期"
+elif (( ! windows )); then
   run -cf l70.tar l70/old l70/olddir
   mkdir -p o70; run -xf l70.tar -C o70
   check "Low a 1960 file round-trips to the nanosecond (0.1.4: 1970) / 1960 年的檔案逐奈秒往返" \

@@ -378,5 +378,64 @@ check "M17 -C itself is not chmodded either / -C 本身也沒被改" '[[ $(perm 
 run -tf m17.tar
 check "M17 -t shows the name as the C calls see it / -t 顯示 C 端看到的名稱" 'grep -qx ".." "$TMP/out"'
 
+# --- M9: an RPM whose header is larger than one 64 KiB read ---------------------------------
+# --- M9：header 大於一次 64 KiB 讀取的 RPM -------------------------------------------------
+# Lead (96 bytes) + one header with hsize 70000 + a .tar.gz payload. Skipping the header makes
+# ByteReader drop consumed bytes, after which 0.1.4 read the payload from the wrong offset.
+# lead（96 位元組）+ 一個 hsize 為 70000 的 header + .tar.gz payload。略過 header 會讓
+# ByteReader 丟掉已讀的位元組，之後 0.1.4 從錯的位移讀 payload。
+mkdir -p m9/p; print hello > m9/p/a.txt
+"$ST" -czf m9/payload.tgz -C m9 p
+mkrpm() {  # <out> <hsize as 4 big-endian bytes, printf form> <hsize> / 建一個最小 RPM
+  { printf '\xed\xab\xee\xdb'; dd if=/dev/zero bs=92 count=1 2>"$TMP/dd.err"
+    printf "\\x8e\\xad\\xe8\\x01\\0\\0\\0\\0\\0\\0\\0\\0$2"
+    dd if=/dev/zero bs="$3" count=1 2>"$TMP/dd.err"; cat m9/payload.tgz } > "$1"
+}
+mkrpm m9big.rpm '\0\x01\x11\x70' 70000
+run -tf m9big.rpm
+check "M9 an RPM with a 70000-byte header lists its payload / 70000 位元組 header 的 RPM 列出內容" \
+  '(( rc == 0 )) && grep -qx "p/a.txt" "$TMP/out"'
+mkrpm m9small.rpm '\0\0\0\x64' 100
+run -tf m9small.rpm
+check "M9 control: a 100-byte header lists too / 對照：100 位元組 header 也列出" \
+  '(( rc == 0 )) && grep -qx "p/a.txt" "$TMP/out"'
+
+# --- N1 and M10: zstd frames that do not come from swift_tar -------------------------------
+# --- N1 與 M10：不是 swift_tar 寫出的 zstd frame ---------------------------------------------
+# The zstd CLI fed from a pipe writes one frame with no stated size.
+# N1 (found during the review): a highly compressible frame whose decoded size is a multiple
+# of 4 MiB was reported as a decode failure. M10: --zstd-parallel decoded such a frame into a
+# buffer doubled without bound (3.2 GB RSS for 1 GiB on 0.1.4).
+# 從管線餵入的 zstd CLI 寫出一個沒有載明大小的 frame。N1（審查時另外發現）：高度可壓縮、
+# 解開後恰為 4 MiB 倍數的 frame 被報成解碼失敗。M10：--zstd-parallel 把這種 frame 解進無上限
+# 倍增的緩衝（0.1.4 解 1 GiB 用了 3.2 GB RSS）。
+if ! command -v zstd >/dev/null; then
+  skipc "N1/M10 need the zstd CLI to make a frame with no stated size / N1、M10 需要 zstd CLI"
+else
+  head -c 16777216 /dev/zero | zstd -q -c > n1.zst
+  rc=0; "$ST" --cat -f n1.zst > n1.out 2>"$TMP/out" || rc=$?
+  check "N1 16 MiB of zeros: --cat exits 0 / 16 MiB 的零：--cat 以 0 結束" '(( rc == 0 ))'
+  check "N1 16 MiB of zeros: all 16777216 bytes out / 輸出完整 16777216 位元組" \
+    '[[ $(wc -c < n1.out | tr -d " ") == 16777216 ]]'
+  rm -f n1.out
+  head -c 1073741824 /dev/zero | zstd -q -c > m10.zst
+  if [[ $(uname -s) == Darwin ]]; then
+    rc=0; /usr/bin/time -l "$ST" --cat --zstd-parallel -f m10.zst >/dev/null 2>"$TMP/m10.time" || rc=$?
+    rss=$(awk '/maximum resident set size/ {print $1}' "$TMP/m10.time")
+  elif [[ -x /usr/bin/time ]] && /usr/bin/time -f %M true >/dev/null 2>&1; then
+    rc=0; /usr/bin/time -f 'RSSKB %M' "$ST" --cat --zstd-parallel -f m10.zst >/dev/null 2>"$TMP/m10.time" || rc=$?
+    rss=$(( $(awk '/^RSSKB/ {print $2}' "$TMP/m10.time") * 1024 ))
+  else
+    rss=""
+  fi
+  if [[ -z $rss ]]; then
+    skipc "M10 needs /usr/bin/time that reports peak RSS / M10 需要能回報峰值 RSS 的 /usr/bin/time"
+  else
+    check "M10 --zstd-parallel on a 1 GiB unsized frame: exits 0 / 以 0 結束" '(( rc == 0 ))'
+    check "M10 --zstd-parallel on a 1 GiB unsized frame: peak RSS under 256 MiB (was 3.2 GB) / 峰值 RSS 低於 256 MiB" \
+      '(( rss > 0 && rss < 268435456 ))'
+  fi
+fi
+
 print -r -- "PASS: $pass  FAIL: $fail  SKIP: $skip"
 (( fail == 0 ))

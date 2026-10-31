@@ -251,7 +251,7 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🔴 部分處理（H1–H10、M1–M8、M11、M13、M15–M17、S1、S2 已修）/ Whole-tree code review of v0.1.4 ▸ partly fixed
+## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🔴 部分處理（H1–H10、M1–M11、M13、M15–M17、S1、S2、N1 已修）/ Whole-tree code review of v0.1.4 ▸ partly fixed
 
 **進度 / Progress**
 - ✅ H1–H7 已修（macOS）：`test/test_review_20261031.zsh` 27 項，對 0.1.4 失敗 22 項（H7 的競態在 0.1.4 上兩次執行皆
@@ -278,6 +278,15 @@ file has to exist for that reference to mean anything.
   Fixed on macOS. M15 refuses a second -C instead of implementing positional -C. M17 is
   downgraded: 0.1.4 on macOS is not hurt (FileManager refuses a NUL path before any chmod);
   the fix makes the check and the C calls see one name. S2 needs a Linux run (no readelf here).
+- ✅ M9、M10 已修，另修審查中新發現的 **N1**（macOS）：再加 6 項，對 0.1.4 失敗 3 項（其餘為對照），修正後 68/0。
+  - **M9 升級**：0.1.4 上不只錯位，header 大於 64 KiB 的 RPM 直接解不開（`gzip decode failed`）；
+    `Data.removeFirst` 之後 `subdata(in: 0..<2)` 在獨立程式中會 trap。
+  - M10：0.1.4 以 `--zstd-parallel` 解一個 33 KB、解開為 1 GiB 的 frame，RSS 達 3.2 GB；修正後 13 MB。
+  - **N1**：循序 zstd 解碼把高度可壓縮、解開後恰為 4 MiB 倍數的合法 frame 判為失敗。frame 結束時輸出
+    緩衝剛好填滿，多出的一次呼叫回傳下一個 frame 標頭的提示（非 0），蓋掉了 0。0.1.4 的 `-x` 預設就走這條。
+  M9 upgraded: an RPM with a header over 64 KiB failed outright on 0.1.4. M10: 3.2 GB RSS →
+  13 MB. N1 (new): the sequential zstd decoder failed a valid, highly compressible frame whose
+  decoded size is a multiple of 4 MiB, because a no-progress call's hint overwrote the final 0.
 - ✅ H8、M11 由 Windows 端修於 `82e7e7a`（橋接層祖先走訪改用 `\\?\`，無法檢查時拒絕；`winSetPathMtime` 經
   `winUcrtPath`）；UNC 路徑（`dcf0a94`）與 `package_win.zsh` 的 runtime 選擇（`82e7e7a`）亦同。
   Fixed by the Windows side in 82e7e7a / dcf0a94.
@@ -343,6 +352,22 @@ installed 0.1.4 on macOS; "read" = code path traced, not run. Line numbers are a
 - **S1 讀碼** `test/test_lzfse_cross_group.zsh:57`：編碼器任何失敗都變 SKIP、rc=0。
 - **S2 讀碼** `verify_release.zsh:53`（與 `compile_tar-linux.zsh:479`）：`! readelf | grep -q` 在 readelf 失敗時通過。
 - **S3 讀碼** `release.zsh:322–343` Windows 驗證借用 PATH 上的 DLL；`win_dlls.zsh:28` 不檢查 objdump 退出碼。
+
+### 審查後新發現 / Found after the review
+
+- **N1 重現，已修**：見上方進度。
+- **N2 重現，高** `-x`、`-t`、`-xO` 完全忽略命令列上的成員名稱：`-xf t.tar b.log` 解出整個封存並以 0 結束，
+  不存在的名稱也是 rc=0。GNU tar 只解出 `b.log`，找不到時 rc=2；bsdtar rc=1。使用者只想取一個檔，
+  結果會覆寫其他每一個檔。來源：`tar_comparison/tar_comparison.md` §5 Bug 1，2026-10-31 以 0.1.4 重現。
+  Member operands are ignored by -x/-t/-xO; the whole archive is extracted, rc=0.
+- **N3 重現** `--no-same-permissions` 套用 umask 但保留 setuid／setgid／sticky：4755 在 umask 027 下解出
+  為 `-rwsr-x---`。GNU tar 與 bsdtar 給 `-rwxr-x---`。來源同上，Bug 2。
+  --no-same-permissions keeps setuid/setgid/sticky; GNU tar and bsdtar drop them.
+- **N4 讀報告** `--delete sub` 只刪 `sub/` 項目，`sub/c.txt` 留在封存裡；GNU tar 連子項一起刪。
+  --delete of a directory leaves its members; GNU removes them.
+- **N5 讀報告** `-c ../x` 照存 `../x` 且無警告，產生一個本工具自己拒絕解出的封存；GNU tar 去掉 `../` 並警告。
+  `--help` 寫 `-x` 會「拒絕絕對路徑」，實際是去掉 `/` 後解出（README 寫對了）。
+  -c stores ../x silently; --help misdescribes absolute-path handling.
 
 ### 低 / Low
 

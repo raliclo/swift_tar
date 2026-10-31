@@ -1165,9 +1165,19 @@ final class ByteReader {
         return true
     }
 
+    // `buf` 的索引不從 0 開始：Data.removeFirst 以切片實作，之後 startIndex 等於移掉的位元組
+    // 數；由前綴切片傳入時亦然。所以一律以 `buf.startIndex + pos` 取值，與 readByte 相同。
+    // 0.1.4 的 peek 與 readSome 用相對位置當絕對索引：header 超過 64 KiB 的 RPM 讀到錯位
+    // 的資料，或直接越界 trap。（2026-10-31 審查 M9）
+    // `buf`'s indices do not start at 0: Data.removeFirst slices, leaving startIndex
+    // at the count removed, and a prefix passed in as a slice is the same. So every
+    // access is `buf.startIndex + pos`, as readByte already did. In 0.1.4 peek and
+    // readSome used the relative position as an absolute index: an RPM with a header
+    // over 64 KiB read shifted data or trapped out of bounds. (2026-10-31 review M9)
     func peek(_ n: Int) -> Data? {
         guard ensure(n) else { return nil }
-        return buf.subdata(in: pos..<pos + n)
+        let at = buf.startIndex + pos
+        return buf.subdata(in: at..<at + n)
     }
 
     func skip(_ n: Int) -> Bool {
@@ -1191,7 +1201,8 @@ final class ByteReader {
             return part
         }
         let take = min(n, buf.count - pos)
-        let out = buf.subdata(in: pos..<pos + take)
+        let at = buf.startIndex + pos
+        let out = buf.subdata(in: at..<at + take)
         pos += take
         return out
     }
@@ -1490,9 +1501,19 @@ func zstdDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
         var full = false
         while inB.pos < inB.size || full {
             var outB = ZSTDOutBuffer(dst: outBuf, size: DECODE_CHUNK, pos: 0)
+            let inBefore = inB.pos
             let ret = ZSTD_decompressStream(zds, &outB, &inB)
             if ZSTD_isError(ret) != 0 { return false }
-            lastRet = ret
+            // 只採用有進展的呼叫的回傳值。frame 剛好在輸出緩衝填滿時結束，會多呼叫一次；那次
+            // 什麼都沒做，回傳的是下一個 frame 標頭大小的提示（非 0），蓋掉了表示「frame 完整」
+            // 的 0。0.1.4 因此把解開後恰為 4 MiB 倍數、且高度可壓縮的合法 .zst 判為解碼失敗。
+            // （2026-10-31，審查時另外發現）
+            // Only a call that made progress sets lastRet. A frame ending exactly as the
+            // output buffer fills costs one more call; that call does nothing and returns a
+            // hint for the next frame header (non-zero), which overwrote the 0 meaning
+            // "frame complete". 0.1.4 therefore failed a valid, highly compressible .zst
+            // whose decoded size is a multiple of 4 MiB. (2026-10-31, found during review)
+            if outB.pos > 0 || inB.pos != inBefore { lastRet = ret }
             if outB.pos > 0 && !writeFrom(output, outBuf, outB.pos) { return false }
             full = outB.pos == outB.size
             if outB.pos == 0 && inB.pos == inB.size { break }
@@ -1510,17 +1531,21 @@ func zstdDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
     return lastRet == 0   // 0 ⟺ frame boundary at EOF / EOF 落在 frame 邊界
 }
 
-/// Decode one complete zstd frame. Returns nil on any error.
+/// Largest decoded size a --zstd-parallel worker decodes in one call. A frame above it, or
+/// one whose header gives no size, never reaches a worker: zstdDecodeStreamParallel hands
+/// it and everything after it to the stream decoder (2026-10-31 review M10).
+/// --zstd-parallel 工作執行緒一次解開的最大大小。超過它、或標頭沒有載明大小的 frame 不會
+/// 交給工作執行緒：zstdDecodeStreamParallel 從它起交給串流解碼器（2026-10-31 審查 M10）。
+private let zstdOneShotLimit: UInt64 = 256 << 20
+
+/// Decode one complete zstd frame whose header states a decoded size of at most
+/// `zstdOneShotLimit` (swift_tar's per-chunk frames do, through ZSTD_compress), in one call.
+/// Returns false on any error. Until 2026-10-31 a frame without a stated size was streamed
+/// here into an output array doubled without bound; such frames no longer get here.
 ///
-/// One call when the frame header states its decoded size (swift_tar's per-chunk frames
-/// do, through ZSTD_compress); a stream decode of this frame alone when it does not. A
-/// size over `oneShotLimit` is also streamed rather than allocated up front, so a header
-/// claiming gigabytes cannot make a worker allocate them before any byte is checked.
-///
-/// 解開一個完整的 zstd frame，任何錯誤都回傳 nil。frame 標頭載明解開後的大小時一次解完
-/// （swift_tar 逐塊寫出的 frame 經由 ZSTD_compress，都有載明）；沒有載明時，只對這一個 frame
-/// 做串流解碼。大小超過 `oneShotLimit` 時也改走串流而不預先配置，以免一個宣稱數 GB 的標頭在
-/// 任何位元組被檢查之前就讓工作執行緒配置那麼多記憶體。
+/// 一次解開一個完整的 zstd frame，其標頭載明的大小不超過 `zstdOneShotLimit`（swift_tar 逐塊
+/// 寫出的 frame 經由 ZSTD_compress，都有載明）。任何錯誤回傳 false。2026-10-31 之前，沒有載明
+/// 大小的 frame 會在這裡串流解進一個無上限倍增的輸出陣列；這種 frame 現在不會進到這裡。
 ///
 /// The frame is `slot.input[0..<inputCount]` and the result goes to
 /// `slot.output[0..<outputCount]`. Both arrays, and the decoding context, belong to the
@@ -1530,51 +1555,23 @@ func zstdDecodeStream(input: FileHandle, prefix: Data, output: FileHandle) -> Bo
 /// 陣列與解碼 context 都屬於槽位，一個 frame 接一個重複使用，所以穩定的串流不再配置任何
 /// 記憶體——先前使用的 ZSTD_decompress 每次呼叫也都會建立並釋放一個 context。
 private func zstdDecodeFrame(_ slot: inout ZstdSlot) -> Bool {
-    let oneShotLimit: UInt64 = 256 << 20
-    let contentSizeUnknown = UInt64.max, contentSizeError = UInt64.max - 1
     let n = slot.inputCount
+    // Unknown (UInt64.max) and error (UInt64.max - 1) are both above the limit.
+    // 未知（UInt64.max）與錯誤（UInt64.max - 1）都大於上限。
     let size = slot.input.withUnsafeBytes { ZSTD_getFrameContentSize($0.baseAddress, n) }
-    if size == contentSizeError { return false }
-    if size != contentSizeUnknown && size <= oneShotLimit {
-        if slot.dctx == nil { slot.dctx = ZSTD_createDCtx() }
-        guard let dctx = slot.dctx else { return false }
-        let want = Int(size)
-        if slot.output.count < want { slot.output = [UInt8](repeating: 0, count: want) }
-        let got = slot.output.withUnsafeMutableBytes { o in
-            slot.input.withUnsafeBytes { i in
-                ZSTD_decompressDCtx(dctx, o.baseAddress, want, i.baseAddress, n)
-            }
+    guard size <= zstdOneShotLimit else { return false }
+    if slot.dctx == nil { slot.dctx = ZSTD_createDCtx() }
+    guard let dctx = slot.dctx else { return false }
+    let want = Int(size)
+    if slot.output.count < want { slot.output = [UInt8](repeating: 0, count: want) }
+    let got = slot.output.withUnsafeMutableBytes { o in
+        slot.input.withUnsafeBytes { i in
+            ZSTD_decompressDCtx(dctx, o.baseAddress, want, i.baseAddress, n)
         }
-        guard ZSTD_isError(got) == 0, got == want else { return false }
-        slot.outputCount = want
-        return true
     }
-    guard let zds = ZSTD_createDStream() else { return false }
-    defer { _ = ZSTD_freeDStream(zds) }
-    if slot.output.count < DECODE_CHUNK { slot.output = [UInt8](repeating: 0, count: DECODE_CHUNK) }
-    var inPos = 0, produced = 0
-    while true {
-        if produced == slot.output.count {
-            slot.output += [UInt8](repeating: 0, count: slot.output.count)
-        }
-        let cap = slot.output.count
-        var ret = 0, newPos = inPos, newProduced = produced
-        slot.output.withUnsafeMutableBytes { o in
-            slot.input.withUnsafeBytes { i in
-                var inB = ZSTDInBuffer(src: i.baseAddress, size: n, pos: inPos)
-                var outB = ZSTDOutBuffer(dst: o.baseAddress, size: cap, pos: produced)
-                ret = ZSTD_decompressStream(zds, &outB, &inB)
-                newPos = inB.pos
-                newProduced = outB.pos
-            }
-        }
-        if ZSTD_isError(ret) != 0 { return false }
-        let progressed = newPos != inPos || newProduced != produced
-        inPos = newPos
-        produced = newProduced
-        if ret == 0 { slot.outputCount = produced; return true }   // frame complete
-        if !progressed { return false }                              // input ran out mid-frame
-    }
+    guard ZSTD_isError(got) == 0, got == want else { return false }
+    slot.outputCount = want
+    return true
 }
 
 /// One in-flight frame's buffers and decoding context; see zstdDecodeFrame.
@@ -1694,6 +1691,20 @@ func zstdDecodeStreamParallel(input: FileHandle, prefix: Data, output: FileHandl
         let avail = filled - start
         if avail > 0 {
             let n = ZSTD_findFrameCompressedSize(staging + start, avail)
+            // 標頭沒有載明大小、或大於 zstdOneShotLimit 的 frame 不交給工作執行緒：那裡只能把
+            // 整個 frame 解進記憶體，0.1.4 對一個 33 KB、解開為 1 GiB 的 frame 用到 3.2 GB RSS。
+            // 改從這個 frame 起交給串流解碼器，記憶體固定。swift_tar 自己的 frame 都載明大小
+            // （每個 4 MiB），不受影響。（2026-10-31 審查 M10）
+            // A frame whose header gives no size, or one above zstdOneShotLimit, is not
+            // handed to a worker: a worker can only decode a whole frame into memory, and
+            // 0.1.4 reached 3.2 GB RSS on a 33 KB frame that decodes to 1 GiB. From that
+            // frame on the stream decoder takes over, in fixed memory. swift_tar's own
+            // frames all state their size (4 MiB each). (2026-10-31 review M10)
+            if ZSTD_isError(n) == 0 && n > 0
+                && ZSTD_getFrameContentSize(staging + start, n) > zstdOneShotLimit {
+                handOff = true
+                break loop
+            }
             if ZSTD_isError(n) == 0 && n > 0 {
                 let seq = nextCut
                 nextCut += 1

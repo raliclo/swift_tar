@@ -238,5 +238,97 @@ check "M5 cfv out.tar d: writes out.tar, not a file named -v / 寫出 out.tar �
   '(( rc == 0 )) && [[ -f w5b/out.tar && ! -e w5b/-v ]]'
 check "M5 cfv: out.tar holds d/x / out.tar 含 d/x" '"$ST" -tf w5b/out.tar | grep -qx "d/x"'
 
+# --- M4: on POSIX "\" and "X:" are part of a name, not path syntax -------------------------
+# --- M4：POSIX 上 "\" 與 "X:" 是名稱的一部分，不是路徑語法 ---------------------------------
+if (( windows )); then
+  skipc "M4 is POSIX-only: Windows cannot name a file with a backslash / M4 僅適用 POSIX"
+else
+  mkdir -p m4; print x > 'm4/foo\bar.txt'; print y > 'C:x4'
+  run -cf m4.tar 'm4/foo\bar.txt' 'C:x4'
+  check "M4 foo\\bar.txt is stored as named / 照原名存入" '"$ST" -tf m4.tar | grep -qxF "m4/foo\\bar.txt"'
+  check "M4 C:x4 keeps its C: / C:x4 保留 C:" '"$ST" -tf m4.tar | grep -qxF "C:x4"'
+  # bsdtar -t prints "\" as "\\", so compare what it extracts. / bsdtar -t 把 "\" 印成 "\\"，故比對解出結果。
+  mkdir -p o4
+  check "M4 bsdtar extracts the same name / bsdtar 解出相同名稱" \
+    'bsdtar -xf m4.tar -C o4 && [[ -f "o4/m4/foo\\bar.txt" ]]'
+fi
+
+# --- M6: a uid/gid above 2097151 is carried in pax, not truncated --------------------------
+# --- M6：超過 2097151 的 uid/gid 以 pax 帶出，不被截斷 -------------------------------------
+# Making such a file needs root. The chown itself is the probe, since sudoers may allow
+# `true` without a password and not `chown`; where it fails, SKIP.
+# 做出這種檔案需要 root。以 chown 本身探測，因為 sudoers 可能只放行 `true` 而不放行
+# `chown`；失敗處 SKIP。
+mkdir -p m6; print x > m6/f
+if (( windows )) || ! sudo -n chown 3000000:3000001 m6/f >"$TMP/sudo.out" 2>&1; then
+  skipc "M6 needs passwordless sudo chown to make a file owned by uid 3000000 / M6 需免密碼 sudo chown"
+else
+  run -cf m6.tar m6/f
+  check "M6 bsdtar reads uid 3000000 / bsdtar 讀到 uid 3000000" \
+    'bsdtar -tvf m6.tar --numeric-owner | grep -q " 3000000 *3000001 "'
+fi
+
+# --- M7: -t and -x agree on which members carry data ---------------------------------------
+# --- M7：-t 與 -x 對哪些成員帶資料的判斷一致 -----------------------------------------------
+# A member whose size is not data is followed by a real header, here evil.txt's. bsdtar 3.8.8
+# reads the size as data only for types other than 1-6 and not for a name ending in "/".
+# size 不代表資料的成員之後緊接真正的標頭（此處為 evil.txt 的）。bsdtar 3.8.8 只對類型 1–6
+# 以外、且名稱不以 "/" 結尾者把 size 當資料。
+settype() {  # <tar> <typeflag>: rewrite the first header's type and its checksum / 改寫首標頭型別與校驗和
+  local f=$1 sum=0 b
+  printf '%s' "$2" | dd of="$f" bs=1 seek=156 conv=notrunc 2>"$TMP/dd.err"
+  printf '        ' | dd of="$f" bs=1 seek=148 conv=notrunc 2>"$TMP/dd.err"
+  for b in $(od -v -An -tu1 -N512 "$f"); do (( sum += b )); done
+  printf '%06o\0 ' $sum | dd of="$f" bs=1 seek=148 conv=notrunc 2>"$TMP/dd.err"
+}
+raw m7in.tar file evil.txt EVIL
+m7pad=$(printf 'A%.0s' {1..1024})
+m7() {  # <out> <name> <type>: a member carrying 1024 bytes that are evil.txt's header and data
+  raw "$1" file "$2" "$m7pad"
+  dd if=m7in.tar of="$1" bs=512 seek=1 count=2 conv=notrunc 2>"$TMP/dd.err"
+  [[ $3 == 0 ]] || settype "$1" "$3"
+}
+m7 m7d.tar d/ 0
+run -tf m7d.tar
+check "M7 type-0 'd/' with data: -t lists the evil.txt that -x writes / -t 列出 -x 會寫出的 evil.txt" \
+  '(( rc == 0 )) && grep -qx evil.txt "$TMP/out"'
+mkdir -p o7d; run -xf m7d.tar -C o7d
+check "M7 type-0 'd/': -x writes evil.txt too / -x 也寫出 evil.txt" '[[ -f o7d/evil.txt ]]'
+m7 m7s.tar s 2
+run -tf m7s.tar --exclude s
+check "M7 an excluded symlink with a size: -t still sees evil.txt / 被排除的 symlink：-t 仍看到 evil.txt" \
+  'grep -qx evil.txt "$TMP/out"'
+mkdir -p o7s; run -xf m7s.tar -C o7s --exclude s
+check "M7 an excluded symlink with a size: -x still writes evil.txt / -x 仍寫出 evil.txt" '[[ -f o7s/evil.txt ]]'
+m7 m7c.tar c 3
+mkdir -p o7c; run -xf m7c.tar -C o7c --no-strict
+check "M7 a type-3 member with a size: -x writes the evil.txt that -t lists / -x 寫出 -t 列出的 evil.txt" \
+  '[[ -f o7c/evil.txt ]] && "$ST" -tf m7c.tar | grep -qx evil.txt'
+m7 m7f.tar f 0
+run -tf m7f.tar
+check "M7 control: a regular file's data is skipped, evil.txt not listed / 對照：一般檔資料被略過" \
+  '(( rc == 0 )) && ! grep -qx evil.txt "$TMP/out"'
+
+# --- M8: --no-same-permissions applies to directories, large files and FIFOs too ----------
+# --- M8：--no-same-permissions 也作用於目錄、大檔與 FIFO -----------------------------------
+if (( windows )); then
+  skipc "M8 is POSIX-only: Windows has no mode bits to mask / M8 僅適用 POSIX"
+else
+  mkdir -p m8/d; chmod 777 m8/d
+  dd if=/dev/zero of=m8/big bs=1048576 count=5 2>"$TMP/dd.err"; chmod 666 m8/big
+  print s > m8/small; chmod 666 m8/small
+  mkfifo m8/p; chmod 666 m8/p
+  run -cf m8.tar m8
+  mkdir -p o8; ( umask 022; "$ST" -xf m8.tar -C o8 --no-same-permissions ) >"$TMP/out" 2>&1 && rc=0 || rc=$?
+  check "M8 extracts / 解出成功" '(( rc == 0 ))'
+  check "M8 a directory gets 0777 & ~022 / 目錄得 755" '[[ $(perm o8/m8/d) == 755 ]]'
+  check "M8 a file above 4 MiB gets 0666 & ~022 / 大於 4 MiB 的檔得 644" '[[ $(perm o8/m8/big) == 644 ]]'
+  check "M8 a FIFO gets 0666 & ~022 / FIFO 得 644" '[[ $(perm o8/m8/p) == 644 ]]'
+  check "M8 control: a small file gets 644 / 對照：小檔得 644" '[[ $(perm o8/m8/small) == 644 ]]'
+  mkdir -p o8p; ( umask 022; "$ST" -xf m8.tar -C o8p ) >"$TMP/out" 2>&1 && rc=0 || rc=$?
+  check "M8 control: without the flag the modes are restored / 對照：不加旗標則原樣還原" \
+    '[[ $(perm o8p/m8/d) == 777 && $(perm o8p/m8/big) == 666 && $(perm o8p/m8/p) == 666 ]]'
+fi
+
 print -r -- "PASS: $pass  FAIL: $fail  SKIP: $skip"
 (( fail == 0 ))

@@ -251,7 +251,7 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🔴 部分處理（H1–H10、M1–M3、M5、M11 已修）/ Whole-tree code review of v0.1.4 ▸ partly fixed
+## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🔴 部分處理（H1–H10、M1–M8、M11 已修）/ Whole-tree code review of v0.1.4 ▸ partly fixed
 
 **進度 / Progress**
 - ✅ H1–H7 已修（macOS）：`test/test_review_20261031.zsh` 27 項，對 0.1.4 失敗 22 項（H7 的競態在 0.1.4 上兩次執行皆
@@ -262,6 +262,13 @@ file has to exist for that reference to mean anything.
   Windows 而略過）。M1 的「讀取中檔案縮小」改為以零補齊並計數，沒有可穩定重現的測試，只讀碼確認。H9 只能在
   Windows 上驗證。Fixed on macOS; 12 more checks, all failing on 0.1.4. H9 needs Windows; M1's
   shrinking-file half has no deterministic test.
+- ✅ M4、M6、M7、M8 已修（macOS）：同一支測試再加 15 項，對 0.1.4 失敗 10 項（其餘為對照組），修正後 53/0
+  （H9、M6 略過）。M7 依 bsdtar 3.8.8 實測統一成一條規則（目錄與類型 1–6 的 size 不帶資料），`-t`、`-O`、每個
+  守門、每個型別分支共用；GNU tar 1.35 對類型 2、6 不同（會略過資料）。M6 在本機無法 `sudo chown`，**未執行**，
+  需 Linux 端以 root 跑。
+  Fixed on macOS; 15 more checks, 10 fail on 0.1.4 (the rest are controls). M7 follows
+  bsdtar 3.8.8 as measured; GNU tar differs on types 2 and 6. M6 is NOT run here (no
+  passwordless `sudo chown`); it needs a root run on Linux.
 - ✅ H8、M11 由 Windows 端修於 `82e7e7a`（橋接層祖先走訪改用 `\\?\`，無法檢查時拒絕；`winSetPathMtime` 經
   `winUcrtPath`）；UNC 路徑（`dcf0a94`）與 `package_win.zsh` 的 runtime 選擇（`82e7e7a`）亦同。
   Fixed by the Windows side in 82e7e7a / dcf0a94.

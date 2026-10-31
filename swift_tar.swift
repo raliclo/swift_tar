@@ -3474,6 +3474,21 @@ private func winClearReadOnly(_ dest: String) {
 }
 
 #if !os(Windows)
+/// 解出時要套用的 mode：預設原樣，`--no-same-permissions` 時套用行程 umask。檔案（池內與
+/// 大於 4 MiB 的 inline 路徑）、目錄與 FIFO 都經過這裡；0.1.4 只有池內的檔案經過，其餘
+/// 三者一律原樣還原。（2026-10-31 審查 M8）
+/// The mode extraction applies: verbatim by default, masked by the process umask
+/// under `--no-same-permissions`. Files (pooled and the inline path above 4 MiB),
+/// directories and FIFOs all come through here; in 0.1.4 only pooled files did,
+/// and the other three kept the archive's mode. (2026-10-31 review M8)
+private func extractedMode(_ mode: UInt32) -> mode_t {
+    guard !tarRestorePermissions else { return mode_t(mode & 0o7777) }
+    // umask(2) 沒有唯讀形式，設定後再設回。/ umask(2) has no read-only form; set it and set it back.
+    let current = umask(0)
+    umask(current)
+    return mode_t(mode & 0o7777) & ~current
+}
+
 /// Set a path's atime and mtime to `seconds.nanos` without following a final symlink,
 /// as posixWriteFile's futimens already does for pool-written files. Used where extraction
 /// had called FileManager.setAttributes, whose Date is a double and cannot hold a pax
@@ -3535,12 +3550,7 @@ private func posixWriteFile(dest: String, data: Data, mtime: UInt64, mtimeNanos:
     //
     // umask(2) 沒有唯讀形式，因此以「設定後再設回」讀取其值。那是標準慣用法，此處不值得
     // 為它加防護：本行程中除了解壓沒有別的東西在跑。
-    let effectiveMode: UInt32 = {
-        guard !tarRestorePermissions else { return mode }
-        let current = umask(0)
-        umask(current)
-        return mode & ~UInt32(current)
-    }()
+    let effectiveMode = UInt32(extractedMode(mode))
     clearNonRegular(dest)
     var fd = dest.withCString { open($0, O_WRONLY | O_CREAT | O_TRUNC, mode_t(effectiveMode)) }
     if fd < 0 && (errno == EACCES || errno == EPERM) {
@@ -4372,19 +4382,30 @@ final class TarWriter {
             pax.append(TarWriter.paxRecord("mtime", String(mtime) + fraction))
             if mtime >= (1 << 33) { hdrMtime = (1 << 33) - 1 }
         }
+        // uid/gid 欄位只有 7 位八進位，上限 2097151；octalField 保留最後 7 位，更大的值
+        // 會被靜默截斷成別人的 id。超過時以 pax 記錄帶完整值，欄位夾在上限，與 mtime 同法。
+        // （2026-10-31 審查 M6）
+        // The uid/gid fields hold 7 octal digits, at most 2097151; octalField keeps
+        // the last 7, so a larger id was silently truncated into someone else's.
+        // Past that, a pax record carries the full value and the field is clamped,
+        // as for mtime. (2026-10-31 review M6)
+        let idMax: UInt32 = 0o7777777
+        var hdrUid = uid, hdrGid = gid
+        if uid > idMax { pax.append(TarWriter.paxRecord("uid", String(uid))); hdrUid = idMax }
+        if gid > idMax { pax.append(TarWriter.paxRecord("gid", String(gid))); hdrGid = idMax }
         if !pax.isEmpty {
             try writePaxHeader(records: pax, mtime: hdrMtime)
         }
         let hdr = buildHeader(name: hdrName, prefix: hdrPrefix, mode: mode,
-                              uid: uid, gid: gid, size: hdrSize, mtime: hdrMtime,
+                              uid: hdrUid, gid: hdrGid, size: hdrSize, mtime: hdrMtime,
                               typeflag: typeflag, linkname: hdrLink)
         try sink.write(Data(hdr))
     }
 
     // ---- entry walkers / 項目走訪 ----
 
-    /// Archive-internal name: normalize "\" to "/", strip a Windows drive
-    /// letter (e.g. "C:"), then strip a leading "/" -- keeps entries
+    /// Archive-internal name: on Windows normalize "\" to "/" and strip a drive
+    /// letter (e.g. "C:"); everywhere strip a leading "/" -- keeps entries
     /// portable POSIX-relative paths regardless of platform, matching
     /// bsdtar's own behavior when given an absolute Windows path.
     ///
@@ -4424,10 +4445,19 @@ final class TarWriter {
     ///
     /// 只影響 "./"。明確指定的運算元（`-C src a.txt`）本來就與兩個參照實作一致，現在依然。
     fileprivate static func archiveName(_ path: String) -> String {
+        // "\" 與 "X:" 只在 Windows 上是路徑語法；POSIX 上它們是檔名的一部分，
+        // `foo\bar.txt` 必須照原名存入，與 GNU tar、bsdtar 相同。（2026-10-31 審查 M4）
+        // "\" and "X:" are path syntax only on Windows; on POSIX they are part
+        // of a file name, and `foo\bar.txt` is stored as is, as GNU tar and
+        // bsdtar do. (2026-10-31 review M4)
+        #if os(Windows)
         var p = path.replacingOccurrences(of: "\\", with: "/")
         if p.count >= 2, p[p.startIndex].isLetter, p[p.index(after: p.startIndex)] == ":" {
             p.removeFirst(2)
         }
+        #else
+        var p = path
+        #endif
         while p.hasPrefix("/") { p.removeFirst() }
         // Collapse repeated "/" and drop a trailing one. `tar -c tree/` must
         // store "tree/a.txt" as bsdtar does, but the walker recurses with
@@ -5854,17 +5884,30 @@ final class TarReader {
             if let l = gnuLongLink { linkname = l; gnuLongLink = nil }
 
             let isDir = typeflag == UInt8(ascii: "5") || name.hasSuffix("/")
+            // 這個成員的 size 是否代表後面跟著資料。每一條路徑——列表、-O、每個守門、每個型別
+            // 分支——都必須用這同一個答案，否則同一個封存在不同路徑上讀到不同的成員序列，
+            // `-t` 就看不到 `-x` 會寫出的東西。規則依 bsdtar 3.8.8 實測（2026-10-31）：目錄
+            // （含以 "/" 結尾的類型 0）與類型 1–6 的 size 不帶資料，其餘類型都帶。
+            // 0.1.4 中守門略過資料、型別分支卻不略過，而 `-t` 只略過類型 0/7。（2026-10-31 審查 M7）
+            // Whether this member's size means data follows. Every path -- listing,
+            // -O, each guard, each type branch -- must use this one answer, or the
+            // same archive yields different member sequences on different paths and
+            // `-t` cannot see what `-x` writes. Rule as measured on bsdtar 3.8.8
+            // (2026-10-31): a directory (a type 0 ending in "/" included) and types
+            // 1-6 carry no data; every other type does. In 0.1.4 the guards
+            // skipped data that the type branches did not, and `-t` skipped only
+            // types 0/7. (2026-10-31 review M7)
+            let hasData = !isDir && !(UInt8(ascii: "1")...UInt8(ascii: "6")).contains(typeflag)
             // --exclude, for listing and extraction alike; see memberIsExcluded.
             // --exclude，列表與解出皆適用；見 memberIsExcluded。
             if TarReader.memberIsExcluded(name, isDirectory: isDir) {
-                if !isDir { try skipData(size) }
+                if hasData { try skipData(size) }
                 continue
             }
+            // 列表用與解出相同的 hasData（見上方）。/ Listing uses the same hasData as extraction (above).
             guard options.extract else {
                 print(name)
-                if typeflag == UInt8(ascii: "0") || typeflag == 0 || typeflag == UInt8(ascii: "7") {
-                    try skipData(size)
-                }
+                if hasData { try skipData(size) }
                 continue
             }
 
@@ -5880,16 +5923,16 @@ final class TarReader {
             // 安全性質的訊息，而那正是人們學會忽略真警告的方式。
             guard let safeRel = TarReader.safeRelativePath(name) else {
                 skipMember("swift_tar: skipping unsafe path '\(name)' / 略過不安全路徑 '\(name)'")
-                if !isDir { try skipData(size) }
+                if hasData { try skipData(size) }
                 continue
             }
             guard !safeRel.isEmpty else {
-                if !isDir { try skipData(size) }
+                if hasData { try skipData(size) }
                 continue
             }
             guard let rel = TarReader.stripComponents(safeRel, count: options.stripComponents),
                   !rel.isEmpty else {
-                if !isDir { try skipData(size) }
+                if hasData { try skipData(size) }
                 continue
             }
             // --no-links (see tarNoLinks). After the unsafe-name check, so a link named
@@ -5901,7 +5944,7 @@ final class TarReader {
                typeflag == UInt8(ascii: "1") || typeflag == UInt8(ascii: "2") {
                 let kind = typeflag == UInt8(ascii: "2") ? ("symlink", "符號連結") : ("hardlink", "硬連結")
                 eprint("swift_tar: skipping link '\(name)' (\(kind.0) -> \(linkname)) / 略過連結 '\(name)'（\(kind.1) -> \(linkname)）")
-                try skipData(size)
+                if hasData { try skipData(size) }
                 continue
             }
             if options.verbose {
@@ -5917,7 +5960,7 @@ final class TarReader {
             if TarReader.passesThroughSymlink(dest: dest, below: options.destDir,
                                               cleared: &clearedDirs) {
                 skipMember("swift_tar: skipping '\(rel)': path passes through a symlink / 略過 '\(rel)'：路徑穿過 symlink")
-                if !isDir { try skipData(size) }
+                if hasData { try skipData(size) }
                 continue
             }
 
@@ -5938,7 +5981,7 @@ final class TarReader {
                     let rem = Int(size % UInt64(TAR_BLOCK))
                     if rem != 0 { _ = readExactly(TAR_BLOCK - rem) }
                 default:
-                    if !isDir { try skipData(size) }
+                    if hasData { try skipData(size) }
                 }
                 continue
             }
@@ -5989,7 +6032,7 @@ final class TarReader {
                 // 從未被回報，而該成員稍後才以 ENOENT 死去。
                 guard ensureDirectory(parent, below: options.destDir) else {
                     skipMember("swift_tar: skipping '\(rel)': cannot make '\(parent)' a directory / 略過 '\(rel)'：無法使 '\(parent)' 成為目錄")
-                    if !isDir { try skipData(size) }
+                    if hasData { try skipData(size) }
                     continue
                 }
             }
@@ -6015,7 +6058,7 @@ final class TarReader {
                     continue
                 }
 #if !os(Windows)
-                chmod(dest, mode_t(mode))
+                chmod(dest, extractedMode(mode))
 #endif
                 dirTimes.append((dest, mtime, mtimeNanos))
             case UInt8(ascii: "2"):
@@ -6144,7 +6187,7 @@ final class TarReader {
                     skipMember("swift_tar: skipping FIFO '\(rel)': a non-empty directory is already there / 略過 FIFO '\(rel)'：該處已有非空目錄")
                     continue
                 }
-                if mkfifo(dest, mode_t(mode)) != 0 {
+                if mkfifo(dest, extractedMode(mode)) != 0 {
                     // Warn and carry on rather than throw. Not every filesystem
                     // has FIFOs -- DrvFs under /mnt/c, FAT and exFAT do not --
                     // and extracting there is a normal thing to do. Aborting the
@@ -6165,7 +6208,7 @@ final class TarReader {
                 // mkfifo 的 mode 參數會被 umask 遮罩，與 open 完全相同（見
                 // posixWriteFile）。少了這個 chmod，0666 的管線會變成 0666 & ~umask，
                 // 與封存所記錄的內容產生一個無聲的差異。
-                chmod(dest, mode_t(mode))
+                chmod(dest, extractedMode(mode))
                 if options.restoreMtime {
                     posixSetTimes(dest, mtime, mtimeNanos)
                 }
@@ -6355,7 +6398,7 @@ final class TarReader {
                 // 錯的：該寫入可能尚未發生，而等它發生時，這些以路徑為準的呼叫
                 // 可能已作用在另一個檔案上。
                 if !wroteViaPool {
-                    chmod(dest, mode_t(mode))
+                    chmod(dest, extractedMode(mode))
                     if options.restoreMtime {
                         posixSetTimes(dest, mtime, mtimeNanos)
                     }
@@ -6363,7 +6406,7 @@ final class TarReader {
 #endif
             default:
                 skipMember("swift_tar: skipping type '\(Character(UnicodeScalar(typeflag)))' entry '\(name)' / 略過未支援型別")
-                try skipData(size)
+                if hasData { try skipData(size) }
             }
         }
 

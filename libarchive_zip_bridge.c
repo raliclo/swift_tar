@@ -1674,7 +1674,19 @@ static int copy_archive_data_to_stdout(struct archive *reader,
  * 被寫到 -C 之外，以 0 結束且 stderr 無訊息，短名稱卻會被拒絕。現在每個上層都以堆積上組出的絕對
  * `\\?\` 路徑詢問，沒有長度上限；`.` 與空的路徑段如 libarchive 一樣略過——在 `\\?\` 之下它們會被
  * 原樣傳下去、查詢失敗，反而讓 `./j/evil.txt` 通過。 */
-static int blocking_ancestor(const wchar_t *path, wchar_t **blocker) {
+/* With `check_self`, the entry's own last component is asked too, and 4 is returned when it is a
+ * name surrogate other than a native symlink -- a junction or an LX symlink. The caller passes it
+ * for directory entries: libarchive replaces a native symlink at `j/` with a real directory, as
+ * the tar extractor does, but takes a junction for a directory and later sets ITS TIME THROUGH
+ * IT, so a ZIP entry `j/` over a junction `j` pointing outside changed the outside directory's
+ * mtime, exit 0 (2026-10-30 review, finding B; tar left it alone). Nothing is written through
+ * the junction otherwise; members below it already return 2.
+ * 帶 `check_self` 時也詢問項目自身的最後一段；若它是原生 symlink 以外的 name surrogate——junction 或
+ * LX symlink——則回傳 4。呼叫端對目錄項目傳入此旗標：libarchive 會把 `j/` 處的原生 symlink 換成真的
+ * 目錄，與 tar 解出器相同，但把 junction 當成目錄，之後**穿過它設定時間**，於是 junction `j` 指向外部時，
+ * ZIP 項目 `j/` 改了外部目錄的 mtime 並以 0 結束（2026-10-30 審查，發現 B；tar 不會動它）。除此之外
+ * 不會穿過 junction 寫入任何東西；其下的成員本來就回傳 2。 */
+static int blocking_ancestor(const wchar_t *path, int check_self, wchar_t **blocker) {
     *blocker = NULL;
     size_t len = wcslen(path);
     /* Only true ancestors count: a directory entry `a/` is `a` itself, not something
@@ -1733,7 +1745,8 @@ static int blocking_ancestor(const wchar_t *path, wchar_t **blocker) {
     while (i < len) {
         size_t start = i;
         while (i < len && rel[i] != L'/' && rel[i] != L'\\') i++;
-        if (i >= len) break;   /* the last component is the entry itself / 最後一段是項目本身 */
+        int self = i >= len;
+        if (self && !check_self) break;   /* the last component is the entry itself / 最後一段是項目本身 */
         size_t clen = i - start;
         if (clen == 0 || (clen == 1 && rel[start] == L'.')) { i++; continue; }
         /* SECURE_NODOTDOT refuses the whole entry downstream. / 下游的 SECURE_NODOTDOT 會拒絕整個項目。 */
@@ -1749,9 +1762,16 @@ static int blocking_ancestor(const wchar_t *path, wchar_t **blocker) {
             HANDLE h = FindFirstFileW(abs, &data);
             if (h != INVALID_HANDLE_VALUE) {
                 FindClose(h);
+                if (self) {
+                    if ((data.dwReserved0 & 0x20000000u) && data.dwReserved0 != IO_REPARSE_TAG_SYMLINK) {
+                        result = 4;
+                    }
+                    break;
+                }
                 if (data.dwReserved0 & 0x20000000u) { result = 2; break; }
             }
         }
+        if (self) break;   /* only the surrogate question applies to the entry itself / 項目自身只問 surrogate */
         if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
             result = 1;
             break;
@@ -2015,7 +2035,18 @@ int swift_tar_zip_read(const char *archive_path,
                  * mangle a non-ASCII name. / 用寬字元路徑：窄字元會經 ANSI 字碼頁而弄壞非 ASCII 名稱。 */
                 const wchar_t *wpath = archive_entry_pathname_w(entry);
                 wchar_t *blocker = NULL;
-                int blocked = wpath != NULL ? blocking_ancestor(wpath, &blocker) : 0;
+                int is_dir = archive_entry_filetype(entry) == AE_IFDIR;
+                int blocked = wpath != NULL ? blocking_ancestor(wpath, is_dir, &blocker) : 0;
+                if (blocked == 4) {
+                    /* `j/` over an existing junction: keep the junction, touch nothing through it,
+                     * and say nothing -- what the tar extractor does with the same entry, which
+                     * is not a skip of anything the archive asked for. Finding B.
+                     * 既有 junction 上的 `j/`：保留 junction、不穿過它碰任何東西、也不出聲——與 tar
+                     * 解出器對同一項目的處理相同，這並未略過封存要求的任何內容。發現 B。 */
+                    free(blocker);
+                    archive_read_data_skip(reader);
+                    continue;
+                }
                 if (blocked == 3) {
                     fprintf(stderr, "swift_tar: %s: Cannot check the path for links or files in the way\n",
                             path != NULL ? path : "");

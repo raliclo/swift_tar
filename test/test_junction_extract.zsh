@@ -70,6 +70,14 @@ seg=$(printf 'a%.0s' {1..240})
 } > "$TMP/zsrc/long.mtree"
 ( cd "$TMP/zsrc" && /c/Windows/System32/tar.exe --format zip -cf ../long.zip @long.mtree ) </dev/null
 ( cd "$TMP/zsrc" && "$ST" -c --zip -f "$TMP/dot.zip" ./j/evil.txt ok.txt ) </dev/null
+# A lone directory entry `j/` dated 1970-01-02 (2026-10-30 review, finding B). The ZIP path let
+# libarchive set that time THROUGH a junction `j`, on the outside directory, exit 0; tar did not.
+# 單獨的目錄項目 `j/`，日期 1970-01-02（2026-10-30 審查，發現 B）。ZIP 路徑讓 libarchive **穿過**
+# junction `j` 把該時間設到外部目錄上並以 0 結束；tar 不會。
+mkdir -p "$TMP/dsrc/j"
+touch -d @86400 "$TMP/dsrc/j"
+( cd "$TMP/dsrc" && "$ST" -c --zip -f "$TMP/dj.zip" j && "$ST" -c -f "$TMP/dj.tar" j ) </dev/null
+zmodload -F zsh/stat b:zstat
 
 # Make dest/ with `j` as <kind>: J = junction, D = directory symlink, plain = ordinary directory.
 # Relative paths with the inherited cwd, never cygpath-built ones (see test_dereference.zsh).
@@ -123,6 +131,13 @@ for kind in J D; do
     && ok "zip 1217-char name via $name: refused, nothing outside / 1217 字元名稱被拒絕、外部無檔案" \
     || { bad "zip 1217-char name via $name: rc=$rc, files outside=${#outside_hits}"; cat "$TMP/err" }
   fresh $kind; run "$TMP/dot.zip";           must_refuse "zip ./j/ via $name"
+  for archive in dj.zip dj.tar; do
+    fresh $kind; touch -d @1000000000 "$TMP/outside"; run "$TMP/$archive"
+    got=$(zstat +mtime -- "$TMP/outside")
+    (( rc == 0 && got == 1000000000 )) \
+      && ok "${archive:e} entry j/ over $name: outside mtime untouched / 外部 mtime 未被改動" \
+      || { bad "${archive:e} entry j/ over $name: rc=$rc, outside mtime=$got (want 1000000000)"; cat "$TMP/err" }
+  done
   fresh $kind; run "$TMP/h.tar"
   (( rc != 0 )) && [[ ! -e $TMP/dest/h.txt ]] \
     && ok "tar hard link via $name: refused, not created / 硬連結被拒絕、未建立" \
@@ -145,6 +160,13 @@ inside_hits=( "$TMP"/dest/j/**/evil.txt(N) )
 (( rc == 0 && ${#inside_hits} == 1 )) \
   && ok "zip: a 1217-char name under a plain directory j is extracted / 一般目錄 j 下的 1217 字元名稱照常解出" \
   || { bad "zip: 1217-char name under a plain j: rc=$rc, found=${#inside_hits}"; cat "$TMP/err" }
+for archive in dj.zip dj.tar; do
+  fresh plain; run "$TMP/$archive"
+  got=$(zstat +mtime -- "$TMP/dest/j")
+  (( rc == 0 && got == 86400 )) \
+    && ok "${archive:e}: entry j/ over a plain directory j sets its mtime / 一般目錄 j 的 mtime 照常設定" \
+    || { bad "${archive:e}: entry j/ over a plain j: rc=$rc, mtime=$got (want 86400)"; cat "$TMP/err" }
+done
 fresh plain; run "$TMP/dot.zip"
 (( rc == 0 )) && [[ $(cat "$TMP/dest/j/evil.txt") == pwned ]] \
   && ok "zip: ./j/evil.txt under a plain directory j is extracted / 一般目錄 j 下的 ./j/evil.txt 照常解出" \

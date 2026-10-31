@@ -709,7 +709,12 @@ swift_tar end to end (`win_clang_deps.zsh`), relative to the all-MSVC build:
 
 All three builds write byte-identical `.tgz`, `.tzst` and `.zip`. zlib's deflate gains about
 10% under clang and its inflate loses 1.5--2%, slower in every one of the five rounds, so that
-is real rather than noise; the trade was taken for the encode gain. zstd gains far less inside
+is real rather than noise; the trade was taken for the encode gain.
+CORRECTED 2026-10-31: only `tgz --cat` supports that sentence -- all clang was slower in all five
+rounds there (best-of −2.0%, median −2.1%). The −1.5% is `zip extract`, which does not: all clang
+was faster in two rounds (13.479 vs 13.546, 13.575 vs 13.689), the median gap is −0.5% against a
+3.3% round-to-round spread for MSVC alone, and it writes files, so it is not an inflate
+measurement. Read it as "inflate about 2% slower, from `tgz --cat`". zstd gains far less inside
 swift_tar than in `zstd -b`: compression runs on parallel chunks, and reading, tar framing and
 coordination dilute the codec's share. ZIP create at 19 MB/s is single-threaded on Windows, a
 separate matter.

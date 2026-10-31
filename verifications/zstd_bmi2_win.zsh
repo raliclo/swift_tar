@@ -2,8 +2,8 @@
 # zstd_bmi2_win.zsh -- does building swift_tar's zstd with clang instead of MSVC turn on BMI2, and is it faster?
 # zstd_bmi2_win.zsh -- 把 swift_tar 的 zstd 從 MSVC 改用 clang 建置，會不會開啟 BMI2？會不會更快？
 #
-#   zsh verifications/zstd_bmi2_win.zsh [CORPUS_DIR=../../claw-code]
-#   ROUNDS=5 BUILD=C:/Users/$USER/tmp/zbmi2 zsh verifications/zstd_bmi2_win.zsh ../../claw-code
+#   zsh verifications/zstd_bmi2_win.zsh [CORPUS_DIR=../claw-code]
+#   ROUNDS=5 BUILD=C:/Users/$USER/tmp/zbmi2 zsh verifications/zstd_bmi2_win.zsh ../claw-code
 #   zsh verifications/zstd_bmi2_win.zsh --help
 #
 # Builds zstd.exe from the zstd submodule (v1.5.7) six ways, out of tree under BUILD, then runs
@@ -47,6 +47,11 @@ if [[ ${1:-} == --help || ${1:-} == -h ]]; then sed -n '2,42p' "$script_path" | 
 
 SCRIPT_DIR=${script_path:h}
 REPO=${SCRIPT_DIR:h}
+# CORRECTED 2026-10-31: the synopsis said ../../claw-code, one level too high; from the swift_tar
+# root this default is ../claw-code, and the old spelling stopped with "corpus not found".
+# test/test_doc_consistency.zsh keeps the synopsis and this line agreeing.
+# 更正 2026-10-31：用法原本寫 ../../claw-code，多了一層；從 swift_tar 根目錄看，此預設是 ../claw-code，舊寫法
+# 會以「corpus not found」中止。test/test_doc_consistency.zsh 讓用法與這一行保持一致。
 CORPUS=${1:-${REPO:h}/claw-code}
 ROUNDS=${ROUNDS:-5}
 BUILD=${BUILD:-C:/Users/${USER:-$USERNAME}/tmp/zbmi2}

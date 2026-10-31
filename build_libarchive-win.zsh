@@ -38,6 +38,12 @@ build_dir="build/libarchive-win"
 # that page cannot represent stops the build: on a CP950 machine
 # archive_read_support_format_rar5.c raised C4819, which becomes C2220 here
 # because libarchive builds with /WX.
+# CORRECTED 2026-10-31: libarchive does not build with /WX here. /WX comes only from ENABLE_WERROR
+# (libarchive/CMakeLists.txt:110-112, 176-178), which defaults ON for Debug alone; this is a Release
+# build, the cache holds ENABLE_WERROR:BOOL=OFF and archive_static's flags.make has no /WX. Under
+# the earlier Visual Studio generator CMAKE_BUILD_TYPE was empty, not Debug, so it was OFF then too.
+# So "C2220 because of /WX" does not explain the stop that was seen; -utf-8 stays right regardless,
+# since sources read in the ANSI code page are misread whether or not the build stops.
 #
 # It needs a non-UTF-8 ACP *and* an actual recompile, so a cached archive.lib hid
 # it for as long as nothing invalidated the build tree.
@@ -50,6 +56,11 @@ build_dir="build/libarchive-win"
 # 字碼頁讀取。任何含有該字碼頁無法表示之位元組的檔案都會中止建置：在 CP950 的機器上，
 # archive_read_support_format_rar5.c 觸發 C4819，而此處 libarchive 以 /WX 建置，
 # 該警告即成為 C2220。
+# 更正 2026-10-31：此處 libarchive 並未以 /WX 建置。/WX 只來自 ENABLE_WERROR
+# （libarchive/CMakeLists.txt:110-112、176-178），其預設只在 Debug 時為 ON；這是 Release 建置，快取為
+# ENABLE_WERROR:BOOL=OFF，archive_static 的 flags.make 沒有 /WX。先前的 Visual Studio 產生器下
+# CMAKE_BUILD_TYPE 是空的、不是 Debug，當時同樣是 OFF。因此「/WX 使之成為 C2220」解釋不了當時看到的
+# 中止；-utf-8 仍然正確，因為以 ANSI 字碼頁讀入的原始碼無論建置是否中止都會被誤讀。
 #
 # 它同時需要非 UTF-8 的 ACP 與一次真正的重編，因此只要沒有東西讓建置樹失效，
 # 一份快取的 archive.lib 就會一直把它遮住。
@@ -60,11 +71,18 @@ build_dir="build/libarchive-win"
 # -utf-8 still means what the paragraph above says. clang-cl's /O2 already implies /Gy.
 # win_clang_cmake.zsh (NMake, not Visual Studio) keeps the library at libarchive/Release/, where
 # compile_tar-win.zsh looks.
+# CORRECTED 2026-10-31: of "/WX, its warning set, the archive.lib name" only the last holds. /WX is
+# off in Release (see the correction above), and the MSVC warning set (/w14062 and the rest) goes
+# into CMAKE_C_FLAGS_DEBUG only. The reasons that stand are the archive.lib name and -utf-8. To stop
+# on warnings, the build would need an explicit -DENABLE_WERROR=ON.
 # 編譯器：Swift 工具鏈的 clang-cl，而非 MSVC cl.exe（2026-10-30，隨 zlib 與 zstd 改用 clang；量測見
 # verifications/win_clang_deps.zsh）。選 clang-cl 而非 GNU 驅動，是因為這樣 libarchive 的 CMake 仍走
 # MSVC 分支——/WX、它的警告組合、archive.lib 的檔名——而 -utf-8 的意義仍如上段所述。clang-cl 的 /O2
 # 已隱含 /Gy。win_clang_cmake.zsh（NMake，而非 Visual Studio）讓靜態庫仍在 compile_tar-win.zsh 尋找的
 # libarchive/Release/。
+# 更正 2026-10-31：「/WX、它的警告組合、archive.lib 的檔名」三者只有最後一項成立。Release 下 /WX 關閉
+# （見上方更正），MSVC 警告組合（/w14062 等）只加入 CMAKE_C_FLAGS_DEBUG。站得住的理由是 archive.lib
+# 的檔名與 -utf-8。若要遇警告即中止，建置需明確加上 -DENABLE_WERROR=ON。
 . ./win_clang_cmake.zsh
 win_clang_cmake clang-cl "$SCRIPT_DIR/$build_dir/libarchive/Release" || exit 1
 # This build tree is incremental (compile_tar-win.zsh runs this every time), and CMake refuses to

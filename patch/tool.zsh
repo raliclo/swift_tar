@@ -5,11 +5,16 @@ swift_tar_patch_tool() {
   emulate -L zsh
   local candidate
   local -a candidates
+  # PROGRAMFILES first: the zsh port has only the upper-case name, so reading ${ProgramFiles} alone
+  # always fell back to C:/Program Files and missed Git installed anywhere else (2026-10-30 review,
+  # finding G; test/test_patch_tool.zsh).
+  # 先讀 PROGRAMFILES：zsh port 只有大寫的名稱，只讀 ${ProgramFiles} 時永遠退回 C:/Program Files，
+  # Git 裝在別處就找不到（2026-10-30 審查，發現 G；test/test_patch_tool.zsh）。
   case $OSTYPE in
     msys*|mingw*|cygwin*)
       candidates=(/usr/bin/patch.exe /c/msys64/usr/bin/patch.exe
         "$HOME/scoop/apps/msys2/current/usr/bin/patch.exe"
-        "${ProgramFiles:-C:/Program Files}/Git/usr/bin/patch.exe"
+        "${PROGRAMFILES:-${ProgramFiles:-C:/Program Files}}/Git/usr/bin/patch.exe"
         "${(@f)$(whence -pa patch)}") ;;
     *) candidates=("${(@f)$(whence -pa patch)}") ;;
   esac

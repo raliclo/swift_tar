@@ -402,6 +402,7 @@ release/swift_tar -x -f from-linux.tar
 | `../../x`、`dir/../../x`、`..\..\x` | 略過該項目：`skipping unsafe path '<name>'` |
 | `/etc/x`、`C:\Windows\x` | 去除開頭的 `/` 與磁碟機代號，寫入目的地**之內** |
 | 路徑穿過「較早項目所建立之 symlink」的成員 | 略過該項目：`path passes through a symlink` |
+| 路徑穿過 `-C` 之下**已存在於磁碟上**之連結的成員——在 Windows 上也包括 junction 與 LX symlink，不只 symlink | 略過該項目並計數，tar 與 ZIP 皆然；`--no-links` 在此幫不上忙，因為該連結從未在封存裡（junction 於 2026-10-29 修正，`test/test_junction_extract.zsh`） |
 | 目標指向外部的 symlink 成員，例如 `portal -> ../..` | **照封存內容建立**，以 `0` 結束；加 `--no-links` 則不建立：`skipping link 'portal' (symlink -> ../..)` |
 
 第三列是與第一列不同的攻擊：封存可攜帶一個 symlink `portal -> ../../..`，接著一個成員

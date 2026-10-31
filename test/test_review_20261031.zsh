@@ -590,28 +590,33 @@ check "Low --identify --zip on a text file does not say zip / 對文字檔不回
 
 # --- Low: a time before 1970 is carried in pax, not clamped to 1970 ---------------------------
 # --- 低：1970 年以前的時間以 pax 帶出，不夾成 1970 ----------------------------------------------
-if (( windows )); then
-  skipc "Low pre-1970 mtime: POSIX writer path / 1970 前的 mtime：POSIX 寫入路徑"
-else
-  # The exact mtime, seconds and nanoseconds, as this platform's stat prints it.
-  # 精確的 mtime（秒與奈秒），以本平台 stat 的格式。
-  if [[ $(uname -s) == Darwin ]]; then mt() { stat -f %Fm -- "$1" }; else mt() { stat -c %.9Y -- "$1" }; fi
-  mkdir -p l70; print x > l70/old; mkdir -p l70/olddir
-  # macOS and GNU touch take a fraction; busybox 1.37 takes neither the "T" nor a fraction,
-  # only "1960-06-15 12:00:00" (whole seconds). A touch that takes no form SKIPs the case
-  # rather than ending the test under set -e (LinuxCS guest, 2026-10-31).
-  # macOS 與 GNU touch 接受小數；busybox 1.37 兩者都不接受，只接受「1960-06-15 12:00:00」
-  # （整秒）。三種寫法都不接受的 touch 讓此案例 SKIP，而不是在 set -e 下結束整支測試
-  #（LinuxCS guest，2026-10-31）。
-  l70ok=0
-  if touch -d 1960-06-15T12:00:00.250000000 l70/old 2>"$TMP/touch.err" \
-     || touch -d '1960-06-15 12:00:00' l70/old 2>"$TMP/touch.err"; then
-    touch -t 195001010000 l70/olddir 2>"$TMP/touch.err" && l70ok=1
-  fi
+# Windows runs it too. Until 2026-10-31 it was skipped there, and -c on Windows stored a 1960
+# file as 1970-01-01: winStat clamped the time to 0 and never set negativeMtime (extraction was
+# already right, e52d012). Git Bash's touch and stat handle 1960; its stat prints a negative
+# fraction oddly (-301262398.1750000000 for -301262398.25), but the same way on both sides of
+# each comparison.
+# Windows 也執行。2026-10-31 之前在那裡 SKIP，而 Windows 上 -c 把 1960 年的檔案存成
+# 1970-01-01：winStat 把時間夾成 0，從不設定 negativeMtime（解出端早已正確，e52d012）。
+# Git Bash 的 touch 與 stat 處理得了 1960 年；其 stat 印負小數的方式怪異（-301262398.25 印成
+# -301262398.1750000000），但每次比較的兩邊印法相同。
+# The exact mtime, seconds and nanoseconds, as this platform's stat prints it.
+# 精確的 mtime（秒與奈秒），以本平台 stat 的格式。
+if [[ $(uname -s) == Darwin ]]; then mt() { stat -f %Fm -- "$1" }; else mt() { stat -c %.9Y -- "$1" }; fi
+mkdir -p l70; print x > l70/old; mkdir -p l70/olddir
+# macOS and GNU touch take a fraction; busybox 1.37 takes neither the "T" nor a fraction,
+# only "1960-06-15 12:00:00" (whole seconds). A touch that takes no form SKIPs the case
+# rather than ending the test under set -e (LinuxCS guest, 2026-10-31).
+# macOS 與 GNU touch 接受小數；busybox 1.37 兩者都不接受，只接受「1960-06-15 12:00:00」
+# （整秒）。三種寫法都不接受的 touch 讓此案例 SKIP，而不是在 set -e 下結束整支測試
+#（LinuxCS guest，2026-10-31）。
+l70ok=0
+if touch -d 1960-06-15T12:00:00.250000000 l70/old 2>"$TMP/touch.err" \
+   || touch -d '1960-06-15 12:00:00' l70/old 2>"$TMP/touch.err"; then
+  touch -t 195001010000 l70/olddir 2>"$TMP/touch.err" && l70ok=1
 fi
-if (( ! windows )) && (( ! l70ok )); then
+if (( ! l70ok )); then
   skipc "Low pre-1970 mtime: this touch cannot set a 1960 date / 此 touch 設不了 1960 年的日期"
-elif (( ! windows )); then
+else
   run -cf l70.tar l70/old l70/olddir
   mkdir -p o70; run -xf l70.tar -C o70
   check "Low a 1960 file round-trips to the nanosecond (0.1.4: 1970) / 1960 年的檔案逐奈秒往返" \
@@ -624,6 +629,13 @@ elif (( ! windows )); then
   if [[ -z $gnutar ]]; then
     skipc "Low pre-1970 base-256: no GNU tar / 沒有 GNU tar"
   else
+    # Another reader, so the round trip above is not this tool agreeing with itself. UTC,
+    # because GNU tar prints local time; --force-local, or GNU tar on Windows reads a
+    # `C:`-style name as a remote host.
+    # 換一個讀取器，使上面的往返不只是本工具自己同意自己。用 UTC，因 GNU tar 印本地時間；
+    # 加 --force-local，否則 Windows 上的 GNU tar 會把 `C:` 形式的名稱當成遠端主機。
+    check "Low GNU tar lists the 1960 file as 1960 (Windows 0.1.4: 1970) / GNU tar 列出的是 1960 年" \
+      '[[ $(TZ=UTC $gnutar --force-local --full-time -tvf l70.tar l70/old) == *" 1960-06-15 "* ]]'
     $gnutar --format=gnu -cf l70g.tar l70/olddir 2>"$TMP/gtar.err"
     mkdir -p o70g; run -xf l70g.tar -C o70g
     check "Low a GNU base-256 1950 time is restored / GNU base-256 的 1950 年時間被還原" \

@@ -2550,6 +2550,11 @@ private struct WinStat {
     /// `mtime` 的小數部分，對應 POSIX 分支的 `st_mtim.tv_nsec`。取自 FILETIME 而非 Date，
     /// 理由見 winFileTime。
     var mtimeNanos: UInt32
+    /// `mtime` before it is clamped at 0: negative for a time before 1970, with mtimeNanos
+    /// counted upward from it, as st_mtim.tv_sec is on the POSIX branch.
+    /// 夾到 0 之前的 `mtime`：1970 年以前為負，mtimeNanos 由它往上算，一如 POSIX 分支的
+    /// st_mtim.tv_sec。
+    var signedMtime: Int64
     var nlink: UInt32
     var volumeSerial: UInt64
     var fileIndex: UInt64
@@ -2641,29 +2646,42 @@ private func winStat(_ path: String) -> WinStat? {
     }
     let fa = gotFad ? fad.dwFileAttributes : INVALID_FILE_ATTRIBUTES
     // FILETIME counts 100ns ticks from 1601-01-01; the Unix epoch is 11644473600 seconds
-    // later. A time at or before that epoch cannot be carried here, so it falls back to the
-    // Date path, which clamps to 0 -- the behaviour this function had before it read
-    // FILETIMEs at all, kept rather than changed alongside the precision fix.
+    // later. A time before that epoch is a negative Unix time, kept as signedMtime with the
+    // fraction counted upward from the second below it -- st_mtim's convention, so -1.5 s is
+    // -2 and 500000000 ns -- and add(path:) hands it to writeEntryHeader as negativeMtime,
+    // the one encoder the POSIX branch already uses. Until 2026-10-31 such a time fell to the
+    // Date path and was clamped to 0, so `-c` stored a 1960 file as 1970-01-01 on Windows
+    // only (GNU tar -tv and WSL bsdtar both read 1970).
     // FILETIME 以 100ns 為單位自 1601-01-01 起算，Unix epoch 晚它 11644473600 秒。早於該
-    // epoch 的時間在此無法表示，故退回 Date 路徑並夾到 0——那是本函式在讀 FILETIME 之前的
-    // 行為，與這次的精度修正分開，不順手更動。
-    let mtime: UInt64
+    // epoch 的時間是負的 Unix 時間，存成 signedMtime，小數由其下方那一秒往上算——即 st_mtim
+    // 的慣例，-1.5 秒為 -2 與 500000000 奈秒——再由 add(path:) 以 negativeMtime 交給
+    // writeEntryHeader，也就是 POSIX 分支已在使用的同一個編碼器。2026-10-31 之前這種時間
+    // 會落到 Date 路徑並夾成 0，於是只有 Windows 上的 `-c` 把 1960 年的檔案存成 1970-01-01
+    //（GNU tar -tv 與 WSL 的 bsdtar 讀出的都是 1970）。
+    let signedMtime: Int64
     let mtimeNanos: UInt32
     let ticks = gotFad
         ? (UInt64(fad.ftLastWriteTime.dwHighDateTime) << 32)
             | UInt64(fad.ftLastWriteTime.dwLowDateTime)
         : 0
-    if ticks >= 116_444_736_000_000_000 {
-        let rel = ticks - 116_444_736_000_000_000
-        mtime = rel / 10_000_000
-        mtimeNanos = UInt32((rel % 10_000_000) * 100)
+    // Win32 documents FILETIMEs above 0x7FFFFFFFFFFFFFFF as invalid, so `exactly` fails only
+    // for a value no valid time has; that and a failed query keep the Date path.
+    // Win32 文件載明大於 0x7FFFFFFFFFFFFFFF 的 FILETIME 無效，故 `exactly` 只會在任何有效時間
+    // 都不是的值上失敗；該情形與查詢失敗都沿用 Date 路徑。
+    if gotFad, let signedTicks = Int64(exactly: ticks) {
+        let rel = signedTicks - 116_444_736_000_000_000
+        var sec = rel / 10_000_000, rem = rel % 10_000_000
+        if rem < 0 { sec -= 1; rem += 10_000_000 }
+        signedMtime = sec
+        mtimeNanos = UInt32(rem * 100)
     } else if let date = attrs[.modificationDate] as? Date {
-        mtime = UInt64(max(0, date.timeIntervalSince1970))
+        signedMtime = Int64(clamping: UInt64(max(0, date.timeIntervalSince1970)))
         mtimeNanos = 0
     } else {
-        mtime = 0
+        signedMtime = 0
         mtimeNanos = 0
     }
+    let mtime = UInt64(max(0, signedMtime))
     let isReparse = fa != INVALID_FILE_ATTRIBUTES
         && (fa & UInt32(FILE_ATTRIBUTE_REPARSE_POINT)) != 0
     let tag = isReparse ? winReparseTag(path) : nil
@@ -2671,7 +2689,8 @@ private func winStat(_ path: String) -> WinStat? {
         || tag == IO_REPARSE_TAG_SYMLINK_VALUE || tag == IO_REPARSE_TAG_LX_SYMLINK_VALUE
     return WinStat(isDir: type == .typeDirectory,
                    isSymlink: isLink,
-                   size: size, mtime: mtime, mtimeNanos: mtimeNanos, nlink: nlink,
+                   size: size, mtime: mtime, mtimeNanos: mtimeNanos,
+                   signedMtime: signedMtime, nlink: nlink,
                    volumeSerial: volumeSerial, fileIndex: fileIndex, reparseTag: tag)
 }
 
@@ -4930,6 +4949,12 @@ final class TarWriter {
         // `mtimeNanos != 0` 在 Windows 上永不成立，任何成員都不會寫出 pax `mtime=` 記錄，
         // 於是 `bsdtar -u` 會把每個帶小數 mtime 的檔案重新加入——正是本功能要防止的缺陷。
         let mtimeNanos = st.mtimeNanos
+        // 1970 年以前的時間：與 POSIX 分支相同，writeEntryHeader 以 pax `mtime=-N` 寫出（見
+        // negativeMtime 與 winStat）。
+        // A time before 1970: as on the POSIX branch, writeEntryHeader writes it as pax
+        // `mtime=-N` (see negativeMtime and winStat).
+        negativeMtime = st.signedMtime < 0 ? (st.signedMtime, mtimeNanos) : nil
+        defer { negativeMtime = nil }
 
         // -u: skip non-directory entries that are not newer than the archived
         // copy. / -u：略過不比封存副本新的非目錄項目。

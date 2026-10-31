@@ -1721,7 +1721,7 @@ lld 路徑與 GNU ld 路徑各自跑過整輪：20 支測試、`--crypto-selftes
 **沒有被證明的事**：載入時沒有東西需要 `.rodata` 可寫（1657 筆動態重定位中 0 筆落在其中）。
 Swift runtime 在某條沒被測試走到的路徑上會不會寫它，測試全過不能排除；若會，現在會以 SIGSEGV
 現身，而不是靜默成功。未向 Swift 回報這個旗標；重現方式、量到的事實與回報時要附的東西記在
-[`swift-aarch64-rodata-writable.md`](swift-aarch64-rodata-writable.md)。
+[`bugs/swift-aarch64-rodata-writable.md`](../bugs/swift-aarch64-rodata-writable.md)。
 
 The cause was the compiler's: Swift 6.3.3 on aarch64 emits the conformance descriptors of
 payload-free enums into a section named `.rodata` with the writable flag, however the
@@ -1731,7 +1731,7 @@ flag from the Swift objects with llvm-objcopy in between, then refuses a binary 
 read-only segment and GNU_RELRO covers `.data.rel.ro` and `.got`; every suite passes on
 the lld build and nothing faulted. Not proven: that no untested path in the Swift runtime
 writes there -- if one does it now faults. The flag was not reported to Swift; the
-reproduction and the evidence are kept in `swift-aarch64-rodata-writable.md`.
+reproduction and the evidence are kept in `bugs/swift-aarch64-rodata-writable.md`.
 
 ## libxml2 釘在 2.13 線，不是最新版 ▸ ✅ 已升級 2026-10-13 / libxml2 was pinned to the 2.13 line ▸ upgraded
 
@@ -3228,12 +3228,12 @@ stdin。測試可能因為與其宣稱檢查之事毫無關係的理由而通過
 到 ZIP 路徑；六項在有漏洞的建置上全數失敗。
 
 > **Third-party tool defects live in
-> [`verifications/bugs/bugs.md`](../verifications/bugs/bugs.md), not here.** This
+> [`bugs/third-party-tools.md`](../bugs/third-party-tools.md), not here.** This
 > file tracks swift_tar's own defects. The bsdtar-on-Windows behaviours referenced
 > below — the mangled listing, the pax requirement, the silent ZIP name loss — are
 > recorded there with their reproductions.
 > **第三方工具的缺陷記於
-> [`verifications/bugs/bugs.md`](../verifications/bugs/bugs.md)，不在本檔。** 本檔追蹤的是
+> [`bugs/third-party-tools.md`](../bugs/third-party-tools.md)，不在本檔。** 本檔追蹤的是
 > swift_tar 自身的缺陷。下文提及的 Windows 版 bsdtar 行為——列表亂碼、pax 記錄的必要性、
 > ZIP 名稱的無聲遺失——連同重現步驟皆記於該處。
 

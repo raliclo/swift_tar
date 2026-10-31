@@ -100,17 +100,19 @@ M4       brew            /opt/homebrew/bin/swift_tar             swift_tar 0.1.5
 Windows  scoop           /c/Users/lowei/scoop/shims/swift_tar    swift_tar 0.1.5 (v0.1.5 / e3b6e0e8) 20261031-120320
 WSL      Release asset   /home/lowei/.local/bin/swift_tar        swift_tar 0.1.5 (v0.1.5 / e3b6e0e8) 20261031-115920
 LinuxVM  LinuxCS pin     /workspace/opt/swift_tar (942a63c)      swift_tar 0.1.5 (v0.1.5 / e3b6e0e8) 20261031-115941
-M6       not upgraded    /opt/homebrew/bin/swift_tar             swift_tar 20261007-200336
+M6       brew            /opt/homebrew/bin/swift_tar             swift_tar 0.1.5 (v0.1.5 / e3b6e0e8) 20261031-120023
 Windows and WSL report the same stamps as the archives Swift_tar-W11 built and verified, so the
 installed files are the published assets. WSL ran the tag's verify_release.zsh on the Release
 download first (VERIFIED, rc=0). On LinuxVM, /usr/bin/tar --version after a prepare reports the
 same 0.1.5 build, and the sha256 agrees three ways (the release's .sha256, the value sent, and a
 fresh download). knownOptions is identical in 0.1.4 and 0.1.5, so the tar wrapper is unchanged.
-M6's swift_tar is a plain file from an old `compile_tar.zsh --install`, not brew-managed, and the
-raliclo/swift_tar tap is not tapped there; moving it to brew is the user's decision, so nothing
-was changed.
+M6's swift_tar was a plain file from an old `compile_tar.zsh --install` (swift_tar
+20261007-200336), not brew-managed. The user moved it to brew; it is now a symlink to
+../Cellar/swift_tar/0.1.5/bin/swift_tar, `brew list --versions swift_tar` says 0.1.5, and its
+stamp is the same as M4's, the published macOS asset (read by Multissh-M4).
 Windows 與 WSL 回報的戳記與 Swift_tar-W11 建置並驗證的封存相同，所以裝上的就是發布的資產。WSL 先以
 tag 的 verify_release.zsh 驗證從 Release 下載的封存（VERIFIED，rc=0）。LinuxVM 經 prepare 後
 /usr/bin/tar --version 回報同一份 0.1.5，sha256 三方一致；0.1.4 與 0.1.5 的 knownOptions 相同，tar
-wrapper 未改。M6 的 swift_tar 是舊的 `compile_tar.zsh --install` 複製出的普通檔案，不由 brew 管理，也
-沒有加入 tap；改用 brew 由使用者決定，故未做任何更動。
+wrapper 未改。M6 的 swift_tar 原本是舊的 `compile_tar.zsh --install` 複製出的普通檔案（swift_tar
+20261007-200336），不由 brew 管理；使用者已改用 brew，現在是指向 ../Cellar/swift_tar/0.1.5/bin/swift_tar
+的連結，`brew list --versions swift_tar` 為 0.1.5，戳記與 M4 相同，即發布的 macOS 資產（由 Multissh-M4 讀取）。

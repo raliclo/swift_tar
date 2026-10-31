@@ -24,11 +24,19 @@
 # upgrade can be rolled back with a single mv.
 # 需以 root 執行（寫入 /usr/local/swift）。可重複執行：若目標版本已安裝則不動作。舊工具鏈保留
 # 於 /usr/local/swift.bak.<時間戳>，升級可用一次 mv 回退。
+#
+# It also installs the tools the test suite runs that a stock Ubuntu lacks: bsdtar
+# (libarchive-tools), the reference reader of test_review_20261031.zsh. On 2026-10-31 a WSL that
+# built and passed everything else FAILed two cases there with "command not found". This step
+# runs even when Swift is already current, and needs root only when something is missing.
+# 另外安裝整套測試會用到、而預設 Ubuntu 沒有的工具：bsdtar（libarchive-tools），
+# test_review_20261031.zsh 的參考讀取器。2026-10-31 一台其他全過的 WSL，因缺它讓那裡兩個案例以
+# 「command not found」FAIL。即使 Swift 已是最新也會執行；只有缺東西時才需要 root。
 set -euo pipefail
 
 script_path="${0:A}"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  sed -n '3,26p' "$script_path" | sed 's/^# \{0,1\}//'
+  sed -n '3,34p' "$script_path" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 
@@ -85,6 +93,27 @@ done
 [[ -n $url ]] || die "no Ubuntu tarball found for Swift $version / 找不到 Swift $version 的 Ubuntu tarball"
 base=${${url:t}%.tar.gz}
 note "Download URL / 下載網址: $url"
+
+# ---- tools the test suite runs / 整套測試要用的工具 ----
+# Checked by command, installed by package: what matters is whether the tests can run the name.
+# Before the "already installed" exit, so a machine with a current Swift still gets them.
+# 以指令檢查、以套件安裝：重點是測試能否執行那個名稱。放在「已安裝」的提前結束之前，所以 Swift
+# 已是最新的機器也會補上。
+test_tools=(bsdtar:libarchive-tools)
+missing_pkgs=()
+for pair in $test_tools; do
+  command -v ${pair%%:*} >/dev/null || missing_pkgs+=(${pair#*:})
+done
+if (( ${#missing_pkgs} )); then
+  [[ $(id -u) == 0 ]] || die "test tools missing; run as root (sudo) to install: ${missing_pkgs[*]} / 缺少測試工具，請以 root（sudo）執行以安裝：${missing_pkgs[*]}"
+  note "Installing test tools / 安裝測試工具: ${missing_pkgs[*]}"
+  apt-get update -q || die "apt-get update failed / apt-get update 失敗"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q $missing_pkgs || die "apt-get install failed / apt-get install 失敗"
+  for pair in $test_tools; do
+    command -v ${pair%%:*} >/dev/null || die "${pair%%:*} still not on PATH after installing ${pair#*:} / 安裝 ${pair#*:} 後仍找不到 ${pair%%:*}"
+  done
+fi
+note "[OK] test tools present / 測試工具齊全: ${test_tools%%:*}"
 
 # ---- already installed? / 已安裝？ ----
 # The version alone is not enough: the 24.04 and 26.04 builds of 6.4.1 both report 6.4.1. The

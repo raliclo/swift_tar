@@ -1,0 +1,95 @@
+swift_tar 0.1.5 release verification / 0.1.5 發布驗證
+tag v0.1.5 = e3b6e0e8, swift_tar_source=7a6f1b995991a42c47382a10e26ff04a2a7c3eee
+All four archives are public builds (lzfse2=excluded). / 四份封存皆為公開版（不含 LZFSE）。
+Collected 2026-10-31 from Mac M4, the aarch64 VM, Windows and WSL (Swift_tar-W11), Mac M6
+(Multissh-M4) and the LinuxCS guest (LinuxCS-M4).
+2026-10-31 彙整自 Mac M4、aarch64 VM、Windows 與 WSL（Swift_tar-W11）、Mac M6（Multissh-M4）
+與 LinuxCS guest（LinuxCS-M4）。
+Published: https://github.com/raliclo/swift_tar/releases/tag/v0.1.5
+
+What changed since 0.1.4 / 與 0.1.4 的差異（30 commits, v0.1.4..v0.1.5）:
+  The 2026-10-31 whole-tree code review: H1-H10, M1-M17, S1-S3, N1-N5 and the low items,
+  each with a check in test/test_review_20261031.zsh that fails on 0.1.4. Highlights:
+  2026-10-31 全樹程式碼審查：H1-H10、M1-M17、S1-S3、N1-N5 與低風險項，每項在
+  test/test_review_20261031.zsh 都有一項在 0.1.4 上失敗的檢查。重點：
+  662d5e9  extraction no longer deletes non-empty directories, chmods through a symlink or
+           clears files above -C; -r/-u refuse a non-tar / 解壓不刪非空目錄、不穿 symlink、
+           不清 -C 之上；-r/-u 拒絕非 tar
+  f767813  scrypt parameters bounded; a truncated bz2 is an error / scrypt 參數設限；截斷的 bz2 報錯
+  5cef3b5  RPM with a large header; --zstd-parallel memory bounded; N1 zstd multiple-of-4-MiB
+  f9b91dd  N2: -x/-t/-O select by member name / 依成員名稱選取
+  f508e07  N4 --delete of a directory; N5 -c ../x; M12 Windows junction loop; S3 release checks
+  e52d012  times before 1970 restored on extraction; ZIP shrink reported
+  06988ba  Windows: a rooted -C extracts under the drive root (Swift_tar-W11)
+  9536d6b  Windows: -c stores a pre-1970 mtime (Swift_tar-W11)
+  8c9100c  Windows: -c --zip reads CJK-named operands and archives (Swift_tar-W11)
+  35c6c2b  Windows review B-G (LZFSE2-Win)
+  Not fixed, recorded in bugs/libarchive.md: a pre-1970 ZIP time reads as 2096 in bsdtar and
+  1980 in unzip; libarchive's Windows "Couldn't visit directory" may read freed memory.
+  未修，記於 bugs/libarchive.md：1970 前的 ZIP 時間在 bsdtar 讀成 2096、unzip 讀成 1980；
+  libarchive Windows 的「Couldn't visit directory」可能讀到已釋放的記憶體。
+
+== Archives / 封存 ==
+a196eb8b5aea4f871f50902bd552b93296defab06b4d7ba4d5f8bc61d3b18c75  swift_tar-0.1.5-macos-arm64.tar.zst
+2d35b841519522a7e879a65b99fc26797b7722377aed40b0ee7e707393fe5ba1  swift_tar-0.1.5-linux-aarch64.tar.zst
+1d7605fdde81c9b4343885832956e0528811102f786556eb118622096b28248b  swift_tar-0.1.5-linux-x86_64.tar.zst
+68c762fbda9681e2c544ac6ab3e84a581e51a1288978240812edd955f43995a7  swift_tar-0.1.5-windows-x86_64.tar.zst
+Each sha256 was recomputed on the Mac with openssl and matched its .sha256. publish.zsh
+downloaded all four back from the public URL and compared them with these files.
+每份 sha256 都在 Mac 上以 openssl 重算並與 .sha256 一致。publish.zsh 已從公開網址下載四份並比對一致。
+
+== Whole test suite at 8c9100c / 於 8c9100c 的整套測試 ==
+The tag e3b6e0e adds on top of 8c9100c only bugs/libarchive.md, the move of two records into
+bugs/, and the VERSION bump, so the source compiled into the release is the same. After the
+bump, test_release was rerun on the Mac: 62/0.
+tag e3b6e0e 在 8c9100c 之上只多了 bugs/libarchive.md、兩份紀錄搬進 bugs/、以及改版號，發布版編進去
+的原始碼相同。改版號後在 Mac 重跑 test_release：62/0。
+
+macOS, Mac M4 (Apple Swift 6.4, swiftlang-6.4.0.34.1; build warnings 0)
+  40 files, every rc=0, FAIL 0. test_review_20261031 93/0/2, test_zip_fidelity 62/0.
+macOS, Mac M6 (Apple Swift 6.4, swiftlang-6.4.0.34.1; build warnings 0), reported by Multissh-M4
+  40 files, every rc=0, FAIL 0. test_review_20261031 91/0/3, test_zip_fidelity 62/0.
+Linux guest, aarch64 buildroot (Swift 6.4, swift-6.4-RELEASE; build warnings 0), reported by LinuxCS-M4
+  Two runs, root and the unprivileged dev account: 40 files each, every rc=0, FAIL 0.
+  test_review_20261031 90/0/3 (M6 via an unprivileged user namespace in the dev run),
+  test_zip_fidelity 62/0 including the CJK section.
+Windows (Swift 6.4.1, x86_64-unknown-windows-msvc; build warnings 0), reported by Swift_tar-W11
+  Every file rc=0: TOTAL PASS 989, FAIL 0. M12, H9 and the rooted -C cases pass.
+WSL (Swift 6.4.1, x86_64-unknown-linux-gnu; build warnings 0), reported by Swift_tar-W11
+  Every file rc=0: TOTAL PASS 1007, FAIL 0.
+
+== macos-arm64 (built and run on the Mac M4) ==
+build: ./compile_tar.zsh --no-lzfse (compile_no_lzfse.zsh adds --install, which brew's link refuses)
+build warnings / 建置警告: 0
+release.zsh:
+swift_tar 0.1.5 (v0.1.5 / e3b6e0e8) 20261031-120023
+verified: extracted, ran, round-tripped a .tar.gz, refused LZFSE / 已驗證：解開、執行、完成 .tar.gz 往返、拒絕 LZFSE
+
+== linux-aarch64 (musl static, built on the Mac; run in the VM) ==
+toolchain: Apple Swift version 6.4 (swift-6.4-RELEASE), swift-6.4.0-RELEASE_static-linux-0.1.0
+build warnings / 建置警告: 0
+VM: ~/projWin/VM-test, console-20261031-120111-tcg-smp4.log
+VERIFIED swift_tar-0.1.5-linux-aarch64.tar.zst
+  sha256  2d35b841519522a7e879a65b99fc26797b7722377aed40b0ee7e707393fe5ba1
+  version swift_tar 0.1.5 (v0.1.5 / e3b6e0e8) 20261031-115941
+  machine Linux 7.3.0-dirty aarch64
+  checks  static, ran in an empty environment, .tar.gz round trip, LZFSE refused, --crypto-selftest, -test
+VERIFY_RC=0
+
+== linux-x86_64 (musl static, built on the Mac; run on WSL by Swift_tar-W11) ==
+toolchain: Apple Swift version 6.4 (swift-6.4-RELEASE), swift-6.4.0-RELEASE_static-linux-0.1.0
+build warnings / 建置警告: 0
+VERIFIED swift_tar-0.1.5-linux-x86_64.tar.zst
+  sha256  1d7605fdde81c9b4343885832956e0528811102f786556eb118622096b28248b
+  version swift_tar 0.1.5 (v0.1.5 / e3b6e0e8) 20261031-115920
+  machine Linux 6.18.54.1-microsoft-standard-WSL2 x86_64
+  checks  static, ran in an empty environment, .tar.gz round trip, LZFSE refused, --crypto-selftest, -test
+verify rc=0
+
+== windows-x86_64 (built and run on Windows by Swift_tar-W11) ==
+toolchain: Swift version 6.4.1 (swift-6.4.1-RELEASE), Target: x86_64-unknown-windows-msvc
+build: EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh, rc=0, warnings 0
+release.zsh (the extracted exe runs with PATH=/c/Windows/System32:/c/Windows since S3):
+swift_tar 0.1.5 (v0.1.5 / e3b6e0e8) 20261031-120320
+verified: extracted, ran, round-tripped a .tar.gz, refused LZFSE / 已驗證：解開、執行、完成 .tar.gz 往返、拒絕 LZFSE
+Delivered to the Mac's dist/ by scp; shasum -c OK there.

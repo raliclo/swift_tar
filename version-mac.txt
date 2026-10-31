@@ -1,4 +1,4 @@
-swift_tar_version=20261030-150730
+swift_tar_version=20261031-120023
 lz4_version=v1.9.2-1745-g779b3556
 lz4_commit=779b3556802f61774ed7f03a72023775ffe7795a
 lz4_linkage=static
@@ -12,7 +12,7 @@ libarchive_version=v3.7.5-2164-g7f149b10
 libarchive_commit=7f149b1076f27449a6cfcb92e5046aea8590f833
 libarchive_linkage=static
 lzfse2=excluded
-swift_tar_source=a7f406d9029eca88b0c55a01600286f156581297
+swift_tar_source=7a6f1b995991a42c47382a10e26ff04a2a7c3eee
 zlib_dylib_version=1.2.12
 zlib_path=/usr/lib/libz.1.dylib
 zlib_linkage=dynamic

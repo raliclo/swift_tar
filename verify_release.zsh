@@ -50,7 +50,11 @@ B=$W/$stem/swift_tar
 # Static: no program interpreter. Asked of the binary, with whatever this machine has.
 # 靜態：沒有 program interpreter。問執行檔本身，用這台機器上有的工具。
 if command -v readelf >/dev/null 2>&1; then
-  ! readelf -lW "$B" | grep -q INTERP || die "the binary has a program interpreter; it is not static" "執行檔有 program interpreter；不是靜態的"
+  # readelf's own failure must fail too: `! readelf | grep -q` read an empty listing as
+  # "no interpreter" (2026-10-31 review S2).
+  # readelf 本身失敗也要算失敗：`! readelf | grep -q` 把空的輸出讀成「沒有 interpreter」（審查 S2）。
+  segs=$(readelf -lW "$B") || die "readelf -lW failed on the binary" "readelf -lW 對執行檔失敗"
+  [[ $segs != *INTERP* ]] || die "the binary has a program interpreter; it is not static" "執行檔有 program interpreter；不是靜態的"
 elif command -v file >/dev/null 2>&1; then
   [[ $(file -b "$B") == *statically\ linked* ]] || die "file does not call the binary static: $(file -b "$B")" "file 不認為它是靜態的"
 else

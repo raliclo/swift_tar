@@ -330,5 +330,53 @@ else
     '[[ $(perm o8p/m8/d) == 777 && $(perm o8p/m8/big) == 666 && $(perm o8p/m8/p) == 666 ]]'
 fi
 
+# --- M13: a hardlink whose target is missing skips that member, not the rest ---------------
+# --- M13：目標不存在的硬連結只略過該成員，不中止其餘 -----------------------------------------
+raw m13.tar hard h13 missing13 file after13.txt A
+mkdir -p o13; run -xf m13.tar -C o13
+check "M13 a hardlink to a missing target: exits non-zero / 目標不存在：以非 0 結束" '(( rc != 0 ))'
+check "M13 the member after it is still written / 其後的成員照樣寫出" '[[ $(<o13/after13.txt) == A ]]'
+check "M13 stderr names the hardlink / stderr 指出該硬連結" 'grep -q "skipping hardlink .h13" "$TMP/out"'
+
+# --- M15: a second -C is refused rather than taken as an operand ---------------------------
+# --- M15：第二個 -C 被拒絕，而不是被當成運算元 ---------------------------------------------
+mkdir -p m15a m15b; print 1 > m15a/f1; print 2 > m15b/f2
+run -cf m15.tar -C m15a f1 -C m15b f2
+check "M15 two -C: exits non-zero and says only one is supported / 兩個 -C：非 0 並說明只支援一個" \
+  '(( rc != 0 )) && grep -q "only one -C" "$TMP/out"'
+run -cf m15c.tar -C m15a f1
+check "M15 control: one -C works / 對照：一個 -C 可用" '(( rc == 0 )) && "$ST" -tf m15c.tar | grep -qx f1'
+
+# --- M16: -test run by a bare name through PATH finds itself ------------------------------
+# --- M16：經 PATH 以裸名稱執行 -test 能找到自己 --------------------------------------------
+if (( windows )); then
+  skipc "M16 is the POSIX half; Windows already searched PATH / M16 為 POSIX 部分"
+else
+  mkdir -p m16
+  ( cd m16 && PATH="${ST:h}:$PATH" "${ST:t}" -test ) >"$TMP/m16.out" 2>&1 && rc=0 || rc=$?
+  check "M16 bare-name -test passes / 裸名稱 -test 通過" '(( rc == 0 )) && ! grep -q "FAILED" "$TMP/m16.out"'
+fi
+
+# --- M17: a NUL inside a long name cannot hide a ".." --------------------------------------
+# --- M17：長檔名內的 NUL 不能藏住 ".." ------------------------------------------------------
+# A GNU L record "..<NUL>AAAA/" names the next member, a directory with mode 0777. The C calls
+# see "..". On macOS 0.1.4 is not hurt by it -- FileManager refuses a path holding a NUL, so the
+# directory is skipped before any chmod -- and the two mode checks pass there too; they stay as
+# guards because Linux's Foundation was not measured. The -t check is the one 0.1.4 fails: it
+# listed "..<NUL>AAAA/", a name no C call sees.
+# GNU L 記錄 "..<NUL>AAAA/" 為下一個成員命名，該成員是 mode 0777 的目錄。C 呼叫看到的是 ".."。
+# macOS 上 0.1.4 不受影響——FileManager 拒絕含 NUL 的路徑，目錄在任何 chmod 之前就被略過——所以
+# 兩項 mode 檢查在 0.1.4 上也通過；保留為防護，因為 Linux 的 Foundation 沒有量過。0.1.4 失敗的是
+# -t 那一項：它列出 "..<NUL>AAAA/"，一個沒有任何 C 呼叫看得到的名稱。
+RAW_TAR_MODE=0000777 "$RAW" m17.tar file '././@LongLink' '..ZAAAA/' dir placeholder/ - >/dev/null
+printf '\0' | dd of=m17.tar bs=1 seek=514 conv=notrunc 2>"$TMP/dd.err"
+settype m17.tar L
+mkdir -p p17/o17; chmod 700 p17
+run -xf m17.tar -C p17/o17
+check "M17 the parent of -C keeps mode 700 / -C 的上一層維持 700" '[[ $(perm p17) == 700 ]]'
+check "M17 -C itself is not chmodded either / -C 本身也沒被改" '[[ $(perm p17/o17) != 777 ]]'
+run -tf m17.tar
+check "M17 -t shows the name as the C calls see it / -t 顯示 C 端看到的名稱" 'grep -qx ".." "$TMP/out"'
+
 print -r -- "PASS: $pass  FAIL: $fail  SKIP: $skip"
 (( fail == 0 ))

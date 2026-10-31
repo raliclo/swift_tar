@@ -651,10 +651,15 @@ mkdir -p "$REP/c1" "$REP/c2"
 printf 'from c1\n' > "$REP/c1/f.txt"
 printf 'from c2\n' > "$REP/c2/f.txt"
 
-"$ST" -c -f "$TMP/rep.tar" -C "$REP/c1" -C "$REP/c2" f.txt >/dev/null 2>&1
-rm -rf "$TMP/repx"; mkdir -p "$TMP/repx"
-"$ST" -x -f "$TMP/rep.tar" -C "$TMP/repx" >/dev/null 2>&1
-eq "repeated -C: the first wins" "from c1" "$(cat "$TMP/repx/f.txt" 2>/dev/null)"
+# -C is the exception since 2026-10-31 (review M15): GNU tar and bsdtar give -C a position, so
+# a second one is refused rather than dropped -- dropping it also turned its value into an operand.
+# 自 2026-10-31 起 -C 是例外（審查 M15）：GNU tar 與 bsdtar 的 -C 依位置生效，所以第二個 -C
+# 被拒絕而不是被捨棄——捨棄時它的值還會變成運算元。
+rm -f "$TMP/rep.tar"
+if "$ST" -c -f "$TMP/rep.tar" -C "$REP/c1" -C "$REP/c2" f.txt >"$TMP/rep.out" 2>&1; then rep_rc=0; else rep_rc=$?; fi
+[ "$rep_rc" -ne 0 ] && grep -q 'only one -C' "$TMP/rep.out" && [ ! -e "$TMP/rep.tar" ] \
+  && ok "repeated -C: refused, no archive written" \
+  || bad "repeated -C: refused, no archive written"
 
 head -c 400000 /dev/urandom > "$REP/c1/big.bin"
 "$ST" -c --zstd --zstd-level 1 --zstd-level 19 -f "$TMP/rl.tzst" -C "$REP/c1" big.bin >/dev/null 2>&1

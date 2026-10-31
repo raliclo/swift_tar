@@ -251,7 +251,7 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🔴 部分處理（H1–H10、M1–M8、M11 已修）/ Whole-tree code review of v0.1.4 ▸ partly fixed
+## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🔴 部分處理（H1–H10、M1–M8、M11、M13、M15–M17、S1、S2 已修）/ Whole-tree code review of v0.1.4 ▸ partly fixed
 
 **進度 / Progress**
 - ✅ H1–H7 已修（macOS）：`test/test_review_20261031.zsh` 27 項，對 0.1.4 失敗 22 項（H7 的競態在 0.1.4 上兩次執行皆
@@ -269,6 +269,15 @@ file has to exist for that reference to mean anything.
   Fixed on macOS; 15 more checks, 10 fail on 0.1.4 (the rest are controls). M7 follows
   bsdtar 3.8.8 as measured; GNU tar differs on types 2 and 6. M6 is NOT run here (no
   passwordless `sudo chown`); it needs a root run on Linux.
+- ✅ M13、M15、M16、M17、S1、S2 已修（macOS）：再加 9 項，對 0.1.4 失敗 5 項，修正後 62/0。
+  - M15 不實作依位置生效的 `-C`，改為出現兩個以上即報錯。
+  - **M17 降級**：macOS 上 0.1.4 實測不受影響，因為 FileManager 拒絕含 NUL 的路徑，目錄在 chmod 前就被略過。
+    修正讓檢查與 C 呼叫看到同一個名稱；Linux 的 Foundation 未量。
+  - S1 三條分支都驗過：真編碼器、故意失敗的假執行檔、公開版。
+  - S2 本機沒有 readelf，只做了 `zsh -n` 與構造示範，需 Linux 端實跑。
+  Fixed on macOS. M15 refuses a second -C instead of implementing positional -C. M17 is
+  downgraded: 0.1.4 on macOS is not hurt (FileManager refuses a NUL path before any chmod);
+  the fix makes the check and the C calls see one name. S2 needs a Linux run (no readelf here).
 - ✅ H8、M11 由 Windows 端修於 `82e7e7a`（橋接層祖先走訪改用 `\\?\`，無法檢查時拒絕；`winSetPathMtime` 經
   `winUcrtPath`）；UNC 路徑（`dcf0a94`）與 `package_win.zsh` 的 runtime 選擇（`82e7e7a`）亦同。
   Fixed by the Windows side in 82e7e7a / dcf0a94.

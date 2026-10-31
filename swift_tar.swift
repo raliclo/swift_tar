@@ -5779,9 +5779,21 @@ final class TarReader {
                     if let eq = rec.firstIndex(of: UInt8(ascii: "=")) {
                         let key = String(decoding: rec[rec.startIndex..<eq], as: UTF8.self)
                         let val = String(decoding: rec[rec.index(after: eq)...], as: UTF8.self)
+                        // 名稱截在第一個 NUL，讓每道檢查看到的就是 C 呼叫實際收到的字串。0.1.4 保留
+                        // NUL：`..\0AAAA/` 不等於 ".."、通過 ".." 檢查，而任何 C 呼叫收到的都是 `..`。
+                        // macOS 上 FileManager 拒絕含 NUL 的路徑，所以實測沒有寫到 -C 之外；但檢查與
+                        // 動作看到不同的名稱，安全就只靠那個巧合。GNU L/K 同理，見下方。
+                        // （2026-10-31 審查 M17）
+                        // A name ends at its first NUL, so every check sees the string the C
+                        // calls receive. 0.1.4 kept the NUL: `..\0AAAA/` is not "..", passed the
+                        // ".." check, and every C call received `..`. On macOS FileManager refuses
+                        // a path holding a NUL, so nothing landed outside -C as measured; but with
+                        // the check and the action seeing different names, safety rested on that
+                        // accident. The same for GNU L/K below. (2026-10-31 review M17)
+                        let name = String(decoding: rec[rec.index(after: eq)...].prefix(while: { $0 != 0 }), as: UTF8.self)
                         switch key {
-                        case "path":     paxPath = val
-                        case "linkpath": paxLink = val
+                        case "path":     paxPath = name
+                        case "linkpath": paxLink = name
                         case "size":     paxSize = UInt64(val)
                         // A pax `mtime` record was read and dropped until 2026-09-17,
                         // so every entry kept its header field instead. Two ways that
@@ -5851,8 +5863,8 @@ final class TarReader {
                 guard let data = readExactly(padded) else {
                     throw TarError.format("truncated GNU longname / GNU 長檔名不完整")
                 }
-                gnuLongName = String(decoding: data.prefix(Int(size)), as: UTF8.self)
-                    .trimmingCharacters(in: CharacterSet(["\0"]))
+                // 截在第一個 NUL，見上方 pax path（審查 M17）。/ Ends at the first NUL; see pax path above (review M17).
+                gnuLongName = String(decoding: data.prefix(Int(size)).prefix(while: { $0 != 0 }), as: UTF8.self)
                 continue
             case UInt8(ascii: "K"):     // GNU long linkname / GNU 長連結名
                 guard let padded = tarPaddedLength(size) else {
@@ -5864,8 +5876,7 @@ final class TarReader {
                 guard let data = readExactly(padded) else {
                     throw TarError.format("truncated GNU longlink / GNU 長連結名不完整")
                 }
-                gnuLongLink = String(decoding: data.prefix(Int(size)), as: UTF8.self)
-                    .trimmingCharacters(in: CharacterSet(["\0"]))
+                gnuLongLink = String(decoding: data.prefix(Int(size)).prefix(while: { $0 != 0 }), as: UTF8.self)
                 continue
             default:
                 break
@@ -6273,8 +6284,15 @@ final class TarReader {
                 // `L -> ../escape/victim` 接著 `hard H L` 使 out/H 與目的地之外的檔案
                 // 共用 inode，不需要任何後續成員。linkat(..., 0) 在兩者上都連結 symlink
                 // 本身，與 GNU tar、bsdtar 的結果相同：out/H 是一個 symlink。
+                // 失敗只略過這一個成員，不中止整次解壓：目標不存在（或被 --exclude 排除）時，
+                // 0.1.4 在此 throw，其後所有成員都沒寫出。GNU tar 報錯後繼續。（2026-10-31 審查 M13）
+                // A failure skips this member only rather than ending the run: with the
+                // target missing (or excluded), 0.1.4 threw here and nothing after it was
+                // written. GNU tar reports it and carries on. (2026-10-31 review M13)
                 if linkat(AT_FDCWD, target, AT_FDCWD, dest, 0) != 0 {
-                    throw TarError.io("hardlink failed for '\(dest)' / 建立硬連結失敗")
+                    let why = String(cString: strerror(errno))
+                    skipMember("swift_tar: skipping hardlink '\(rel)' -> '\(linkname)': \(why) / 略過硬連結 '\(rel)' -> '\(linkname)'：\(why)")
+                    continue
                 }
 #endif
             case UInt8(ascii: "0"), 0, UInt8(ascii: "7"):
@@ -7109,6 +7127,22 @@ func runSelfTest(debug: Bool = false) {
             .replacingOccurrences(of: ".exe", with: "")
 #if os(Windows)
         if let resolved = resolveExecutable(bareName) { selfExe = resolved }
+#else
+        // POSIX 也一樣：經 PATH 以 `swift_tar -test` 執行時 argv[0] 是裸名稱，0.1.4 把它解析成
+        // 工作目錄下不存在的檔案，於是每個子行程都啟動失敗。（2026-10-31 審查 M16）
+        // The same on POSIX: run through PATH as `swift_tar -test`, argv[0] is a bare
+        // name, which 0.1.4 resolved to a missing file in the working directory, so
+        // every child process failed to start. (2026-10-31 review M16)
+        if !CommandLine.arguments[0].contains("/") {
+            let pathVar = ProcessInfo.processInfo.environment["PATH"] ?? ""
+            for dir in pathVar.split(separator: ":")
+            where FileManager.default.isExecutableFile(atPath: "\(dir)/\(bareName)") {
+                // 絕對路徑：PATH 裡可能有相對目錄，而子行程會改變工作目錄。
+                // Absolute: PATH may hold a relative dir, and the children change directory.
+                selfExe = URL(fileURLWithPath: "\(dir)/\(bareName)").standardizedFileURL.path
+                break
+            }
+        }
 #endif
     }
     var allOK = true
@@ -8032,6 +8066,17 @@ struct SwiftTarMain {
         // 當成 -f -，`-x -so -f a` 會去讀空的 stdin 而毫無輸出。
         let archiveFromStream = wantStdin || (args.contains("-stream-out") && doCreate)
         let archivePath = archiveFromStream ? "-" : (optValue("-f") ?? "-")
+        // 只支援一個 -C。GNU tar 與 bsdtar 的 -C 依位置生效（`-C a f1 -C b f2`），本程式不是；
+        // 0.1.4 默默只用第一個，第二個 -C 的值反而被當成要收入的運算元。明說，而不是做錯。
+        // （2026-10-31 審查 M15）
+        // Only one -C is supported. In GNU tar and bsdtar -C is positional
+        // (`-C a f1 -C b f2`); here it is not, and 0.1.4 silently used the first
+        // while the second's value became an operand. Say so rather than do the
+        // wrong thing. (2026-10-31 review M15)
+        if args.filter({ $0 == "-C" || $0.hasPrefix("-C=") }).count > 1 {
+            eprint("swift_tar: only one -C is supported; GNU tar's positional -C is not / 只支援一個 -C；不支援 GNU tar 依位置生效的 -C")
+            exit(1)
+        }
         let destDir = optValue("-C") ?? ""
 
         // ---- encryption wiring / 加密接線 ----

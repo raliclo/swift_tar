@@ -476,13 +476,17 @@ if command -v readelf >/dev/null 2>&1; then
     # it: the warning this replaces scrolled past for weeks. See -z separate-code above.
     # 程式碼可寫的建置一律拒絕，不論連結器有沒有說話：這裡取代的那則警告已經在畫面上
     # 捲過好幾週。見上方的 -z separate-code。
-    if readelf -lW release/swift_tar | grep -E '^ +LOAD ' | grep -q 'RWE'; then
+    # readelf 自己失敗時要停下，不能讀成「沒有 RWE」（2026-10-31 審查 S2）。
+    # Stop when readelf itself fails rather than read that as "no RWE" (2026-10-31 review S2).
+    segs=$(readelf -lW release/swift_tar) || die "readelf -lW 對 release/swift_tar 失敗 / readelf -lW failed on release/swift_tar"
+    secs=$(readelf -SW release/swift_tar) || die "readelf -SW 對 release/swift_tar 失敗 / readelf -SW failed on release/swift_tar"
+    if print -r -- "$segs" | grep -E '^ +LOAD ' | grep -q 'RWE'; then
         die "release/swift_tar 有同時可寫又可執行的 LOAD 區段 / has a LOAD segment that is both writable and executable"
     fi
     # Likewise for .rodata once the flag was taken off above: if it is writable again, an
     # input this script did not rewrite brought the flag back.
     # .rodata 亦然：上面已拿掉旗標，若它又變成可寫，就是有本腳本沒改寫到的輸入把旗標帶回來。
-    rodata=($(readelf -SW release/swift_tar | grep -E '\] \.rodata +PROGBITS' | sed 's/^.*\] //'))
+    rodata=($(print -r -- "$secs" | grep -E '\] \.rodata +PROGBITS' | sed 's/^.*\] //'))
     if [[ -n "$OBJCOPY" && "${rodata[7]:-}" == *W* ]]; then
         die "release/swift_tar 的 .rodata 可寫（旗標 ${rodata[7]}）/ .rodata is writable (flags ${rodata[7]})"
     fi

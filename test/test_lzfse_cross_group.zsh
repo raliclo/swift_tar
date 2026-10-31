@@ -54,9 +54,17 @@ mkdir -p "$TMP/src"
 : > "$TMP/big"
 while (( $(size_of "$TMP/big") < 8388608 )); do cat "$ROOT/swift_tar.swift" >> "$TMP/big"; done
 head -c 3000000 "$TMP/big" > "$TMP/src/x"
-if ! ( cd "$TMP" && "$ST" -c --other3-optimal -f x.lz src ) >/dev/null 2>&1; then
-  echo "SKIP: this build has no other3 encoder (the public build excludes LZFSE)"
-  exit 0
+# SKIP only when the build says it has no such option; any other failure of the encoder is a
+# FAIL. Until 2026-10-31 every failure read as SKIP with rc=0 (review S1).
+# 只有在建置明說沒有這個選項時才 SKIP；編碼器的其他任何失敗都是 FAIL。2026-10-31 之前任何失敗
+# 都被讀成 SKIP、rc=0（審查 S1）。
+if ! ( cd "$TMP" && "$ST" -c --other3-optimal -f x.lz src ) >"$TMP/enc.out" 2>&1; then
+  if grep -q 'unknown option --other3-optimal' "$TMP/enc.out"; then
+    echo "SKIP: this build has no other3 encoder (the public build excludes LZFSE)"
+    exit 0
+  fi
+  bad "the other3 encoder failed: $(<"$TMP/enc.out")"
+  echo "PASS: $pass  FAIL: $fail"; exit 1
 fi
 "$ST" --cat -f "$TMP/x.lz" > "$TMP/x.tar"
 

@@ -3028,6 +3028,28 @@ private func winCreateHardlink(dest: String, target: String) -> Bool {
 /// lazy 初始化為執行緒安全）。
 private let winProcessCwd = FileManager.default.currentDirectoryPath
 
+/// The root a rooted path (`\x`: no drive, one leading backslash) hangs from: the working
+/// directory's drive (`C:`), or `\\server\share` when the working directory is UNC. Taken from the
+/// real drive or share when the working directory is in `\\?\` or `\\?\UNC\` form too -- a process
+/// can be started in one (CreateProcessW's lpCurrentDirectory accepts it; measured 2026-10-31), and
+/// the root is not `\\?\` itself.
+/// 有根路徑（`\x`：沒有磁碟代號、開頭一個反斜線）所掛的根：工作目錄的磁碟機（`C:`），或工作目錄為
+/// UNC 時的 `\\server\share`。工作目錄是 `\\?\` 或 `\\?\UNC\` 形式時也取真正的磁碟機或共用——行程可以
+/// 在這種目錄下啟動（CreateProcessW 的 lpCurrentDirectory 接受；2026-10-31 實測），而根不是 `\\?\` 本身。
+private let winCwdRoot: String = {
+    var c = winProcessCwd.replacingOccurrences(of: "/", with: "\\")
+    if c.hasPrefix("\\\\?\\UNC\\") {
+        c = "\\\\" + c.dropFirst(8)
+    } else if c.hasPrefix("\\\\?\\") {
+        c = String(c.dropFirst(4))
+    }
+    if c.hasPrefix("\\\\") {
+        let parts = c.dropFirst(2).split(separator: "\\", maxSplits: 2, omittingEmptySubsequences: false)
+        return "\\\\" + parts.prefix(2).joined(separator: "\\")
+    }
+    return String(c.prefix(2))
+}()
+
 /// CRT calls receive the path verbatim — unlike Foundation they do not handle
 /// long paths automatically — so: normalize to backslashes, make absolute,
 /// and past MAX_PATH resolve "."/".." lexically and add the \\?\ prefix
@@ -3039,8 +3061,16 @@ private func winUcrtPath(_ path: String) -> String {
     var p = path.replacingOccurrences(of: "/", with: "\\")
     let u = Array(p.utf16)
     let hasDrive = u.count >= 2 && u[1] == UInt16(UInt8(ascii: ":"))
+    // A rooted path hangs from the working directory's root, not from the working directory.
+    // Prefixing it with the cwd gave `<cwd>\\Users\x`, and once the empty segment was dropped below,
+    // `-x -C \Users\x` wrote into <cwd>\Users\x and exited 0 (0.1.4 failed with errno 22 instead;
+    // 2026-10-31). Known gap: a drive-relative `C:x` is left as it was, not resolved against the
+    // current directory on C:.
+    // 有根路徑掛在工作目錄的根上，而不是工作目錄上。把 cwd 接在前面會得到 `<cwd>\\Users\x`，而下方丟掉
+    // 空段之後，`-x -C \Users\x` 就寫進 <cwd>\Users\x 並以 0 結束（0.1.4 則以 errno 22 失敗；2026-10-31）。
+    // 已知缺口：磁碟相對的 `C:x` 維持原樣，不會依 C: 上的目前目錄解析。
     if !hasDrive && !p.hasPrefix("\\\\") {
-        p = winProcessCwd + "\\" + p
+        p = p.hasPrefix("\\") ? winCwdRoot + p : winProcessCwd + "\\" + p
     }
     // Always prefix, not only past MAX_PATH. The `\\?\` form does two jobs: it
     // lifts the length limit, and it turns off DOS path parsing -- including the

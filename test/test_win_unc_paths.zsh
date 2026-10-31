@@ -16,6 +16,17 @@
 # 函式改走 winUcrtPath 之後，從共用資料夾 `-c` 也回報「cannot stat」（2026-10-30：0.1.4 收入 4 個成員，
 # ab1b4e9 為 0）。所用的共用是本機管理共用 //localhost/C$，不需要伺服器；連不到時 SKIP。`..` 案例釘住
 # `..` 在共用內解析，cwd 案例涵蓋 winProcessCwd 為 UNC 的情形。
+#
+# Rooted paths (`\Users\x`: no drive, one leading backslash) are the same family. winUcrtPath
+# prefixed them with the working directory, so `-x -C \Users\x` wrote <cwd>\Users\x and exited 0
+# (0.1.4 failed with errno 22 instead; 2026-10-31). A rooted path means the root of the working
+# directory: its drive, or \\server\share when the working directory is UNC. They are passed with
+# backslashes because the zsh port hands `/Users/x` to swift_tar unconverted while Git Bash
+# rewrites it to its own root.
+# 有根路徑（`\Users\x`：沒有磁碟代號、開頭一個反斜線）屬於同一族。winUcrtPath 把工作目錄接在它們
+# 前面，於是 `-x -C \Users\x` 寫到 <cwd>\Users\x 並以 0 結束（0.1.4 則以 errno 22 失敗；2026-10-31）。
+# 有根路徑指的是工作目錄的根：它的磁碟機，或工作目錄為 UNC 時的 \\server\share。以反斜線傳入，因為
+# zsh port 會把 `/Users/x` 原封不動交給 swift_tar，而 Git Bash 會把它改寫成自己的根。
 set -euo pipefail
 
 script_path="${0:A}"
@@ -85,6 +96,20 @@ rc=0; "$ST" -x -f $TMP/c1.tar -C "$U/d2/x/.." 2>$TMP/err </dev/null || rc=$?
 extracted "-x -C <UNC>/x/.." $TMP/d2
 rc=0; ( cd "$U/d3" && "$ST" -x -f $TMP/c1.tar ) 2>$TMP/err </dev/null || rc=$?
 extracted "-x with a UNC working directory" $TMP/d3
+
+# Rooted paths: $TMP without its drive, in backslashes. Run from $TMP/wd, so the old behaviour
+# leaves the files under $TMP/wd/Users/... instead.
+# 有根路徑：去掉磁碟代號、改成反斜線的 $TMP。從 $TMP/wd 執行，舊行為會把檔案留在 $TMP/wd/Users/...。
+RT="${${win[3,-1]}//\//\\}"
+mkdir -p $TMP/wd $TMP/wd2
+rc=0; ( cd $TMP/wd && "$ST" -x -f $TMP/c1.tar -C "$RT\\r1" ) 2>$TMP/err </dev/null || rc=$?
+extracted "-x -C <rooted>" $TMP/r1
+[[ ! -e $TMP/wd/Users ]] && ok "-x -C <rooted>: nothing under the working directory" \
+  || bad "-x -C <rooted>: wrote under the working directory ($TMP/wd/Users)"
+rc=0; ( cd $TMP/wd && "$ST" -c -f $TMP/c4.tar -C "$RT\\src" u ) 2>$TMP/err </dev/null || rc=$?
+created "-c -C <rooted>" $TMP/c4.tar
+rc=0; ( cd "$U/wd2" && "$ST" -x -f $TMP/c1.tar -C "$RT\\r3" ) 2>$TMP/err </dev/null || rc=$?
+extracted "-x -C <rooted> with a UNC working directory: the share's root" $TMP/r3
 
 printf 'PASS: %d  FAIL: %d  SKIP: 0\n' $pass $fail
 (( fail == 0 ))

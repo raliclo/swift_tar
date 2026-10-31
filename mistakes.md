@@ -32,6 +32,7 @@ $S/counter.zsh -i mistakes_counter.csv2 bump 1 <date>   # 第 1 條再犯一次 
 | ---: | --- | ---: | ---: | ---: | --- |
 | 1 | 樣式要 `extended_glob` 而未開，檢查的一部分不可能失敗 | 1 | 1 | 1 | — |
 | 2 | 管線末端的 `tail` 吞掉 push 失敗，`&&` 照樣推出上層 gitlink | 1 | 1 | 1 | — |
+| 3 | 工具選擇的另一條分支從沒跑過：openssl 的 `--` 讓沒有 sha256sum 的 Mac 無法出貨 | 2 | 1 | 2 | — |
 
 ---
 
@@ -115,3 +116,57 @@ swift_tar 的 push 被拒（non-fast-forward：另一處已先推了內容相同
 remote did not have. Same shape as lzfse2 entry 1, seventh disguise. Never pipe a push; check
 its own status, and before pushing a parent gitlink confirm the submodule commit is on the
 remote with `git branch -r --contains`.
+
+---
+
+## 3. 工具選擇的另一條分支從沒跑過：openssl 的 `--` 讓沒有 sha256sum 的 Mac 無法出貨 — **已發生 2 次（2026-10-20、2026-10-30）**
+
+**症狀**：`release.zsh` 的雜湊改寫（`e3c87f4`）帶著四個新案例——原生與交叉各一個「印出非雜湊」、
+一個「工具失敗」——全部通過；整套 33 支測試全綠、`claim_check` 全部落地。**而在一台沒有
+sha256sum 的 Mac 上，每一次出貨都會被拒絕**：LibreSSL 印出 `usage: dgst [-cdr] …`，接著是
+`release.zsh: a command failed`。
+
+**實際狀況**：
+
+```zsh
+if command -v sha256sum >/dev/null 2>&1; then h=$(cd -- "$1" && sha256sum -- "$2")
+elif command -v openssl >/dev/null 2>&1; then h=$(openssl dgst -sha256 -r -- "$1/$2")   # ← --
+```
+
+macOS 的 `/usr/bin/openssl` 是 LibreSSL 3.3.6，它不認得 `--`，以 1 結束（Homebrew 的 OpenSSL
+接受，所以 PATH 順序也會改變結果）。`--` 是「為了保險」加的，**從沒在任何一個 openssl 上跑過**：
+
+- 手邊每一台機器都有 sha256sum——macOS 27 的 `/sbin/sha256sum`、Linux 的 coreutils、Windows 的
+  Git Bash——所以 `elif` 永遠不會被走到；
+- 新案例把**假的** sha256sum 放在 PATH 最前面，那只會讓 `command -v sha256sum` 更確定成立。
+  四個案例測的全是同一條分支。
+
+同一行 `openssl dgst -sha256 -r --` 在 `publish.zsh` 的 `sha256_of` 裡**從 `bed0956`
+（2026-10-20，發布工具建立時）就在了**，十一天沒有人發現，原因相同。那是第一次；`e3c87f4`
+把它抄進 `release.zsh` 是第二次。
+
+**怎麼發現的**：2026-10-31 的審查直接執行 `/usr/bin/openssl dgst -sha256 -r -- f`，得到 rc 1。
+再把 `/sbin` 移出 PATH、讓 LibreSSL 排最前，端對端跑 `test_release.zsh`：HEAD 的打包兩項失敗，
+`df415e4`（改動之前）通過。修正在 `a079540`。
+
+**與第 1 條同形**（對照組只落在一邊），也是 skill 關口 4 的形狀，只是範圍更窄：**驗證的平台是
+對的，但那個平台走不到這條分支。** 「在我的平台上通過」在這裡什麼都沒說，因為我的平台根本不
+執行那一行。
+
+**現在怎麼防**：
+
+- **有 `if/elif` 的工具選擇，就讓每一條分支各有一個案例真的走到。** 方法是把前面的工具**移出**
+  PATH，而不是在前面放一個假的——後者只會讓第一條分支更確定被選中。`test_release.zsh` 的
+  openssl 案例就是這樣做（只在 macOS，那裡 sha256sum 獨佔 `/sbin`）。
+- **加 `--` 這類「保險」旗標之前，在每一個目標實作上跑一次**：LibreSSL 與 OpenSSL、GNU 與 BSD
+  的同名工具，接受的語法並不相同。保險旗標本身也是一段沒驗過的程式碼。
+- 寫完一個分支時問一句：**「這台機器會走哪一條？」** 若每台機器的答案都一樣，另一條就是沒驗過。
+
+`release.zsh` and `publish.zsh` fell back to `openssl dgst -sha256 -r --` when sha256sum was
+absent, and macOS's LibreSSL rejects `--`, so a Mac without sha256sum could not release. Every
+available machine had sha256sum, and the new cases put a fake one first on PATH, so all of them
+ran the sha256sum branch and passed. In `publish.zsh` since `bed0956` (2026-10-20), copied into
+`release.zsh` by `e3c87f4` (2026-10-30), fixed in `a079540`. Same shape as entry 1 and as the
+skill's gate 4, narrower: the platform was right, but it never reaches that branch. Give every
+branch of a tool choice a case that takes it -- by removing the earlier tool from PATH, not by
+shadowing it -- and run a "just in case" flag such as `--` on every implementation it targets.

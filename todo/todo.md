@@ -251,7 +251,7 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🔴 部分處理（H1–H10、M1–M11、M13、M15–M17、S1、S2、N1 已修）/ Whole-tree code review of v0.1.4 ▸ partly fixed
+## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🔴 部分處理（H1–H10、M1–M11、M13–M17、S1、S2、N1–N3 已修）/ Whole-tree code review of v0.1.4 ▸ partly fixed
 
 **進度 / Progress**
 - ✅ H1–H7 已修（macOS）：`test/test_review_20261031.zsh` 27 項，對 0.1.4 失敗 22 項（H7 的競態在 0.1.4 上兩次執行皆
@@ -287,6 +287,17 @@ file has to exist for that reference to mean anything.
   M9 upgraded: an RPM with a header over 64 KiB failed outright on 0.1.4. M10: 3.2 GB RSS →
   13 MB. N1 (new): the sequential zstd decoder failed a valid, highly compressible frame whose
   decoded size is a multiple of 4 MiB, because a no-progress call's hint overwrote the final 0.
+- ✅ N2、N3、M14 與兩個低風險項已修（macOS）：再加 11 項，對 0.1.4 失敗 7 項（其餘為對照），修正後 77/0。
+  - N2：`-x`、`-t`、`-O` 依成員名稱選取（完全相符或目錄前綴，不展開萬用字元，同 GNU tar）；找不到的名稱
+    一律以 1 結束。ZIP 後端尚不支援選取，有運算元時拒絕。
+  - N3：`--no-same-permissions` 也去掉 setuid／setgid／sticky。
+    原本的 N3 檢查用 `stat -f %Lp`，而它會丟掉 setuid 位元，所以在 0.1.4 上也會通過；改用 `fperm` 後
+    才在 0.1.4 上失敗。
+  - M14：暫存檔以 0600 建立、替換前套用原檔權限；POSIX 上以 `rename(2)` 原子替換。原子性本身沒有測試。
+  - 低風險：`--zstd-level` 不搭配 `--zstd` 時拒絕；symlink 目標讀不到時計入退出碼（需要競態，無測試）。
+  N2: member operands select on -x/-t/-O, a missing name exits 1, ZIP refuses operands. N3:
+  setuid/setgid/sticky dropped too (the first N3 check used `stat -f %Lp`, which hides setuid,
+  so it could not fail; `fperm` fixes that). M14: 0600 temp, original mode, rename(2).
 - ✅ H8、M11 由 Windows 端修於 `82e7e7a`（橋接層祖先走訪改用 `\\?\`，無法檢查時拒絕；`winSetPathMtime` 經
   `winUcrtPath`）；UNC 路徑（`dcf0a94`）與 `package_win.zsh` 的 runtime 選擇（`82e7e7a`）亦同。
   Fixed by the Windows side in 82e7e7a / dcf0a94.

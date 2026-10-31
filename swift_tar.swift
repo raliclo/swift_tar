@@ -3497,7 +3497,11 @@ private func extractedMode(_ mode: UInt32) -> mode_t {
     // umask(2) 沒有唯讀形式，設定後再設回。/ umask(2) has no read-only form; set it and set it back.
     let current = umask(0)
     umask(current)
-    return mode_t(mode & 0o7777) & ~current
+    // setuid／setgid／sticky 也一併去掉，與 GNU tar、bsdtar 相同：0.1.4 在 umask 027 下把 4755
+    // 解成 -rwsr-x---，它們給 -rwxr-x---。（2026-10-31，比較文件發現，N3）
+    // setuid/setgid/sticky go too, as in GNU tar and bsdtar: at umask 027 0.1.4 made 4755
+    // -rwsr-x---, where they give -rwxr-x---. (2026-10-31, found by the comparison document, N3)
+    return mode_t(mode & 0o777) & ~current
 }
 
 /// Set a path's atime and mtime to `seconds.nanos` without following a final symlink,
@@ -4872,6 +4876,7 @@ final class TarWriter {
             // junction 是目錄、AppExecLink 被判為一般檔案——故這是對「紙上可達」的防護，
             // 不是對已發生情形的修補。
             guard !dest.isEmpty else {
+                unreadableCount += 1   // 計入退出碼（審查低風險項）/ counts toward the exit status (review, low)
                 eprint("swift_tar: skipping '\(name)': cannot read the symlink target / 略過 '\(name)'：讀不出 symlink 的目標")
                 return
             }
@@ -5102,6 +5107,7 @@ final class TarWriter {
             // 錯誤或競態，不是分類錯誤。
             let dest = (try? FileManager.default.destinationOfSymbolicLink(atPath: readPath)) ?? ""
             guard !dest.isEmpty else {
+                unreadableCount += 1   // 計入退出碼（審查低風險項）/ counts toward the exit status (review, low)
                 eprint("swift_tar: skipping '\(name)': cannot read the symlink target / 略過 '\(name)'：讀不出 symlink 的目標")
                 return
             }
@@ -5587,10 +5593,22 @@ final class TarReader {
         // 留下的既有檔案照常覆寫，與所有 tar 的行為一致。宣告於最後，使 memberwise
         // initializer 的引數順序與呼叫端一致。
         var force: Bool = false
+        // 命令列上的成員名稱；空 = 全部。見 run() 裡的選取。/ Member operands; empty = all. See the selection in run().
+        var members: [String] = []
+    }
+
+    /// 選取比較用的名稱：去掉開頭的 "./" 與結尾的 "/"。/ A name as selection compares it: no leading "./", no trailing "/".
+    fileprivate static func selectionKey(_ s: String) -> String {
+        var t = Substring(s)
+        while t.hasPrefix("./") { t = t.dropFirst(2) }
+        while t.count > 1 && t.hasSuffix("/") { t = t.dropLast() }
+        return String(t)
     }
 
     func run(options: Options) throws {
         var zeroBlocks = 0
+        let selection = options.members.map(TarReader.selectionKey)
+        var selected = Set<String>()
         var paxPath: String? = nil, paxLink: String? = nil, paxSize: UInt64? = nil
         var paxMtime: UInt64? = nil
         var paxMtimeNanos: UInt32 = 0
@@ -5920,6 +5938,22 @@ final class TarReader {
             // skipped data that the type branches did not, and `-t` skipped only
             // types 0/7. (2026-10-31 review M7)
             let hasData = !isDir && !(UInt8(ascii: "1")...UInt8(ascii: "6")).contains(typeflag)
+            // 命令列上的成員名稱，列表、-O 與解出皆適用：完全相符，或位在該目錄之下，與 GNU tar
+            // 相同（不展開萬用字元）。0.1.4 完全忽略它們：`-xf t.tar b.log` 解出整個封存並以 0
+            // 結束。找不到的名稱在最後回報。（2026-10-31，比較文件發現，N2）
+            // Member operands, for listing, -O and extraction alike: an exact match or
+            // anything under that directory, as GNU tar does (no wildcards). 0.1.4 ignored
+            // them entirely: `-xf t.tar b.log` extracted the whole archive and exited 0.
+            // Names never matched are reported at the end. (2026-10-31, found by the
+            // comparison document, N2)
+            if !selection.isEmpty {
+                let key = TarReader.selectionKey(name)
+                guard let hit = selection.first(where: { key == $0 || key.hasPrefix($0 + "/") }) else {
+                    if hasData { try skipData(size) }
+                    continue
+                }
+                selected.insert(hit)
+            }
             // --exclude, for listing and extraction alike; see memberIsExcluded.
             // --exclude，列表與解出皆適用；見 memberIsExcluded。
             if TarReader.memberIsExcluded(name, isDirectory: isDir) {
@@ -6514,6 +6548,13 @@ final class TarReader {
         // and nothing about what gets written.
         // --strict（預設）：在最後才回報略過的成員——其他一切都已落地、目錄時間也都設好之後——
         // 所以嚴格模式只改變退出碼，不改變寫出的內容。
+        // 找不到的成員名稱一律是錯誤，不受 --no-strict 影響（GNU tar rc=2、bsdtar rc=1）。
+        // A member operand never found is always an error, --no-strict or not (GNU tar rc=2, bsdtar rc=1).
+        let missing = selection.filter { !selected.contains($0) }
+        for m in missing { eprint("swift_tar: \(m): not found in archive / 封存中找不到 \(m)") }
+        if !missing.isEmpty {
+            throw TarError.io("\(missing.count) member name(s) not found in archive / 封存中找不到 \(missing.count) 個成員名稱")
+        }
         if tarStrict && skippedMembers > 0 {
             throw TarError.io("\(skippedMembers) member(s) skipped; pass --no-strict to exit 0 anyway / 略過了 \(skippedMembers) 個成員；如仍要以 0 結束請加 --no-strict")
         }
@@ -8002,6 +8043,16 @@ struct SwiftTarMain {
         // decoder -- so telling the user it only affects -c would be false.
         // --zstd-parallel 不適用：它在讀取時確實有作用——選擇多核心解碼——所以說它只影響 -c
         // 並不正確。
+        // --zstd-level 只對以 zstd 建立有意義；0.1.4 對 `-cz --zstd-level 19` 默默忽略。
+        // （2026-10-31 審查低風險項）
+        // --zstd-level only means something when creating with zstd; 0.1.4 silently
+        // ignored it in `-cz --zstd-level 19`. (2026-10-31 review, low)
+        if doCreate && args.contains(where: { $0 == "--zstd-level" || $0.hasPrefix("--zstd-level=") }) {
+            if case .zstd = codec {} else {
+                eprint("Error: --zstd-level needs --zstd. / 錯誤：--zstd-level 需搭配 --zstd。")
+                exit(1)
+            }
+        }
         if codecCount > 0 && !doCreate && !doAppend && !doUpdate && !tarZstdParallel {
             eprint("Note: codec flags only affect -c; reading auto-detects. / 提示：引擎旗標僅影響 -c，讀取自動偵測。")
         }
@@ -8293,6 +8344,11 @@ struct SwiftTarMain {
                     if stripComponents != 0 {
                         throw TarError.io("--strip-components is not supported for ZIP extraction / ZIP 解出不支援 --strip-components")
                     }
+                    // ZIP 後端尚不支援成員選取；拒絕，而不是像 0.1.4 那樣默默解出全部（N2）。
+                    // The ZIP backend cannot select members yet; refuse rather than extract everything as 0.1.4 did (N2).
+                    if !files.isEmpty {
+                        throw TarError.io("member names are not supported for ZIP yet; nothing was read / ZIP 尚不支援指定成員名稱；未讀取任何內容")
+                    }
                     try runZipRead(archivePath: archivePath, extract: doExtract,
                                    destDir: destDir, toStdout: toStdout, verbose: verbose,
                                    restoreMtime: restoreMtime)
@@ -8302,7 +8358,8 @@ struct SwiftTarMain {
                                 writeBackend: writeBackend, restoreMtime: restoreMtime,
                                 stripComponents: stripComponents,
                                 toStdout: toStdout, ignoreZeros: ignoreZeros,
-                                force: args.contains("--force"))
+                                force: args.contains("--force"),
+                                members: files)
                 }
             }
         } catch {
@@ -8680,7 +8737,13 @@ struct SwiftTarMain {
         var matched = Set<String>()
 
         let tmpPath = archivePath + ".swifttar-del.tmp"
-        _ = fm.createFile(atPath: tmpPath, contents: nil)
+        // 暫存檔先以 0600 建立，替換前再改成原檔的權限：0.1.4 以預設 0644 建立，於是 0600 的
+        // 封存在 --delete 之後變成人人可讀。（2026-10-31 審查 M14）
+        // The temp file starts at 0600 and takes the original's mode before the
+        // replace: 0.1.4 created it at the default 0644, so a 0600 archive became
+        // world-readable after --delete. (2026-10-31 review M14)
+        let originalMode = (try? fm.attributesOfItem(atPath: archivePath))?[.posixPermissions] as? NSNumber
+        _ = fm.createFile(atPath: tmpPath, contents: nil, attributes: [.posixPermissions: 0o600])
         guard let output = FileHandle(forWritingAtPath: tmpPath) else {
             throw TarError.io("cannot create temp '\(tmpPath)' / 無法建立暫存 '\(tmpPath)'")
         }
@@ -8822,10 +8885,22 @@ struct SwiftTarMain {
             try? fm.removeItem(atPath: tmpPath)
             throw TarError.io("no matching members deleted / 未刪除任何符合的項目")
         }
-        // Atomically replace the original with the rewritten archive.
-        // 以重寫後的封存原子替換原檔。
+        if let originalMode {
+            try? fm.setAttributes([.posixPermissions: originalMode], ofItemAtPath: tmpPath)
+        }
+        // Replace the original with the rewritten archive. On POSIX rename(2) does it in one
+        // step; 0.1.4 removed the original first, so a failure between the two calls left no
+        // archive at all (2026-10-31 review M14). Windows keeps remove-then-move.
+        // 以重寫後的封存替換原檔。POSIX 上 rename(2) 一步完成；0.1.4 先刪原檔，兩個呼叫之間
+        // 若失敗就什麼都沒留下（2026-10-31 審查 M14）。Windows 維持先刪再移。
+#if os(Windows)
         _ = try? fm.removeItem(atPath: archivePath)
         try fm.moveItem(atPath: tmpPath, toPath: archivePath)
+#else
+        guard rename(tmpPath, archivePath) == 0 else {
+            throw TarError.io("cannot replace '\(archivePath)': \(String(cString: strerror(errno))) / 無法替換 '\(archivePath)'")
+        }
+#endif
         if verbose { eprint("swift_tar: deleted \(removed) member(s) / 已刪除 \(removed) 個項目") }
     }
 
@@ -8848,7 +8923,8 @@ struct SwiftTarMain {
                         stripComponents: Int = 0,
                         toStdout: Bool = false,
                         ignoreZeros: Bool = false,
-                        force: Bool = false) throws {
+                        force: Bool = false,
+                        members: [String] = []) throws {
         // `-C` must name a directory, or nothing at all. It may not name an
         // existing file. Both reference tars refuse outright -- bsdtar with
         // "could not chdir to '<path>'", GNU tar with "Cannot open: Not a
@@ -8917,7 +8993,8 @@ struct SwiftTarMain {
                                         restoreMtime: restoreMtime,
                                         toStdout: toStdout,
                                         ignoreZeros: ignoreZeros,
-                                        force: force)
+                                        force: force,
+                                        members: members)
         try TarReader(input: stream.handle, prefix: stream.prefix).run(options: options)
         group.wait()
         guard result.ok else {

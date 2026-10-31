@@ -41,6 +41,13 @@ skipc(){ print -r -- "SKIP: $1"; skip=$((skip + 1)) }
 check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi }
 # Permission bits as octal, on BSD and GNU stat. / 權限位元（八進位），BSD 與 GNU stat 皆可。
 if [[ $(uname -s) == Darwin ]]; then perm() { stat -f %Lp -- "$1" }; else perm() { stat -c %a -- "$1" }; fi
+# Same, keeping setuid/setgid/sticky: BSD %Lp drops them, so a setuid check with perm() cannot
+# fail. / 同上但保留 setuid／setgid／sticky：BSD 的 %Lp 會丟掉它們，用 perm() 檢查 setuid 永遠不會失敗。
+fperm() {
+  local p
+  if [[ $(uname -s) == Darwin ]]; then p=$(stat -f %p -- "$1"); p=${p[-4,-1]}; else p=$(stat -c %a -- "$1"); fi
+  print -r -- "${p##0}"
+}
 # Run swift_tar; its status goes to $rc, both streams to $TMP/out. / 執行並把退出碼放在 $rc。
 run() { rc=0; "$ST" "$@" >"$TMP/out" 2>&1 || rc=$? }
 raw() { "$RAW" "$@" >/dev/null }
@@ -436,6 +443,57 @@ else
       '(( rss > 0 && rss < 268435456 ))'
   fi
 fi
+
+# --- N2: member operands select members on -x, -t and -O -----------------------------------
+# --- N2：成員名稱在 -x、-t、-O 上選取成員 --------------------------------------------------
+mkdir -p n2/sub; print a > n2/a.txt; print b > n2/b.log; print c > n2/sub/c.txt
+run -cf n2.tar -C n2 a.txt b.log sub
+mkdir -p o2n; run -xf n2.tar -C o2n b.log
+check "N2 -x b.log extracts only b.log / -x b.log 只解出 b.log" '(( rc == 0 )) && [[ -f o2n/b.log && ! -e o2n/a.txt && ! -e o2n/sub ]]'
+run -tf n2.tar sub
+check "N2 -t sub lists the directory and what is under it / -t sub 列出目錄與其下成員" \
+  '(( rc == 0 )) && [[ $(print -r -- "$(<$TMP/out)" | sort | tr "\n" " ") == "sub/ sub/c.txt " ]]'
+rc=0; "$ST" -xO -f n2.tar a.txt > "$TMP/n2o" 2>&1 || rc=$?
+check "N2 -xO a.txt prints only a.txt / -xO a.txt 只輸出 a.txt" '(( rc == 0 )) && [[ $(<$TMP/n2o) == a ]]'
+run -tf n2.tar nosuch
+check "N2 a name not in the archive: exits non-zero and names it / 不在封存中的名稱：非 0 並指出" \
+  '(( rc != 0 )) && grep -q "nosuch: not found in archive" "$TMP/out"'
+run -tf n2.tar
+check "N2 control: no operands lists everything / 對照：無運算元列出全部" \
+  '(( rc == 0 )) && [[ $(wc -l < "$TMP/out" | tr -d " ") == 4 ]]'
+
+# --- N3: --no-same-permissions drops setuid/setgid/sticky -----------------------------------
+# --- N3：--no-same-permissions 去掉 setuid／setgid／sticky ----------------------------------
+if (( windows )); then
+  skipc "N3 is POSIX-only / N3 僅適用 POSIX"
+else
+  RAW_TAR_MODE=0004755 "$RAW" n3.tar file suid.sh x >/dev/null
+  mkdir -p o3n; ( umask 027; "$ST" -xf n3.tar -C o3n --no-same-permissions ) >"$TMP/out" 2>&1 && rc=0 || rc=$?
+  check "N3 4755 at umask 027 comes out 750, setuid gone / umask 027 下 4755 成為 750" \
+    '(( rc == 0 )) && [[ $(fperm o3n/suid.sh) == 750 ]]'
+fi
+
+# --- M14: --delete keeps the archive's mode -------------------------------------------------
+# --- M14：--delete 保留封存的權限 ------------------------------------------------------------
+if (( windows )); then
+  skipc "M14 mode check is POSIX-only / M14 權限檢查僅適用 POSIX"
+else
+  mkdir -p m14; print 1 > m14/one; print 2 > m14/two
+  run -cf m14.tar -C m14 one two; chmod 600 m14.tar
+  ( umask 022; "$ST" --delete -f m14.tar one ) >"$TMP/out" 2>&1 && rc=0 || rc=$?
+  check "M14 --delete on a 0600 archive keeps 0600 / 0600 的封存刪除後仍為 0600" \
+    '(( rc == 0 )) && [[ $(perm m14.tar) == 600 ]] && [[ $("$ST" -tf m14.tar) == two ]]'
+fi
+
+# --- Low: --zstd-level needs --zstd ----------------------------------------------------------
+# --- 低：--zstd-level 需搭配 --zstd ---------------------------------------------------------
+# (The unreadable-symlink-target fix has no test: readlink failing right after lstat said
+# "link" needs a race. / 讀不出 symlink 目標的修正沒有測試：lstat 判為連結後 readlink 才失敗需要競態。)
+mkdir -p lo; print x > lo/x
+run -czf lo.tgz --zstd-level 19 lo
+check "Low --zstd-level with -z: refused / 搭配 -z 時拒絕" '(( rc != 0 )) && grep -q "needs --zstd" "$TMP/out" && [[ ! -e lo.tgz ]]'
+run -c --zstd --zstd-level 19 -f lo.tzst lo
+check "Low control: --zstd-level with --zstd works / 對照：搭配 --zstd 可用" '(( rc == 0 ))'
 
 print -r -- "PASS: $pass  FAIL: $fail  SKIP: $skip"
 (( fail == 0 ))

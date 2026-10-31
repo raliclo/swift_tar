@@ -272,7 +272,11 @@ if [[ $OS == windows ]]; then
   for t in llvm-objdump objdump; do command -v $t >/dev/null 2>&1 && { objdump_bin=$t; break; }; done
   [[ -n $objdump_bin ]] || die "neither llvm-objdump nor objdump is on PATH; the DLLs to ship are read from the PE imports" \
                                "PATH 上沒有 llvm-objdump 或 objdump；要帶哪些 DLL 是從 PE import 讀出來的"
-  typeset -a dlls=(${(f)"$(swift_tar_win_dlls "$objdump_bin" "$BIN" "$rt_bin")"})
+  # Captured first so a failure stops here: inside the array assignment it was lost (review S3).
+  # 先取出再拆，失敗才會停在這裡：包在陣列賦值裡時，失敗會被吃掉（審查 S3）。
+  dll_list=$(swift_tar_win_dlls "$objdump_bin" "$BIN" "$rt_bin") \
+    || die "could not read the PE imports of $BIN" "讀不出 $BIN 的 PE import"
+  typeset -a dlls=(${(f)dll_list})
   has_core=0
   for f in $dlls; do [[ ${f:t:l} == swiftcore.dll ]] && has_core=1; done
   (( has_core )) || die "the PE imports of $BIN never reach swiftCore.dll in $rt_bin" \
@@ -315,6 +319,16 @@ rm -rf -- "$STAGE"
 # Verify by extracting and running, not by the archive existing.
 # 以解開並執行來驗證，而不是看封存在不在。
 # ---------------------------------------------------------------------
+# On Windows the extracted exe runs with only the system directories on PATH, so every runtime
+# DLL it loads must come from the archive itself. With the full PATH a missing DLL was found in
+# the installed Swift runtime and the check passed (2026-10-31 review S3).
+# Windows 上解開的 exe 以只含系統目錄的 PATH 執行，所以它載入的每個 runtime DLL 都必須來自封存
+# 本身。用完整 PATH 時，少帶的 DLL 會從已安裝的 Swift runtime 找到，檢查照樣通過（審查 S3）。
+if [[ $OS == windows ]]; then
+  VERIFY_PATH=/c/Windows/System32:/c/Windows
+else
+  VERIFY_PATH=$PATH
+fi
 CHECK=$(mktemp -d "$DIST/.verify.XXXXXX")
 trap 'rm -rf -- "$CHECK"' EXIT
 ( cd -- "$DIST" && zstd -dq -c "$STEM.tar.zst" ) | ( cd -- "$CHECK" && tar -xf - )
@@ -337,7 +351,7 @@ if (( CROSS )); then
   print -r -- "已從檔案檢查（靜態 $ARCH ELF、內含 identity、解開後逐位元組相同）；這裡沒有執行——請在 linux-$ARCH 機器上執行 ./verify_release.zsh $STEM.tar.zst"
   exit 0
 fi
-got=$(cd -- "$CHECK/$STEM" && "./$BIN_NAME" --version | tr -d '\r')
+got=$(cd -- "$CHECK/$STEM" && PATH=$VERIFY_PATH "./$BIN_NAME" --version | tr -d '\r')
 [[ $got == "$REPORTED" ]] || die "the extracted binary reports [$got], the source one [$REPORTED]" \
                                  "解開後的執行檔回報 [$got]，來源那個回報 [$REPORTED]"
 # A binary that prints its version has only shown that it starts: it must also make and read
@@ -349,8 +363,8 @@ got=$(cd -- "$CHECK/$STEM" && "./$BIN_NAME" --version | tr -d '\r')
   mkdir -p probe/in probe/out
   print -r -- "pkg,license" > probe/in/a.txt
   seq 1 2000 > probe/in/b.txt
-  "./$STEM/$BIN_NAME" -c --gzip -f probe/p.tar.gz -C probe/in a.txt b.txt
-  "./$STEM/$BIN_NAME" -x -f probe/p.tar.gz -C probe/out
+  PATH=$VERIFY_PATH "./$STEM/$BIN_NAME" -c --gzip -f probe/p.tar.gz -C probe/in a.txt b.txt
+  PATH=$VERIFY_PATH "./$STEM/$BIN_NAME" -x -f probe/p.tar.gz -C probe/out
   cmp -s probe/in/a.txt probe/out/a.txt && cmp -s probe/in/b.txt probe/out/b.txt
 ) || die "the extracted binary could not round-trip a .tar.gz" "解開後的執行檔無法完成 .tar.gz 往返"
 # And it refuses LZFSE rather than substituting something.

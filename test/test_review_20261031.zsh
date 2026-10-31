@@ -262,17 +262,31 @@ fi
 
 # --- M6: a uid/gid above 2097151 is carried in pax, not truncated --------------------------
 # --- M6：超過 2097151 的 uid/gid 以 pax 帶出，不被截斷 -------------------------------------
-# Making such a file needs root. The chown itself is the probe, since sudoers may allow
-# `true` without a password and not `chown`; where it fails, SKIP.
-# 做出這種檔案需要 root。以 chown 本身探測，因為 sudoers 可能只放行 `true` 而不放行
-# `chown`；失敗處 SKIP。
+# swift_tar takes uid/gid from stat, so the test needs a file that stat reports as owned by
+# 3000000. Linux: an unprivileged user namespace maps our uid to it, no root needed. Else, as
+# root, chown. Otherwise (macOS as a user) SKIP. No sudo.
+# swift_tar 的 uid/gid 取自 stat，所以需要一個 stat 回報為 3000000 所有的檔案。Linux：以非特權
+# user namespace 把自己的 uid 對應過去，不需要 root。否則若是 root 就 chown。其他（macOS 一般
+# 使用者）SKIP。不用 sudo。
 mkdir -p m6; print x > m6/f
-if (( windows )) || ! sudo -n chown 3000000:3000001 m6/f >"$TMP/sudo.out" 2>&1; then
-  skipc "M6 needs passwordless sudo chown to make a file owned by uid 3000000 / M6 需免密碼 sudo chown"
-else
+m6how=""
+if (( windows )); then
+  :
+elif command -v unshare >/dev/null && unshare --user --map-user=3000000 --map-group=3000001 true >"$TMP/m6.probe" 2>&1; then
+  m6how=unshare
+  rc=0; unshare --user --map-user=3000000 --map-group=3000001 "$ST" -cf m6.tar m6/f >"$TMP/out" 2>&1 || rc=$?
+elif (( $(id -u) == 0 )); then
+  m6how=chown
+  chown 3000000:3000001 m6/f
   run -cf m6.tar m6/f
-  check "M6 bsdtar reads uid 3000000 / bsdtar 讀到 uid 3000000" \
-    'bsdtar -tvf m6.tar --numeric-owner | grep -q " 3000000 *3000001 "'
+fi
+if [[ -z $m6how ]]; then
+  skipc "M6 needs Linux user namespaces or root to make a file owned by uid 3000000 / M6 需要 Linux user namespace 或 root"
+else
+  # bsdtar prints "3000000 3000001", GNU tar "3000000/3000001". / 兩種 tar 的格式都接受。
+  if command -v bsdtar >/dev/null; then m6list=$(bsdtar -tvf m6.tar --numeric-owner); else m6list=$(tar --numeric-owner -tvf m6.tar); fi
+  check "M6 ($m6how) another tar reads uid 3000000 and gid 3000001 / 另一個 tar 讀到 uid 3000000、gid 3000001" \
+    '(( rc == 0 )) && [[ $m6list == *3000000*3000001* ]]'
 fi
 
 # --- M7: -t and -x agree on which members carry data ---------------------------------------
@@ -494,6 +508,80 @@ run -czf lo.tgz --zstd-level 19 lo
 check "Low --zstd-level with -z: refused / 搭配 -z 時拒絕" '(( rc != 0 )) && grep -q "needs --zstd" "$TMP/out" && [[ ! -e lo.tgz ]]'
 run -c --zstd --zstd-level 19 -f lo.tzst lo
 check "Low control: --zstd-level with --zstd works / 對照：搭配 --zstd 可用" '(( rc == 0 ))'
+
+# --- N4: --delete of a directory removes what is under it ------------------------------------
+# --- N4：--delete 一個目錄會一併刪掉其下成員 -------------------------------------------------
+mkdir -p n4/sub; print a > n4/a.txt; print c > n4/sub/c.txt
+run -cf n4.tar -C n4 a.txt sub
+run --delete -f n4.tar sub
+check "N4 --delete sub removes sub/ and sub/c.txt / 刪除 sub/ 與 sub/c.txt" \
+  '(( rc == 0 )) && [[ $("$ST" -tf n4.tar) == a.txt ]]'
+
+# --- N5: -c ../x drops the leading ../ with a warning ----------------------------------------
+# --- N5：-c ../x 去掉開頭的 ../ 並警告 -------------------------------------------------------
+mkdir -p n5/w; print x > n5/x.txt
+( cd n5/w && "$ST" -cf ../n5.tar ../x.txt ) >"$TMP/out" 2>&1 && rc=0 || rc=$?
+check "N5 -c ../x.txt stores x.txt / 存成 x.txt" '(( rc == 0 )) && [[ $("$ST" -tf n5/n5.tar) == x.txt ]]'
+check "N5 says it removed ../ / 說明去掉了 ../" 'grep -q "removing leading .\.\./" "$TMP/out"'
+mkdir -p o5n; run -xf n5/n5.tar -C o5n
+check "N5 the archive extracts with this tool / 本工具能解出" '(( rc == 0 )) && [[ -f o5n/x.txt ]]'
+run --help
+check "N5 --help no longer says -x refuses absolute paths / --help 不再說拒絕絕對路徑" \
+  '! grep -q "refuses absolute paths" "$TMP/out" && grep -q "strips a leading" "$TMP/out"'
+
+# --- Low: -u compares to the nanosecond ------------------------------------------------------
+# --- 低：-u 比較到奈秒 -----------------------------------------------------------------------
+if (( windows )); then
+  skipc "Low -u nanoseconds: touch -t with a fraction is POSIX here / -u 奈秒：此處以 POSIX touch 設定"
+else
+  # macOS and GNU touch both take -d YYYY-MM-DDThh:mm:SS.frac. / macOS 與 GNU touch 都接受這個 -d 格式。
+  mkdir -p lu; print 1 > lu/f
+  if ! touch -d 2020-01-01T00:00:10.100000000 lu/f 2>"$TMP/touch.err"; then
+    skipc "Low -u nanoseconds: this touch cannot set a fraction / 此 touch 設不了小數秒"
+  else
+    run -cf lu.tar lu/f
+    run -uf lu.tar lu/f
+    check "Low control: -u with nothing newer adds nothing / 對照：沒有更新者不加入" \
+      '(( rc == 0 )) && [[ $("$ST" -tf lu.tar | grep -c "^lu/f$") == 1 ]]'
+    touch -d 2020-01-01T00:00:10.900000000 lu/f
+    run -uf lu.tar lu/f
+    check "Low -u re-adds a file 0.8 s newer within the same second / 同一秒內較新 0.8 秒會重新加入" \
+      '(( rc == 0 )) && [[ $("$ST" -tf lu.tar | grep -c "^lu/f$") == 2 ]]'
+  fi
+fi
+
+# --- Low: control bytes in a member name are escaped when listed -----------------------------
+# --- 低：列出時跳脫成員名稱中的控制字元 -------------------------------------------------------
+"$RAW" lc.tar file "$(printf 'a\033[2Jb')" x >/dev/null
+run -tf lc.tar
+check "Low an ESC in a name lists as \\033 / 名稱中的 ESC 列為 \\033" \
+  '(( rc == 0 )) && grep -qxF "a\\033[2Jb" "$TMP/out" && ! grep -q "$(printf "\033")" "$TMP/out"'
+
+# --- Low: -c --zip with 60000 operands does not overflow the stack ---------------------------
+# --- 低：-c --zip 給 60000 個運算元不會堆疊溢位 ----------------------------------------------
+mkdir -p lz
+( cd lz && for i in {1..60000}; do : > f$i; done )
+( cd lz && "$ST" -c --zip -f ../lz.zip f{1..60000} ) >"$TMP/out" 2>&1 && rc=0 || rc=$?
+check "Low -c --zip with 60000 operands: exits 0 (0.1.4: SIGSEGV) / 60000 個運算元：以 0 結束" '(( rc == 0 ))'
+rm -rf lz lz.zip
+
+# --- Low: --identify --zip opens the file -----------------------------------------------------
+# --- 低：--identify --zip 會開檔 ---------------------------------------------------------------
+print "not a zip" > notzip.bin
+run --identify --zip -f notzip.bin
+check "Low --identify --zip on a text file does not say zip / 對文字檔不回答 zip" '! grep -q ": zip$" "$TMP/out"'
+
+# --- Low: a time before 1970 is carried in pax, not clamped to 1970 ---------------------------
+# --- 低：1970 年以前的時間以 pax 帶出，不夾成 1970 ----------------------------------------------
+if (( windows )); then
+  skipc "Low pre-1970 mtime: POSIX writer path / 1970 前的 mtime：POSIX 寫入路徑"
+else
+  mkdir -p l70; print x > l70/old
+  touch -t 196001010000 l70/old 2>"$TMP/touch.err"
+  run -cf l70.tar l70/old
+  check "Low a 1960 file: bsdtar reads 1960 / 1960 年的檔案：bsdtar 讀到 1960" \
+    '(( rc == 0 )) && bsdtar -tvf l70.tar | grep -q " 1960 "'
+fi
 
 print -r -- "PASS: $pass  FAIL: $fail  SKIP: $skip"
 (( fail == 0 ))

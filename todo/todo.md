@@ -251,7 +251,7 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🔴 部分處理（H1–H10、M1–M11、M13–M17、S1、S2、N1–N3 已修）/ Whole-tree code review of v0.1.4 ▸ partly fixed
+## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🟡 程式端全修（H1–H10、M1–M17、S1–S3、N1–N5、低風險項）；待 Windows／Linux 驗證/ Whole-tree code review of v0.1.4 ▸ partly fixed
 
 **進度 / Progress**
 - ✅ H1–H7 已修（macOS）：`test/test_review_20261031.zsh` 27 項，對 0.1.4 失敗 22 項（H7 的競態在 0.1.4 上兩次執行皆
@@ -298,6 +298,19 @@ file has to exist for that reference to mean anything.
   N2: member operands select on -x/-t/-O, a missing name exits 1, ZIP refuses operands. N3:
   setuid/setgid/sticky dropped too (the first N3 check used `stat -f %Lp`, which hides setuid,
   so it could not fail; `fperm` fixes that). M14: 0600 temp, original mode, rename(2).
+- ✅ 第二輪（macOS 已驗；M12、S3 與 Windows 部分待 Windows 端驗證）：N4、N5、M12、S3 與其餘低風險項。
+  test_review 新增 11 項，對 0.1.4 全部失敗（對照組除外），修正後 88/0；test_release 新增 1 項，
+  對舊 win_dlls.zsh 失敗。
+  - N4：`--delete dir` 連同其下成員。N5：`-c ../x` 去掉到最後一個 `..` 的前綴並警告一次；`--help` 改正。
+  - M12：Windows 上不加 `-h` 也做目錄迴圈偵測；test_dereference 新增 Windows 案例，**本機無法執行**。
+  - S3：`win_dlls.zsh` 檢查 objdump 退出碼；`release.zsh` 不再在陣列賦值裡吃掉失敗，Windows 上以只含系統
+    目錄的 PATH 執行解開後的 exe。**release.zsh 的 Windows 分支本機無法執行。**
+  - 低風險：`-u` 比到奈秒；`-t`／`-v` 跳脫控制字元；`-c --zip` 運算元改以 heap 複製（0.1.4 在 60000 個時
+    SIGSEGV）；`-test` 以 mkdtemp 建暫存目錄（POSIX）；`--identify --zip` 開檔判斷；1970 前的 mtime 以 pax
+    負值寫出（**讀取端尚未還原負的時間**）；ZIP 建立時檔案縮小會回報並計入結束碼（兩條路徑，無穩定測試）；
+    橋接層訊息以 UTF-8 名稱取代 `(null)`（Windows，無測試）。
+  Second round: N4, N5, M12, S3 and the remaining low items. M12 and S3's Windows paths are not
+  run here. The reader does not restore a negative mtime yet.
 - ✅ H8、M11 由 Windows 端修於 `82e7e7a`（橋接層祖先走訪改用 `\\?\`，無法檢查時拒絕；`winSetPathMtime` 經
   `winUcrtPath`）；UNC 路徑（`dcf0a94`）與 `package_win.zsh` 的 runtime 選擇（`82e7e7a`）亦同。
   Fixed by the Windows side in 82e7e7a / dcf0a94.

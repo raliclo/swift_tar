@@ -271,6 +271,16 @@ else
     printf '%s' "${out}" | grep -q 'storing the link itself' \
       && bad 'junction cycle: a directory is NOT stored as a link' \
       || ok 'junction cycle: a directory is NOT stored as a link'
+    # Without -h: a junction is walked as a directory, and 0.1.4 recursed forever here
+    # (2026-10-31 review M12). / 不加 -h：junction 被當成目錄走進去，0.1.4 在此無限遞迴（審查 M12）。
+    rc=0; out="$( cd "${j}" && "${ST}" -c -f "${TMP}/jcyc2.tar" . 2>&1 )" || rc=$?
+    [ "${rc}" = 0 ] && ok 'junction cycle without -h: exits 0' || bad "junction cycle without -h: exits 0 (got ${rc})"
+    n=$(members "${TMP}/jcyc2.tar" | wc -l | tr -d ' ')
+    [ "${n}" -le 10 ] && ok "junction cycle without -h: the walk stays bounded (${n} members)" \
+      || bad "junction cycle without -h: the walk stays bounded (got ${n} members)"
+    printf '%s' "${out}" | grep -q 'would loop here' \
+      && ok 'junction cycle without -h: it is reported as a loop' \
+      || bad 'junction cycle without -h: it is reported as a loop'
   fi
 fi
 

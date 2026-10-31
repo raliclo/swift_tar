@@ -181,17 +181,21 @@ private func cSwiftTarZipRead(
 
 private func withCStrings<R>(_ strings: [String],
                              _ body: ([UnsafePointer<CChar>]) -> R) -> R {
-    var pointers: [UnsafePointer<CChar>] = []
-    pointers.reserveCapacity(strings.count)
-    func append(_ index: Int) -> R {
-        guard index < strings.count else { return body(pointers) }
-        return strings[index].withCString { pointer in
-            pointers.append(pointer)
-            defer { pointers.removeLast() }
-            return append(index + 1)
+    // 每個字串複製到 heap，而非每個字串遞迴一層 withCString：0.1.4 的遞迴深度等於運算元數，
+    // `-c --zip` 給數萬個運算元時會讓堆疊溢位。（2026-10-31 審查低風險項）
+    // Each string is copied to the heap rather than recursing one withCString per string:
+    // 0.1.4's recursion was as deep as the operand count, so tens of thousands of
+    // operands to `-c --zip` overflowed the stack. (2026-10-31 review, low)
+    let copies: [UnsafeMutablePointer<CChar>] = strings.map { s in
+        s.withCString { src in
+            let n = strlen(src) + 1
+            let dst = UnsafeMutablePointer<CChar>.allocate(capacity: n)
+            dst.initialize(from: src, count: n)
+            return dst
         }
     }
-    return append(0)
+    defer { copies.forEach { $0.deallocate() } }
+    return body(copies.map { UnsafePointer($0) })
 }
 
 private func isZipMagic(_ archivePath: String) -> Bool {
@@ -969,6 +973,10 @@ func lzipCompressStream(_ input: Data, level: Int32 = 6) -> Data? {
 // The cost is one uncontended lock per access, and these are read a few times per
 // stream, never in a hot loop. The computed property keeps every call site unchanged.
 let zstdCompressionLevelBox = Mutex<Int32>(9)
+/// 已警告過的 ".." 前綴，每個只警告一次（見 archiveName）。/ ".." prefixes already warned about, once each (see archiveName).
+let tarDotDotWarned = Mutex<Set<String>>([])
+/// -u 的封存端時間：秒與奈秒。/ -u's archived time: seconds and nanoseconds.
+typealias TarUpdateStamp = (sec: UInt64, nanos: UInt32)
 var zstdCompressionLevel: Int32 {
     get { zstdCompressionLevelBox.withLock { $0 } }
     set { zstdCompressionLevelBox.withLock { $0 = newValue } }
@@ -3981,7 +3989,16 @@ final class TarWriter {
     /// (GNU tar --update semantics). nil for plain append (-r) / create (-c).
     /// 更新（-u）基準：檔內名稱 → mtime。設定後，mtime 未比封存副本新的項目會被略過，
     /// 目錄亦然（GNU tar --update 語意）。純追加（-r）／建立（-c）為 nil。
-    private let updateBaseline: [String: UInt64]?
+    private let updateBaseline: [String: TarUpdateStamp]?
+    /// 目前這個項目的 mtime 若早於 1970，這裡是它的（秒，奈秒），由 POSIX 走訪設定、
+    /// writeEntryHeader 讀取。0.1.4 把它夾成 0（1970-01-01），現在以 pax `mtime=-N.frac`
+    /// 寫出，與 bsdtar 相同；標頭欄位仍為 0。本工具的讀取端還不會還原負的時間。
+    /// （2026-10-31 審查低風險項）
+    /// The current entry's (seconds, nanoseconds) when its mtime is before 1970, set by
+    /// the POSIX walk and read by writeEntryHeader. 0.1.4 clamped it to 0 (1970-01-01);
+    /// it is now written as pax `mtime=-N.frac`, as bsdtar does, with 0 in the header
+    /// field. This tool's reader does not restore a negative time yet. (2026-10-31 review, low)
+    private var negativeMtime: (sec: Int64, nanos: UInt32)? = nil
     /// Filesystem identity of the archive being written, so the walk can leave
     /// it out of itself. `tar -cf backup.tar .` run inside the directory being
     /// backed up is a standing footgun: the output file is created first, the
@@ -4023,7 +4040,7 @@ final class TarWriter {
     /// See ReadAhead. / 見 ReadAhead。
     private let readAhead: ReadAhead
 
-    init(sink: ParallelChunkSink, verbose: Bool, updateBaseline: [String: UInt64]? = nil,
+    init(sink: ParallelChunkSink, verbose: Bool, updateBaseline: [String: TarUpdateStamp]? = nil,
          archivePath: String? = nil, dereference: Bool = false) {
         self.sink = sink
         self.verbose = verbose
@@ -4213,9 +4230,17 @@ final class TarWriter {
     /// the descent into it is not, so a newer child is still found.
     /// -u 閘門：true ⟺ 已有同名且不比其舊的封存副本，故此項目應略過。目錄自身的標頭
     /// 與其他項目一樣受閘門限制；向下遞迴則不受限，故較新的子檔仍會被找到。
-    private func skipForUpdate(_ name: String, _ mtime: UInt64) -> Bool {
+    ///
+    /// 比較到奈秒：0.1.4 只比整秒，同一秒內從 .1 改到 .9 的檔案不會被重新加入，而 bsdtar 會。
+    /// 封存端的奈秒來自 pax `mtime=` 的小數，本工具寫出的每個帶小數的成員都有。
+    /// （2026-10-31 審查低風險項）
+    /// Compared to the nanosecond: 0.1.4 compared whole seconds, so a file changed
+    /// from .1 to .9 within one second was not re-added, where bsdtar re-adds it. The
+    /// archive side's nanoseconds come from the pax `mtime=` fraction, which this tool
+    /// writes for every member that has one. (2026-10-31 review, low)
+    private func skipForUpdate(_ name: String, _ mtime: UInt64, _ nanos: UInt32) -> Bool {
         guard let base = updateBaseline, let old = base[name] else { return false }
-        return mtime <= old
+        return (mtime, nanos) <= (old.sec, old.nanos)
     }
 
     // ---- pax helpers / pax 輔助 ----
@@ -4392,7 +4417,17 @@ final class TarWriter {
         // 檔案——幾乎全部——都會被重新加入。代價是每個這類成員多一個 pax 標頭，約 1 KB；標頭
         // 欄位仍存整秒，給忽略該記錄的讀取器用。
         var hdrMtime = mtime
-        if mtime >= (1 << 33) || mtimeNanos != 0 {
+        if let neg = negativeMtime {
+            // -1.5 s is sec -2, nanos 500000000: the value is sec + nanos / 1e9.
+            // -1.5 秒是 sec -2、nanos 500000000：值為 sec + nanos / 1e9。
+            let total = neg.sec * 1_000_000_000 + Int64(neg.nanos)
+            let mag = total.magnitude
+            let whole = mag / 1_000_000_000, frac = mag % 1_000_000_000
+            let text = (total < 0 ? "-" : "") + String(whole)
+                + (frac != 0 ? "." + String(format: "%09llu", frac) : "")
+            pax.append(TarWriter.paxRecord("mtime", text))
+            hdrMtime = 0
+        } else if mtime >= (1 << 33) || mtimeNanos != 0 {
             let fraction = mtimeNanos != 0 ? "." + String(format: "%09u", mtimeNanos) : ""
             pax.append(TarWriter.paxRecord("mtime", String(mtime) + fraction))
             if mtime >= (1 << 33) { hdrMtime = (1 << 33) - 1 }
@@ -4459,7 +4494,7 @@ final class TarWriter {
     /// 所有人都不一致。
     ///
     /// 只影響 "./"。明確指定的運算元（`-C src a.txt`）本來就與兩個參照實作一致，現在依然。
-    fileprivate static func archiveName(_ path: String) -> String {
+    fileprivate static func archiveName(_ path: String, warn: Bool = false) -> String {
         // "\" 與 "X:" 只在 Windows 上是路徑語法；POSIX 上它們是檔名的一部分，
         // `foo\bar.txt` 必須照原名存入，與 GNU tar、bsdtar 相同。（2026-10-31 審查 M4）
         // "\" and "X:" are path syntax only on Windows; on POSIX they are part
@@ -4488,6 +4523,20 @@ final class TarWriter {
         // 名稱，而 -u 會判定所有成員皆不存在，使封存翻倍。
         while p.contains("//") { p = p.replacingOccurrences(of: "//", with: "/") }
         while p.hasSuffix("/") && p.count > 1 { p.removeLast() }
+        // 去掉到最後一個 ".." 為止的前綴，與 GNU tar 相同（`../x` → `x`、`a/../../b` → `b`）。
+        // 0.1.4 照存 `../x` 且不警告，寫出一個本工具自己拒絕解出的封存。（2026-10-31，N5）
+        // Drop the prefix through the last "..", as GNU tar does (`../x` → `x`,
+        // `a/../../b` → `b`). 0.1.4 stored `../x` silently, writing an archive this
+        // tool itself refuses to extract. (2026-10-31, N5)
+        let comps = p.split(separator: "/", omittingEmptySubsequences: false)
+        if let last = comps.lastIndex(of: "..") {
+            let dropped = comps[...last].joined(separator: "/") + "/"
+            p = comps[(last + 1)...].joined(separator: "/")
+            if p.isEmpty { p = "." }   // `..` itself names the top: stored as "./" / `..` 本身即頂層，存成 "./"
+            if warn && tarDotDotWarned.withLock({ $0.insert(dropped).inserted }) {
+                eprint("swift_tar: removing leading '\(dropped)' from member names / 從成員名稱去掉開頭的 '\(dropped)'")
+            }
+        }
         return p
     }
 
@@ -4693,7 +4742,7 @@ final class TarWriter {
         // 最先執行，早於任何提前返回：ReadAhead 得知的每個路徑都必須在此依走訪順序取走，
         // 否則它的堆疊會與走訪脫節。以讀取側為鍵，與 add(walk:) 給出的提示一致。
         let prefetched = readAhead.claim(incomingReadPath)
-        let name = TarWriter.archiveName(path)
+        let name = TarWriter.archiveName(path, warn: true)
         // Checked before stat, so an excluded entry costs nothing and an excluded
         // directory is never descended into -- which is what makes `--exclude` able
         // to step around an unreadable subtree rather than merely omit its listing.
@@ -4801,13 +4850,17 @@ final class TarWriter {
                 eprint("swift_tar: '\(name)': --dereference cannot follow it, storing the link itself / '\(name)'：--dereference 無法跟隨，改存連結本身")
             }
         }
-        // 迴圈偵測：同 POSIX 分支，只看目前遞迴堆疊上的祖先。
-        // Cycle detection: as in the POSIX branch, ancestors on the current stack only.
+        // 迴圈偵測：同 POSIX 分支，只看目前遞迴堆疊上的祖先。Windows 上不加 -h 也要做：junction
+        // 會被當成目錄走進去，0.1.4 遇到指回上層的 junction 就無限遞迴。（2026-10-31 審查 M12）
+        // Cycle detection: as in the POSIX branch, ancestors on the current stack only. On
+        // Windows it runs without -h too: a junction is walked as a directory, and 0.1.4
+        // recursed forever on one pointing back up. (2026-10-31 review M12)
         var pushedDirID: String? = nil
-        if dereference, st.isDir {
+        if st.isDir {
             let id = "\(st.volumeSerial)/\(st.fileIndex)"
             if walkedDirs.contains(id) {
-                eprint("swift_tar: skipping '\(name)': --dereference would loop here / 略過 '\(name)'：--dereference 於此形成迴圈")
+                // 不計入退出碼，與 POSIX 分支的 -h 迴圈相同。/ Not counted toward the exit status, as the POSIX -h loop.
+                eprint("swift_tar: skipping '\(name)': it would loop here, a directory already being archived above it / 略過 '\(name)'：於此形成迴圈，它是上層正在收入的目錄")
                 return
             }
             walkedDirs.insert(id)
@@ -4834,7 +4887,7 @@ final class TarWriter {
 
         // -u: skip non-directory entries that are not newer than the archived
         // copy. / -u：略過不比封存副本新的非目錄項目。
-        if !st.isDir && skipForUpdate(name, mtime) { return }
+        if !st.isDir && skipForUpdate(name, mtime, mtimeNanos) { return }
 
         if st.isSymlink {
             if verbose { eprint("a \(name)") }
@@ -4910,7 +4963,7 @@ final class TarWriter {
             // GNU tar 在同樣的執行下清單始終是 `./ ./norm.txt ./late.txt`。GNU tar 的*大小*
             // 無論如何看起來都不變，因為它 10240 位元組的區塊化會蓋掉這種程度的成長——能看出
             // 差異的是項目清單，這也是此處以清單而非位元組數檢驗的原因。
-            if !skipForUpdate(name, mtime) {
+            if !skipForUpdate(name, mtime, mtimeNanos) {
                 if verbose { eprint("a \(name)/") }
                 try writeEntryHeader(name: name + "/", mode: mode, uid: uid, gid: gid,
                                      size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
@@ -5056,14 +5109,20 @@ final class TarWriter {
         #if os(Linux)
         let mtime = UInt64(max(0, st.st_mtim.tv_sec))
         let mtimeNanos = UInt32(clamping: max(0, st.st_mtim.tv_nsec))
+        let signedSec = Int64(st.st_mtim.tv_sec)
         #else
         let mtime = UInt64(max(0, st.st_mtimespec.tv_sec))
         let mtimeNanos = UInt32(clamping: max(0, st.st_mtimespec.tv_nsec))
+        let signedSec = Int64(st.st_mtimespec.tv_sec)
         #endif
+        // 1970 年以前的時間：writeEntryHeader 以 pax `mtime=-N` 寫出（見 negativeMtime）。
+        // A time before 1970: writeEntryHeader writes it as pax `mtime=-N` (see negativeMtime).
+        negativeMtime = signedSec < 0 ? (signedSec, mtimeNanos) : nil
+        defer { negativeMtime = nil }
 
         // -u: skip non-directory entries that are not newer than the archived
         // copy. / -u：略過不比封存副本新的非目錄項目。
-        if (st.st_mode & S_IFMT) != S_IFDIR && skipForUpdate(name, mtime) { return }
+        if (st.st_mode & S_IFMT) != S_IFDIR && skipForUpdate(name, mtime, mtimeNanos) { return }
 
         switch st.st_mode & S_IFMT {
         case S_IFDIR:
@@ -5073,7 +5132,7 @@ final class TarWriter {
             }
             // Gate the header, not the descent; see the Windows branch above for the
             // measurement. / 閘門作用於標頭而非遞迴；實測見上方 Windows 分支。
-            if !skipForUpdate(name, mtime) {
+            if !skipForUpdate(name, mtime, mtimeNanos) {
                 if verbose { eprint("a \(name)/") }
                 try writeEntryHeader(name: name + "/", mode: mode, uid: uid, gid: gid,
                                      size: 0, mtime: mtime, mtimeNanos: mtimeNanos,
@@ -5597,6 +5656,27 @@ final class TarReader {
         var members: [String] = []
     }
 
+    /// 列出用的名稱：控制字元印成 `\n`、`\t` 或 `\ooo`，與 GNU tar 預設的 escape 風格相同，
+    /// 讓成員名稱無法送出終端機控制序列。反斜線不跳脫，`foo\bar.txt` 照原樣列出。0.1.4 原樣印出。
+    /// （2026-10-31 審查低風險項）
+    /// A name for listing: control bytes print as `\n`, `\t` or `\ooo`, as in GNU tar's
+    /// default escape style, so a member name cannot send terminal control sequences.
+    /// Backslashes are left alone; `foo\bar.txt` lists as is. 0.1.4 printed names raw.
+    /// (2026-10-31 review, low)
+    fileprivate static func displayName(_ s: String) -> String {
+        guard s.utf8.contains(where: { $0 < 0x20 || $0 == 0x7f }) else { return s }
+        var out = ""
+        for u in s.unicodeScalars {
+            switch u.value {
+            case 0x0a: out += "\\n"
+            case 0x09: out += "\\t"
+            case 0..<0x20, 0x7f: out += "\\" + String(format: "%03o", u.value)
+            default: out.unicodeScalars.append(u)
+            }
+        }
+        return out
+    }
+
     /// 選取比較用的名稱：去掉開頭的 "./" 與結尾的 "/"。/ A name as selection compares it: no leading "./", no trailing "/".
     fileprivate static func selectionKey(_ s: String) -> String {
         var t = Substring(s)
@@ -5962,7 +6042,7 @@ final class TarReader {
             }
             // 列表用與解出相同的 hasData（見上方）。/ Listing uses the same hasData as extraction (above).
             guard options.extract else {
-                print(name)
+                print(TarReader.displayName(name))
                 if hasData { try skipData(size) }
                 continue
             }
@@ -6004,7 +6084,7 @@ final class TarReader {
                 continue
             }
             if options.verbose {
-                print("x \(rel)")
+                print("x \(TarReader.displayName(rel))")
             }
             let dest = options.destDir.isEmpty ? rel : options.destDir + "/" + rel
 
@@ -6822,9 +6902,9 @@ private func printTarUsage() {
         需要時寫入 ZIP64 記錄；無法關閉（--zip64 則一律寫入）
       - ZIP members are written in sorted order            -> --zip-unsorted
         ZIP 成員依排序後的順序寫出                           -> --zip-unsorted
-      - -x refuses absolute paths, ".." and paths through a symlink; cannot be
-        turned off
-        -x 拒絕絕對路徑、".." 與穿過 symlink 的路徑；無法關閉
+      - -x strips a leading "/" (extracts under -C) and refuses ".." and paths
+        through a symlink; cannot be turned off
+        -x 去掉開頭的 "/"（解在 -C 之下），拒絕 ".." 與穿過 symlink 的路徑；無法關閉
     Off by default / 預設關閉: --skip-compressed, -h/--dereference,
       --zstd-parallel, --force, -i/--ignore-zeros, --strip-components
 
@@ -7228,9 +7308,24 @@ func runSelfTest(debug: Bool = false) {
     }
     print("[swift_tar -test] standard tar (which tar): \(stdTar)")
 
-    let tmp = NSTemporaryDirectory() + "swift_tar_selftest_\(ProcessInfo.processInfo.processIdentifier)"
     let fm = FileManager.default
+#if os(Windows)
+    let tmp = NSTemporaryDirectory() + "swift_tar_selftest_\(ProcessInfo.processInfo.processIdentifier)"
     try? fm.removeItem(atPath: tmp)
+#else
+    // mkdtemp：名稱無法預測、權限 0700、建立是原子的。0.1.4 以 PID 命名並先刪後建，在共用的
+    // /tmp 上留下讓別人搶先放東西的空間。（2026-10-31 審查低風險項）
+    // mkdtemp: an unpredictable name, mode 0700, created atomically. 0.1.4 named it by
+    // PID and removed it before creating it, leaving room in a shared /tmp for someone
+    // else to get there first. (2026-10-31 review, low)
+    var template = Array((NSTemporaryDirectory() + "swift_tar_selftest_XXXXXX").utf8CString)
+    guard let tmp = template.withUnsafeMutableBufferPointer({ buf -> String? in
+        mkdtemp(buf.baseAddress!).map { String(cString: $0) }
+    }) else {
+        print("[swift_tar -test] FAIL: cannot create a temporary directory (errno \(errno)) / 失敗：無法建立暫存目錄")
+        exit(1)
+    }
+#endif
     // Printed so a test can check this exact path afterwards. The directory is removed
     // just before the exit() at the end of this function: exit() never returns, so a
     // `defer` here does not run -- one stood here until 2026-10-13 and every run left
@@ -8323,7 +8418,11 @@ struct SwiftTarMain {
             } else if doDelete {
                 try runDelete(archivePath: archivePath, names: files, verbose: verbose)
             } else if doIdentify {
-                if explicitZip || isZipMagic(archivePath) {
+                // 只看檔案本身：0.1.4 遇到 --zip 就不開檔直接回答 "zip"，連不存在的檔案也是。
+                // （2026-10-31 審查低風險項）
+                // Only the file itself decides: with --zip, 0.1.4 answered "zip" without opening
+                // it, even for a file that did not exist. (2026-10-31 review, low)
+                if isZipMagic(archivePath) {
                     let label = archivePath == "-" ? "<stdin>" : archivePath
                     print("\(label): zip")
                 } else {
@@ -8511,7 +8610,7 @@ struct SwiftTarMain {
     /// 三份，封存 4608 → 7168 → 9728 bytes，而它旁邊的檔案維持一份。GNU tar 在 gnu 與 pax
     /// 兩種格式下都維持一份且大小不變。長檔名也錯在同一處——鍵取自被截斷的欄位——此處舊註解
     /// 曾記載那是可接受的，而其代價就是反覆重新追加。
-    static func scanTarEntries(path: String) throws -> (eofOffset: UInt64, baseline: [String: UInt64]) {
+    static func scanTarEntries(path: String) throws -> (eofOffset: UInt64, baseline: [String: TarUpdateStamp]) {
         guard let fh = FileHandle(forReadingAtPath: path) else {
             throw TarError.io("cannot open '\(path)' / 無法開啟 '\(path)'")
         }
@@ -8523,11 +8622,12 @@ struct SwiftTarMain {
         }
 
         var offset: UInt64 = 0
-        var baseline: [String: UInt64] = [:]
+        var baseline: [String: TarUpdateStamp] = [:]
         // Overrides from the extended header in front of the next entry.
         // 來自下一個項目前方擴充標頭的覆寫值。
         var pendingName: String? = nil
         var pendingMtime: UInt64? = nil
+        var pendingNanos: UInt32 = 0
         // An extended header holds a few records; anything larger is not one this scan
         // needs, and reading it on the strength of a size field in the file itself is how
         // an archive gets to choose an allocation. Past the cap it is skipped as before.
@@ -8600,9 +8700,20 @@ struct SwiftTarMain {
                                 let val = String(decoding: rec[rec.index(after: eq)...], as: UTF8.self)
                                 if key == "path" { pendingName = val }
                                 if key == "mtime" {
-                                    let whole = val.split(separator: ".", maxSplits: 1,
-                                                          omittingEmptySubsequences: false).first
-                                    if let whole = whole, let v = UInt64(whole) { pendingMtime = v }
+                                    let parts = val.split(separator: ".", maxSplits: 1,
+                                                          omittingEmptySubsequences: false)
+                                    if let whole = parts.first, let v = UInt64(whole) { pendingMtime = v }
+                                    // 小數取前 9 位補成奈秒，供 -u 比較（見 skipForUpdate）。
+                                    // The fraction's first 9 digits, scaled to ns, for -u (see skipForUpdate).
+                                    if parts.count == 2 {
+                                        let digits = parts[1].prefix(9)
+                                        if !digits.isEmpty, digits.allSatisfy({ ("0"..."9").contains($0) }),
+                                           let n = UInt32(digits) {
+                                            var scale: UInt32 = 1
+                                            for _ in digits.count..<9 { scale *= 10 }
+                                            pendingNanos = n * scale
+                                        }
+                                    }
                                 }
                             }
                             pos += len
@@ -8628,9 +8739,10 @@ struct SwiftTarMain {
             // gated by -u). / 目錄名以 "/" 結尾，去除以對齊 archiveName。
             var key = pendingName ?? name
             if key.hasSuffix("/") { key.removeLast() }
-            baseline[key] = pendingMtime ?? mtime
+            baseline[key] = (pendingMtime ?? mtime, pendingMtime != nil ? pendingNanos : 0)
             pendingName = nil
             pendingMtime = nil
+            pendingNanos = 0
             offset += UInt64(TAR_BLOCK) + dataBlocks
         }
         return (offset, baseline)
@@ -8843,8 +8955,22 @@ struct SwiftTarMain {
                 let prefix = str(h, 345..<500)
                 if !prefix.isEmpty { name = prefix + "/" + name }
                 let effName = pendingName ?? name
-                if wanted.contains(norm(effName)) {
-                    matched.insert(norm(effName))
+                // 名稱相符，或位在某個指定目錄之下，與 GNU tar 相同：0.1.4 的 `--delete sub` 只刪
+                // `sub/` 項目，`sub/c.txt` 留在封存裡。（2026-10-31，比較文件發現，N4）
+                // A match, or anything under a named directory, as GNU tar does: in 0.1.4
+                // `--delete sub` removed the `sub/` entry and left `sub/c.txt`. (2026-10-31,
+                // found by the comparison document, N4)
+                let key = norm(effName)
+                var hit: String? = wanted.contains(key) ? key : nil
+                if hit == nil {
+                    var parent = key
+                    while hit == nil, let slash = parent.lastIndex(of: "/") {
+                        parent = String(parent[..<slash])
+                        if wanted.contains(parent) { hit = parent }
+                    }
+                }
+                if let hit {
+                    matched.insert(hit)
                     removed += 1
                     if verbose { eprint("d \(effName)") }
                     // drop pending pre-headers + this entry's data / 丟棄前置標頭與本項目資料

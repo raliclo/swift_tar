@@ -207,11 +207,18 @@ static FILE *open_entry_source(struct archive_entry *entry) {
 #endif
 }
 
+/* Messages name an entry through entry_sort_name: UTF-8 first, so a non-ANSI name on Windows
+ * is not printed as "(null)" (2026-10-31 review, low). Defined below.
+ * 訊息經由 entry_sort_name 取項目名稱：先取 UTF-8，Windows 上非 ANSI 名稱才不會印成 "(null)"
+ *（2026-10-31 審查低風險項）。定義在下方。 */
+static const char *entry_sort_name(struct archive_entry *entry);
+
 /* Copy `input`, already opened by write_entry, into the entry just written, and close it.
  * 把 write_entry 已開啟的 `input` 複製進剛寫出的項目，並關閉它。 */
 static int copy_file_to_archive(struct archive *writer,
                                 struct archive_entry *entry,
                                 FILE *input,
+                                long *unreadable,
                                 char *error_buffer,
                                 size_t error_capacity) {
     char buffer[64 * 1024];
@@ -246,6 +253,29 @@ static int copy_file_to_archive(struct archive *writer,
         return -1;
     }
     fclose(input);
+    /* The file shrank after it was listed. The header already states the listed size, so
+     * pad with zeros to it, as the tar path does, and count it toward the exit status. Until
+     * 2026-10-31 the entry was silently left short (review, low).
+     * 列出之後檔案縮小了。標頭已記下列出時的大小，所以與 tar 路徑相同，以零補足並計入結束碼。
+     * 2026-10-31 之前該項目被默默存短（審查低風險項）。 */
+    if (remaining > 0) {
+        la_int64_t shrank = remaining;
+
+        memset(buffer, 0, sizeof(buffer));
+        while (remaining > 0) {
+            size_t n = remaining < (la_int64_t)sizeof(buffer) ? (size_t)remaining : sizeof(buffer);
+            la_ssize_t written = archive_write_data(writer, buffer, n);
+
+            if (written < 0 || (size_t)written != n) {
+                set_archive_error(error_buffer, error_capacity, "archive_write_data", writer);
+                return -1;
+            }
+            remaining -= (la_int64_t)n;
+        }
+        fprintf(stderr, "swift_tar: %s: file shrank by %lld bytes; padded with zeros / 檔案縮小了 %lld 位元組；以零補齊\n",
+                entry_sort_name(entry), (long long)shrank, (long long)shrank);
+        ++*unreadable;
+    }
     return 0;
 }
 
@@ -334,7 +364,7 @@ static int write_entry_header(struct archive *writer,
                               size_t error_capacity) {
     int status;
 
-    if (verbose) fprintf(stderr, "a %s\n", archive_entry_pathname(entry));
+    if (verbose) fprintf(stderr, "a %s\n", entry_sort_name(entry));
 
     /* mtime only. The ZIP writer puts whatever times the entry carries into the UT
      * extra field, and archive_read_disk fills in atime and ctime -- both of which
@@ -370,7 +400,7 @@ static int write_entry_header(struct archive *writer,
          * 全部缺席，而檔案仍被建立出來。同一套 libarchive 上的 bsdtar 是略過
          * 該項並繼續；此處的 tar 路徑亦然，它在 Swift 端以檔案身分排除封存。 */
         fprintf(stderr, "swift_tar: %s: %s\n",
-                archive_entry_pathname(entry), archive_reason(writer));
+                entry_sort_name(entry), archive_reason(writer));
         return 0;
     }
     if (status < ARCHIVE_OK) {
@@ -378,7 +408,7 @@ static int write_entry_header(struct archive *writer,
          * but do not let the reason go unsaid.
          * ARCHIVE_WARN：標頭已寫入，故繼續複製資料，但不讓原因無聲消失。 */
         fprintf(stderr, "swift_tar: %s: %s\n",
-                archive_entry_pathname(entry), archive_reason(writer));
+                entry_sort_name(entry), archive_reason(writer));
     }
     return 1;
 }
@@ -402,7 +432,7 @@ static int write_entry(struct archive *writer,
     if (archive_entry_filetype(entry) == AE_IFREG && archive_entry_size(entry) > 0) {
         input = open_entry_source(entry);
         if (input == NULL) {
-            note_unreadable(unreadable, archive_entry_pathname(entry),
+            note_unreadable(unreadable, entry_sort_name(entry),
                             "cannot open, left out", "無法開啟，未收入", errno);
             return 0;
         }
@@ -412,7 +442,7 @@ static int write_entry(struct archive *writer,
         if (input != NULL) fclose(input);
         return status;
     }
-    return copy_file_to_archive(writer, entry, input, error_buffer, error_capacity);
+    return copy_file_to_archive(writer, entry, input, unreadable, error_buffer, error_capacity);
 }
 
 /* ---- compressing members on several threads -------------------------------------------
@@ -659,19 +689,29 @@ static int pipeline_write_first(zip_pipeline *pipeline) {
     } else if (job->unreadable) {
         /* Nothing was written for it yet, so leaving it out leaves no trace in the archive.
          * 它還沒有任何東西寫出，所以略過它不會在封存裡留下痕跡。 */
-        note_unreadable(&pipeline->unreadable, archive_entry_pathname(job->entry),
+        note_unreadable(&pipeline->unreadable, entry_sort_name(job->entry),
                         "cannot open, left out", "無法開啟，未收入", job->error_number);
     } else if (job->failed) {
         set_error(pipeline->error_buffer, pipeline->error_capacity, job->error);
         result = -1;
     } else {
         int status;
+        la_int64_t listed = archive_entry_size(job->entry);
 
         /* The size the header states is the number of bytes the worker read, so a file
          * that changed size after it was listed is still stored as what was read.
          * 標頭所記的大小是工作執行緒實際讀到的位元組數，所以列出之後大小變了的檔案，存下的仍是
          * 實際讀到的內容。 */
         archive_entry_set_size(job->entry, job->bytes);
+        /* A file that shrank is stored short and said so, counted toward the exit status;
+         * until 2026-10-31 nothing was said (review, low).
+         * 縮小的檔案存成較短的內容並說出來，計入結束碼；2026-10-31 之前一聲不響（審查低風險項）。 */
+        if (job->bytes < listed) {
+            fprintf(stderr, "swift_tar: %s: file shrank by %lld bytes while being read; stored what was read / 讀取中檔案縮小了 %lld 位元組；存下實際讀到的內容\n",
+                    entry_sort_name(job->entry), (long long)(listed - job->bytes),
+                    (long long)(listed - job->bytes));
+            ++pipeline->unreadable;
+        }
         status = write_entry_header(pipeline->writer, job->entry, pipeline->verbose,
                                     pipeline->error_buffer, pipeline->error_capacity);
         if (status < 0) {
@@ -841,7 +881,7 @@ static int skip_entry(struct archive_entry *entry,
         file_id entry_id = file_identity(archive_entry_sourcepath(entry));
         if (same_file(entry_id, archive_id)) {
             fprintf(stderr, "swift_tar: %s: Can't add archive to itself\n",
-                    archive_entry_pathname(entry));
+                    entry_sort_name(entry));
             return 1;
         }
     }

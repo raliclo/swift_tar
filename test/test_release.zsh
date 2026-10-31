@@ -330,6 +330,11 @@ chmod 755 "$W/objdump"
 got=$(swift_tar_win_dlls "$W/objdump" "$W/swift_tar.exe" "$W/rt" | sed "s:^$W/rt/::" | sort | tr '\n' ' ')
 check "win_dlls: only the import closure ships, under the directory's own spelling" "$got" \
   "Foundation.dll msvcp140.dll swiftCore.dll vcruntime140.dll "
+# An objdump that fails is an error, not an empty import list (2026-10-31 review S3).
+# objdump 失敗是錯誤，不是空的 import 清單（2026-10-31 審查 S3）。
+print -l '#!/bin/zsh' 'exit 3' > "$W/objdump-fails"; chmod 755 "$W/objdump-fails"
+rc=0; swift_tar_win_dlls "$W/objdump-fails" "$W/swift_tar.exe" "$W/rt" > "$TMP/wd.out" 2>&1 || rc=$?
+check "win_dlls: a failing objdump makes it fail" "$rc" 1
 # The notice decision must not depend on order (2026-10-20: it shipped only when an MSVC DLL came
 # first). / 附說明與否不得取決於順序（2026-10-20：只有 MSVC DLL 排第一時才附）。
 rc=0; swift_tar_ships_msvc_runtime "$W/rt/Foundation.dll" "$W/rt/swiftCore.dll" "$W/rt/msvcp140.dll" || rc=$?; check "win_dlls: an MSVC DLL that comes last still counts" "$rc" 0

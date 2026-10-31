@@ -18,14 +18,22 @@
 swift_tar_win_dlls() {
   emulate -L zsh
   setopt extended_glob no_unset
-  local objdump=$1 start=$2 rt=$3 f pe dll key
+  local objdump=$1 start=$2 rt=$3 f pe dll key dump
   local -A on_disk=() shipped=()
   for f in "$rt"/(#i)*.dll(N.); do on_disk[${f:t:l}]=$f; done
   local -a queue=("$start")
   while (( $#queue )); do
     pe=${queue[1]}
     shift queue
-    for dll in ${(f)"$("$objdump" -p "$pe" | sed -n 's/^[[:space:]]*DLL Name:[[:space:]]*//p' | tr -d '\r')"}; do
+    # objdump's own failure is an error, not "no imports": inside the pipeline it read as an
+    # empty list, so the release shipped without the DLLs it needed (2026-10-31 review S3).
+    # objdump 本身失敗是錯誤，不是「沒有 import」：放在管線裡時它被讀成空清單，於是發行版少了
+    # 需要的 DLL（2026-10-31 審查 S3）。
+    if ! dump=$("$objdump" -p "$pe"); then
+      print -ru2 -- "swift_tar_win_dlls: $objdump -p $pe failed / 執行失敗"
+      return 1
+    fi
+    for dll in ${(f)"$(print -r -- "$dump" | sed -n 's/^[[:space:]]*DLL Name:[[:space:]]*//p' | tr -d '\r')"}; do
       key=${dll:l}
       f=${on_disk[$key]-}
       [[ -n $f && -z ${shipped[$key]-} ]] || continue

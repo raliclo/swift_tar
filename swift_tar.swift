@@ -3015,7 +3015,7 @@ private func winCreateHardlink(dest: String, target: String) -> Bool {
     }
     process.waitUntilExit()
     if process.terminationStatus != 0 {
-        eprint("swift_tar: warning: failed to create hardlink '\(dest)' -> '\(target)', skipping / 警告：無法建立硬連結 '\(dest)' -> '\(target)'，已略過")
+        eprint("swift_tar: skipping hardlink '\(dest)' -> '\(target)': fsutil failed / 略過硬連結 '\(dest)' -> '\(target)'：fsutil 失敗")
         return false
     }
     return true

@@ -33,6 +33,9 @@ RAW="$ROOT/verifications/make_raw_tar.zsh"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf -- "$TMP"' EXIT
+# $TMP as a native exe sees it: on Windows the shell's /tmp/... means nothing to swift_tar.exe.
+# 原生 exe 看得懂的 $TMP：Windows 上 shell 的 /tmp/... 對 swift_tar.exe 沒有意義。
+if (( windows )); then NTMP=$(cygpath -m -- "$TMP"); else NTMP=$TMP; fi
 
 pass=0 fail=0 skip=0
 ok()   { print -r -- "PASS: $1"; pass=$((pass + 1)) }
@@ -106,7 +109,7 @@ mkdir -p w3; print PRECIOUS > w3/thesis.docx
 check "H3 relative -C under a file: exits non-zero / 相對 -C 位於檔案之下：以非 0 結束" '(( rc != 0 ))'
 check "H3 relative -C under a file: the file survives / 該檔案保留" \
   '[[ -f w3/thesis.docx && $(<w3/thesis.docx) == PRECIOUS ]]'
-run -xf h3.tar -C "$TMP/w3/thesis.docx/restore"
+run -xf h3.tar -C "$NTMP/w3/thesis.docx/restore"
 check "H3 absolute -C under a file: the file survives / 絕對 -C：該檔案保留" \
   '(( rc != 0 )) && [[ -f w3/thesis.docx && $(<w3/thesis.docx) == PRECIOUS ]]'
 
@@ -115,7 +118,7 @@ check "H3 absolute -C under a file: the file survives / 絕對 -C：該檔案保
 # 對照組：封存聲稱為目錄的檔案照樣被清掉，且用絕對 -C（走訪過去會丟掉開頭的 "/"，改看工作目錄）。
 raw h3c.tar file cfg/x inner
 mkdir -p o3c; print old > o3c/cfg
-run -xf h3c.tar -C "$TMP/o3c"
+run -xf h3c.tar -C "$NTMP/o3c"
 check "H3 control: an archive-claimed blocker below an absolute -C is replaced / 對照：絕對 -C 之下的阻擋物被取代" \
   '(( rc == 0 )) && [[ -d o3c/cfg && $(<o3c/cfg/x) == inner ]]'
 
@@ -256,8 +259,12 @@ else
   check "M4 C:x4 keeps its C: / C:x4 保留 C:" '"$ST" -tf m4.tar | grep -qxF "C:x4"'
   # bsdtar -t prints "\" as "\\", so compare what it extracts. / bsdtar -t 把 "\" 印成 "\\"，故比對解出結果。
   mkdir -p o4
-  check "M4 bsdtar extracts the same name / bsdtar 解出相同名稱" \
-    'bsdtar -xf m4.tar -C o4 && [[ -f "o4/m4/foo\\bar.txt" ]]'
+  if command -v bsdtar >/dev/null; then
+    check "M4 bsdtar extracts the same name / bsdtar 解出相同名稱" \
+      'bsdtar -xf m4.tar -C o4 && [[ -f "o4/m4/foo\\bar.txt" ]]'
+  else
+    skipc "M4 bsdtar cross-check: no bsdtar on PATH / PATH 上沒有 bsdtar"
+  fi
 fi
 
 # --- M6: a uid/gid above 2097151 is carried in pax, not truncated --------------------------
@@ -357,7 +364,7 @@ raw m13.tar hard h13 missing13 file after13.txt A
 mkdir -p o13; run -xf m13.tar -C o13
 check "M13 a hardlink to a missing target: exits non-zero / 目標不存在：以非 0 結束" '(( rc != 0 ))'
 check "M13 the member after it is still written / 其後的成員照樣寫出" '[[ $(<o13/after13.txt) == A ]]'
-check "M13 stderr names the hardlink / stderr 指出該硬連結" 'grep -q "skipping hardlink .h13" "$TMP/out"'
+check "M13 stderr names the hardlink / stderr 指出該硬連結" 'grep -q "skipping hardlink .*h13" "$TMP/out"'
 
 # --- M15: a second -C is refused rather than taken as an operand ---------------------------
 # --- M15：第二個 -C 被拒絕，而不是被當成運算元 ---------------------------------------------
@@ -394,8 +401,12 @@ printf '\0' | dd of=m17.tar bs=1 seek=514 conv=notrunc 2>"$TMP/dd.err"
 settype m17.tar L
 mkdir -p p17/o17; chmod 700 p17
 run -xf m17.tar -C p17/o17
-check "M17 the parent of -C keeps mode 700 / -C 的上一層維持 700" '[[ $(perm p17) == 700 ]]'
-check "M17 -C itself is not chmodded either / -C 本身也沒被改" '[[ $(perm p17/o17) != 777 ]]'
+if (( windows )); then
+  skipc "M17 mode checks: Windows has no POSIX modes / M17 權限檢查：Windows 沒有 POSIX 權限"
+else
+  check "M17 the parent of -C keeps mode 700 / -C 的上一層維持 700" '[[ $(perm p17) == 700 ]]'
+  check "M17 -C itself is not chmodded either / -C 本身也沒被改" '[[ $(perm p17/o17) != 777 ]]'
+fi
 run -tf m17.tar
 check "M17 -t shows the name as the C calls see it / -t 顯示 C 端看到的名稱" 'grep -qx ".." "$TMP/out"'
 
@@ -559,11 +570,17 @@ check "Low an ESC in a name lists as \\033 / 名稱中的 ESC 列為 \\033" \
 
 # --- Low: -c --zip with 60000 operands does not overflow the stack ---------------------------
 # --- 低：-c --zip 給 60000 個運算元不會堆疊溢位 ----------------------------------------------
-mkdir -p lz
-( cd lz && for i in {1..60000}; do : > f$i; done )
-( cd lz && "$ST" -c --zip -f ../lz.zip f{1..60000} ) >"$TMP/out" 2>&1 && rc=0 || rc=$?
-check "Low -c --zip with 60000 operands: exits 0 (0.1.4: SIGSEGV) / 60000 個運算元：以 0 結束" '(( rc == 0 ))'
-rm -rf lz lz.zip
+# Windows caps a command line at 32767 characters, so the shell refuses before swift_tar runs.
+# Windows 命令列上限 32767 字元，shell 在 swift_tar 執行前就拒絕。
+if (( windows )); then
+  skipc "Low 60000 operands: Windows command lines cannot hold them / Windows 命令列放不下"
+else
+  mkdir -p lz
+  ( cd lz && for i in {1..60000}; do : > f$i; done )
+  ( cd lz && "$ST" -c --zip -f ../lz.zip f{1..60000} ) >"$TMP/out" 2>&1 && rc=0 || rc=$?
+  check "Low -c --zip with 60000 operands: exits 0 (0.1.4: SIGSEGV) / 60000 個運算元：以 0 結束" '(( rc == 0 ))'
+  rm -rf lz lz.zip
+fi
 
 # --- Low: --identify --zip opens the file -----------------------------------------------------
 # --- 低：--identify --zip 會開檔 ---------------------------------------------------------------

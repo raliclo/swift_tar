@@ -59,42 +59,35 @@ Pass `--install` (or `-install`) to also copy it to `/opt/homebrew/bin/swift_tar
 
 ### Linux
 
-`compile_tar-linux.zsh` needs a Swift toolchain and the codec headers and shared
-libraries. Both are probed rather than assumed: it uses `/workspace/opt/swift`
-and `/workspace/sysroot` when they exist (the buildroot aarch64 appliance under
-`sos/linux_kernal_vm_interactive`), otherwise `swiftc` from `PATH` and `/usr`.
-Override with `SWIFT_PREFIX` and `SYSROOT`.
+Every Linux build is a fully static musl executable, since 2026-11-04: no glibc,
+no shared libraries, no Swift runtime to install. `compile_tar-linux.zsh` builds
+one for the host's architecture by running `./compile_tar-musl.zsh native`, so
+the binary tested on Linux is the same kind as the one released. The glibc build
+it used to make is gone.
 
-libarchive is always built statically from the `libarchive/` submodule with this
-tree's patches, as on macOS; the script stops when cmake or the sources are
-missing. Two differences from the macOS build remain. The four submodule codecs
-(zlib, liblzma, liblz4, libzstd) are built statically from this tree only where
-cmake and their sources are present; without them the script links the
-sysroot's shared libraries and says so, and such a build does not contain the
-submodule pins. bzip2 is always the sysroot's. Set `CODECS_STATIC` to `1` or `0`
-to decide outright. And `-DEXCLUDE_LZFSE` is applied automatically when `lzfse2/` is not
-checked out, so the same script serves a full clone and a source drop without a
-flag.
+It needs a Swift 6.4.x toolchain, the **matching** Static Linux SDK installed with
+`swift sdk install` (the SDK name is taken from `swiftc --version`, so 6.4.1
+needs `swift-6.4.1-RELEASE_static-linux`), and cmake. The toolchain is
+`/workspace/opt/swift/usr` when it exists (the buildroot guest), otherwise
+`swiftc` from `PATH`; override with `SWIFT_PREFIX`, and the SDK with
+`SWIFT_STATIC_SDK`.
 
-The link uses the toolchain's `ld.lld` when it can start. `ld.lld` needs
-`libxml2.so.2` at load time; where that is the only thing missing, the script
-builds it with clang from the `libxml2/` submodule and puts it on the linker's
-library path only. Otherwise it links with the system `ld` and says so.
-swift_tar itself never links libxml2. Compile and link are separate steps:
-Swift on aarch64 marks `.rodata` writable, and the script removes that flag
-from the objects in between, then refuses a binary whose `.rodata` is writable.
+libarchive and the four submodule codecs (zlib, liblzma, liblz4, libzstd) are
+built statically from this tree, against the SDK's musl sysroot; bzip2 is the
+SDK's static libbz2. `LIBARCHIVE_STATIC=0` and `CODECS_STATIC=0` are refused. The
+LZFSE engine is included when `lzfse2/` is checked out
+(`lzfse2/lzfse-cli.swift` is compiled in with its `runCLI()` entry point
+stripped), and left out with `-DEXCLUDE_LZFSE` when it is not or when
+`EXCLUDE_LZFSE=1`.
 
-Verified on aarch64 Linux (buildroot, glibc, Swift 6.4.0) under QEMU: builds
-clean, records its RPATH, and reports its linked libraries in
-`version-linux.txt`.
-
-The build reuses `lzfse2/lzfse-cli.swift` as a library (its top-level
-`runCLI()` entry point is stripped, then both files are compiled together)
-and links `-lz -lbz2 -llz4 -llzma -lzstd` plus the bundled static libarchive
-ZIP backend. The binary is emitted to
-**`release/swift_tar`**. If the `lzfse2` submodule is missing, the build stops
-with an error suggesting `git submodule update --init` or the LZFSE-free build
-below.
+The link uses the toolchain's `ld.lld`. Where it cannot start only because
+`libxml2.so.2` is missing (the buildroot guest), the script builds that library
+from the `libxml2/` submodule and puts it on the library path; swift_tar itself
+never links libxml2. Swift marks `.rodata` writable, so the objects and the SDK's
+archives have that flag removed before the link, and a binary with `.rodata` in a
+writable segment, a program interpreter or a `NEEDED` entry is refused. The
+binary goes to **`release/swift_tar`** and its provenance to `version-linux.txt`
+(not committed).
 
 ### Public build without LZFSE
 

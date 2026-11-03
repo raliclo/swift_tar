@@ -114,8 +114,14 @@ case "$(swift_tar_platform)" in
     # _stdio.h 的 800 多個 -Wnullability-completeness 警告）。
     mac)   build_dir="build/libarchive-macos"; version_file="version-mac.txt"
            platform_flags=(-DCMAKE_OSX_SYSROOT="$(xcrun --show-sdk-path)") ;;
+    # Linux is musl too since 2026-11-04 (the user's decision): compile_tar-linux.zsh builds
+    # through compile_tar-musl.zsh, which supplies the toolchain file. Without one cmake
+    # would find the host's glibc headers and libraries, so it is required, not optional.
+    # Linux 自 2026-11-04 起同樣是 musl（使用者的決定）：compile_tar-linux.zsh 經由
+    # compile_tar-musl.zsh 建置，由它提供 toolchain 檔。少了它 cmake 會找到主機 glibc 的標頭與
+    # 函式庫，所以是必要的，不是可有可無。
     linux) build_dir="build/libarchive-linux"; version_file="version-linux.txt"
-           platform_flags=(-DCMAKE_POSITION_INDEPENDENT_CODE=ON) ;;
+           platform_flags=(-DCMAKE_TOOLCHAIN_FILE="${SWIFT_TAR_CMAKE_TOOLCHAIN:?Linux builds are musl: run compile_tar-linux.zsh, which sets SWIFT_TAR_CMAKE_TOOLCHAIN}") ;;
     # The musl cross targets (compile_tar-musl.zsh) take their cmake toolchain file from
     # SWIFT_TAR_CMAKE_TOOLCHAIN. / musl 交叉目標（compile_tar-musl.zsh）的 cmake toolchain 檔由
     # SWIFT_TAR_CMAKE_TOOLCHAIN 傳入。

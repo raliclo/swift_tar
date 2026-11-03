@@ -52,31 +52,25 @@ Linux 用 `compile_tar-linux.zsh`、Windows 用 `compile_tar-win.bat`——故�
 
 ### Linux
 
-`compile_tar-linux.zsh` 需要 Swift 工具鏈與各 codec 的 header 與共享函式庫。兩者皆以
-探測而非假設決定：存在時使用 `/workspace/opt/swift` 與 `/workspace/sysroot`（即
-`sos/linux_kernal_vm_interactive` 下的 buildroot aarch64 設備），否則改用 `PATH` 上的
-`swiftc` 與 `/usr`。可用 `SWIFT_PREFIX` 與 `SYSROOT` 覆寫。
+自 2026-11-04 起，所有 Linux 建置都是完全靜態的 musl 執行檔：不需要 glibc、共享函式庫或另外安裝
+Swift runtime。`compile_tar-linux.zsh` 以 `./compile_tar-musl.zsh native` 為本機架構建出一份，所以
+在 Linux 上測試的執行檔與正式發布的是同一種。它以前建的 glibc 版已移除。
 
-libarchive 一律由 `libarchive/` submodule 加上本樹的 patch 靜態建出，與 macOS 相同；缺 cmake
-或原始碼時腳本直接停止。與 macOS 版仍有兩點不同。只有在 cmake 與原始碼都在時，四個有
-submodule 的 codec（zlib、liblzma、liblz4、libzstd）才由本樹靜態建出；缺少時腳本改連結
-sysroot 的共享庫並明白說出來，而這種建置的內容不是 submodule 的 pin。bzip2 一律使用 sysroot
-的。設定 `CODECS_STATIC` 為 `1` 或 `0` 可直接決定。另外，未 checkout `lzfse2/` 時會自動套用 `-DEXCLUDE_LZFSE`，使同一支腳本無需
-旗標即可服務完整 clone 與純原始碼投放兩種情況。
+需要 Swift 6.4.x 工具鏈、以 `swift sdk install` 安裝的**相符**Static Linux SDK（SDK 名稱取自
+`swiftc --version`，所以 6.4.1 需要 `swift-6.4.1-RELEASE_static-linux`），以及 cmake。工具鏈存在時用
+`/workspace/opt/swift/usr`（buildroot guest），否則用 `PATH` 上的 `swiftc`；可用 `SWIFT_PREFIX` 覆寫，
+SDK 則用 `SWIFT_STATIC_SDK`。
 
-工具鏈的 `ld.lld` 起得來時，連結就用它。`ld.lld` 載入時需要 `libxml2.so.2`；只缺這一項時，
-腳本用 clang 從 `libxml2/` submodule 建出它，並且只放進連結器的函式庫路徑。其餘情況改用系統的
-`ld` 連結並明白說出來。swift_tar 本身不連結 libxml2。編譯與連結分成兩步：aarch64 上的 Swift 會把
-`.rodata` 標成可寫，腳本在兩步之間把目的檔上的這個旗標拿掉，並拒絕 `.rodata` 可寫的執行檔。
+libarchive 與四個有 submodule 的 codec（zlib、liblzma、liblz4、libzstd）都由本樹針對 SDK 的 musl
+sysroot 靜態建出；bzip2 用 SDK 的靜態 libbz2。`LIBARCHIVE_STATIC=0` 與 `CODECS_STATIC=0` 會被拒絕。
+已 checkout `lzfse2/` 時會編入 LZFSE 引擎（`lzfse2/lzfse-cli.swift` 剝除其 `runCLI()` 進入點後一起
+編譯）；未 checkout 或設定 `EXCLUDE_LZFSE=1` 時以 `-DEXCLUDE_LZFSE` 排除。
 
-已於 QEMU 下的 aarch64 Linux（buildroot、glibc、Swift 6.4.0）驗證：建置無誤、正確記錄
-RPATH，並將所連結的函式庫寫入 `version-linux.txt`。
-
-建置時將 `lzfse2/lzfse-cli.swift` 當函式庫重用（剝除其頂層 `runCLI()`
-進入點後兩檔合併編譯），並連結 `-lz -lbz2 -llz4 -llzma -lzstd` 與內附的
-靜態 libarchive ZIP 後端。
-二進位輸出至 **`release/swift_tar`**。若缺少 `lzfse2` submodule，建置會以錯誤中止，
-並提示執行 `git submodule update --init` 或改用下方不含 LZFSE 的建置。
+連結使用工具鏈的 `ld.lld`。只因缺少 `libxml2.so.2` 而起不來時（buildroot guest），腳本從 `libxml2/`
+submodule 建出它並放進函式庫路徑；swift_tar 本身不連結 libxml2。Swift 會把 `.rodata` 標成可寫，所以
+連結前會拿掉目的檔與 SDK 封存檔上的這個旗標，並拒絕 `.rodata` 位於可寫區段、帶有 program
+interpreter 或 `NEEDED` 項目的執行檔。二進位輸出至 **`release/swift_tar`**，來源資訊寫入
+`version-linux.txt`（不 commit）。
 
 ### 不含 LZFSE 的公開版
 

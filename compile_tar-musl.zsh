@@ -5,6 +5,7 @@
 #
 #   ./compile_tar-musl.zsh aarch64     -> release/linux-aarch64/swift_tar
 #   ./compile_tar-musl.zsh x86_64      -> release/linux-x86_64/swift_tar
+#   ./compile_tar-musl.zsh native      -> release/swift_tar, on Linux (compile_tar-linux.zsh)
 #   ./compile_tar-musl.zsh --help
 #
 # The public build (no LZFSE), linked fully static against musl with Swift's Static Linux
@@ -23,30 +24,136 @@ set -euo pipefail
 
 script_path=${0:A}
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then
-  sed -n '3,20p' "$script_path" | sed 's/^# \{0,1\}//'
+  sed -n '3,21p' "$script_path" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 cd "${script_path:h}"
 die() { print -ru2 -- "[swift_tar-musl] ERROR / 錯誤：$*"; exit 1 }
 log_msg() { print -r -- "[swift_tar-musl] $*" }
 
-ARCH=${1:-}
-[[ $ARCH == aarch64 || $ARCH == x86_64 ]] || die "usage: ./compile_tar-musl.zsh aarch64|x86_64 / 用法"
-TC=${SWIFT_TOOLCHAIN:-$HOME/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain}/usr/bin
-SDK=${SWIFT_STATIC_SDK:-$HOME/Library/org.swift.swiftpm/swift-sdks/swift-6.4.0-RELEASE_static-linux-0.1.0.artifactbundle/swift-6.4.0-RELEASE_static-linux-0.1.0/swift-linux-musl}
-for t in swiftc clang llvm-ar llvm-ranlib llvm-objcopy llvm-objdump; do
+# Two modes / 兩種模式:
+#   aarch64 | x86_64   the release build: public, cross or native, release/linux-<arch>/swift_tar,
+#                      version-musl-<arch>.txt (committed). / 正式版：公開版，交叉或原生。
+#   native             the Linux dev/test build that compile_tar-linux.zsh asks for: this host's
+#                      arch, on Linux only, release/swift_tar, version-linux.txt (not committed),
+#                      LZFSE included when SWIFT_TAR_LZFSE=1. Linux builds are musl since
+#                      2026-11-04 (the user's decision); the glibc build is gone.
+#                      compile_tar-linux.zsh 要的 Linux 開發／測試建置：本機架構、僅限 Linux、
+#                      release/swift_tar、version-linux.txt（不 commit），SWIFT_TAR_LZFSE=1 時含
+#                      LZFSE。Linux 建置自 2026-11-04 起一律 musl（使用者的決定），glibc 建置已移除。
+MODE=${1:-}
+HOST=$(uname -s)
+case $MODE in
+  aarch64|x86_64) ARCH=$MODE ;;
+  native)
+    [[ $HOST == Linux ]] || die "native is the Linux dev build; on $HOST use aarch64 or x86_64 / native 僅限 Linux"
+    ARCH=$(uname -m)
+    [[ $ARCH == arm64 ]] && ARCH=aarch64
+    [[ $ARCH == aarch64 || $ARCH == x86_64 ]] || die "unsupported host arch $ARCH / 不支援的主機架構" ;;
+  *) die "usage: ./compile_tar-musl.zsh aarch64|x86_64|native / 用法" ;;
+esac
+
+# The toolchain: the swift.org one on a Mac, the swiftc on PATH (or SWIFT_PREFIX) on Linux.
+# toolchain：Mac 上是 swift.org 那一份，Linux 上是 PATH（或 SWIFT_PREFIX）裡的 swiftc。
+if [[ -n ${SWIFT_TOOLCHAIN:-} ]]; then
+  TC=$SWIFT_TOOLCHAIN/usr/bin
+elif [[ $HOST == Darwin ]]; then
+  TC=$HOME/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain/usr/bin
+elif [[ -n ${SWIFT_PREFIX:-} ]]; then
+  TC=$SWIFT_PREFIX/bin
+else
+  swiftc_path=$(whence -p swiftc) || die "no swiftc on PATH; set SWIFT_PREFIX / PATH 上沒有 swiftc"
+  TC=${swiftc_path:A:h}
+fi
+for t in swiftc clang; do
   [[ -x $TC/$t ]] || die "no $t in $TC; install the swift.org toolchain or set SWIFT_TOOLCHAIN"
 done
+# The SDK must match the compiler exactly, so its name comes from swiftc's own version:
+# "swift-6.4-RELEASE" means 6.4.0. swiftpm installs SDKs under ~/Library/org.swift.swiftpm on a
+# Mac and ~/.swiftpm on Linux.
+# SDK 必須與編譯器完全相符，所以名稱取自 swiftc 自己的版本：「swift-6.4-RELEASE」即 6.4.0。swiftpm
+# 在 Mac 上把 SDK 裝在 ~/Library/org.swift.swiftpm，Linux 上裝在 ~/.swiftpm。
+swift_ver=$("$TC/swiftc" --version 2>&1 | sed -n 's/.*(swift-\([0-9][0-9.]*\)-RELEASE).*/\1/p' | head -1)
+[[ -n $swift_ver ]] || die "cannot read a release version from $TC/swiftc --version"
+[[ $swift_ver == *.*.* ]] || swift_ver=$swift_ver.0
+if [[ -n ${SWIFT_STATIC_SDK:-} ]]; then
+  SDK=$SWIFT_STATIC_SDK
+else
+  sdks=( {$HOME/Library/org.swift.swiftpm,$HOME/.swiftpm}/swift-sdks/swift-$swift_ver-RELEASE_static-linux-*.artifactbundle/swift-$swift_ver-RELEASE_static-linux-*/swift-linux-musl(N/) )
+  (( ${#sdks} >= 1 )) || die "no Static Linux SDK for Swift $swift_ver; install swift-$swift_ver-RELEASE_static-linux with 'swift sdk install' or set SWIFT_STATIC_SDK"
+  # The first match: on a Mac ~/.swiftpm/swift-sdks may be a link to the Library one.
+  # 取第一個：Mac 上 ~/.swiftpm/swift-sdks 可能是指向 Library 那份的連結。
+  SDK=${sdks[1]}
+fi
 src=( "$SDK"/musl-*.sdk/$ARCH(N/) )
 (( ${#src} == 1 )) || die "no musl-*.sdk/$ARCH under $SDK; install the Static Linux SDK or set SWIFT_STATIC_SDK"
 command -v cmake >/dev/null 2>&1 || die "cmake is required / 需要 cmake"
 
-export SWIFT_TAR_PLATFORM=musl-$ARCH
+# llvm's binutils where the toolchain has them, else the host's: a Linux toolchain may ship
+# without llvm-objcopy/llvm-objdump, and GNU objcopy/objdump read and print the same things
+# for the host's own architecture (native mode builds only that one).
+# toolchain 有 llvm 的 binutils 就用它，否則用主機的：Linux 的 toolchain 可能不帶 llvm-objcopy／
+# llvm-objdump，而 GNU objcopy／objdump 對主機本身的架構讀寫與印出的內容相同（native 只建這一種）。
+tool() {   # tool <llvm name> <host name>
+  if [[ -x $TC/$1 ]]; then print -r -- "$TC/$1"
+  elif [[ $HOST == Linux ]] && whence -p $2 >/dev/null; then whence -p $2
+  else die "no $1 in $TC and no $2 on PATH / 找不到 $1 或 $2"
+  fi
+}
+AR=$(tool llvm-ar ar); RANLIB=$(tool llvm-ranlib ranlib)
+OBJCOPY=$(tool llvm-objcopy objcopy); OBJDUMP=$(tool llvm-objdump objdump)
+
+# ld.lld must start, since the static link uses it. In the buildroot guest the toolchain's
+# ld.lld wants a libxml2.so.2 the rootfs lacks; as compile_tar-linux.zsh did before this
+# change, build exactly the symbols it imports from the libxml2 submodule, for the host.
+# ld.lld 必須起得來，因為靜態連結用它。buildroot guest 裡 toolchain 的 ld.lld 需要 rootfs 沒有的
+# libxml2.so.2；與本次改動前的 compile_tar-linux.zsh 相同，從 libxml2 子模組為主機建出它匯入的那些符號。
+if [[ $HOST == Linux ]]; then
+  LLD=$TC/ld.lld
+  [[ -x $LLD ]] || die "no ld.lld in $TC; the musl link needs it / 找不到 ld.lld"
+  if ! lld_err=$("$LLD" --version 2>&1 >/dev/null); then
+    [[ $lld_err == *libxml2.so.2* && -f libxml2/CMakeLists.txt ]] \
+      || die "ld.lld does not start: $lld_err / ld.lld 起不來"
+    log_msg "ld.lld needs libxml2.so.2; building it from libxml2/ / ld.lld 需要 libxml2.so.2，從 libxml2/ 建出"
+    xml_imports=(${(u)${(f)"$(readelf --dyn-syms -W "$LLD" | grep -o '[A-Za-z_0-9]*@LIBXML2_[0-9.]*')"}})
+    (( ${#xml_imports} )) || die "cannot read the libxml2 symbols ld.lld imports / 讀不出 ld.lld 匯入的 libxml2 符號"
+    mkdir -p build
+    xml_map=$PWD/build/libxml2-linux.map
+    for node in ${(u)xml_imports#*@}; do
+      print -r -- "$node {"
+      print -r -- "  global:"
+      for imp in $xml_imports; do
+        [[ ${imp#*@} == $node ]] && print -r -- "    ${imp%@*};"
+      done
+      print -r -- "};"
+    done > "$xml_map"
+    CC=$TC/clang cmake -S libxml2 -B build/libxml2-linux -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+      -DLIBXML2_WITH_ICU=OFF -DLIBXML2_WITH_TESTS=OFF -DLIBXML2_WITH_PROGRAMS=OFF \
+      -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--version-script=$xml_map"
+    cmake --build build/libxml2-linux
+    [[ -e build/libxml2-linux/libxml2.so.2 ]] || ln -s libxml2.so build/libxml2-linux/libxml2.so.2
+    export LD_LIBRARY_PATH=$PWD/build/libxml2-linux${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+    "$LLD" --version >/dev/null || die "ld.lld still does not start with the libxml2 just built / 建好 libxml2 後 ld.lld 仍起不來"
+  fi
+fi
+
+# The release build names its target; native keeps the host's "linux", so its build
+# directories and version-linux.txt never touch the committed release records.
+# 正式版指名目標；native 沿用主機的「linux」，所以它的 build 目錄與 version-linux.txt 不會碰到
+# commit 進 repo 的正式版紀錄。
+if [[ $MODE == native ]]; then
+  unset SWIFT_TAR_PLATFORM
+  out=release/swift_tar
+else
+  export SWIFT_TAR_PLATFORM=musl-$ARCH
+  out=release/linux-$ARCH/swift_tar
+fi
 . ./platform.zsh
 plat=$(swift_tar_platform)
-B=$PWD/build/$plat
+B=$PWD/build/$plat-musl-$ARCH
+[[ $MODE == native ]] || B=$PWD/build/$plat
 SYSROOT=$B/sysroot
-mkdir -p "$B/bin" "release/linux-$ARCH"
+mkdir -p "$B/bin" "${out:h}"
 log_msg "toolchain: $($TC/swiftc --version 2>&1 | head -1)"
 log_msg "sdk:       ${src[1]}"
 
@@ -66,12 +173,12 @@ log_msg "sdk:       ${src[1]}"
 # ---------------------------------------------------------------------
 stamp=$SYSROOT/.swift_tar_copied_from
 if [[ ! -f $stamp || $(<"$stamp") != "${src[1]}" ]]; then
-  [[ $SYSROOT == $PWD/build/musl-*/sysroot ]] || die "refusing to replace $SYSROOT"
+  [[ $SYSROOT == $PWD/build/musl-*/sysroot || $SYSROOT == $PWD/build/linux-musl-*/sysroot ]] || die "refusing to replace $SYSROOT"
   rm -rf -- "$SYSROOT"
   log_msg "copy the sysroot and make .rodata read-only in its archives / 複製 sysroot 並把封存檔的 .rodata 改為唯讀"
   cp -pR "${src[1]}" "$SYSROOT"
   for a in "$SYSROOT"/**/*.a(N); do
-    "$TC/llvm-objcopy" --set-section-flags .rodata=alloc,readonly,data "$a"
+    "$OBJCOPY" --set-section-flags .rodata=alloc,readonly,data "$a"
   done
   print -r -- "${src[1]}" > "$stamp"
 fi
@@ -115,8 +222,8 @@ print -l "set(CMAKE_SYSTEM_NAME Linux)" \
   "set(CMAKE_SYSTEM_PROCESSOR $ARCH)" \
   "set(CMAKE_C_COMPILER \"$CC\")" \
   "set(CMAKE_CXX_COMPILER \"$CXX\")" \
-  "set(CMAKE_AR \"$TC/llvm-ar\")" \
-  "set(CMAKE_RANLIB \"$TC/llvm-ranlib\")" \
+  "set(CMAKE_AR \"$AR\")" \
+  "set(CMAKE_RANLIB \"$RANLIB\")" \
   "set(CMAKE_SYSROOT \"$SYSROOT\")" \
   "set(CMAKE_FIND_ROOT_PATH \"$SYSROOT\")" \
   "set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)" \
@@ -133,8 +240,23 @@ version_file=version-$plat.txt
 CC=$CC zsh ./build_codecs.zsh
 CC=$CC ZLIB_LIBRARY="$PWD/build/zlib-$plat/libz.a" ZLIB_INCLUDE_DIR="$PWD/zlib" zsh ./build_libarchive.zsh
 
+# LZFSE only for a native dev build that asks for it (compile_tar-linux.zsh decides); a release
+# build is always the public one. / LZFSE 只給要求它的 native 開發建置（由 compile_tar-linux.zsh
+# 決定）；正式版一律是公開版。
+defines=(-DEXCLUDE_LZFSE)
+cli_src=()
+if [[ $MODE == native && ${SWIFT_TAR_LZFSE:-0} == 1 ]]; then
+  [[ -f lzfse2/lzfse-cli.swift ]] || die "SWIFT_TAR_LZFSE=1 but there is no lzfse2/lzfse-cli.swift / 沒有 lzfse2"
+  cli_src=($B/lzfse-cli-lib.swift)
+  grep -v '^runCLI()$' lzfse2/lzfse-cli.swift > "${cli_src[1]}"
+  defines=()
+  log_msg "building WITH the LZFSE engine / 含 LZFSE 引擎"
+else
+  log_msg "building without LZFSE (-DEXCLUDE_LZFSE) / 不含 LZFSE 引擎"
+fi
+
 TEMP_VERSION=$B/swift_tar_version.swift
-SWIFT_TAR_LZFSE_SOURCE= zsh ./generate_version.zsh "$TEMP_VERSION"
+SWIFT_TAR_LZFSE_SOURCE=$( (( ${#cli_src} )) && print -r -- lzfse2/lzfse-cli.swift ) zsh ./generate_version.zsh "$TEMP_VERSION"
 
 # Compile, take the writable flag off our own `.rodata`, then link: the same two steps as
 # compile_tar-linux.zsh, for the same reason.
@@ -146,19 +268,22 @@ mkdir -p "$OBJDIR"
 # ROOT, not $PWD, inside the subshell below: there $PWD is already the object directory.
 # 下面子 shell 裡用 ROOT 而不是 $PWD：在那裡 $PWD 已經是目的檔目錄。
 ROOT=$PWD
-srcs=("$TEMP_VERSION" swift_tar.swift rgb1.swift crypto.swift)
+srcs=("$TEMP_VERSION" "${cli_src[@]}" swift_tar.swift rgb1.swift crypto.swift)
 srcs=(${srcs:A})
 log_msg "compile swift_tar / 編譯 swift_tar"
-( cd "$OBJDIR" && "$TC/swiftc" -O -swift-version 6 "${target[@]}" -DEXCLUDE_LZFSE -c "${srcs[@]}" \
+( cd "$OBJDIR" && "$TC/swiftc" -O -swift-version 6 "${target[@]}" "${defines[@]}" -c "${srcs[@]}" \
     -I "$ROOT/cmodules/PinnedZlib" -Xcc -I"$ROOT/zlib" )
 for o in "$OBJDIR"/*.o; do
-  "$TC/llvm-objcopy" --set-section-flags .rodata=alloc,readonly,data "$o"
+  "$OBJCOPY" --set-section-flags .rodata=alloc,readonly,data "$o"
 done
-out=release/linux-$ARCH/swift_tar
+# build_libarchive.zsh names the bridge object after the musl target, and plain for "linux".
+# build_libarchive.zsh 以 musl 目標為橋接層目的檔命名，「linux」則用原名。
+bridge_obj=build/libarchive_zip_bridge-$plat.o
+[[ $plat == linux ]] && bridge_obj=build/libarchive_zip_bridge.o
 log_msg "link $out / 連結"
 "$TC/swiftc" "${target[@]}" -static-executable -static-stdlib \
   -Xclang-linker -resource-dir -Xclang-linker "$SYSROOT/usr/lib/swift/clang" \
-  "$OBJDIR"/*.o build/libarchive_zip_bridge-$plat.o build/libarchive-$plat/libarchive/libarchive.a \
+  "$OBJDIR"/*.o "$bridge_obj" build/libarchive-$plat/libarchive/libarchive.a \
   build/xz-$plat/liblzma.a build/lz4-$plat/liblz4.a build/zstd-$plat/lib/libzstd.a build/zlib-$plat/libz.a \
   -L"$SYSROOT/usr/lib" -lbz2 -Xlinker --strip-all -o "$out"
 
@@ -166,12 +291,12 @@ log_msg "link $out / 連結"
 # Refusals about the result, read from the file since it cannot run here.
 # 對產物的拒絕，從檔案讀出，因為它在這裡跑不了。
 # ---------------------------------------------------------------------
-headers=$("$TC/llvm-objdump" -p "$out")
+headers=$("$OBJDUMP" -p "$out")
 [[ $headers != *INTERP* ]] || die "$out has a program interpreter; it is not a static executable"
 [[ $headers != *NEEDED* ]] || die "$out needs shared libraries: $(print -r -- "$headers" | grep NEEDED | tr -s ' ' | tr '\n' ' ')"
 # `.rodata` must lie in a LOAD segment that is not writable.
 # `.rodata` 必須位於不可寫的 LOAD 區段裡。
-ro=$("$TC/llvm-objdump" -h "$out" | awk '$2==".rodata"{print $4, $3}')
+ro=$("$OBJDUMP" -h "$out" | awk '$2==".rodata"{print $4, $3}')
 [[ -n $ro ]] || die "$out has no .rodata section to check"
 ro_vma=$(( 16#${ro%% *} ))
 # llvm-objdump -p prints each segment on two lines: `LOAD off .. vaddr ..`, then

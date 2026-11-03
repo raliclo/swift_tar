@@ -58,8 +58,9 @@ Swift runtime。`compile_tar-linux.zsh` 以 `./compile_tar-musl.zsh native` 為�
 
 需要 Swift 6.4.x 工具鏈、以 `swift sdk install` 安裝的**相符**Static Linux SDK（SDK 名稱取自
 `swiftc --version`，所以 6.4.1 需要 `swift-6.4.1-RELEASE_static-linux`），以及 cmake。工具鏈存在時用
-`/workspace/opt/swift/usr`（buildroot guest），否則用 `PATH` 上的 `swiftc`；可用 `SWIFT_PREFIX` 覆寫，
-SDK 則用 `SWIFT_STATIC_SDK`。
+`/workspace/opt/swift/usr`（buildroot guest），否則用 `PATH` 上的 `swiftc`；可用 `SWIFT_PREFIX` 覆寫。
+SDK 依序在 `$SWIFT_SDKS_PATH`、`/workspace/opt/swift-sdks`（guest）、`~/.swiftpm/swift-sdks`、
+`~/Library/org.swift.swiftpm/swift-sdks` 尋找；`SWIFT_STATIC_SDK` 可直接指定。
 
 libarchive 與四個有 submodule 的 codec（zlib、liblzma、liblz4、libzstd）都由本樹針對 SDK 的 musl
 sysroot 靜態建出；bzip2 用 SDK 的靜態 libbz2。`LIBARCHIVE_STATIC=0` 與 `CODECS_STATIC=0` 會被拒絕。

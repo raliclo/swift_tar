@@ -69,20 +69,29 @@ for t in swiftc clang; do
   [[ -x $TC/$t ]] || die "no $t in $TC; install the swift.org toolchain or set SWIFT_TOOLCHAIN"
 done
 # The SDK must match the compiler exactly, so its name comes from swiftc's own version:
-# "swift-6.4-RELEASE" means 6.4.0. swiftpm installs SDKs under ~/Library/org.swift.swiftpm on a
-# Mac and ~/.swiftpm on Linux.
-# SDK 必須與編譯器完全相符，所以名稱取自 swiftc 自己的版本：「swift-6.4-RELEASE」即 6.4.0。swiftpm
-# 在 Mac 上把 SDK 裝在 ~/Library/org.swift.swiftpm，Linux 上裝在 ~/.swiftpm。
+# "swift-6.4-RELEASE" means 6.4.0. Searched in csv2's order: SWIFT_SDKS_PATH, then
+# /workspace/opt/swift-sdks (the LinuxCS guest, whose /root is a read-only snapshot that does not
+# survive a reboot), then where swiftpm installs them, ~/.swiftpm on Linux and
+# ~/Library/org.swift.swiftpm on a Mac.
+# SDK 必須與編譯器完全相符，所以名稱取自 swiftc 自己的版本：「swift-6.4-RELEASE」即 6.4.0。依 csv2 的
+# 順序尋找：SWIFT_SDKS_PATH、/workspace/opt/swift-sdks（LinuxCS guest：它的 /root 位於唯讀快照上，
+# 重開機後不保留），再來是 swiftpm 的安裝位置，Linux 為 ~/.swiftpm，Mac 為 ~/Library/org.swift.swiftpm。
 swift_ver=$("$TC/swiftc" --version 2>&1 | sed -n 's/.*(swift-\([0-9][0-9.]*\)-RELEASE).*/\1/p' | head -1)
 [[ -n $swift_ver ]] || die "cannot read a release version from $TC/swiftc --version"
 [[ $swift_ver == *.*.* ]] || swift_ver=$swift_ver.0
 if [[ -n ${SWIFT_STATIC_SDK:-} ]]; then
   SDK=$SWIFT_STATIC_SDK
 else
-  sdks=( {$HOME/Library/org.swift.swiftpm,$HOME/.swiftpm}/swift-sdks/swift-$swift_ver-RELEASE_static-linux-*.artifactbundle/swift-$swift_ver-RELEASE_static-linux-*/swift-linux-musl(N/) )
-  (( ${#sdks} >= 1 )) || die "no Static Linux SDK for Swift $swift_ver; install swift-$swift_ver-RELEASE_static-linux with 'swift sdk install' or set SWIFT_STATIC_SDK"
-  # The first match: on a Mac ~/.swiftpm/swift-sdks may be a link to the Library one.
-  # 取第一個：Mac 上 ~/.swiftpm/swift-sdks 可能是指向 Library 那份的連結。
+  sdk_dirs=(${SWIFT_SDKS_PATH:+$SWIFT_SDKS_PATH} /workspace/opt/swift-sdks $HOME/.swiftpm/swift-sdks
+            $HOME/Library/org.swift.swiftpm/swift-sdks)
+  sdks=()
+  for d in $sdk_dirs; do
+    sdks+=( $d/swift-$swift_ver-RELEASE_static-linux-*.artifactbundle/swift-$swift_ver-RELEASE_static-linux-*/swift-linux-musl(N/) )
+  done
+  (( ${#sdks} >= 1 )) || die "no Static Linux SDK for Swift $swift_ver in ${sdk_dirs[*]}; install swift-$swift_ver-RELEASE_static-linux or set SWIFT_STATIC_SDK"
+  # The first match, in the order above. On a Mac ~/.swiftpm/swift-sdks may be a link to the
+  # Library one, so both can match the same SDK.
+  # 依上述順序取第一個。Mac 上 ~/.swiftpm/swift-sdks 可能是指向 Library 那份的連結，兩者可能指同一份。
   SDK=${sdks[1]}
 fi
 src=( "$SDK"/musl-*.sdk/$ARCH(N/) )

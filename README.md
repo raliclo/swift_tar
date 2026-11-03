@@ -69,8 +69,10 @@ It needs a Swift 6.4.x toolchain, the **matching** Static Linux SDK installed wi
 `swift sdk install` (the SDK name is taken from `swiftc --version`, so 6.4.1
 needs `swift-6.4.1-RELEASE_static-linux`), and cmake. The toolchain is
 `/workspace/opt/swift/usr` when it exists (the buildroot guest), otherwise
-`swiftc` from `PATH`; override with `SWIFT_PREFIX`, and the SDK with
-`SWIFT_STATIC_SDK`.
+`swiftc` from `PATH`; override with `SWIFT_PREFIX`. The SDK is looked for in
+`$SWIFT_SDKS_PATH`, `/workspace/opt/swift-sdks` (the guest), `~/.swiftpm/swift-sdks`
+and `~/Library/org.swift.swiftpm/swift-sdks`, in that order; `SWIFT_STATIC_SDK`
+names one outright.
 
 libarchive and the four submodule codecs (zlib, liblzma, liblz4, libzstd) are
 built statically from this tree, against the SDK's musl sysroot; bzip2 is the

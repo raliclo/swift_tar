@@ -52,9 +52,45 @@ Linux 用 `compile_tar-linux.zsh`、Windows 用 `compile_tar-win.bat`——故�
 
 ### Linux
 
-自 2026-11-04 起，所有 Linux 建置都是完全靜態的 musl 執行檔：不需要 glibc、共享函式庫或另外安裝
-Swift runtime。`compile_tar-linux.zsh` 以 `./compile_tar-musl.zsh native` 為本機架構建出一份，所以
-在 Linux 上測試的執行檔與正式發布的是同一種。它以前建的 glibc 版已移除。
+`compile_tar-linux.zsh` 有兩種建置，都輸出 **`release/swift_tar`** 與 `version-linux.txt`，也都遵守
+`EXCLUDE_LZFSE=1`。
+
+- `./compile_tar-linux.zsh`（預設）：glibc，動態連結 Swift runtime，不需要 Static Linux SDK。
+- `./compile_tar-linux.zsh --musl`：以 `./compile_tar-musl.zsh native` 為本機架構建出完全靜態的 musl
+  執行檔，與發布的 Linux 正式版同一種。
+
+從 edf28c4 到同一天稍晚（2026-11-04），musl 曾是唯一的 Linux 建置。glibc 恢復為預設，是因為 multissh
+的標準 Linux 建置是 glibc，它附帶的 swift_tar 也以同樣方式建置。在同一個 checkout 裡切換模式時，codec
+與 libarchive 的建置目錄會重新建置，因為它們的 cmake 快取記著另一種模式的編譯器。
+
+#### glibc（預設）
+
+需要 Swift 工具鏈與各 codec 的 header 與共享函式庫。兩者皆以探測而非假設決定：存在時使用
+`/workspace/opt/swift` 與 `/workspace/sysroot`（即 `sos/linux_kernal_vm_interactive` 下的 buildroot
+aarch64 設備），否則改用 `PATH` 上的 `swiftc` 與 `/usr`。可用 `SWIFT_PREFIX` 與 `SYSROOT` 覆寫。
+
+libarchive 一律由 `libarchive/` submodule 加上本樹的 patch 靜態建出，與 macOS 相同；缺 cmake
+或原始碼時腳本直接停止。與 macOS 版仍有兩點不同。只有在 cmake 與原始碼都在時，四個有
+submodule 的 codec（zlib、liblzma、liblz4、libzstd）才由本樹靜態建出；缺少時腳本改連結
+sysroot 的共享庫並明白說出來，而這種建置的內容不是 submodule 的 pin。bzip2 一律使用 sysroot
+的。設定 `CODECS_STATIC` 為 `1` 或 `0` 可直接決定。另外，未 checkout `lzfse2/` 時會自動套用 `-DEXCLUDE_LZFSE`，使同一支腳本無需
+旗標即可服務完整 clone 與純原始碼投放兩種情況。
+
+工具鏈的 `ld.lld` 起得來時，連結就用它。`ld.lld` 載入時需要 `libxml2.so.2`；只缺這一項時，
+腳本用 clang 從 `libxml2/` submodule 建出它，並且只放進連結器的函式庫路徑。其餘情況改用系統的
+`ld` 連結並明白說出來。swift_tar 本身不連結 libxml2。編譯與連結分成兩步：aarch64 上的 Swift 會把
+`.rodata` 標成可寫，腳本在兩步之間把目的檔上的這個旗標拿掉，並拒絕 `.rodata` 可寫的執行檔。
+
+已於 QEMU 下的 aarch64 Linux（buildroot、glibc、Swift 6.4.0）驗證：建置無誤、正確記錄
+RPATH，並將所連結的函式庫寫入 `version-linux.txt`。2026-11-04 另於 `swift:6.4.2-noble` 容器的
+x86_64 上以 `EXCLUDE_LZFSE=1` 再驗證：沒有警告，執行檔能完成 `.tar.zst` 往返、通過
+`--crypto-selftest` 並拒絕 LZFSE。
+
+建置時將 `lzfse2/lzfse-cli.swift` 當函式庫重用（剝除其頂層 `runCLI()`
+進入點後兩檔合併編譯），並連結 `-lz -lbz2 -llz4 -llzma -lzstd` 與內附的
+靜態 libarchive ZIP 後端。
+
+#### musl（`--musl`）
 
 需要 Swift 6.4.x 工具鏈、以 `swift sdk install` 安裝的**相符**Static Linux SDK（SDK 名稱取自
 `swiftc --version`，所以 6.4.1 需要 `swift-6.4.1-RELEASE_static-linux`），以及 cmake。工具鏈存在時用

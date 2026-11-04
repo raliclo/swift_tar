@@ -59,11 +59,60 @@ Pass `--install` (or `-install`) to also copy it to `/opt/homebrew/bin/swift_tar
 
 ### Linux
 
-Every Linux build is a fully static musl executable, since 2026-11-04: no glibc,
-no shared libraries, no Swift runtime to install. `compile_tar-linux.zsh` builds
-one for the host's architecture by running `./compile_tar-musl.zsh native`, so
-the binary tested on Linux is the same kind as the one released. The glibc build
-it used to make is gone.
+`compile_tar-linux.zsh` makes one of two builds. Both write
+**`release/swift_tar`** and `version-linux.txt`, and both honour `EXCLUDE_LZFSE=1`.
+
+- `./compile_tar-linux.zsh`, the default: glibc, with the Swift runtime linked
+  dynamically. It needs no Static Linux SDK.
+- `./compile_tar-linux.zsh --musl`: a fully static musl executable for the host's
+  architecture, built by `./compile_tar-musl.zsh native`. It is the same kind as
+  the published Linux releases.
+
+From edf28c4 until later the same day (2026-11-04), musl was the only Linux
+build. glibc came back as the default because multissh's standard Linux build is
+glibc, and the swift_tar it ships is built the same way. Switching modes in one
+checkout rebuilds the codec and libarchive build directories, whose cmake caches
+remember the other mode's compiler.
+
+#### glibc (default)
+
+It needs a Swift toolchain and the codec headers and shared libraries. Both are
+probed rather than assumed: it uses `/workspace/opt/swift` and
+`/workspace/sysroot` when they exist (the buildroot aarch64 appliance under
+`sos/linux_kernal_vm_interactive`), otherwise `swiftc` from `PATH` and `/usr`.
+Override with `SWIFT_PREFIX` and `SYSROOT`.
+
+libarchive is always built statically from the `libarchive/` submodule with this
+tree's patches, as on macOS; the script stops when cmake or the sources are
+missing. Two differences from the macOS build remain. The four submodule codecs
+(zlib, liblzma, liblz4, libzstd) are built statically from this tree only where
+cmake and their sources are present; without them the script links the
+sysroot's shared libraries and says so, and such a build does not contain the
+submodule pins. bzip2 is always the sysroot's. Set `CODECS_STATIC` to `1` or `0`
+to decide outright. And `-DEXCLUDE_LZFSE` is applied automatically when `lzfse2/` is not
+checked out, so the same script serves a full clone and a source drop without a
+flag.
+
+The link uses the toolchain's `ld.lld` when it can start. `ld.lld` needs
+`libxml2.so.2` at load time; where that is the only thing missing, the script
+builds it with clang from the `libxml2/` submodule and puts it on the linker's
+library path only. Otherwise it links with the system `ld` and says so.
+swift_tar itself never links libxml2. Compile and link are separate steps:
+Swift on aarch64 marks `.rodata` writable, and the script removes that flag
+from the objects in between, then refuses a binary whose `.rodata` is writable.
+
+Verified on aarch64 Linux (buildroot, glibc, Swift 6.4.0) under QEMU: builds
+clean, records its RPATH, and reports its linked libraries in
+`version-linux.txt`. Verified again on x86_64 in the `swift:6.4.2-noble`
+container on 2026-11-04 with `EXCLUDE_LZFSE=1`: no warnings, and the binary
+round-trips a `.tar.zst`, passes `--crypto-selftest` and refuses LZFSE.
+
+The build reuses `lzfse2/lzfse-cli.swift` as a library (its top-level
+`runCLI()` entry point is stripped, then both files are compiled together)
+and links `-lz -lbz2 -llz4 -llzma -lzstd` plus the bundled static libarchive
+ZIP backend.
+
+#### musl (`--musl`)
 
 It needs a Swift 6.4.x toolchain, the **matching** Static Linux SDK installed with
 `swift sdk install` (the SDK name is taken from `swiftc --version`, so 6.4.1

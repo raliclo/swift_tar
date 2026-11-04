@@ -5,7 +5,7 @@
 #
 #   ./compile_tar-musl.zsh aarch64     -> release/linux-aarch64/swift_tar
 #   ./compile_tar-musl.zsh x86_64      -> release/linux-x86_64/swift_tar
-#   ./compile_tar-musl.zsh native      -> release/swift_tar, on Linux (compile_tar-linux.zsh)
+#   ./compile_tar-musl.zsh native      -> release/swift_tar, on Linux (compile_tar-linux.zsh --musl)
 #   ./compile_tar-musl.zsh --help
 #
 # The public build (no LZFSE), linked fully static against musl with Swift's Static Linux
@@ -34,13 +34,13 @@ log_msg() { print -r -- "[swift_tar-musl] $*" }
 # Two modes / 兩種模式:
 #   aarch64 | x86_64   the release build: public, cross or native, release/linux-<arch>/swift_tar,
 #                      version-musl-<arch>.txt (committed). / 正式版：公開版，交叉或原生。
-#   native             the Linux dev/test build that compile_tar-linux.zsh asks for: this host's
+#   native             the Linux dev/test build that compile_tar-linux.zsh --musl asks for: this host's
 #                      arch, on Linux only, release/swift_tar, version-linux.txt (not committed),
-#                      LZFSE included when SWIFT_TAR_LZFSE=1. Linux builds are musl since
-#                      2026-11-04 (the user's decision); the glibc build is gone.
-#                      compile_tar-linux.zsh 要的 Linux 開發／測試建置：本機架構、僅限 Linux、
+#                      LZFSE included when SWIFT_TAR_LZFSE=1. Without --musl,
+#                      compile_tar-linux.zsh makes the glibc build instead (the default).
+#                      compile_tar-linux.zsh --musl 要的 Linux 開發／測試建置：本機架構、僅限 Linux、
 #                      release/swift_tar、version-linux.txt（不 commit），SWIFT_TAR_LZFSE=1 時含
-#                      LZFSE。Linux 建置自 2026-11-04 起一律 musl（使用者的決定），glibc 建置已移除。
+#                      LZFSE。不加 --musl 時 compile_tar-linux.zsh 改建 glibc 版（預設）。
 MODE=${1:-}
 HOST=$(uname -s)
 case $MODE in

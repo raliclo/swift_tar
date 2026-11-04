@@ -114,14 +114,17 @@ case "$(swift_tar_platform)" in
     # _stdio.h 的 800 多個 -Wnullability-completeness 警告）。
     mac)   build_dir="build/libarchive-macos"; version_file="version-mac.txt"
            platform_flags=(-DCMAKE_OSX_SYSROOT="$(xcrun --show-sdk-path)") ;;
-    # Linux is musl too since 2026-11-04 (the user's decision): compile_tar-linux.zsh builds
-    # through compile_tar-musl.zsh, which supplies the toolchain file. Without one cmake
-    # would find the host's glibc headers and libraries, so it is required, not optional.
-    # Linux 自 2026-11-04 起同樣是 musl（使用者的決定）：compile_tar-linux.zsh 經由
-    # compile_tar-musl.zsh 建置，由它提供 toolchain 檔。少了它 cmake 會找到主機 glibc 的標頭與
-    # 函式庫，所以是必要的，不是可有可無。
+    # Linux has two builds (compile_tar-linux.zsh): glibc by default, against the host, and
+    # musl with --musl, whose compile_tar-musl.zsh supplies the toolchain file. With the file
+    # set this is the musl build; without it, the glibc one.
+    # Linux 有兩種建置（compile_tar-linux.zsh）：預設 glibc，對本機建置；加 --musl 則為 musl，由
+    # compile_tar-musl.zsh 提供 toolchain 檔。有設這個檔就是 musl 建置，沒有就是 glibc 建置。
     linux) build_dir="build/libarchive-linux"; version_file="version-linux.txt"
-           platform_flags=(-DCMAKE_TOOLCHAIN_FILE="${SWIFT_TAR_CMAKE_TOOLCHAIN:?Linux builds are musl: run compile_tar-linux.zsh, which sets SWIFT_TAR_CMAKE_TOOLCHAIN}") ;;
+           if [[ -n ${SWIFT_TAR_CMAKE_TOOLCHAIN:-} ]]; then
+               platform_flags=(-DCMAKE_TOOLCHAIN_FILE="$SWIFT_TAR_CMAKE_TOOLCHAIN")
+           else
+               platform_flags=(-DCMAKE_POSITION_INDEPENDENT_CODE=ON)
+           fi ;;
     # The musl cross targets (compile_tar-musl.zsh) take their cmake toolchain file from
     # SWIFT_TAR_CMAKE_TOOLCHAIN. / musl 交叉目標（compile_tar-musl.zsh）的 cmake toolchain 檔由
     # SWIFT_TAR_CMAKE_TOOLCHAIN 傳入。

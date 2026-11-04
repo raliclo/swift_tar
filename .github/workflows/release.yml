@@ -205,7 +205,11 @@ jobs:
       - name: Tools / 工具
         run: |
           apt-get update -q
-          apt-get install -y -q --no-install-recommends zsh zstd binutils tar
+          # tar is GNU tar, which -test compares with; it cannot do ZIP, so -test falls back to
+          # Info-ZIP's zip and unzip, and the codec tools are for the compressed cases.
+          # tar 是 GNU tar，-test 拿它來比對；它做不了 ZIP，所以 -test 改用 Info-ZIP 的 zip 與 unzip，
+          # codec 工具給壓縮的案例用。
+          apt-get install -y -q --no-install-recommends zsh zstd binutils tar gzip bzip2 xz-utils lz4 zip unzip
           if ls -d /usr/lib/swift /usr/share/swift 2>/dev/null; then echo "a Swift is installed here / 這裡裝了 Swift"; exit 1; fi
 
       - uses: actions/checkout@v5

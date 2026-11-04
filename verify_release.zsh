@@ -104,7 +104,16 @@ fi
 env -i "$B" --crypto-selftest >/dev/null 2>&1 || die "--crypto-selftest failed" "--crypto-selftest 失敗"
 # -test compares against a standard tar on PATH, so it keeps this machine's PATH.
 # -test 要和 PATH 上的標準 tar 比對，所以保留這台機器的 PATH。
-( cd -- "$W" && env -i PATH="$PATH" "$B" -test ) >/dev/null 2>&1 || die "-test failed (it needs GNU tar or bsdtar on PATH)" "-test 失敗（它需要 PATH 上有 GNU tar 或 bsdtar）"
+# Its output is kept and shown on failure: thrown away, the first CI run of verify (41839755081,
+# 2026-11-04) said only "-test failed" on all four archives, with nothing to say why.
+# 它的輸出保留下來，失敗時印出：丟掉時，verify 第一次在 CI 上跑（41839755081，2026-11-04）四份封存都
+# 只說「-test failed」，看不出原因。
+if ! ( cd -- "$W" && env -i PATH="$PATH" "$B" -test ) > "$W/test.out" 2>&1; then
+  print -ru2 -- "---- the last lines of -test / -test 的最後幾行 ----"
+  tail -40 "$W/test.out" >&2
+  die "-test failed (it needs GNU tar or bsdtar on PATH, and the codec tools it compares with)" \
+      "-test 失敗（它需要 PATH 上有 GNU tar 或 bsdtar，以及它用來比對的 codec 工具）"
+fi
 
 print -r -- "VERIFIED $base"
 print -r -- "  sha256  $h"

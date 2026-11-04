@@ -9,7 +9,7 @@
 #                                    bzlib.h, no Static Linux SDK
 #                                    glibc 建置：動態連結本機 glibc 與 toolchain 的 Swift runtime；
 #                                    需要 swiftc、clang、cmake 與 bzlib.h，不需要 Static Linux SDK
-#   ./compile_tar-linux.zsh --musl   static musl build for this host's architecture, through
+#   ./compile_tar-linux.zsh --musl   (or -musl) static musl build for this host's architecture, through
 #                                    `./compile_tar-musl.zsh native`; needs the Static Linux SDK
 #                                    以 `./compile_tar-musl.zsh native` 為本機架構建置靜態 musl；
 #                                    需要 Static Linux SDK
@@ -18,10 +18,15 @@
 #
 # Both write release/swift_tar and version-linux.txt, and both honour EXCLUDE_LZFSE=1 (the
 # public build even where lzfse2 is checked out, as `./compile_tar.zsh --no-lzfse` on macOS).
-# The published Linux releases are the musl build made on the Mac (compile_tar-musl.zsh <arch>).
+# Both are published (user's decision, 2026-11-04, named as multissh names them):
+# linux-<arch>-glibc is this default build, packed by release.zsh on a Linux machine with the
+# Swift runtime .so files in lib/ beside it; linux-<arch>-musl is the static build, made on the
+# Mac (compile_tar-musl.zsh <arch>) or here with --musl.
 # 兩者都輸出 release/swift_tar 與 version-linux.txt，也都遵守 EXCLUDE_LZFSE=1（即使 lzfse2 已
-# checkout 也建公開版，與 macOS 的 `./compile_tar.zsh --no-lzfse` 相同）。發布的 Linux 正式版是在
-# Mac 上建的 musl 版（compile_tar-musl.zsh <arch>）。
+# checkout 也建公開版，與 macOS 的 `./compile_tar.zsh --no-lzfse` 相同）。兩種都發布（使用者
+# 2026-11-04 決定，命名與 multissh 相同）：linux-<arch>-glibc 就是這個預設建置，由 release.zsh 在
+# Linux 機器上打包，Swift runtime 的 .so 放在旁邊的 lib/；linux-<arch>-musl 是靜態建置，在 Mac 上
+# 建（compile_tar-musl.zsh <arch>）或在這裡加 --musl 建。
 #
 # History / 沿革: edf28c4 (2026-11-04) made every Linux build musl and removed the glibc one. The
 # same day the user restored glibc as the default, with musl behind --musl: multissh's standard
@@ -38,7 +43,7 @@ MUSL=0
 for arg in "$@"; do
     case $arg in
         --help|-h) sed -n '3,32p' "$script_path" | sed 's/^# \{0,1\}//'; exit 0 ;;
-        --musl) MUSL=1 ;;
+        --musl|-musl) MUSL=1 ;;
         *) print -u2 -- "[swift_tar-linux] unknown argument: $arg (see --help) / 不認得的引數：$arg（請見 --help）"; exit 2 ;;
     esac
 done
@@ -410,6 +415,16 @@ fi
 # 情況下啟動，而該前提撐不過真實系統的邊界：/etc/profile.d 只對 login shell 生效、
 # `su -` 會重建環境、sudo 更會直接刪除 LD_*。這三種失敗都只報同一句無用的
 # "error while loading shared libraries"。
+#
+# Two relative entries come first, for the published linux-<arch>-glibc archive, which carries
+# the runtime itself (user's decision, 2026-11-04): $ORIGIN/lib is the archive's own layout
+# (swift_tar beside lib/), $ORIGIN/../lib/swift_tar is where install.zsh puts the libraries
+# (<prefix>/bin and <prefix>/lib/swift_tar). Where neither exists, as for release/swift_tar
+# here, the loader goes on to this toolchain's runtime.
+# 最前面是兩個相對位置，給自帶 runtime 的 linux-<arch>-glibc 正式版用（使用者 2026-11-04 決定）：
+# $ORIGIN/lib 是封存本身的配置（swift_tar 與 lib/ 並列），$ORIGIN/../lib/swift_tar 是 install.zsh
+# 放函式庫的位置（<prefix>/bin 與 <prefix>/lib/swift_tar）。兩者都不存在時，例如這裡的
+# release/swift_tar，載入器接著找這個 toolchain 的 runtime。
 SWIFT_RUNTIME_DIR="$SWIFT_PREFIX/lib/swift/linux"
 
 # -swift-version 6, matching compile_tar.zsh and compile_tar-win.zsh. Linux was the
@@ -569,6 +584,8 @@ fi
     "${ARCHIVE_LINK[@]}" \
     "${CODEC_LINK[@]}" \
     "${LINKER_FLAGS[@]}" \
+    -Xlinker -rpath -Xlinker '$ORIGIN/lib' \
+    -Xlinker -rpath -Xlinker '$ORIGIN/../lib/swift_tar' \
     -Xlinker -rpath -Xlinker "$SWIFT_RUNTIME_DIR" \
     -Xlinker -rpath -Xlinker "$SYSROOT/lib" \
     -o release/swift_tar
@@ -676,8 +693,25 @@ record_provenance() {
         strip+='|^(zlib|lz4|xz|zstd)_(so_version|path|linkage|version|commit)='
     fi
     strip+='|^libarchive_(so_version|path)='
+    # What release.zsh packs from: which libc, that the Swift runtime is not linked in, and the
+    # runtime this binary was linked against, which is the one that ships (as compile_tar-win.zsh
+    # records its runtime for the Windows archive). A musl build's lines go, since both modes
+    # write version-linux.txt. glibc_min is the newest GLIBC_ symbol version the binary asks
+    # for, i.e. the oldest glibc it runs on.
+    # release.zsh 打包時所依據的：哪一種 libc、Swift runtime 沒有連進來、以及這個執行檔連結時用的
+    # runtime，出貨的就是那一份（與 compile_tar-win.zsh 為 Windows 封存記下 runtime 相同）。兩種模式
+    # 都寫 version-linux.txt，所以 musl 建置留下的行要清掉。glibc_min 是執行檔要求的最新 GLIBC_ 符號
+    # 版本，也就是它能執行的最舊 glibc。
+    strip+='|^(libc|glibc_min|swift_stdlib_linkage|swift_runtime_dir|swift_static_sdk|swift_toolchain)='
+    local -a glibc_vers
+    glibc_vers=(${(uon)${(f)"$(readelf -VW release/swift_tar | grep -o 'GLIBC_[0-9][0-9.]*')"}#GLIBC_})
     {
         grep -vE "$strip" "$version_file" || [ $? -eq 1 ]
+        print -r -- libc=glibc
+        (( ${#glibc_vers} )) && print -r -- "glibc_min=${glibc_vers[-1]}"
+        print -r -- swift_stdlib_linkage=dynamic
+        print -r -- "swift_runtime_dir=$SWIFT_RUNTIME_DIR"
+        print -r -- "swift_toolchain=$("$SWIFTC" --version 2>&1 | head -1)"
         [[ "$CODECS_STATIC" == 1 ]] || record_linked zlib       'libz.so'
         record_linked bzip2      'libbz2.so'
         [[ "$CODECS_STATIC" == 1 ]] || record_linked lz4        'liblz4.so'

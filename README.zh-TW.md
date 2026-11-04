@@ -55,9 +55,12 @@ Linux 用 `compile_tar-linux.zsh`、Windows 用 `compile_tar-win.bat`——故�
 `compile_tar-linux.zsh` 有兩種建置，都輸出 **`release/swift_tar`** 與 `version-linux.txt`，也都遵守
 `EXCLUDE_LZFSE=1`。
 
-- `./compile_tar-linux.zsh`（預設）：glibc，動態連結 Swift runtime，不需要 Static Linux SDK。
-- `./compile_tar-linux.zsh --musl`：以 `./compile_tar-musl.zsh native` 為本機架構建出完全靜態的 musl
-  執行檔，與發布的 Linux 正式版同一種。
+- `./compile_tar-linux.zsh`（預設）：glibc，動態連結 Swift runtime，不需要 Static Linux SDK。即
+  `linux-<arch>-glibc` 正式版。
+- `./compile_tar-linux.zsh --musl`（或 `-musl`）：以 `./compile_tar-musl.zsh native` 為本機架構建出
+  完全靜態的 musl 執行檔，與 `linux-<arch>-musl` 正式版同一種。
+
+自 2026-11-04 起兩種都發布，命名與 multissh 相同：`linux-<arch>-glibc` 與 `linux-<arch>-musl`。
 
 從 edf28c4 到同一天稍晚（2026-11-04），musl 曾是唯一的 Linux 建置。glibc 恢復為預設，是因為 multissh
 的標準 Linux 建置是 glibc，它附帶的 swift_tar 也以同樣方式建置。在同一個 checkout 裡切換模式時，codec
@@ -89,6 +92,12 @@ x86_64 上以 `EXCLUDE_LZFSE=1` 再驗證：沒有警告，執行檔能完成 `.
 建置時將 `lzfse2/lzfse-cli.swift` 當函式庫重用（剝除其頂層 `runCLI()`
 進入點後兩檔合併編譯），並連結 `-lz -lbz2 -llz4 -llzma -lzstd` 與內附的
 靜態 libarchive ZIP 後端。
+
+它的 RUNPATH 依序是 `$ORIGIN/lib`、`$ORIGIN/../lib/swift_tar`，再來才是 toolchain 的 runtime 目錄。
+`linux-<arch>-glibc` 正式版把執行檔會載入的 Swift runtime `.so` 帶在旁邊的 `lib/`，所以在沒裝 Swift
+的機器上也能執行；`install.zsh` 會把它們放進 `<prefix>/lib/swift_tar`。它寫出的 `version-linux.txt`
+記錄 `libc=glibc`、`glibc_min`（執行檔要求的最新 `GLIBC_` 符號版本，也就是它能執行的最舊 glibc）
+以及 runtime 目錄，`release.zsh` 打包的就是那一份。glibc、libstdc++ 與 libbz2 仍屬系統。
 
 #### musl（`--musl`）
 
@@ -170,9 +179,10 @@ CMake build tree 屬於開發產物，並非 runtime dependency，因此不放�
 
 正式版是公開版（不含 LZFSE），每個平台一份 `.tar.zst`，放在
 [GitHub Releases](https://github.com/raliclo/swift_tar/releases)，旁邊各附一個 `.sha256`。
-自 0.2.0 起共八份：`linux-{x86_64,aarch64}`（glibc；須先安裝 Swift runtime）、
-`linux-{x86_64,aarch64}-musl`（完全靜態，什麼都不需要）、`macos-{x86_64,arm64}` 與
-`windows-{x86_64,arm64}`（隨附 Swift runtime DLL）。到 0.1.5 為止，`linux-<arch>` 是 musl 版。
+自 0.2.0 起共八份：`linux-{x86_64,aarch64}-glibc`（Swift runtime 的 `.so` 隨附在 `lib/`；glibc、
+libstdc++ 與 libbz2 屬於系統）、`linux-{x86_64,aarch64}-musl`（完全靜態，什麼都不需要）、
+`macos-{x86_64,arm64}` 與 `windows-{x86_64,arm64}`（隨附 Swift runtime DLL）。Linux 的命名與 multissh
+相同。到 0.1.5 為止，`linux-<arch>` 是 musl 版。
 `swift_tar --version` 會印出版本號、build id（在 tag 上建的執行檔是 `v0.2.0 / <commit>`）與來源戳記。
 
 自 0.2.0 起每份封存都帶有 GitHub 的建置來源證明（attestation），證明它是由本 repo 的 workflow
@@ -192,13 +202,14 @@ brew install raliclo/swift_tar/swift_tar
 scoop bucket add raliclo https://github.com/raliclo/lzfse2
 scoop install raliclo/swift_tar
 
-# Linux——靜態版：解開後把 swift_tar 放上 PATH
+# Linux（x86-64 或 aarch64），各有兩種。-musl 完全靜態：解開後把 swift_tar 放上 PATH。
+# -glibc 把 Swift runtime 帶在 lib/：lib/ 要留在 swift_tar 旁邊。
 sha256sum -c swift_tar-0.2.0-linux-x86_64-musl.tar.zst.sha256
 zstd -dc swift_tar-0.2.0-linux-x86_64-musl.tar.zst | tar -xf -
 
 # 任何平台、不經 brew 或 scoop——install.zsh 挑選本機的封存、以 .sha256 驗證，
-# 再把 swift_tar 放進 ~/.local/bin（需要 curl、zstd、tar）
-zsh install.zsh                    # 最新版；Linux 上為 glibc 版
+# 再把 swift_tar 放進 ~/.local/bin（需要 curl、zstd、tar）；-glibc 的 runtime 放進 ~/.local/lib/swift_tar
+zsh install.zsh                    # 最新版；Linux 上為 -glibc 版
 zsh install.zsh --musl             # Linux：靜態版
 zsh install.zsh 0.2.0 --prefix /opt/swift_tar
 ```
@@ -210,7 +221,10 @@ zsh install.zsh 0.2.0 --prefix /opt/swift_tar
 Windows `build_zlib-win.zsh`、`build_zstd-win.zsh` 與 `compile_tar-win.zsh`），並各以 `release.zsh`
 打包。`release.zsh` 拒絕：工作區不乾淨、執行檔的 build id 不是這個 checkout 的、完整版、沒有 strip 的
 執行檔、以及已存在的封存；它會 strip 打包的副本（macOS 上並重新做 ad-hoc 簽章），再以解開、執行、完成
-一次 `.tar.gz` 往返、確認 LZFSE 被拒絕來驗證。
+一次 `.tar.gz` 往返、確認 LZFSE 被拒絕來驗證。`linux-<arch>-glibc` 另外把建置記下的 Swift runtime `.so`
+放進 `lib/`，並以空環境問動態載入器（`ld.so --list`），確認每一個都解析到那裡。每份 Linux 封存接著在
+沒有安裝 Swift 的一般 `ubuntu:24.04` 映像裡，由 `verify_release.zsh` 再執行一次；`-glibc` 靠它自己的
+`lib/` 就能跑，靠的就是這一步證明。
 
 1. 把 `VERSION` 改成新版本號，commit 並推到 `master`。
 2. 手動執行 workflow（Actions › Release › Run workflow），只建置與打包、不發布，直到每個 job 都通過。
@@ -221,7 +235,9 @@ Windows `build_zlib-win.zsh`、`build_zstd-win.zsh` 與 `compile_tar-win.zsh`）
 
 舊的手動流程仍可用於單一機器的封存：建置後執行 `./release.zsh`；在 Mac 上以 `./compile_tar-musl.zsh <arch>`
 與 `SWIFT_TAR_PLATFORM=musl-<arch> ./release.zsh` 產生 `linux-<arch>-musl`，再以
-`./verify_release.zsh <archive>` 在同架構的 Linux 機器上執行。
+`./verify_release.zsh <archive>` 在同架構的 Linux 機器上執行。在 Linux 機器上，`EXCLUDE_LZFSE=1
+./compile_tar-linux.zsh` 再 `./release.zsh` 會產生 `linux-<arch>-glibc`，它能執行的最舊 glibc 取決於
+建置機器。
 
 `test/test_release.zsh` 涵蓋 build id、`release.zsh` 的每一項拒絕、套件檔改寫，以及 `publish.zsh` 的前段拒絕，
 全程不發布。
@@ -932,9 +948,10 @@ build_id.zsh        供 source：決定 --version 所印 build id 的唯一來�
 compile_tar-musl.zsh  在 Mac 上交叉建置靜態的 Linux 正式版（musl）→ release/linux-<arch>/swift_tar
 release.zsh         把這個平台的公開版打包成 dist/ 裡的 .tar.zst
 verify_release.zsh  在同架構的 Linux 機器上執行一份 Linux 正式版封存
-publish.zsh         打 tag、發布四份封存、改寫 brew 與 scoop 的檔案
+publish.zsh         打 tag、發布八份封存、改寫 brew 與 scoop 的檔案
 publish_rewrite.zsh 供 source：publish.zsh 改寫套件檔的部分
 win_dlls.zsh        供 source：release.zsh 挑選 Windows 要附的 runtime DLL
+linux_sos.zsh       供 source：release.zsh 挑選 linux-<arch>-glibc 要附的 Swift runtime .so
 Formula/swift_tar.rb  Homebrew formula（這個 repo 本身就是 tap）
 version-mac.txt / version-win.txt / version-musl-<arch>.txt   各平台的建置版本戳與連結來源（glibc 開發建置的 version-linux.txt 不入版控）
 licenses/           隨 Linux 與 Windows 封存出貨的第三方授權（見 licenses/README.md）

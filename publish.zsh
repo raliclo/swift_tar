@@ -7,13 +7,14 @@
 #    ./publish.zsh 0.1.0 --publish    do it / 真的執行
 #    ./publish.zsh --help             print this and do nothing / 印出這段說明
 #
-#  Put the four archives release.zsh made on each node into dist/ first:
-#  macos-arm64, linux-x86_64, linux-aarch64 and windows-x86_64, each with its .sha256.
+#  Put the eight archives (release.yml, or release.zsh on each node) into dist/ first: macos-{x86_64,arm64},
+#  linux-{x86_64,aarch64}-glibc, linux-{x86_64,aarch64}-musl and windows-{x86_64,arm64}, each with
+#  its .sha256.
 #  This does not build, test or collect them. It rewrites Formula/swift_tar.rb (the brew
 #  tap, macOS arm64) and ../bucket/swift_tar.json (the scoop bucket in the parent lzfse2
 #  repository, Windows x86_64); committing those two is left to you.
-#  先把各節點 release.zsh 產生的四份封存（macos-arm64、linux-x86_64、linux-aarch64、
-#  windows-x86_64，各帶 .sha256）放進 dist/。這支腳本不建置、不測試、不收集。它改寫
+#  先把八份封存（release.yml 或各節點的 release.zsh 產生；macos-{x86_64,arm64}、linux-{x86_64,aarch64}-glibc、
+#  linux-{x86_64,aarch64}-musl、windows-{x86_64,arm64}，各帶 .sha256）放進 dist/。這支腳本不建置、不測試、不收集。它改寫
 #  Formula/swift_tar.rb（brew tap，macOS arm64）與 ../bucket/swift_tar.json（上層 lzfse2 repo
 #  的 scoop bucket，Windows x86_64）；兩者的 commit 留給你。
 # =====================================================================
@@ -44,7 +45,7 @@ REPO=raliclo/swift_tar
 # --help answers before the version is read, so it is never taken for one.
 # --help 在讀取版本之前回答，所以不會被當成版本。
 case ${1:-} in
-  -h|--help) sed -n '3,18p' ${0:A} | sed 's/^# \{0,2\}//'; exit 0 ;;
+  -h|--help) sed -n '3,19p' ${0:A} | sed 's/^# \{0,2\}//'; exit 0 ;;
   -*) print -ru2 -- "the first argument is the version, not an option (got: $1); see --help / 第一個引數是版本，不是選項（收到：$1），請見 --help"; exit 2 ;;
 esac
 VERSION=${1:-}
@@ -64,12 +65,16 @@ TAG=v$VERSION
 DIST=$HERE/dist
 FORMULA=$HERE/Formula/swift_tar.rb
 MANIFEST=${SWIFT_TAR_SCOOP_MANIFEST:-$HERE/../bucket/swift_tar.json}
-# The platforms a release carries. All four or none: a platform missing from a release leaves
+# The platforms a release carries. All of them or none: a platform missing from a release leaves
 # its package file's url on the old version while its version line moves, and brew or scoop
 # then installs the old binary under the new number without an error (csv2, 2026-10-19).
-# 一次出貨帶的平台。四個都要有，否則不發：少了一個平台時，它的套件檔 version 會前進、url 卻留在
+# 一次出貨帶的平台。全部都要有，否則不發：少了一個平台時，它的套件檔 version 會前進、url 卻留在
 # 舊版，brew 或 scoop 就會把舊的執行檔標著新版本號裝上，沒有任何錯誤（csv2，2026-10-19）。
-PLATFORMS=(macos-arm64 linux-x86_64 linux-aarch64 windows-x86_64)
+# Linux ships twice per architecture since 2026-11-04 (user's decision, named as multissh does):
+# -glibc, with the Swift runtime in lib/, and the static -musl.
+# 自 2026-11-04 起 Linux 每個架構出兩份（使用者決定，命名與 multissh 相同）：Swift runtime 在 lib/
+# 的 -glibc，以及靜態的 -musl。
+PLATFORMS=(macos-x86_64 macos-arm64 linux-x86_64-glibc linux-aarch64-glibc linux-x86_64-musl linux-aarch64-musl windows-x86_64 windows-arm64)
 
 say() { print -r -- "$1" }
 would() { if (( DO_PUBLISH )); then print -r -- "  $1"; else print -r -- "  WOULD  $1"; fi }
@@ -186,7 +191,7 @@ typeset -A HASH
 for plat in $PLATFORMS; do
   a=$DIST/swift_tar-$VERSION-$plat.tar.zst
   [[ -r $a ]] || die "missing $a; every platform ships or none does (run release.zsh on that node and collect it)" \
-                     "缺少 $a；四個平台都要有才發布（在該節點跑 release.zsh 並收集回來）"
+                     "缺少 $a；所有平台都要有才發布（在該節點跑 release.zsh 並收集回來）"
   ARCHIVES+=("$a")
 done
 extra=( "$DIST"/swift_tar-$VERSION-*.tar.zst(N) )
@@ -236,7 +241,7 @@ would "gh release create $TAG -R $REPO with ${#ASSETS} assets"
 if (( DO_PUBLISH )); then
   gh release create "$TAG" -R "$REPO" --verify-tag \
     --title "swift_tar $VERSION" \
-    --notes "swift_tar $VERSION, the public build (no LZFSE). One .tar.zst per platform with a .sha256 beside it. macOS: brew; Windows: scoop (carries its Swift runtime DLLs); Linux x86-64 and aarch64: fully static against musl, extract and put swift_tar on PATH." \
+    --notes "swift_tar $VERSION, the public build (no LZFSE). One .tar.zst per platform with a .sha256 beside it. macOS: brew; Windows: scoop (carries its Swift runtime DLLs); Linux x86-64 and aarch64, two builds each: -glibc carries its Swift runtime in lib/ (keep lib/ beside swift_tar, or use install.zsh), -musl is fully static; extract and put swift_tar on PATH." \
     "${ASSETS[@]}" >/dev/null
 fi
 

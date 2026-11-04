@@ -1,12 +1,20 @@
 # Build, package, attest and release swift_tar for eight targets.
 # 為八個目標建置、打包、簽署來源證明並發布 swift_tar。
 #
-# Targets / 目標: linux-{x86_64,aarch64} (glibc; the Swift runtime is linked dynamically, so it
-# must be installed), linux-{x86_64,aarch64}-musl (static, needs nothing), macos-{x86_64,arm64},
+# Targets / 目標: linux-{x86_64,aarch64}-glibc (the Swift runtime .so files ride along in lib/),
+# linux-{x86_64,aarch64}-musl (static, needs nothing), macos-{x86_64,arm64},
 # windows-{x86_64,arm64} (the Swift runtime DLLs ride along). All are the public build: no LZFSE.
-# linux-{x86_64,aarch64}（glibc；動態連結 Swift runtime，所以目標機器要先安裝），
+# The Linux names are multissh's (user's decision, 2026-11-04).
+# linux-{x86_64,aarch64}-glibc（Swift runtime 的 .so 隨附在 lib/），
 # linux-{x86_64,aarch64}-musl（靜態，什麼都不需要），macos-{x86_64,arm64}，
-# windows-{x86_64,arm64}（Swift runtime DLL 隨附）。全部都是公開版：不含 LZFSE。
+# windows-{x86_64,arm64}（Swift runtime DLL 隨附）。全部都是公開版：不含 LZFSE。Linux 的命名與
+# multissh 相同（使用者 2026-11-04 決定）。
+#
+# The verify job then runs every Linux archive on its own in a plain ubuntu image with no Swift,
+# through verify_release.zsh: for -glibc that is the proof that lib/ is enough. The release job
+# waits for it.
+# verify job 接著把每份 Linux 封存單獨放進沒有 Swift 的一般 ubuntu 映像，以 verify_release.zsh 執行：
+# 對 -glibc 而言，這就是「lib/ 已足夠」的證明。release job 會等它。
 #
 # Each job builds with this repository's own scripts and packs with release.zsh, which runs
 # the extracted binary, round-trips a .tar.gz and checks LZFSE is refused before it writes the
@@ -41,8 +49,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x86_64,       runner: ubuntu-24.04,     container: "swift:6.4.2-noble" }
-          - { platform: linux-aarch64,      runner: ubuntu-24.04-arm, container: "swift:6.4.2-noble" }
+          - { platform: linux-x86_64-glibc,  runner: ubuntu-24.04,     container: "swift:6.4.2-noble" }
+          - { platform: linux-aarch64-glibc, runner: ubuntu-24.04-arm, container: "swift:6.4.2-noble" }
           - { platform: linux-x86_64-musl,  runner: ubuntu-24.04,     container: "swift:6.4.2-noble", compile_args: "--musl" }
           - { platform: linux-aarch64-musl, runner: ubuntu-24.04-arm, container: "swift:6.4.2-noble", compile_args: "--musl" }
           - { platform: macos-x86_64,       runner: macos-15-intel }
@@ -160,6 +168,14 @@ jobs:
           ls dist/swift_tar-*-${{ matrix.platform }}.tar.zst dist/swift_tar-*-${{ matrix.platform }}.tar.zst.sha256
           [ "$(ls dist/*.tar.zst | wc -l)" = 1 ] || { echo "expected exactly one archive / 預期恰好一份封存"; exit 1; }
 
+      # On Linux, the release tooling's own tests against the binary just built (they include
+      # the linux_sos cases and the refusal of a version file that names no libc).
+      # 在 Linux 上，以剛建好的執行檔跑出貨工具自己的測試（包括 linux_sos 案例，以及拒絕沒寫明 libc 的
+      # version 檔）。
+      - name: test_release (Linux)
+        if: runner.os == 'Linux'
+        run: zsh ./test/test_release.zsh
+
       - uses: actions/upload-artifact@v6
         with:
           name: swift_tar-${{ matrix.platform }}
@@ -168,10 +184,48 @@ jobs:
             dist/*.tar.zst.sha256
           if-no-files-found: error
 
+  # Each Linux archive alone, in ubuntu:24.04 with no Swift installed: -glibc must run on its
+  # own lib/, -musl on nothing at all.
+  # 每份 Linux 封存單獨放進沒有安裝 Swift 的 ubuntu:24.04：-glibc 必須靠它自己的 lib/ 執行，-musl 則
+  # 什麼都不靠。
+  verify:
+    name: verify ${{ matrix.platform }}
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    container: "ubuntu:24.04"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x86_64-glibc,  runner: ubuntu-24.04 }
+          - { platform: linux-aarch64-glibc, runner: ubuntu-24.04-arm }
+          - { platform: linux-x86_64-musl,   runner: ubuntu-24.04 }
+          - { platform: linux-aarch64-musl,  runner: ubuntu-24.04-arm }
+    steps:
+      - name: Tools / 工具
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends zsh zstd binutils tar
+          if ls -d /usr/lib/swift /usr/share/swift 2>/dev/null; then echo "a Swift is installed here / 這裡裝了 Swift"; exit 1; fi
+
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: verify_release.zsh
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: swift_tar-${{ matrix.platform }}
+          path: dist
+
+      - name: verify_release.zsh
+        run: |
+          for a in dist/swift_tar-*-${{ matrix.platform }}.tar.zst; do zsh ./verify_release.zsh "$a"; done
+
   release:
     name: release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, verify]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -193,7 +247,7 @@ jobs:
         run: |
           cd dist
           version=${TAG#v}
-          for plat in linux-x86_64 linux-aarch64 linux-x86_64-musl linux-aarch64-musl macos-x86_64 macos-arm64 windows-x86_64 windows-arm64; do
+          for plat in linux-x86_64-glibc linux-aarch64-glibc linux-x86_64-musl linux-aarch64-musl macos-x86_64 macos-arm64 windows-x86_64 windows-arm64; do
             f=swift_tar-$version-$plat.tar.zst
             [ -f "$f" ] && [ -f "$f.sha256" ] || { echo "missing $f / 缺少 $f"; ls -l; exit 1; }
             sha256sum -c "$f.sha256"
@@ -213,5 +267,5 @@ jobs:
           cd dist
           version=${TAG#v}
           gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --title "swift_tar $version" \
-            --notes "swift_tar $version, the public build (no LZFSE): one .tar.zst per platform with a .sha256 beside it. Linux: linux-<arch> is glibc and needs the Swift runtime installed; linux-<arch>-musl is fully static and needs nothing. macOS and Windows on x86_64 and arm64; the Windows archives carry the Swift runtime DLLs. Every archive has a GitHub build-provenance attestation: gh attestation verify <archive> -R $GITHUB_REPOSITORY. Install with: zsh install.zsh $version" \
+            --notes "swift_tar $version, the public build (no LZFSE): one .tar.zst per platform with a .sha256 beside it. Linux: linux-<arch>-glibc carries its Swift runtime in lib/ (keep lib/ beside swift_tar; glibc, libstdc++ and libbz2 are the system's); linux-<arch>-musl is fully static and needs nothing. macOS and Windows on x86_64 and arm64; the Windows archives carry the Swift runtime DLLs. Every archive has a GitHub build-provenance attestation: gh attestation verify <archive> -R $GITHUB_REPOSITORY. Install with: zsh install.zsh $version" \
             ./*.tar.zst ./*.tar.zst.sha256

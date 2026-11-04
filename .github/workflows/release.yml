@@ -238,6 +238,16 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # The release notes are release-notes/<X.Y.Z>.md at the tag. A version without one is
+      # refused here, before anything is created: a generic line said nothing about 0.2.0's
+      # renamed Linux archives, which every script fetching the old name needs to know.
+      # release notes 是 tag 上的 release-notes/<X.Y.Z>.md。沒有它的版本在這裡、在建立任何東西之前就被
+      # 拒絕：一段通用說明完全沒提到 0.2.0 改名的 Linux 封存，而每個抓舊檔名的腳本都需要知道這件事。
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: release-notes
+          path: repo
+
       # Every archive must carry the tag's version: a build from another commit is named by
       # VERSION, which the tag check in release.zsh ties to the tag only through the build id.
       # 每份封存都必須帶著 tag 的版本：從別的 commit 建出的封存以 VERSION 命名，而 release.zsh 只透過
@@ -246,6 +256,7 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
+          [ -s "repo/release-notes/${TAG#v}.md" ] || { echo "no release-notes/${TAG#v}.md at $TAG / $TAG 上沒有 release-notes/${TAG#v}.md"; exit 1; }
           cd dist
           version=${TAG#v}
           for plat in linux-x86_64-musl linux-aarch64-musl macos-x86_64 macos-arm64 windows-x86_64 windows-arm64; do
@@ -268,5 +279,5 @@ jobs:
           cd dist
           version=${TAG#v}
           gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --title "swift_tar $version" \
-            --notes "swift_tar $version, the public build (no LZFSE): one .tar.zst per platform with a .sha256 beside it. Linux: linux-<arch>-musl, fully static, needs nothing. macOS and Windows on x86_64 and arm64; the Windows archives carry the Swift runtime DLLs. Every archive has a GitHub build-provenance attestation: gh attestation verify <archive> -R $GITHUB_REPOSITORY. Install with: zsh install.zsh $version" \
+            --notes-file "../repo/release-notes/$version.md" \
             ./*.tar.zst ./*.tar.zst.sha256

@@ -97,6 +97,11 @@ dirty=$(git status --porcelain --untracked-files=no -- . ':(exclude)version-*.tx
       "工作區不乾淨；tag 會指向一個沒有被發布的狀態"
 }
 [[ -r $FORMULA ]] || die "$FORMULA is missing" "缺少 $FORMULA"
+# The release notes, as release.yml takes them: release-notes/<X.Y.Z>.md, committed with the
+# release. / release notes，與 release.yml 相同：隨正式版提交的 release-notes/<X.Y.Z>.md。
+NOTES=$HERE/release-notes/$VERSION.md
+[[ -s $NOTES ]] || die "$NOTES is missing; write the release notes for $VERSION and commit them first" \
+                       "缺少 $NOTES；請先寫好 $VERSION 的 release notes 並提交"
 [[ -r $MANIFEST ]] || die "$MANIFEST is missing; the scoop bucket lives in the parent lzfse2 repository (or set SWIFT_TAR_SCOOP_MANIFEST)" \
                           "缺少 $MANIFEST；scoop bucket 在上層 lzfse2 repo（或設定 SWIFT_TAR_SCOOP_MANIFEST）"
 git fetch -q --tags origin
@@ -241,7 +246,7 @@ would "gh release create $TAG -R $REPO with ${#ASSETS} assets"
 if (( DO_PUBLISH )); then
   gh release create "$TAG" -R "$REPO" --verify-tag \
     --title "swift_tar $VERSION" \
-    --notes "swift_tar $VERSION, the public build (no LZFSE). One .tar.zst per platform with a .sha256 beside it. macOS: brew; Windows: scoop (carries its Swift runtime DLLs); Linux x86-64 and aarch64: -musl, fully static against musl, extract and put swift_tar on PATH." \
+    --notes-file "$NOTES" \
     "${ASSETS[@]}" >/dev/null
 fi
 

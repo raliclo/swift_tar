@@ -571,6 +571,20 @@ if [ -r "$MANIFEST_SRC" ]; then
   if [ "$rc" = 1 ] && [[ $out == *"gh is not authenticated"* ]] && [[ $out != *"HEAD is on no origin branch"* ]]; then
     ok "publish.zsh lets a detached HEAD that is on an origin branch through"
   else bad "publish.zsh lets a detached HEAD that is on an origin branch through (rc $rc: $out)"; fi
+  # A version without release-notes/<X.Y.Z>.md is refused before anything else is asked. The
+  # cases above are the other side: their clones carry the notes and get past this check.
+  # 沒有 release-notes/<X.Y.Z>.md 的版本，在問任何其他事之前就被拒絕。上面的案例就是另一側：它們的
+  # clone 帶著 notes，通過了這道檢查。
+  C3=$TMP/pubclone3
+  git clone -q --shared "$ROOT" "$C3"
+  cp "$ROOT/publish.zsh" "$C3/publish.zsh"
+  # Committed, not just deleted: the clean-tree check comes first and would refuse a deletion.
+  # 要提交，不能只刪：工作區乾淨檢查排在前面，會先拒絕未提交的刪除。
+  git -C "$C3" rm -q "release-notes/$(<"$C3/VERSION").md"
+  git -C "$C3" -c user.name=test -c user.email=test@invalid commit -q -am 'no notes'
+  rc=0; out=$(PATH="$TMP/fakebin:$PATH" SWIFT_TAR_SCOOP_MANIFEST=$MANIFEST_SRC "$C3/publish.zsh" "$(<"$C3/VERSION")" 2>&1) || rc=$?
+  if [ "$rc" = 1 ] && [[ $out == *"write the release notes for"* ]]; then ok "publish.zsh refuses a version without release notes"
+  else bad "publish.zsh refuses a version without release notes (rc $rc: $out)"; fi
 fi
 
 echo "-----------------------------------------"

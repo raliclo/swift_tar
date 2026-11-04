@@ -223,7 +223,7 @@ Windows `build_zlib-win.zsh`、`build_zstd-win.zsh` 與 `compile_tar-win.zsh`）
 一次 `.tar.gz` 往返、確認 LZFSE 被拒絕來驗證；Linux 的 glibc 建置會被拒絕。每份 Linux 封存接著在沒有
 安裝 Swift 的一般 `ubuntu:24.04` 映像裡，由 `verify_release.zsh` 再執行一次。
 
-1. 把 `VERSION` 改成新版本號，commit 並推到 `master`。
+1. 把 `VERSION` 改成新版本號，並寫好 `release-notes/<VERSION>.md`，說明與上一版的差異（沒有它就拒絕發布）；commit 並推到 `master`。
 2. 手動執行 workflow（Actions › Release › Run workflow），只建置與打包、不發布，直到每個 job 都通過。
 3. 為那個 commit 打簽章 tag 並推送：
    `git tag -s v<VERSION> -m "swift_tar <VERSION>" && git push origin v<VERSION>`。
@@ -946,6 +946,7 @@ release.zsh         把這個平台的公開版打包成 dist/ 裡的 .tar.zst
 verify_release.zsh  在同架構的 Linux 機器上執行一份 linux-<arch>-musl 封存
 publish.zsh         打 tag、發布六份封存、改寫 brew 與 scoop 的檔案
 publish_rewrite.zsh 供 source：publish.zsh 改寫套件檔的部分
+release-notes/<X.Y.Z>.md  每個正式版的 release notes，release.yml 與 publish.zsh 都用它
 win_dlls.zsh        供 source：release.zsh 挑選 Windows 要附的 runtime DLL
 Formula/swift_tar.rb  Homebrew formula（這個 repo 本身就是 tap）
 version-mac.txt / version-win.txt / version-musl-<arch>.txt   各平台的建置版本戳與連結來源（glibc 開發建置的 version-linux.txt 不入版控）

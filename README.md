@@ -270,7 +270,7 @@ checking LZFSE is refused; it refuses a glibc Linux build. Every Linux archive i
 then run again by `verify_release.zsh` in a plain `ubuntu:24.04` image with no
 Swift installed.
 
-1. Set `VERSION` to the new number, commit and push to `master`.
+1. Set `VERSION` to the new number and write `release-notes/<VERSION>.md`, what changed since the last release (the release is refused without it); commit and push to `master`.
 2. Run the workflow by hand (Actions › Release › Run workflow) to build and pack
    all six without releasing, until every job is green.
 3. Tag that commit with a signed tag and push it:
@@ -1126,6 +1126,7 @@ release.zsh         package this platform's public build into dist/ as .tar.zst
 verify_release.zsh  run a linux-<arch>-musl archive on a Linux machine of its architecture
 publish.zsh         tag, publish the six archives, rewrite the brew and scoop files
 publish_rewrite.zsh sourced: publish.zsh's package-file rewrite
+release-notes/<X.Y.Z>.md  the notes of each release, used by release.yml and publish.zsh
 win_dlls.zsh        sourced: release.zsh's choice of the Windows runtime DLLs to ship
 Formula/swift_tar.rb  Homebrew formula (this repository is its own tap)
 version-mac.txt / version-win.txt / version-musl-<arch>.txt   per-platform build stamp + linkage provenance (version-linux.txt, from a glibc development build, is not committed)

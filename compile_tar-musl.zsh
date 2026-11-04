@@ -185,7 +185,12 @@ if [[ ! -f $stamp || $(<"$stamp") != "${src[1]}" ]]; then
   [[ $SYSROOT == $PWD/build/musl-*/sysroot || $SYSROOT == $PWD/build/linux-musl-*/sysroot ]] || die "refusing to replace $SYSROOT"
   rm -rf -- "$SYSROOT"
   log_msg "copy the sysroot and make .rodata read-only in its archives / 複製 sysroot 並把封存檔的 .rodata 改為唯讀"
-  cp -pR "${src[1]}" "$SYSROOT"
+  # -R, not -pR: whether to redo the copy is decided by $stamp, not by timestamps, and the
+  # owner is of no use here. A non-root user's busybox `cp -p` printed one "can't preserve
+  # ownership" line per file of an SDK it does not own (3377 lines in the guest, 2026-11-04).
+  # 用 -R 而非 -pR：要不要重做由 $stamp 決定，不看時間戳，擁有者在此也沒有用。非 root 以 busybox
+  # `cp -p` 複製不屬於自己的 SDK 時，每個檔案印一行「can't preserve ownership」（guest 上 3377 行，2026-11-04）。
+  cp -R "${src[1]}" "$SYSROOT"
   for a in "$SYSROOT"/**/*.a(N); do
     "$OBJCOPY" --set-section-flags .rodata=alloc,readonly,data "$a"
   done

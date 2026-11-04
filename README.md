@@ -207,8 +207,19 @@ because they are development artifacts, not runtime dependencies.
 
 Releases are the public build (no LZFSE), one `.tar.zst` per platform on the
 [GitHub Releases](https://github.com/raliclo/swift_tar/releases) page, each with a
-`.sha256` beside it. `swift_tar --version` prints the version, the build id
-(`v0.1.1 / <commit>` for a binary built at the tag) and the provenance stamp.
+`.sha256` beside it. From 0.2.0 there are eight: `linux-{x86_64,aarch64}` (glibc;
+the Swift runtime must be installed), `linux-{x86_64,aarch64}-musl` (fully
+static, needs nothing), `macos-{x86_64,arm64}` and `windows-{x86_64,arm64}` (the
+Swift runtime DLLs ride along). Until 0.1.5, `linux-<arch>` was the musl build.
+`swift_tar --version` prints the version, the build id (`v0.2.0 / <commit>` for a
+binary built at the tag) and the provenance stamp.
+
+Every archive from 0.2.0 on carries a GitHub build-provenance attestation, which
+shows that it was built by this repository's workflow from the tagged commit:
+
+```sh
+gh attestation verify swift_tar-0.2.0-linux-x86_64-musl.tar.zst -R raliclo/swift_tar
+```
 
 ```sh
 # macOS (Apple silicon) — this repository is its own tap; `brew trust` is required
@@ -220,51 +231,43 @@ brew install raliclo/swift_tar/swift_tar
 scoop bucket add raliclo https://github.com/raliclo/lzfse2
 scoop install raliclo/swift_tar
 
-# Linux (x86-64 or aarch64) — fully static: extract and put swift_tar on PATH
-sha256sum -c swift_tar-0.1.1-linux-x86_64.tar.zst.sha256
-zstd -dc swift_tar-0.1.1-linux-x86_64.tar.zst | tar -xf -
+# Linux — the static build: extract and put swift_tar on PATH
+sha256sum -c swift_tar-0.2.0-linux-x86_64-musl.tar.zst.sha256
+zstd -dc swift_tar-0.2.0-linux-x86_64-musl.tar.zst | tar -xf -
 
-# Any of the four, without brew or scoop — install.zsh picks this machine's archive,
+# Any platform, without brew or scoop — install.zsh picks this machine's archive,
 # checks its .sha256 and puts swift_tar in ~/.local/bin (needs curl, zstd, tar)
-zsh install.zsh                    # latest release
-zsh install.zsh 0.1.5 --prefix /opt/swift_tar
+zsh install.zsh                    # latest release; on Linux the glibc build
+zsh install.zsh --musl             # Linux: the static build
+zsh install.zsh 0.2.0 --prefix /opt/swift_tar
 ```
 
 ### Making a release
 
-`VERSION` holds the number the next release carries. The order is: rehearse,
-tag, build at the tag, collect, publish.
+`.github/workflows/release.yml` builds all eight archives on GitHub's runners
+with this repository's own scripts (Linux in the `swift:6.4.2-noble` container,
+`--musl` with Swift's Static Linux SDK; macOS `compile_tar.zsh --no-lzfse`;
+Windows `build_zlib-win.zsh`, `build_zstd-win.zsh` and `compile_tar-win.zsh`),
+and packs each with `release.zsh`. `release.zsh` refuses a dirty tree, a binary
+whose build id is not this checkout's, the full build, an unstripped binary and
+an existing archive; it strips the packaged copy (and signs it again ad hoc on
+macOS), then verifies by extracting, running, round-tripping a `.tar.gz` and
+checking LZFSE is refused.
 
-1. Rehearse every platform, then throw the archives away. Do this before
-   tagging: a tag moved after archives were built invalidates every one of them.
-   - macOS arm64, on the Mac: `./compile_tar.zsh --no-lzfse`, then `./release.zsh`.
-   - Windows x86-64, on Windows: `EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh`,
-     then `./release.zsh`. The archive carries the Swift runtime DLLs.
-   - Linux aarch64 and x86-64, both on the Mac: `./compile_tar-musl.zsh <arch>`,
-     then `SWIFT_TAR_PLATFORM=musl-<arch> ./release.zsh`. These are fully static
-     against musl (Swift's Static Linux SDK, swift.org toolchain 6.4.0), so they
-     need nothing on the target: no glibc of a given version, no libbz2, no Swift.
-     The Mac cannot run them, so `release.zsh` checks them from the file, and
-     `./verify_release.zsh <archive>` runs them on a Linux machine of that
-     architecture.
-2. Tag the commit `v<VERSION>` and push the tag; each node fetches tags.
-3. Build and run `release.zsh` again for every platform. It refuses a dirty tree,
-   a binary whose build id is not this checkout's, the full build, an
-   unstripped binary, and an existing archive. On macOS it strips the packaged
-   copy and signs it again ad hoc; `release/swift_tar` keeps its symbols. The
-   Linux builds are linked with `--strip-all`, and the Windows exe has no symbol
-   table. On macOS and Windows it verifies by extracting, running,
-   round-tripping a `.tar.gz` and checking LZFSE is refused; for Linux, run
-   `verify_release.zsh` on each architecture, which does the same with an empty
-   environment and also runs the built-in self-tests.
-4. Collect the four archives and their `.sha256` into `dist/` on the Mac
-   (`/Volumes/LinuxCS/helper/collect_release.zsh swift_tar <VERSION>` fetches the
-   Windows one).
-5. `./publish.zsh <VERSION>` says what it would do; `./publish.zsh <VERSION>
-   --publish` checks again that every archive's binary is stripped, creates the
-   GitHub Release, downloads every asset back from the
-   public URL, and rewrites `Formula/swift_tar.rb` and the parent repository's
-   `bucket/swift_tar.json`. Commit both.
+1. Set `VERSION` to the new number, commit and push to `master`.
+2. Run the workflow by hand (Actions › Release › Run workflow) to build and pack
+   all eight without releasing, until every job is green.
+3. Tag that commit with a signed tag and push it:
+   `git tag -s v<VERSION> -m "swift_tar <VERSION>" && git push origin v<VERSION>`.
+   The workflow builds at the tag, checks all eight archives and their `.sha256`,
+   signs a build-provenance attestation for each, and creates the GitHub Release.
+4. Update `Formula/swift_tar.rb` and the parent repository's
+   `bucket/swift_tar.json` from the published archives.
+
+The older manual flow still works for one machine's archive: build, then
+`./release.zsh`; on the Mac, `./compile_tar-musl.zsh <arch>` and
+`SWIFT_TAR_PLATFORM=musl-<arch> ./release.zsh` make `linux-<arch>-musl`, which
+`./verify_release.zsh <archive>` runs on a Linux machine of that architecture.
 
 `test/test_release.zsh` covers the build id, every refusal of `release.zsh`, the
 package-file rewrite, and `publish.zsh`'s early refusals, without publishing.

@@ -150,6 +150,11 @@ scoop install raliclo/swift_tar
 # Linux（x86-64 或 aarch64）——完全靜態：解開後把 swift_tar 放上 PATH
 sha256sum -c swift_tar-0.1.1-linux-x86_64.tar.zst.sha256
 zstd -dc swift_tar-0.1.1-linux-x86_64.tar.zst | tar -xf -
+
+# 四個平台皆可、不經 brew 或 scoop——install.zsh 挑選本機的封存、以 .sha256 驗證，
+# 再把 swift_tar 放進 ~/.local/bin（需要 curl、zstd、tar）
+zsh install.zsh                    # 最新版
+zsh install.zsh 0.1.5 --prefix /opt/swift_tar
 ```
 
 ### 發布正式版

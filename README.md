@@ -174,6 +174,11 @@ scoop install raliclo/swift_tar
 # Linux (x86-64 or aarch64) — fully static: extract and put swift_tar on PATH
 sha256sum -c swift_tar-0.1.1-linux-x86_64.tar.zst.sha256
 zstd -dc swift_tar-0.1.1-linux-x86_64.tar.zst | tar -xf -
+
+# Any of the four, without brew or scoop — install.zsh picks this machine's archive,
+# checks its .sha256 and puts swift_tar in ~/.local/bin (needs curl, zstd, tar)
+zsh install.zsh                    # latest release
+zsh install.zsh 0.1.5 --prefix /opt/swift_tar
 ```
 
 ### Making a release

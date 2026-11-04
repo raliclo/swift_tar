@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 # =====================================================================
-# compile_tar-musl.zsh -- cross-build the static Linux release binary on a Mac
-# compile_tar-musl.zsh -- 在 Mac 上交叉建置靜態的 Linux 正式版執行檔
+# compile_tar-musl.zsh -- build the static Linux release binary: cross on a Mac, or native on Linux
+# compile_tar-musl.zsh -- 建置靜態的 Linux 正式版執行檔：在 Mac 上交叉建置，或在 Linux 上原生建置
 #
 #   ./compile_tar-musl.zsh aarch64     -> release/linux-aarch64/swift_tar
 #   ./compile_tar-musl.zsh x86_64      -> release/linux-x86_64/swift_tar
@@ -10,11 +10,16 @@
 #
 # The public build (no LZFSE), linked fully static against musl with Swift's Static Linux
 # SDK, so it runs on any Linux of that architecture: no glibc, no libbz2, no Swift runtime.
-# Built here and checked on a Linux machine of the same architecture (verify_release.zsh),
-# as decided with the user on 2026-10-20. Needs the swift.org toolchain and the matching SDK:
+# It is the only Linux release, linux-<arch>-musl (2026-11-04). The published archives are
+# built natively by .github/workflows/release.yml (compile_tar-linux.zsh --musl, i.e. native
+# here); the cross build on a Mac makes the same archive for one machine, checked on a Linux
+# machine of that architecture with verify_release.zsh. Needs the swift.org toolchain and the
+# matching SDK:
 # 公開版（不含 LZFSE），以 Swift 的 Static Linux SDK 對 musl 完全靜態連結，所以在該架構的任何
-# Linux 上都能執行：不需要 glibc、libbz2 或 Swift runtime。在這裡建置，再到同架構的 Linux 機器上
-# 檢查（verify_release.zsh），2026-10-20 與使用者決定。需要 swift.org 的 toolchain 與相符的 SDK：
+# Linux 上都能執行：不需要 glibc、libbz2 或 Swift runtime。它是唯一的 Linux 正式版，名稱為
+# linux-<arch>-musl（2026-11-04）。發布的封存由 .github/workflows/release.yml 原生建置
+# （compile_tar-linux.zsh --musl，也就是這裡的 native）；在 Mac 上的交叉建置可為單一機器產生同樣的
+# 封存，再到同架構的 Linux 機器上以 verify_release.zsh 檢查。需要 swift.org 的 toolchain 與相符的 SDK：
 #
 #   SWIFT_TOOLCHAIN   default ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
 #   SWIFT_STATIC_SDK  default: the swift-linux-musl directory of
@@ -24,7 +29,7 @@ set -euo pipefail
 
 script_path=${0:A}
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then
-  sed -n '3,21p' "$script_path" | sed 's/^# \{0,1\}//'
+  sed -n '3,26p' "$script_path" | sed 's/^# \{0,1\}//'
   exit 0
 fi
 cd "${script_path:h}"

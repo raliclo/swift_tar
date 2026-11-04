@@ -30,6 +30,14 @@ repo. zlib, zstd, libarchive, xz and lz4 take their licences from their own subm
 - **macOS**：沒有。執行檔動態連結系統的 Swift runtime 與 libbz2。
   **macOS**: none; the binary links the system's Swift runtime and libbz2 dynamically.
 
+下表的版本欄是這些授權檔取得時所依據的版本（Swift 6.4.0）。自 0.2.0 起，正式版改由
+`.github/workflows/release.yml` 以 Swift 6.4.2 建置（Linux 用同版的 Static Linux SDK）；這些授權檔尚未
+對照 6.4.2 的原始碼重新確認。
+
+The version column is what these files were taken from (Swift 6.4.0). From 0.2.0 the releases
+are built by `.github/workflows/release.yml` with Swift 6.4.2 (Linux with that version's Static
+Linux SDK); the files have not yet been re-checked against the 6.4.2 sources.
+
 | 檔案 / file | 元件 / component | 版本 / version | 授權 / licence | 平台 | 來源 / source |
 |---|---|---|---|---|---|
 | swift-LICENSE.txt | Swift runtime (swiftCore, Concurrency, Synchronization, swiftMusl) | swift-6.4.0-RELEASE | Apache-2.0 + Runtime Library Exception | L W | github.com/swiftlang/swift `LICENSE.txt` |

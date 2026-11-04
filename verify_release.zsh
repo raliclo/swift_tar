@@ -6,14 +6,15 @@
 #   ./verify_release.zsh swift_tar-0.1.6-linux-aarch64-musl.tar.zst
 #   ./verify_release.zsh --help
 #
-# The -musl archives are built and packed on the Mac (compile_tar-musl.zsh, release.zsh),
-# where they cannot run. This is the running: on a Linux machine of the archive's
+# A -musl archive packed on the Mac (compile_tar-musl.zsh, release.zsh) cannot be run there,
+# and the CI's verify job runs each one again in an image without Swift. This is the running:
+# on a Linux machine of the archive's
 # architecture it checks the .sha256 beside it, extracts it, confirms the binary is static,
 # prints its --version, round-trips a .tar.gz, sees LZFSE refused, and runs the built-in
 # self-tests. Linux ships -musl only. Needs only the archive, its .sha256, zstd and tar; no
 # checkout.
-# -musl 封存在 Mac 上建置與打包（compile_tar-musl.zsh、release.zsh），在那裡跑不了。這支腳本就是那個
-# 「執行」：在與封存同架構的 Linux 機器上核對旁邊的 .sha256、解開、確認執行檔是靜態的、印出
+# 在 Mac 上打包的 -musl 封存（compile_tar-musl.zsh、release.zsh）在那裡跑不了，CI 的 verify job 也在
+# 沒有 Swift 的映像裡把每一份再執行一次。這支腳本就是那個「執行」：在與封存同架構的 Linux 機器上核對旁邊的 .sha256、解開、確認執行檔是靜態的、印出
 # --version、完成一次 .tar.gz 往返、確認 LZFSE 被拒絕，並執行內建自我測試。Linux 只出 -musl 版。只需要
 # 封存、它的 .sha256、zstd 與 tar，不需要 checkout。
 # =====================================================================
@@ -21,7 +22,7 @@ emulate -L zsh
 setopt no_unset pipe_fail errexit extended_glob
 
 case ${1:-} in
-  -h|--help) sed -n '3,18p' ${0:A} | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '3,19p' ${0:A} | sed 's/^# \{0,1\}//'; exit 0 ;;
   '') print -ru2 -- "usage: ./verify_release.zsh <archive.tar.zst> / 用法"; exit 2 ;;
 esac
 A=${1:A}

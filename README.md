@@ -150,6 +150,11 @@ writable segment, a program interpreter or a `NEEDED` entry is refused. The
 binary goes to **`release/swift_tar`** and its provenance to `version-linux.txt`
 (not committed).
 
+This is how the published `linux-<arch>-musl` archives are built:
+`.github/workflows/release.yml` runs `EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh --musl`
+on an x86_64 and an aarch64 runner in the `swift:6.4.2-noble` container, with the
+Static Linux SDK of that same Swift version.
+
 ### Public build without LZFSE
 
 `compile_no_lzfse.zsh` (a wrapper for `compile_tar.zsh --no-lzfse`) builds a
@@ -1116,9 +1121,9 @@ compile_tar-linux.zsh  Linux build script → release/swift_tar
 platform.zsh        sourced: the one place the platform suffix is decided
 VERSION             the number the next release carries
 build_id.zsh        sourced: the one place the build id printed by --version is decided
-compile_tar-musl.zsh  cross-build the static Linux release (musl) on the Mac → release/linux-<arch>/swift_tar
+compile_tar-musl.zsh  the static Linux release (musl): cross on the Mac → release/linux-<arch>/swift_tar, or native on Linux (compile_tar-linux.zsh --musl) → release/swift_tar
 release.zsh         package this platform's public build into dist/ as .tar.zst
-verify_release.zsh  run a Linux release archive on a Linux machine of its architecture
+verify_release.zsh  run a linux-<arch>-musl archive on a Linux machine of its architecture
 publish.zsh         tag, publish the six archives, rewrite the brew and scoop files
 publish_rewrite.zsh sourced: publish.zsh's package-file rewrite
 win_dlls.zsh        sourced: release.zsh's choice of the Windows runtime DLLs to ship

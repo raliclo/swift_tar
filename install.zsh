@@ -68,9 +68,9 @@ for tool in curl zstd tar; do
   command -v $tool >/dev/null 2>&1 || die "$tool is not on PATH / PATH 上沒有 $tool"
 done
 
-# The eight platforms .github/workflows/release.yml ships, and nothing else: a name that is not
+# The six platforms .github/workflows/release.yml ships, and nothing else: a name that is not
 # among them has no archive to fetch, and saying so here is clearer than a 404 later.
-# .github/workflows/release.yml 出貨的八個平台，僅此八個：不在其中的名稱沒有封存可抓，在這裡說清楚
+# .github/workflows/release.yml 出貨的六個平台，僅此六個：不在其中的名稱沒有封存可抓，在這裡說清楚
 # 勝過之後的 404。
 exe=""
 case $(uname -s) in

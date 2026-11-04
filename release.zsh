@@ -86,12 +86,14 @@ write_sha256() {
 }
 
 # Which build: this machine's own, or a musl cross target named by SWIFT_TAR_PLATFORM (made by
-# compile_tar-musl.zsh on the Mac; the Linux releases are those, decided 2026-10-20). A cross
-# binary cannot run here, so it is checked from the file and run later on a Linux machine of
-# its architecture with verify_release.zsh.
+# compile_tar-musl.zsh on the Mac). A Linux release is musl either way: built natively on
+# Linux with compile_tar-linux.zsh --musl (what .github/workflows/release.yml does), or cross
+# on the Mac. A cross binary cannot run here, so it is checked from the file and run later on a
+# Linux machine of its architecture with verify_release.zsh.
 # 哪一份建置：這台機器自己的，或由 SWIFT_TAR_PLATFORM 指名的 musl 交叉目標（compile_tar-musl.zsh 在
-# Mac 上建出；Linux 正式版就是這兩份，2026-10-20 決定）。交叉建置的執行檔在這裡跑不了，所以從檔案
-# 檢查，之後再以 verify_release.zsh 在同架構的 Linux 機器上執行。
+# Mac 上建出）。Linux 正式版無論哪種都是 musl：在 Linux 上以 compile_tar-linux.zsh --musl 原生建置
+# （.github/workflows/release.yml 就是這樣做），或在 Mac 上交叉建置。交叉建置的執行檔在這裡跑不了，
+# 所以從檔案檢查，之後再以 verify_release.zsh 在同架構的 Linux 機器上執行。
 . "$HERE/platform.zsh"
 PLAT=$(swift_tar_platform) || die "unknown SWIFT_TAR_PLATFORM" "不認得的 SWIFT_TAR_PLATFORM"
 # LIBC names the Linux archive's libc, as multissh names its own (4d55b91): linux-<arch>-musl,

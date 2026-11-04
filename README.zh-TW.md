@@ -116,6 +116,10 @@ submodule 建出它並放進函式庫路徑；swift_tar 本身不連結 libxml2�
 interpreter 或 `NEEDED` 項目的執行檔。二進位輸出至 **`release/swift_tar`**，來源資訊寫入
 `version-linux.txt`（不 commit）。
 
+發布的 `linux-<arch>-musl` 封存就是這樣建出的：`.github/workflows/release.yml` 在 x86_64 與 aarch64 的
+runner 上，於 `swift:6.4.2-noble` 容器裡以同一版 Swift 的 Static Linux SDK 執行
+`EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh --musl`。
+
 ### 不含 LZFSE 的公開版
 
 `compile_no_lzfse.zsh`（`compile_tar.zsh --no-lzfse` 的包裝）建置「公開／可散布」版
@@ -937,9 +941,9 @@ compile_tar-linux.zsh  Linux 建置腳本 → release/swift_tar
 platform.zsh        供 source：決定平台後綴的唯一來源
 VERSION             下一個正式版要帶的版本號
 build_id.zsh        供 source：決定 --version 所印 build id 的唯一來源
-compile_tar-musl.zsh  在 Mac 上交叉建置靜態的 Linux 正式版（musl）→ release/linux-<arch>/swift_tar
+compile_tar-musl.zsh  靜態的 Linux 正式版（musl）：在 Mac 上交叉建置 → release/linux-<arch>/swift_tar，或在 Linux 上原生建置（compile_tar-linux.zsh --musl）→ release/swift_tar
 release.zsh         把這個平台的公開版打包成 dist/ 裡的 .tar.zst
-verify_release.zsh  在同架構的 Linux 機器上執行一份 Linux 正式版封存
+verify_release.zsh  在同架構的 Linux 機器上執行一份 linux-<arch>-musl 封存
 publish.zsh         打 tag、發布六份封存、改寫 brew 與 scoop 的檔案
 publish_rewrite.zsh 供 source：publish.zsh 改寫套件檔的部分
 win_dlls.zsh        供 source：release.zsh 挑選 Windows 要附的 runtime DLL

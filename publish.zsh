@@ -135,6 +135,9 @@ sha256_of() {
 }
 HEAD_SHA=$(git rev-parse HEAD)
 VERSION_RE=${VERSION//./\\.}
+source "$HERE/stripped.zsh"
+NM=$(swift_tar_nm) || die "neither llvm-nm nor nm is on PATH; an executable not shown to be stripped is not published" \
+                          "PATH 上沒有 llvm-nm 或 nm；沒能證明已 strip 的執行檔不發布"
 
 # The binary must carry `v<VERSION> / <8 hex>` for THIS commit. Every other check here is
 # equally true of an archive built from the previous commit, because the node that built it
@@ -154,7 +157,17 @@ archive_commit_ok() {   # archive_commit_ok <archive> <inner path>
   # `grep -a`，否則二進位比對只得到一行「Binary file matches」；`|| true`，否則找不到時 errexit 會在
   # 下面的拒絕說話之前就殺掉腳本。
   ids=$(LC_ALL=C grep -a -o -E "v$VERSION_RE / [0-9a-f]{8,40}" "$bx/$inner" | LC_ALL=C sort -u || true)
+  # Stripped, checked again here: release.zsh strips and checks, but an archive packed by an older
+  # release.zsh, or by hand, would otherwise be published with its symbols.
+  # 已 strip，在這裡再查一次：release.zsh 會 strip 並檢查，但由舊版 release.zsh 或手工打包的封存，
+  # 否則會帶著符號被發布。
+  local left strip_rc=0
+  left=$(swift_tar_unstripped "$NM" "$bx/$inner") || strip_rc=$?
   rm -rf -- "$bx"
+  (( strip_rc != 2 )) || { print -ru2 -- "$base: $NM cannot read its ${inner:t}: $left"
+                           print -ru2 -- "$base：$NM 讀不了其中的 ${inner:t}：$left"; return 1 }
+  (( strip_rc == 0 )) || { print -ru2 -- "$base: ${inner:t} is not stripped; symbols left include: ${left//$'\n'/, }"
+                           print -ru2 -- "$base：${inner:t} 沒有 strip；殘留的符號包括：${left//$'\n'/, }"; return 1 }
   [[ -n $ids ]] || { print -ru2 -- "$base: the binary carries no build id \"v$VERSION / <commit>\"; it was not built at $TAG"
                      print -ru2 -- "$base：執行檔裡沒有「v$VERSION / <commit>」形狀的 build id；它不是在 $TAG 上建的"; return 1 }
   # Into an array: a subscript on the expansion takes the first character, not the first line.

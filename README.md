@@ -200,8 +200,11 @@ tag, build at the tag, collect, publish.
      architecture.
 2. Tag the commit `v<VERSION>` and push the tag; each node fetches tags.
 3. Build and run `release.zsh` again for every platform. It refuses a dirty tree,
-   a binary whose build id is not this checkout's, the full build, and an
-   existing archive. On macOS and Windows it verifies by extracting, running,
+   a binary whose build id is not this checkout's, the full build, an
+   unstripped binary, and an existing archive. On macOS it strips the packaged
+   copy and signs it again ad hoc; `release/swift_tar` keeps its symbols. The
+   Linux builds are linked with `--strip-all`, and the Windows exe has no symbol
+   table. On macOS and Windows it verifies by extracting, running,
    round-tripping a `.tar.gz` and checking LZFSE is refused; for Linux, run
    `verify_release.zsh` on each architecture, which does the same with an empty
    environment and also runs the built-in self-tests.
@@ -209,7 +212,8 @@ tag, build at the tag, collect, publish.
    (`/Volumes/LinuxCS/helper/collect_release.zsh swift_tar <VERSION>` fetches the
    Windows one).
 5. `./publish.zsh <VERSION>` says what it would do; `./publish.zsh <VERSION>
-   --publish` creates the GitHub Release, downloads every asset back from the
+   --publish` checks again that every archive's binary is stripped, creates the
+   GitHub Release, downloads every asset back from the
    public URL, and rewrites `Formula/swift_tar.rb` and the parent repository's
    `bucket/swift_tar.json`. Commit both.
 

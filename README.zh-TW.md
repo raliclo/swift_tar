@@ -173,12 +173,15 @@ zsh install.zsh 0.1.5 --prefix /opt/swift_tar
      檢查，再由 `./verify_release.zsh <封存>` 在同架構的 Linux 機器上執行。
 2. 把 commit 打上 `v<VERSION>` 並推送 tag；各節點 fetch tag。
 3. 每個平台再建一次並跑 `release.zsh`。它拒絕：工作區不乾淨、執行檔的 build id 不是這個
-   checkout 的、完整版、以及已存在的封存。macOS 與 Windows 上它以解開、執行、完成一次
+   checkout 的、完整版、沒有 strip 的執行檔、以及已存在的封存。在 macOS 上它會 strip 打包的副本
+   並重新做 ad-hoc 簽章；`release/swift_tar` 保留符號。Linux 建置以 `--strip-all` 連結，Windows
+   exe 沒有符號表。macOS 與 Windows 上它以解開、執行、完成一次
    `.tar.gz` 往返、確認 LZFSE 被拒絕來驗證；Linux 則在每種架構上跑 `verify_release.zsh`，
    它在空環境下做同樣的事，並執行內建的自我測試。
 4. 把四份封存與它們的 `.sha256` 收到 Mac 的 `dist/`
    （`/Volumes/LinuxCS/helper/collect_release.zsh swift_tar <VERSION>` 會取回 Windows 那份）。
-5. `./publish.zsh <VERSION>` 只說會做什麼；`./publish.zsh <VERSION> --publish` 建立 GitHub
+5. `./publish.zsh <VERSION>` 只說會做什麼；`./publish.zsh <VERSION> --publish` 再確認每份封存裡的
+   執行檔都已 strip、建立 GitHub
    Release、從公開網址把每個資產下載回來比對，並改寫 `Formula/swift_tar.rb` 與上層 repo 的
    `bucket/swift_tar.json`。兩者都要提交。
 

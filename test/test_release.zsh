@@ -73,6 +73,28 @@ check "build id outside git, nothing passed: unknown" "$(swift_tar_build_id "$TM
 check "build id outside git: SWIFT_TAR_BUILD_ID" "$(SWIFT_TAR_BUILD_ID="v0.1.0 / 12345678" swift_tar_build_id "$TMP/nogit")" "v0.1.0 / 12345678"
 
 # ---------------------------------------------------------------------
+# stripped.zsh, on a small program built here with and without its symbols.
+# stripped.zsh，對這裡建出的小程式，分別帶與不帶符號。
+# ---------------------------------------------------------------------
+. "$ROOT/stripped.zsh"
+if ! command -v cc >/dev/null 2>&1 || ! command -v strip >/dev/null 2>&1 || ! NM=$(swift_tar_nm); then
+  echo "SKIP: stripped.zsh cases (needs cc, strip and llvm-nm or nm)"
+else
+  SP=$TMP/strip
+  mkdir -p "$SP"
+  print -r -- 'int helper(int x) { return x + 1; } int main(void) { return helper(-1); }' > "$SP/p.c"
+  cc "$SP/p.c" -o "$SP/full"
+  cp "$SP/full" "$SP/stripped"; strip "$SP/stripped"
+  print -r -- 'not a binary' > "$SP/text"
+  rc=0; swift_tar_unstripped "$NM" "$SP/full" > "$SP/out" || rc=$?
+  check "stripped.zsh: a program with symbols is not stripped, and some are named" "$rc:$([ -s "$SP/out" ] && echo named)" "1:named"
+  rc=0; swift_tar_unstripped "$NM" "$SP/stripped" >/dev/null || rc=$?
+  check "stripped.zsh: the same program after strip is stripped" "$rc" 0
+  rc=0; swift_tar_unstripped "$NM" "$SP/text" >/dev/null || rc=$?
+  check "stripped.zsh: a file nm cannot read is an error, not stripped" "$rc" 2
+fi
+
+# ---------------------------------------------------------------------
 # The built binary's --version: `swift_tar <VERSION> (<build id>) <stamp>`.
 # 建出的執行檔的 --version：`swift_tar <VERSION> (<build id>) <戳記>`。
 # ---------------------------------------------------------------------
@@ -116,7 +138,7 @@ elif ! command -v zstd >/dev/null 2>&1; then
 else
   R=$TMP/rel
   mkdir -p "$R/release" "$R/zlib"
-  cp "$ROOT/release.zsh" "$ROOT/build_id.zsh" "$ROOT/platform.zsh" "$R/"
+  cp "$ROOT/release.zsh" "$ROOT/build_id.zsh" "$ROOT/platform.zsh" "$ROOT/stripped.zsh" "$R/"
   print 0.1.0 > "$R/VERSION"
   print 'licence' > "$R/LICENSE"; print 'readme' > "$R/README.md"; print 'readme' > "$R/README.zh-TW.md"
   print 'zlib licence' > "$R/zlib/LICENSE"
@@ -133,13 +155,28 @@ else
   # never written out here, because release.zsh searches the binary for it.
   # make_fake <版本> <id> [全部接受]：回答 --version，並經由系統 tar 做 gzip 往返；其他選項一律失敗，
   # 除非要求它全部接受。LZFSE 的旗標不寫在這裡，因為 release.zsh 會在執行檔裡搜尋它。
+  # A compiled program that hands its arguments to that script through /bin/sh -c, not a #!/bin/sh
+  # script itself: release.zsh strips and checks the binary, and strip and nm cannot read a script.
+  # 是一個把引數經 /bin/sh -c 交給那段腳本的編譯程式，而不是 #!/bin/sh 腳本本身：release.zsh 會 strip
+  # 並檢查執行檔，而 strip 與 nm 讀不了腳本。
   make_fake() {
-    print -l '#!/bin/sh' \
+    local s
+    s=$(print -l \
       "if [ \"\$1\" = --version ]; then echo 'swift_tar $1 ($2) 20260101-000000'; exit 0; fi" \
       'if [ "$1" = -c ] && [ "$2" = --gzip ]; then f=$4; d=$6; shift 6; exec tar -czf "$f" -C "$d" "$@"; fi' \
       'if [ "$1" = -x ]; then exec tar -xzf "$3" -C "$5"; fi' \
-      "exit ${3:-1}" > "$R/release/swift_tar"
-    chmod 755 "$R/release/swift_tar"
+      "exit ${3:-1}")
+    s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}
+    print -r -- "#include <unistd.h>
+static const char script[] = \"$s\";
+int main(int argc, char **argv) {
+  char *args[argc + 4];
+  args[0] = \"sh\"; args[1] = \"-c\"; args[2] = (char *)script; args[3] = \"sh\";
+  for (int i = 1; i <= argc; i++) args[i + 3] = argv[i];
+  execv(\"/bin/sh\", args);
+  return 127;
+}" > "$TMP/fake.c"
+    cc "$TMP/fake.c" -o "$R/release/swift_tar"
   }
   rel() { rc=0; ( cd "$R" && ./release.zsh ) > "$TMP/rel.out" 2>&1 || rc=$?; }
   says() { grep -qF -- "$1" "$TMP/rel.out"; }
@@ -165,6 +202,15 @@ else
     # 怎樣都會通過。
     pax=$(zstd -dq -c "$R/dist/$STEM.tar.zst" | LC_ALL=C grep -a -c 'PaxHeader' || true)
     check "release.zsh: no pax headers (xattrs, ACLs, file flags) in the archive" "$pax" 0
+    # The archive's binary is stripped; release/swift_tar, the build, keeps its symbols.
+    # 封存裡的執行檔已 strip；release/swift_tar（建置本身）保留符號。
+    mkdir -p "$TMP/relx"
+    zstd -dq -c "$R/dist/$STEM.tar.zst" | ( cd "$TMP/relx" && tar -xf - "$STEM/swift_tar" )
+    rc=0; swift_tar_unstripped "$(swift_tar_nm)" "$TMP/relx/$STEM/swift_tar" >/dev/null || rc=$?
+    check "release.zsh: the packaged binary is stripped" "$rc" 0
+    rc=0; swift_tar_unstripped "$(swift_tar_nm)" "$R/release/swift_tar" >/dev/null || rc=$?
+    check "release.zsh: release/swift_tar keeps its symbols" "$rc" 1
+    rm -rf "$TMP/relx"
   fi
   rel
   check "release.zsh: an existing archive is not overwritten" "$rc" 1
@@ -245,7 +291,7 @@ if [ "$OS" != macos ] || [ ! -x "$XTC/clang" ] || (( ${#XSDK} != 1 )) || ! comma
 else
   X=$TMP/cross
   mkdir -p "$X/release/linux-aarch64" "$X/zlib"
-  cp "$ROOT/release.zsh" "$ROOT/build_id.zsh" "$ROOT/platform.zsh" "$X/"
+  cp "$ROOT/release.zsh" "$ROOT/build_id.zsh" "$ROOT/platform.zsh" "$ROOT/stripped.zsh" "$X/"
   print 0.1.0 > "$X/VERSION"
   print 'licence' > "$X/LICENSE"; print 'readme' > "$X/README.md"; print 'readme' > "$X/README.zh-TW.md"
   print 'zlib licence' > "$X/zlib/LICENSE"
@@ -255,10 +301,12 @@ else
   print -l '/release/' '/dist/' > "$X/.gitignore"
   ( cd "$X" && quiet_git init -q && quiet_git add . && quiet_git commit -qm cross )
   xid=$(swift_tar_build_id "$X")
-  xcc() {   # xcc <identity text> -- the stand-in binary
+  xcc() {   # xcc <identity text> [keep] -- the stand-in binary, stripped like the real one unless keep
+    local -a strip_flag=(-s)
+    [[ ${2:-} == keep ]] && strip_flag=()
     print -r -- "const char id[] = \"$1\"; int main(void) { return id[0] == 0; }" > "$TMP/x.c"
     "$XTC/clang" --target=aarch64-unknown-linux-musl --sysroot="${XSDK[1]}" \
-      -resource-dir "${XSDK[1]}/usr/lib/swift/clang" -fuse-ld=lld -rtlib=compiler-rt -static \
+      -resource-dir "${XSDK[1]}/usr/lib/swift/clang" -fuse-ld=lld -rtlib=compiler-rt -static $strip_flag \
       "$TMP/x.c" -o "$X/release/linux-aarch64/swift_tar"
   }
   xrel() { rc=0; ( cd "$X" && SWIFT_TAR_PLATFORM=musl-aarch64 ./release.zsh ) > "$TMP/x.out" 2>&1 || rc=$?; }
@@ -278,6 +326,15 @@ else
   got=$(zstd -dq -c "$X/dist/$XSTEM.tar.zst" | tar -tf - | sed -n "s:^$XSTEM/::p" | grep -E -v '^(swift_tar|version\.txt|README.*|swift_tar-LICENSE\.txt|zlib-LICENSE\.txt)?$' | sort | tr '\n' ' ')
   check "release.zsh, cross: the archive carries every licence in licenses/" "$got" "$want"
   rm -rf "$X/dist"
+  # A cross binary is not stripped by release.zsh (it is compared byte for byte with the build),
+  # so one linked without --strip-all is refused.
+  # 交叉建置的執行檔不由 release.zsh strip（它要與建置逐位元組比對），所以沒以 --strip-all 連結的會被拒絕。
+  xcc "swift_tar 0.1.0 ($xid)" keep
+  xrel
+  if [ "$rc" = 1 ] && grep -q 'is not stripped' "$TMP/x.out" && [ ! -e "$X/dist/$XSTEM.tar.zst" ]; then ok "release.zsh, cross: an unstripped binary is refused"
+  else bad "release.zsh, cross: an unstripped binary is refused (rc $rc; $(tr '\n' '|' < "$TMP/x.out"))"; fi
+  rm -rf "$X/dist"
+  xcc "swift_tar 0.1.0 ($xid)"
   # The cross branch writes its .sha256 through the same write_sha256 (see the native cases).
   # Here, before the licence is dropped below, so the hash is the only thing wrong.
   # 交叉分支經由同一個 write_sha256 寫 .sha256（見原生案例）。放在下方移除授權之前，讓雜湊是唯一

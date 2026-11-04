@@ -195,6 +195,27 @@ rm -rf -- "$STAGE"
 mkdir -p -- "$STAGE"
 cp -- "$BIN" "$STAGE/$BIN_NAME"
 chmod 755 "$STAGE/$BIN_NAME"
+# Only stripped executables ship. The Linux builds are linked with --strip-all and the Windows exe
+# carries no symbol table, but the macOS build keeps its symbols (0.1.5 shipped about 3,000 of
+# them), so the staged copy is stripped here; release/swift_tar keeps them for debugging. Stripping
+# invalidates the linker's ad-hoc signature, and Apple silicon kills an arm64 binary whose
+# signature is invalid, so it is signed again; the run after extraction below proves it starts.
+# 只發布已 strip 的執行檔。Linux 建置以 --strip-all 連結，Windows exe 沒有符號表，但 macOS 建置保留
+# 符號（0.1.5 帶了約 3,000 個），所以在這裡 strip 暫存副本；release/swift_tar 保留符號供除錯。strip 會
+# 讓連結器的 ad-hoc 簽章失效，而 Apple silicon 會砍掉簽章無效的 arm64 執行檔，所以重新簽一次；下面
+# 解開後的執行證明它起得來。
+if [[ $OS == macos ]]; then
+  strip "$STAGE/$BIN_NAME"
+  codesign --force --sign - "$STAGE/$BIN_NAME"
+fi
+source "$HERE/stripped.zsh"
+NM=$(swift_tar_nm) || die "neither llvm-nm nor nm is on PATH; an executable not shown to be stripped is not released" \
+                          "PATH 上沒有 llvm-nm 或 nm；沒能證明已 strip 的執行檔不發布"
+strip_rc=0
+left=$(swift_tar_unstripped "$NM" "$STAGE/$BIN_NAME") || strip_rc=$?
+(( strip_rc != 2 )) || die "$NM cannot read $BIN_NAME: $left" "$NM 讀不了 $BIN_NAME：$left"
+(( strip_rc == 0 )) || die "$BIN_NAME is not stripped; symbols left include: ${left//$'\n'/, }" \
+                           "$BIN_NAME 沒有 strip；殘留的符號包括：${left//$'\n'/, }"
 cp -- "$VERSION_FILE" "$STAGE/version.txt"
 cp -- LICENSE "$STAGE/swift_tar-LICENSE.txt"
 cp -- README.md README.zh-TW.md "$STAGE/"

@@ -425,6 +425,18 @@ fi
 # $ORIGIN/lib 是封存本身的配置（swift_tar 與 lib/ 並列），$ORIGIN/../lib/swift_tar 是 install.zsh
 # 放函式庫的位置（<prefix>/bin 與 <prefix>/lib/swift_tar）。兩者都不存在時，例如這裡的
 # release/swift_tar，載入器接著找這個 toolchain 的 runtime。
+#
+# -no-toolchain-stdlib-rpath: on Linux swiftc puts the toolchain's runtime directory FIRST in the
+# RUNPATH by itself, ahead of the entries given here, so the archive's lib/ lost to the build
+# machine's runtime. CI run 41837688456 (2026-11-04) showed it: RUNPATH
+# [/usr/lib/swift/linux:$ORIGIN/lib:...], and release.zsh refused the archive because
+# libswiftSynchronization.so resolved to /usr/lib/swift/linux. The runtime directory is still
+# in the list, last, through the explicit -rpath below.
+# -no-toolchain-stdlib-rpath：swiftc 在 Linux 上會自己把 toolchain 的 runtime 目錄放在 RUNPATH 的
+# **最前面**，排在這裡給的項目之前，於是封存的 lib/ 輸給建置機器的 runtime。CI 第 41837688456 次執行
+# （2026-11-04）就是如此：RUNPATH 為 [/usr/lib/swift/linux:$ORIGIN/lib:...]，release.zsh 因
+# libswiftSynchronization.so 解析到 /usr/lib/swift/linux 而拒絕了封存。runtime 目錄仍經由下面明確的
+# -rpath 留在清單裡，排在最後。
 SWIFT_RUNTIME_DIR="$SWIFT_PREFIX/lib/swift/linux"
 
 # -swift-version 6, matching compile_tar.zsh and compile_tar-win.zsh. Linux was the
@@ -584,6 +596,7 @@ fi
     "${ARCHIVE_LINK[@]}" \
     "${CODEC_LINK[@]}" \
     "${LINKER_FLAGS[@]}" \
+    -no-toolchain-stdlib-rpath \
     -Xlinker -rpath -Xlinker '$ORIGIN/lib' \
     -Xlinker -rpath -Xlinker '$ORIGIN/../lib/swift_tar' \
     -Xlinker -rpath -Xlinker "$SWIFT_RUNTIME_DIR" \

@@ -663,7 +663,22 @@ record_linked() {        # key  soname-prefix (literal / 字面字串)
         break
     done
     [[ -n "$soname" ]] || return 0
-    real=$(readlink -f "$SYSROOT/lib/$soname" 2>/dev/null) || real=""
+    # The library is looked for where it is, not only in $SYSROOT/lib: Debian and Ubuntu keep it
+    # in the multiarch directory. Looking in $SYSROOT/lib alone, the CI build of 2026-11-04
+    # recorded bzip2_path=/usr/lib/libbz2.so.1.0, a file that does not exist, and
+    # bzip2_so_version=1.0 instead of 1.0.8: readlink -f answers for a missing file too. A
+    # soname found nowhere is said to be unresolved.
+    # 函式庫要到它實際所在的地方找，不只是 $SYSROOT/lib：Debian 與 Ubuntu 把它放在多架構目錄。只看
+    # $SYSROOT/lib 時，2026-11-04 的 CI 建置記下了 bzip2_path=/usr/lib/libbz2.so.1.0——一個不存在的
+    # 檔案——以及 bzip2_so_version=1.0 而非 1.0.8：readlink -f 對不存在的檔案也會回答。哪裡都找不到
+    # 的 soname 就明說未解析。
+    real=""
+    local dir
+    for dir in "$SYSROOT/lib" "$SYSROOT/lib/$(uname -m)-linux-gnu" "$SYSROOT/lib64" "/lib/$(uname -m)-linux-gnu"; do
+        [[ -e "$dir/$soname" ]] || continue
+        real=${${:-$dir/$soname}:A}
+        break
+    done
     [[ -n "$real" ]] || real="$soname (unresolved / 未解析)"
     ver=${${real:t}#*.so.}
     printf '%s_so_version=%s\n%s_path=%s\n%s_linkage=dynamic\n' "$key" "$ver" "$key" "$real" "$key"

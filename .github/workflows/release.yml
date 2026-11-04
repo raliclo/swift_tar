@@ -124,12 +124,16 @@ jobs:
           submodules: false
 
       # The public submodules the build needs; lzfse2 is private and the public build leaves it out.
-      # 建置需要的公開子模組；lzfse2 是 private，公開版不需要它。
+      # Full history, not --depth 1: version.txt records each one's `git describe --tags`, and
+      # without its tags that was a bare short hash (zlib_version=da607da for v1.3.2, 2026-11-04).
+      # 建置需要的公開子模組；lzfse2 是 private，公開版不需要它。取完整歷史而非 --depth 1：version.txt
+      # 記的是各自的 `git describe --tags`，沒有 tag 時只剩短 hash（2026-11-04 的 zlib_version=da607da，
+      # 實為 v1.3.2）。
       - name: Submodules / 子模組
         shell: bash
         run: |
           git config --global --add safe.directory '*'
-          git submodule update --init --depth 1 libarchive zlib zstd lz4 xz
+          git submodule update --init libarchive zlib zstd lz4 xz
 
       - name: Build and package / 建置與打包
         if: runner.os != 'Windows'

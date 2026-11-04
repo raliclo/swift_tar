@@ -118,15 +118,13 @@ fi
 # 在 Windows 上的發行預演涵蓋。
 if [ "$OS" = windows ]; then
   echo "SKIP: release.zsh native cases (the stand-in binary is a shell script, not a PE; see win_dlls below)"
-# On Linux too since 0.2.0: release.zsh packs a Linux build made here, as linux-<arch>-glibc or
-# linux-<arch>-musl. From f19c63a (2026-10-20) until then it refused one, and this place tested
-# only that refusal. On Linux the stand-in is the musl kind, linked -static and recorded as
-# musl: a -glibc release needs a real Swift runtime to pack (linux_sos below, and the CI's
-# real build in an image without Swift).
-# 自 0.2.0 起 Linux 上也跑：release.zsh 會打包在這裡建的 Linux 版，名稱為 linux-<arch>-glibc 或
-# linux-<arch>-musl。從 f19c63a（2026-10-20）到那時為止它拒絕原生打包，這裡只測那個拒絕。Linux 上的
-# 替身是 musl 那一種：以 -static 連結並記為 musl；-glibc 正式版要有真的 Swift runtime 才打包得起來
-# （見下方 linux_sos，以及 CI 在沒有 Swift 的映像裡跑的真實建置）。
+# On Linux too since 0.2.0: release.zsh packs a musl build made here as linux-<arch>-musl, and
+# refuses a glibc one (Linux ships musl only). From f19c63a (2026-10-20) until then it refused
+# every native build, and this place tested only that refusal. On Linux the stand-in is linked
+# -static and recorded as musl.
+# 自 0.2.0 起 Linux 上也跑：release.zsh 會把在這裡建的 musl 版打包成 linux-<arch>-musl，並拒絕 glibc 版
+# （Linux 只出 musl）。從 f19c63a（2026-10-20）到那時為止它拒絕所有原生打包，這裡只測那個拒絕。Linux 上
+# 的替身以 -static 連結並記為 musl。
 elif ! command -v zstd >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1; then
   echo "SKIP: release.zsh cases (needs zstd and clang on PATH)"
 elif [ "$OS" = linux ] && ! print -r -- 'int main(void){return 0;}' | clang -static -x c - -o "$TMP/static-probe" 2>/dev/null; then
@@ -282,16 +280,18 @@ int main(int argc, char **argv) {
       rm -rf "$R/dist"
     else echo "SKIP: release.zsh openssl branch (zstd shares a directory with sha256sum)"; fi
   fi
-  # Linux: the libc in the name must be what the binary is. A dynamic binary recorded as musl is
-  # refused, and a version file that names no libc is refused rather than guessed (both modes of
-  # compile_tar-linux.zsh write version-linux.txt).
-  # Linux：名稱裡的 libc 必須就是執行檔的那一種。記為 musl 的動態執行檔會被拒絕；沒寫明 libc 的
-  # version 檔也會被拒絕，不做猜測（compile_tar-linux.zsh 的兩種模式都寫 version-linux.txt）。
+  # Linux: only musl is released. A dynamic binary recorded as musl is refused, a glibc build
+  # (libc=glibc, the default of compile_tar-linux.zsh) is refused, and a version file that names
+  # no libc is refused rather than guessed (both modes write version-linux.txt).
+  # Linux：只發布 musl。記為 musl 的動態執行檔會被拒絕；glibc 建置（libc=glibc，compile_tar-linux.zsh
+  # 的預設）會被拒絕；沒寫明 libc 的 version 檔也會被拒絕，不做猜測（兩種模式都寫 version-linux.txt）。
   if [ "$OS" = linux ]; then
     FAKE_CFLAGS="" make_fake 0.1.0 "$id"
     rel_refuses "a dynamically linked binary recorded as musl" "it is not static"
-    make_fake 0.1.0 "$id"
     cp "$R/version-$PLAT.txt" "$TMP/vf.musl"
+    { grep -v -E '^(libc|swift_stdlib_linkage)=' "$TMP/vf.musl"; print -l 'libc=glibc' 'swift_stdlib_linkage=dynamic'; } > "$R/version-$PLAT.txt"
+    rel_refuses "a glibc build (Linux releases are musl only)" "Linux releases are musl only"
+    make_fake 0.1.0 "$id"
     grep -v '^libc=' "$TMP/vf.musl" > "$R/version-$PLAT.txt"
     rel_refuses "a Linux build whose version file names no libc" "names no libc"
     cp "$TMP/vf.musl" "$R/version-$PLAT.txt"
@@ -449,45 +449,6 @@ check "release.zsh: ships the recorded runtime and globs no Runtimes/" "$calls:$
 calls=$(grep -c 'swift_tar_win_runtime "\$exe"' "$ROOT/package_win.zsh" || true)  # 0 matches is the failure being checked / 0 筆正是要檢查的失敗
 globs=$(grep -c 'Runtimes/\*' "$ROOT/package_win.zsh" || true)                     # 0 matches is the passing case / 0 筆才是通過
 check "package_win.zsh: packages the recorded runtime and globs no Runtimes/" "$calls:$globs" "1:0"
-
-# ---------------------------------------------------------------------
-# linux_sos.zsh: which Swift runtime .so files the linux-<arch>-glibc archive carries, with a
-# stand-in readelf that prints <elf>.needed as readelf -d's "(NEEDED)" lines.
-# linux_sos.zsh：linux-<arch>-glibc 封存帶哪些 Swift runtime .so。替身 readelf 把 <elf>.needed 印成
-# readelf -d 的「(NEEDED)」行。
-# ---------------------------------------------------------------------
-source "$ROOT/linux_sos.zsh"
-G=$TMP/glibc
-mkdir -p "$G/rt"
-for so in libswiftCore.so libFoundation.so libFoundationXML.so libdispatch.so libBlocksRuntime.so; do : > "$G/rt/$so"; done
-: > "$G/swift_tar"
-print -l libswiftCore.so libFoundation.so libc.so.6 libbz2.so.1.0 > "$G/swift_tar.needed"
-print -l libswiftCore.so libdispatch.so libstdc++.so.6 > "$G/rt/libFoundation.so.needed"
-print -l libBlocksRuntime.so libc.so.6 > "$G/rt/libdispatch.so.needed"
-print -l libxml2.so.2 > "$G/rt/libFoundationXML.so.needed"
-print -l '#!/bin/zsh' '[[ -r $2.needed ]] || exit 0' \
-  'while IFS= read -r l; do printf " 0x0000000000000001 (NEEDED)             Shared library: [%s]\n" "$l"; done < "$2.needed"' > "$G/readelf"
-chmod 755 "$G/readelf"
-got=$(swift_tar_linux_sos "$G/readelf" "$G/swift_tar" "$G/rt" | sed "s:^$G/rt/::" | LC_ALL=C sort | tr '\n' ' ')
-check "linux_sos: only the DT_NEEDED closure found in the runtime ships, never the system's" "$got" \
-  "libBlocksRuntime.so libFoundation.so libdispatch.so libswiftCore.so "
-print -l '#!/bin/zsh' 'exit 3' > "$G/readelf-fails"; chmod 755 "$G/readelf-fails"
-rc=0; swift_tar_linux_sos "$G/readelf-fails" "$G/swift_tar" "$G/rt" > "$TMP/ls.out" 2>&1 || rc=$?
-check "linux_sos: a failing readelf makes it fail" "$rc" 1
-# The runtime that ships is the one compile_tar-linux.zsh recorded, never a guess.
-# 出貨的 runtime 是 compile_tar-linux.zsh 記下的那一份，絕不猜測。
-print -l 'libc=glibc' "swift_runtime_dir=$G/rt" > "$G/version.txt"
-rc=0; got=$(swift_tar_linux_runtime "$G/version.txt") || rc=$?
-check "linux_runtime: the recorded runtime directory" "$rc:$got" "0:$G/rt"
-mkdir -p "$G/empty"
-print -l 'libc=glibc' "swift_runtime_dir=$G/empty" > "$G/version.txt"
-rc=0; swift_tar_linux_runtime "$G/version.txt" >/dev/null || rc=$?
-check "linux_runtime: a recorded directory without libswiftCore.so is refused" "$rc" 2
-print -l 'libc=glibc' > "$G/version.txt"
-rc=0; swift_tar_linux_runtime "$G/version.txt" >/dev/null || rc=$?
-check "linux_runtime: no record is refused" "$rc" 1
-calls=$(grep -c 'swift_tar_linux_runtime "\$VERSION_FILE"' "$ROOT/release.zsh" || true)  # 0 matches is the failure being checked / 0 筆正是要檢查的失敗
-check "release.zsh: the glibc archive ships the recorded runtime" "$calls" 1
 
 # ---------------------------------------------------------------------
 # publish_rewrite.zsh on copies of the real package files.

@@ -63,13 +63,16 @@ Pass `--install` (or `-install`) to also copy it to `/opt/homebrew/bin/swift_tar
 **`release/swift_tar`** and `version-linux.txt`, and both honour `EXCLUDE_LZFSE=1`.
 
 - `./compile_tar-linux.zsh`, the default: glibc, with the Swift runtime linked
-  dynamically. It needs no Static Linux SDK. It is the `linux-<arch>-glibc` release.
+  dynamically. It needs no Static Linux SDK. It is for building here (multissh's
+  glibc build uses it) and is never released.
 - `./compile_tar-linux.zsh --musl` (or `-musl`): a fully static musl executable for the
   host's architecture, built by `./compile_tar-musl.zsh native`. It is the same kind
   as the `linux-<arch>-musl` release.
 
-Both are published since 2026-11-04, named as multissh names its own:
-`linux-<arch>-glibc` and `linux-<arch>-musl`.
+Linux releases are musl only (decided 2026-11-04): a glibc build needs a glibc at
+least as new as its build machine's (2.38 for one built on Ubuntu 24.04), so it
+would not run on older systems, and glibc cannot be shipped beside it.
+`release.zsh` refuses a glibc build.
 
 From edf28c4 until later the same day (2026-11-04), musl was the only Linux
 build. glibc came back as the default because multissh's standard Linux build is
@@ -115,14 +118,9 @@ The build reuses `lzfse2/lzfse-cli.swift` as a library (its top-level
 and links `-lz -lbz2 -llz4 -llzma -lzstd` plus the bundled static libarchive
 ZIP backend.
 
-Its RUNPATH starts with `$ORIGIN/lib` and `$ORIGIN/../lib/swift_tar`, then the
-toolchain's runtime directory. The `linux-<arch>-glibc` release carries the Swift
-runtime `.so` files the binary loads in `lib/` beside it, so it runs on a machine
-without Swift; `install.zsh` puts them in `<prefix>/lib/swift_tar`. The
-`version-linux.txt` it writes records `libc=glibc`, `glibc_min` (the newest
-`GLIBC_` symbol version the binary asks for, i.e. the oldest glibc it runs on) and
-the runtime directory, which is the one `release.zsh` packs. glibc, libstdc++ and
-libbz2 stay the system's.
+The `version-linux.txt` it writes records `libc=glibc`, which is how `release.zsh`
+tells it from a `--musl` build and refuses it, and `glibc_min`, the newest
+`GLIBC_` symbol version the binary asks for, i.e. the oldest glibc it runs on.
 
 #### musl (`--musl`)
 
@@ -219,12 +217,10 @@ because they are development artifacts, not runtime dependencies.
 
 Releases are the public build (no LZFSE), one `.tar.zst` per platform on the
 [GitHub Releases](https://github.com/raliclo/swift_tar/releases) page, each with a
-`.sha256` beside it. From 0.2.0 there are eight: `linux-{x86_64,aarch64}-glibc`
-(the Swift runtime `.so` files ride along in `lib/`; glibc, libstdc++ and libbz2
-are the system's), `linux-{x86_64,aarch64}-musl` (fully static, needs nothing),
-`macos-{x86_64,arm64}` and `windows-{x86_64,arm64}` (the Swift runtime DLLs ride
-along). The Linux names are multissh's. Until 0.1.5, `linux-<arch>` was the musl
-build.
+`.sha256` beside it. From 0.2.0 there are six: `linux-{x86_64,aarch64}-musl` (fully
+static, needs nothing; Linux ships musl only), `macos-{x86_64,arm64}` and
+`windows-{x86_64,arm64}` (the Swift runtime DLLs ride along). The Linux name is
+multissh's. Until 0.1.5, `linux-<arch>` was the musl build.
 `swift_tar --version` prints the version, the build id (`v0.2.0 / <commit>` for a
 binary built at the tag) and the provenance stamp.
 
@@ -245,22 +241,19 @@ brew install raliclo/swift_tar/swift_tar
 scoop bucket add raliclo https://github.com/raliclo/lzfse2
 scoop install raliclo/swift_tar
 
-# Linux (x86-64 or aarch64), two builds each. -musl is fully static: extract and put
-# swift_tar on PATH. -glibc carries its Swift runtime in lib/: keep lib/ beside swift_tar.
+# Linux (x86-64 or aarch64) — fully static: extract and put swift_tar on PATH
 sha256sum -c swift_tar-0.2.0-linux-x86_64-musl.tar.zst.sha256
 zstd -dc swift_tar-0.2.0-linux-x86_64-musl.tar.zst | tar -xf -
 
 # Any platform, without brew or scoop — install.zsh picks this machine's archive,
-# checks its .sha256 and puts swift_tar in ~/.local/bin (needs curl, zstd, tar);
-# for -glibc the runtime goes to ~/.local/lib/swift_tar
-zsh install.zsh                    # latest release; on Linux the -glibc build
-zsh install.zsh --musl             # Linux: the static build
+# checks its .sha256 and puts swift_tar in ~/.local/bin (needs curl, zstd, tar)
+zsh install.zsh                    # latest release; on Linux the -musl build
 zsh install.zsh 0.2.0 --prefix /opt/swift_tar
 ```
 
 ### Making a release
 
-`.github/workflows/release.yml` builds all eight archives on GitHub's runners
+`.github/workflows/release.yml` builds all six archives on GitHub's runners
 with this repository's own scripts (Linux in the `swift:6.4.2-noble` container,
 `--musl` with Swift's Static Linux SDK; macOS `compile_tar.zsh --no-lzfse`;
 Windows `build_zlib-win.zsh`, `build_zstd-win.zsh` and `compile_tar-win.zsh`),
@@ -268,18 +261,16 @@ and packs each with `release.zsh`. `release.zsh` refuses a dirty tree, a binary
 whose build id is not this checkout's, the full build, an unstripped binary and
 an existing archive; it strips the packaged copy (and signs it again ad hoc on
 macOS), then verifies by extracting, running, round-tripping a `.tar.gz` and
-checking LZFSE is refused. For `linux-<arch>-glibc` it also packs the Swift runtime
-`.so` files the build recorded into `lib/`, and asks the dynamic loader
-(`ld.so --list`, empty environment) that each resolves there. Every Linux archive
-is then run again by `verify_release.zsh` in a plain `ubuntu:24.04` image with no
-Swift installed, which is what shows the `-glibc` one runs on its own `lib/`.
+checking LZFSE is refused; it refuses a glibc Linux build. Every Linux archive is
+then run again by `verify_release.zsh` in a plain `ubuntu:24.04` image with no
+Swift installed.
 
 1. Set `VERSION` to the new number, commit and push to `master`.
 2. Run the workflow by hand (Actions › Release › Run workflow) to build and pack
-   all eight without releasing, until every job is green.
+   all six without releasing, until every job is green.
 3. Tag that commit with a signed tag and push it:
    `git tag -s v<VERSION> -m "swift_tar <VERSION>" && git push origin v<VERSION>`.
-   The workflow builds at the tag, checks all eight archives and their `.sha256`,
+   The workflow builds at the tag, checks all six archives and their `.sha256`,
    signs a build-provenance attestation for each, and creates the GitHub Release.
 4. Update `Formula/swift_tar.rb` and the parent repository's
    `bucket/swift_tar.json` from the published archives.
@@ -288,9 +279,8 @@ The older manual flow still works for one machine's archive: build, then
 `./release.zsh`; on the Mac, `./compile_tar-musl.zsh <arch>` and
 `SWIFT_TAR_PLATFORM=musl-<arch> ./release.zsh` make `linux-<arch>-musl`, which
 `./verify_release.zsh <archive>` runs on a Linux machine of that architecture.
-On a Linux machine, `EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh` then
-`./release.zsh` makes `linux-<arch>-glibc`, whose oldest supported glibc is the
-build machine's.
+On a Linux machine, `EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh --musl` then
+`./release.zsh` makes the same archive.
 
 `test/test_release.zsh` covers the build id, every refusal of `release.zsh`, the
 package-file rewrite, and `publish.zsh`'s early refusals, without publishing.
@@ -1129,10 +1119,9 @@ build_id.zsh        sourced: the one place the build id printed by --version is 
 compile_tar-musl.zsh  cross-build the static Linux release (musl) on the Mac → release/linux-<arch>/swift_tar
 release.zsh         package this platform's public build into dist/ as .tar.zst
 verify_release.zsh  run a Linux release archive on a Linux machine of its architecture
-publish.zsh         tag, publish the eight archives, rewrite the brew and scoop files
+publish.zsh         tag, publish the six archives, rewrite the brew and scoop files
 publish_rewrite.zsh sourced: publish.zsh's package-file rewrite
 win_dlls.zsh        sourced: release.zsh's choice of the Windows runtime DLLs to ship
-linux_sos.zsh       sourced: release.zsh's choice of the Swift runtime .so files for linux-<arch>-glibc
 Formula/swift_tar.rb  Homebrew formula (this repository is its own tap)
 version-mac.txt / version-win.txt / version-musl-<arch>.txt   per-platform build stamp + linkage provenance (version-linux.txt, from a glibc development build, is not committed)
 licenses/           third-party licences shipped in the Linux and Windows archives (see licenses/README.md)

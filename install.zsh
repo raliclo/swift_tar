@@ -6,23 +6,19 @@
 #    zsh install.zsh                     the latest release into ~/.local/bin / 最新版裝到 ~/.local/bin
 #    zsh install.zsh 0.1.5               release v0.1.5 / 指定 v0.1.5
 #    zsh install.zsh --prefix /opt/st    into /opt/st/bin / 裝到 /opt/st/bin
-#    zsh install.zsh --musl              Linux: the static build (or -musl) / Linux：靜態版（或 -musl）
+#    zsh install.zsh --musl              accepted and ignored: Linux is always the static build
+#                                        接受但不作用：Linux 一律是靜態版
 #    zsh install.zsh --help              print this and do nothing / 印出這段說明
 #
-#  Picks swift_tar-<version>-<platform>.tar.zst for macos-{x86_64,arm64},
-#  windows-{x86_64,arm64}, or linux-{x86_64,aarch64}-glibc and with --musl
-#  linux-{x86_64,aarch64}-musl (static), from the public GitHub Release, checks it against its
-#  .sha256, and puts swift_tar in <prefix>/bin: on Windows with the Swift runtime DLLs beside it,
-#  for -glibc with the Swift runtime .so files in <prefix>/lib/swift_tar, where the binary's
-#  RUNPATH looks, so neither needs Swift installed. These names are 0.2.0's, as multissh names
-#  its own; until 0.1.5 linux-<arch> was the musl build. The repository is public, so no gh
-#  login is needed. Needs curl, zstd and tar on PATH.
-#  依 macos-{x86_64,arm64}、windows-{x86_64,arm64}，或 linux-{x86_64,aarch64}-glibc，加 --musl 則為
-#  linux-{x86_64,aarch64}-musl（靜態），從公開 GitHub Release 挑選 swift_tar-<版本>-<平台>.tar.zst，以其
-#  .sha256 驗證，再把 swift_tar 放進 <prefix>/bin：Windows 上連同旁邊的 Swift runtime DLL；-glibc 則把
-#  Swift runtime 的 .so 放進 <prefix>/lib/swift_tar，那是執行檔的 RUNPATH 會找的地方，所以兩者都不需要
-#  先安裝 Swift。這些是 0.2.0 的名稱，與 multissh 的命名相同；到 0.1.5 為止 linux-<arch> 是 musl 版。
-#  repository 是公開的，不需要 gh 登入。需要 PATH 上有 curl、zstd 與 tar。
+#  Picks swift_tar-<version>-<platform>.tar.zst for macos-{x86_64,arm64}, windows-{x86_64,arm64}
+#  or linux-{x86_64,aarch64}-musl (static; Linux ships musl only), from the public GitHub
+#  Release, checks it against its .sha256, and puts swift_tar (on Windows also the Swift runtime
+#  DLLs beside it) in <prefix>/bin. These names are 0.2.0's; until 0.1.5 linux-<arch> was the
+#  musl build. The repository is public, so no gh login is needed. Needs curl, zstd and tar.
+#  依 macos-{x86_64,arm64}、windows-{x86_64,arm64} 或 linux-{x86_64,aarch64}-musl（靜態；Linux 只出
+#  musl 版），從公開 GitHub Release 挑選 swift_tar-<版本>-<平台>.tar.zst，以其 .sha256 驗證，再把
+#  swift_tar（Windows 上連同旁邊的 Swift runtime DLL）放進 <prefix>/bin。這些是 0.2.0 的名稱；到 0.1.5
+#  為止 linux-<arch> 是 musl 版。repository 是公開的，不需要 gh 登入。需要 curl、zstd 與 tar。
 # =====================================================================
 # Modelled on multissh's install.zsh. The checks are the ones release.zsh and publish.zsh already
 # hold the archive to: the hash is recomputed here and compared, and the installed binary must
@@ -34,7 +30,7 @@ emulate -L zsh
 setopt no_unset pipe_fail errexit
 
 case ${1:-} in
-  -h|--help) sed -n '3,25p' ${0:A} | sed 's/^# \{0,2\}//'; exit 0 ;;
+  -h|--help) sed -n '3,21p' ${0:A} | sed 's/^# \{0,2\}//'; exit 0 ;;
 esac
 
 REPO=raliclo/swift_tar
@@ -54,11 +50,13 @@ sha256_of() {
   print -r -- ${h%% *}
 }
 
-VERSION="" prefix=$HOME/.local libc=-glibc musl=""
+VERSION="" prefix=$HOME/.local musl=""
 while (( $# )); do
   case $1 in
     --prefix) (( $# >= 2 )) || die "--prefix needs a directory / --prefix 需要目錄"; prefix=$2; shift ;;
-    --musl|-musl) musl=-musl libc=-musl ;;
+    # Kept so multissh-style calls still work; Linux is musl either way.
+    # 保留，讓 multissh 那樣的呼叫照常可用；Linux 無論如何都是 musl。
+    --musl|-musl) musl=-musl ;;
     <->.<->.<->) VERSION=$1 ;;
     *) die "unknown argument: $1 (see --help) / 不認得的引數：$1（請見 --help）" ;;
   esac
@@ -82,9 +80,9 @@ case $(uname -s) in
           [[ $(sysctl -n sysctl.proc_translated 2>/dev/null || true) == 1 ]] && arch=arm64
           plat=macos-$arch ;;
   Linux)  case $(uname -m) in
-            x86_64|amd64)  plat=linux-x86_64$libc ;;
-            aarch64|arm64) plat=linux-aarch64$libc ;;
-            *)             plat=linux-$(uname -m)$libc ;;
+            x86_64|amd64)  plat=linux-x86_64-musl ;;
+            aarch64|arm64) plat=linux-aarch64-musl ;;
+            *)             plat=linux-$(uname -m)-musl ;;
           esac ;;
   # The machine's architecture from the system's PROCESSOR_ARCHITECTURE in the registry: MSYS2
   # emulated on arm64 says x86_64 in uname -m, and PowerShell's OSArchitecture said X64 inside
@@ -104,9 +102,9 @@ esac
 [[ -z $musl || $plat == linux-* ]] || die "--musl is for Linux only / --musl 只用於 Linux"
 case $plat in
   macos-x86_64|macos-arm64|windows-x86_64|windows-arm64) ;;
-  linux-x86_64-glibc|linux-aarch64-glibc|linux-x86_64-musl|linux-aarch64-musl) ;;
-  *) die "no release for $plat; releases cover {linux-glibc,linux-musl,macos,windows} on x86_64 and arm64" \
-         "沒有 $plat 的 release；正式版涵蓋 x86_64 與 arm64 上的 linux-glibc、linux-musl、macos、windows" ;;
+  linux-x86_64-musl|linux-aarch64-musl) ;;
+  *) die "no release for $plat; releases cover {linux-musl,macos,windows} on x86_64 and arm64" \
+         "沒有 $plat 的 release；正式版涵蓋 x86_64 與 arm64 上的 linux-musl、macos、windows" ;;
 esac
 
 # The latest tag from where github.com/<repo>/releases/latest redirects, which needs no API token
@@ -148,16 +146,9 @@ zstd -dq -c "$base" | tar -xf -
 # version asked for) never replaces a working one.
 # 安裝前先執行解出的副本，讓起不來（或版本不對）的執行檔不會取代一個能用的。
 check_version() {
-  local reported hint="" hint_zh=""
-  # The glibc build carries its Swift runtime but takes glibc, libstdc++ and libbz2 from the
-  # system; when it does not start, the static build needs none of them.
-  # glibc 版自帶 Swift runtime，但 glibc、libstdc++ 與 libbz2 取自系統；起不來時，靜態版這些都不需要。
-  if [[ $plat == linux-*-glibc ]]; then
-    hint=" (the glibc build needs a glibc at least as new as its build machine's, libstdc++ and libbz2; or use --musl for the static build)"
-    hint_zh="（glibc 版需要不比建置機器舊的 glibc、libstdc++ 與 libbz2；或改用 --musl 安裝靜態版）"
-  fi
+  local reported
   reported=$(cd -- "$1" && "./swift_tar$exe" --version | tr -d '\r') \
-    || die "$1/swift_tar$exe does not run$hint" "$1/swift_tar$exe 無法執行$hint_zh"
+    || die "$1/swift_tar$exe does not run" "$1/swift_tar$exe 無法執行"
   [[ $reported == "swift_tar $VERSION "* ]] || die "$1/swift_tar$exe reports [$reported], expected [swift_tar $VERSION ...]" \
                                                    "$1/swift_tar$exe 回報 [$reported]，預期是 [swift_tar $VERSION ...]"
   print -r -- "$reported"
@@ -170,21 +161,13 @@ check_version "$tmp/$stem" >/dev/null
 # a half-installed set.
 # 每個檔案先複製到目的地旁邊，再改名蓋過去。直接覆寫執行檔是就地改寫：macOS 上這樣改過的已簽章執行
 # 檔下次啟動會被砍掉；Windows 上執行中的 swift_tar.exe 被鎖住，改名會失敗，而不是留下裝了一半的組合。
-# Pairs of <file in the archive> <directory it goes to>. The -glibc runtime goes before the
-# binary, so a binary that is in place always finds its libraries.
-# <封存裡的檔案> <放到哪個目錄> 成對排列。-glibc 的 runtime 先於執行檔就位，讓已就位的執行檔一定
-# 找得到它的函式庫。
-typeset -a files=()
-for f in "$stem"/lib/*.so*(N); do files+=("$f" "$prefix/lib/swift_tar"); done
-[[ $plat == *-glibc && ${#files} == 0 ]] && die "$base has no $stem/lib/*.so; the glibc build carries its Swift runtime there" \
-                                                "$base 裡沒有 $stem/lib/*.so；glibc 版的 Swift runtime 放在那裡"
-if [[ -n $exe ]]; then for f in "$stem"/*.dll(N); do files+=("$f" "$prefix/bin"); done; fi
-files+=("$stem/swift_tar$exe" "$prefix/bin")
-for f d in "${files[@]}"; do
-  mkdir -p -- "$d"
-  cp -- "$f" "$d/${f:t}.new.$$"
-  mv -f -- "$d/${f:t}.new.$$" "$d/${f:t}" \
-    || die "cannot replace $d/${f:t} (is swift_tar running?)" "無法取代 $d/${f:t}（swift_tar 還在執行？）"
+typeset -a files=("$stem/swift_tar$exe")
+[[ -n $exe ]] && files+=("$stem"/*.dll(N))
+mkdir -p -- "$prefix/bin"
+for f in $files; do
+  cp -- "$f" "$prefix/bin/${f:t}.new.$$"
+  mv -f -- "$prefix/bin/${f:t}.new.$$" "$prefix/bin/${f:t}" \
+    || die "cannot replace $prefix/bin/${f:t} (is swift_tar running?)" "無法取代 $prefix/bin/${f:t}（swift_tar 還在執行？）"
 done
 chmod 755 "$prefix/bin/swift_tar$exe"
 

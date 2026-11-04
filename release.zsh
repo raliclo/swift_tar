@@ -9,15 +9,15 @@
 #
 #  After the public build (no LZFSE): macOS ./compile_tar.zsh --no-lzfse; Windows
 #  EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh; Linux EXCLUDE_LZFSE=1 zsh ./compile_tar-linux.zsh
-#  (linux-<arch>-glibc, packed with the Swift runtime in lib/) or with --musl (static,
-#  linux-<arch>-musl), or on the Mac ./compile_tar-musl.zsh <arch>, checked from the file here
-#  and run on a Linux machine with ./verify_release.zsh. The others are run where they were
-#  built. The eight archives of a release are built by .github/workflows/release.yml.
+#  --musl (static, linux-<arch>-musl), or on the Mac ./compile_tar-musl.zsh <arch>, checked from
+#  the file here and run on a Linux machine with ./verify_release.zsh. Linux ships musl only;
+#  the glibc build is refused. The others are run where they were built. The six archives of
+#  a release are built by .github/workflows/release.yml.
 #  先建公開版（不含 LZFSE）：macOS ./compile_tar.zsh --no-lzfse；Windows EXCLUDE_LZFSE=1 zsh
-#  ./compile_tar-win.zsh；Linux EXCLUDE_LZFSE=1 zsh ./compile_tar-linux.zsh（linux-<arch>-glibc，
-#  Swift runtime 放在 lib/ 一起打包）或加 --musl（靜態，linux-<arch>-musl），或在 Mac 上
-#  ./compile_tar-musl.zsh <arch>，在這裡從檔案檢查，再到 Linux 機器上以 ./verify_release.zsh 執行。
-#  其餘的在建置處執行。一次發布的八份封存由 .github/workflows/release.yml 建置。
+#  ./compile_tar-win.zsh；Linux EXCLUDE_LZFSE=1 zsh ./compile_tar-linux.zsh --musl（靜態，
+#  linux-<arch>-musl），或在 Mac 上 ./compile_tar-musl.zsh <arch>，在這裡從檔案檢查，再到 Linux 機器上
+#  以 ./verify_release.zsh 執行。Linux 只出 musl 版，glibc 建置會被拒絕。其餘的在建置處執行。一次發布
+#  的六份封存由 .github/workflows/release.yml 建置。
 # =====================================================================
 # Modelled on csv2's release.zsh (/Volumes/LinuxCS/sos/csv2), including the refusals it learned
 # the hard way: the version comes from the binary, never from a constant here; the build id is
@@ -94,12 +94,15 @@ write_sha256() {
 # 檢查，之後再以 verify_release.zsh 在同架構的 Linux 機器上執行。
 . "$HERE/platform.zsh"
 PLAT=$(swift_tar_platform) || die "unknown SWIFT_TAR_PLATFORM" "不認得的 SWIFT_TAR_PLATFORM"
-# LIBC names the Linux archives' libc, as multissh names its own (4d55b91; the user's decision,
-# 2026-11-04): linux-<arch>-glibc and linux-<arch>-musl, never a bare linux-<arch> (until 0.1.5
-# that name was the musl one). Empty on macOS and Windows.
-# LIBC 是 Linux 封存名稱裡的 libc，與 multissh 的命名相同（4d55b91；使用者 2026-11-04 決定）：
-# linux-<arch>-glibc 與 linux-<arch>-musl，不再有沒後綴的 linux-<arch>（到 0.1.5 為止那個名稱是 musl
-# 版）。macOS 與 Windows 上為空。
+# LIBC names the Linux archive's libc, as multissh names its own (4d55b91): linux-<arch>-musl,
+# never a bare linux-<arch> (until 0.1.5 that name was the musl one). Empty on macOS and Windows.
+# Linux ships musl only (user's decision, 2026-11-04): a glibc build needs a glibc at least as
+# new as its build machine's, and bundling glibc beside it is not workable, so the static
+# build is the only one that runs on any Linux.
+# LIBC 是 Linux 封存名稱裡的 libc，與 multissh 的命名相同（4d55b91）：linux-<arch>-musl，不再有沒後綴的
+# linux-<arch>（到 0.1.5 為止那個名稱是 musl 版）。macOS 與 Windows 上為空。Linux 只出 musl 版（使用者
+# 2026-11-04 決定）：glibc 建置需要不比建置機器舊的 glibc，而把 glibc 附在旁邊行不通，所以只有靜態版能在
+# 任何 Linux 上執行。
 CROSS=0
 LIBC=""
 case $PLAT in
@@ -131,15 +134,17 @@ VERSION_FILE=$HERE/version-$PLAT.txt
 [[ -r $VERSION_FILE ]] || die "$VERSION_FILE is missing; the build writes it" "缺少 $VERSION_FILE；建置會寫出它"
 VERSION=$(<VERSION)
 # A Linux build made here names its libc in the version file: compile_tar-linux.zsh writes
-# libc=glibc, and --musl writes libc=musl-<version>. One that names neither is refused, not
-# guessed.
+# libc=glibc, and --musl writes libc=musl-<version>. Only musl is released; glibc, or a file
+# that names neither, is refused rather than guessed.
 # 在這裡建的 Linux 版在 version 檔裡寫明 libc：compile_tar-linux.zsh 寫 libc=glibc，--musl 寫
-# libc=musl-<版本>。兩者都沒寫的會被拒絕，不做猜測。
+# libc=musl-<版本>。只發布 musl；glibc，或兩者都沒寫的，一律拒絕，不做猜測。
 if [[ $PLAT == linux ]]; then
   if grep -q '^libc=musl-' "$VERSION_FILE"; then LIBC=musl
-  elif grep -qx 'libc=glibc' "$VERSION_FILE"; then LIBC=glibc
-  else die "$VERSION_FILE names no libc; rebuild with ./compile_tar-linux.zsh (glibc) or ./compile_tar-linux.zsh --musl" \
-           "$VERSION_FILE 沒有寫明 libc；請以 ./compile_tar-linux.zsh（glibc）或 ./compile_tar-linux.zsh --musl 重新建置"; fi
+  elif grep -qx 'libc=glibc' "$VERSION_FILE"; then
+    die "$VERSION_FILE is a glibc build; Linux releases are musl only: rebuild with ./compile_tar-linux.zsh --musl" \
+        "$VERSION_FILE 是 glibc 建置；Linux 正式版只出 musl：請以 ./compile_tar-linux.zsh --musl 重新建置"
+  else die "$VERSION_FILE names no libc; rebuild with ./compile_tar-linux.zsh --musl" \
+           "$VERSION_FILE 沒有寫明 libc；請以 ./compile_tar-linux.zsh --musl 重新建置"; fi
 fi
 if [[ $OS == windows ]]; then
   objdump_bin=""
@@ -203,27 +208,19 @@ else
   [[ $REPORTED == "$IDENTITY "* ]] || die "the binary reports [$REPORTED], expected [$IDENTITY ...] (VERSION and this checkout); rebuild before releasing" \
                                           "執行檔回報 [$REPORTED]，預期是 [$IDENTITY ...]（VERSION 與這個 checkout）；發行前請重新建置"
 fi
-# A native Linux binary must be what its name will say: static for -musl, dynamic for -glibc,
-# whose Swift runtime is then packed beside it. Asked of the binary with readelf, as the
-# buildroot guest has no `file`; readelf failing is a failure (2026-10-31 review S2).
-# 原生 Linux 執行檔必須符合它的名稱將宣稱的：-musl 是靜態，-glibc 是動態，後者的 Swift runtime
-# 接著打包在旁邊。用 readelf 問執行檔，因為 buildroot guest 沒有 `file`；readelf 失敗就是失敗
-# （2026-10-31 審查 S2）。
+# A native Linux binary must be what its name will say: static. Asked of the binary with
+# readelf, as the buildroot guest has no `file`; readelf failing is a failure (2026-10-31
+# review S2).
+# 原生 Linux 執行檔必須符合它的名稱將宣稱的：靜態。用 readelf 問執行檔，因為 buildroot guest 沒有
+# `file`；readelf 失敗就是失敗（2026-10-31 審查 S2）。
 if [[ $PLAT == linux ]]; then
   command -v readelf >/dev/null 2>&1 || die "readelf is not on PATH; a Linux binary's linkage is checked with it" \
                                             "PATH 上沒有 readelf；Linux 執行檔的連結方式要靠它檢查"
   segs=$(readelf -lW "$BIN") || die "readelf -lW failed on $BIN" "readelf -lW 對 $BIN 失敗"
-  if [[ $LIBC == musl ]]; then
-    [[ $segs != *INTERP* ]] || die "$VERSION_FILE says musl, but $BIN has a program interpreter; it is not static" \
-                                   "$VERSION_FILE 說是 musl，但 $BIN 有 program interpreter，不是靜態的"
-    grep -qx 'swift_stdlib_linkage=static' "$VERSION_FILE" || die "$VERSION_FILE does not record a static musl build" \
-                                                                  "$VERSION_FILE 沒有記錄為靜態 musl 建置"
-  else
-    [[ $segs == *INTERP* ]] || die "$VERSION_FILE says glibc, but $BIN has no program interpreter" \
-                                   "$VERSION_FILE 說是 glibc，但 $BIN 沒有 program interpreter"
-    grep -qx 'swift_stdlib_linkage=dynamic' "$VERSION_FILE" || die "$VERSION_FILE does not record the Swift runtime as dynamic; rebuild with ./compile_tar-linux.zsh" \
-                                                                   "$VERSION_FILE 沒有記錄 Swift runtime 為動態連結；請以 ./compile_tar-linux.zsh 重新建置"
-  fi
+  [[ $segs != *INTERP* ]] || die "$VERSION_FILE says musl, but $BIN has a program interpreter; it is not static" \
+                                 "$VERSION_FILE 說是 musl，但 $BIN 有 program interpreter，不是靜態的"
+  grep -qx 'swift_stdlib_linkage=static' "$VERSION_FILE" || die "$VERSION_FILE does not record a static musl build" \
+                                                                "$VERSION_FILE 沒有記錄為靜態 musl 建置"
 fi
 
 # The public build only. The version file says what the build compiled in; the binary is then
@@ -270,11 +267,11 @@ if [[ $OS == macos ]]; then
   strip "$STAGE/$BIN_NAME"
   codesign --force --sign - "$STAGE/$BIN_NAME"
 fi
-# A Linux build made here is stripped here too: the glibc build keeps its symbols; DT_NEEDED,
-# RUNPATH and the dynamic symbols stay. The cross build is left alone, since it is compared
-# byte for byte with release/linux-<arch>/swift_tar.
-# 在這裡建的 Linux 版也在這裡 strip：glibc 版保留了符號；DT_NEEDED、RUNPATH 與動態符號都會保留。
-# 交叉建置不動，因為它要與 release/linux-<arch>/swift_tar 逐位元組比對。
+# A Linux build made here is stripped here too, which costs nothing when --strip-all already
+# did it. The cross build is left alone, since it is compared byte for byte with
+# release/linux-<arch>/swift_tar.
+# 在這裡建的 Linux 版也在這裡 strip；已經以 --strip-all 連結的，再做一次也不損失什麼。交叉建置不動，
+# 因為它要與 release/linux-<arch>/swift_tar 逐位元組比對。
 if [[ $OS == linux ]] && (( ! CROSS )); then
   strip_bin=""
   for t in llvm-strip strip; do command -v $t >/dev/null 2>&1 && { strip_bin=$t; break; }; done
@@ -313,17 +310,13 @@ done
 typeset -a SWIFT_RUNTIME_LICENSES=(swift-LICENSE swift-experimental-string-processing-LICENSE
   swift-corelibs-foundation-LICENSE swift-foundation-LICENSE swift-foundation-icu-LICENSE
   icu-LICENSE swift-corelibs-libdispatch-LICENSE)
-# The glibc archive carries the runtime .so files in lib/, so it takes the runtime set; its
-# glibc, libstdc++ and libbz2 are the system's.
-# glibc 封存把 runtime 的 .so 帶在 lib/，所以帶 runtime 那一組；它的 glibc、libstdc++ 與 libbz2
-# 屬於系統。
 typeset -a THIRD_PARTY=()
 # Every musl build, cross or made here, links the SDK's runtime in.
 # 每個 musl 版（交叉或在這裡建的）都把 SDK 的 runtime 連進來。
 if [[ $LIBC == musl ]]; then
   THIRD_PARTY=($SWIFT_RUNTIME_LICENSES musl-COPYRIGHT musl-fts-COPYING bzip2-LICENSE
                llvm-libcxx-LICENSE llvm-libcxxabi-LICENSE llvm-libunwind-LICENSE llvm-compiler-rt-LICENSE)
-elif [[ $OS == windows || $LIBC == glibc ]]; then
+elif [[ $OS == windows ]]; then
   THIRD_PARTY=($SWIFT_RUNTIME_LICENSES)
 fi
 for name in $THIRD_PARTY; do
@@ -395,39 +388,6 @@ if [[ $OS == windows ]]; then
     cp -- licenses/msvc-redist-NOTICE.txt "$STAGE/"
   fi
 fi
-typeset -a sos=()
-if [[ $LIBC == glibc ]]; then
-  # The codecs and libarchive must be the submodules' static copies: a sysroot's shared ones
-  # (CODECS_STATIC=0) would need the target machine to have the same libraries.
-  # codec 與 libarchive 必須是子模組的靜態版：sysroot 的共享庫（CODECS_STATIC=0）會要求目標機器有
-  # 同樣的函式庫。
-  for lib in zlib xz lz4 zstd libarchive; do
-    grep -qx "${lib}_linkage=static" "$VERSION_FILE" || die "$VERSION_FILE does not record $lib as static; a glibc release links the submodules' codecs (CODECS_STATIC=1)" \
-                                                            "$VERSION_FILE 沒有記錄 $lib 為靜態；glibc 正式版連結子模組的 codec（CODECS_STATIC=1）"
-  done
-  # The Swift runtime rides along in lib/, where the binary's RUNPATH $ORIGIN/lib finds it
-  # (compile_tar-linux.zsh), so the archive runs on a machine without Swift. The runtime is
-  # the one the build recorded, and only the libraries the binary's DT_NEEDED closure reaches
-  # in it: the directory also holds FoundationNetworking, FoundationXML and the like.
-  # Swift runtime 放進 lib/，執行檔的 RUNPATH $ORIGIN/lib 會在那裡找到它（compile_tar-linux.zsh），
-  # 所以封存在沒裝 Swift 的機器上也能執行。runtime 是建置記下的那一份，而且只帶執行檔的 DT_NEEDED
-  # 遞移閉包在其中走得到的函式庫：那個目錄還有 FoundationNetworking、FoundationXML 之類。
-  source "$HERE/linux_sos.zsh"
-  rt_rc=0
-  rt_dir=$(swift_tar_linux_runtime "$VERSION_FILE") || rt_rc=$?
-  (( rt_rc != 1 )) || die "$VERSION_FILE has no swift_runtime_dir=; rebuild with ./compile_tar-linux.zsh, which records the Swift runtime it used" \
-                          "$VERSION_FILE 沒有 swift_runtime_dir=；請以 ./compile_tar-linux.zsh 重新建置，它會記下所用的 Swift runtime"
-  (( rt_rc == 0 )) || die "the Swift runtime $BIN was built with has no libswiftCore.so any more; rebuild" \
-                          "$BIN 建置時所用的 Swift runtime 已沒有 libswiftCore.so；請重新建置"
-  # Captured first so a failure stops here (review S3, as for the DLLs).
-  # 先取出再拆，失敗才會停在這裡（審查 S3，與 DLL 相同）。
-  so_list=$(swift_tar_linux_sos readelf "$BIN" "$rt_dir") || die "could not read the DT_NEEDED entries of $BIN" "讀不出 $BIN 的 DT_NEEDED"
-  sos=(${(f)so_list})
-  (( ${sos[(Ie)$rt_dir/libswiftCore.so]} )) || die "the DT_NEEDED entries of $BIN never reach libswiftCore.so in $rt_dir" \
-                                                   "$BIN 的 DT_NEEDED 一路下來都沒有用到 $rt_dir 裡的 libswiftCore.so"
-  mkdir -p -- "$STAGE/lib"
-  cp -L -- "${sos[@]}" "$STAGE/lib/"
-fi
 
 # Relative names from inside dist/: on Windows zstd and tar are native programs that cannot
 # open an MSYS-style absolute path.
@@ -485,30 +445,6 @@ fi
 got=$(cd -- "$CHECK/$STEM" && PATH=$VERIFY_PATH "./$BIN_NAME" --version | tr -d '\r')
 [[ $got == "$REPORTED" ]] || die "the extracted binary reports [$got], the source one [$REPORTED]" \
                                  "解開後的執行檔回報 [$got]，來源那個回報 [$REPORTED]"
-# Starting proves nothing about where the runtime came from: the build's own runtime directory
-# is in the RUNPATH too, so on this machine a missing lib/ would still start. The loader is
-# asked instead, in list mode (what ldd does; the buildroot guest has no ldd), with an empty
-# environment, and every library shipped must resolve inside the extracted lib/.
-# 起得來不能證明 runtime 從哪裡來：建置自己的 runtime 目錄也在 RUNPATH 裡，所以在這台機器上即使
-# 缺了 lib/ 也照樣起得來。改為問載入器，用列出模式（ldd 做的就是這個；buildroot guest 沒有 ldd），
-# 在空環境下執行，並要求每個出貨的函式庫都解析到解開後的 lib/ 裡。
-if [[ $LIBC == glibc ]]; then
-  interp=${${${(M)${(f)segs}:#*program interpreter:*}##*: }%%\]*}
-  [[ -x $interp ]] || die "cannot find the program interpreter [$interp] of $BIN" "找不到 $BIN 的 program interpreter [$interp]"
-  listing=$(env -i "$interp" --list "$CHECK/$STEM/$BIN_NAME") || die "$interp --list failed on the extracted binary" \
-                                                                     "$interp --list 對解開後的執行檔失敗"
-  [[ $listing != *'not found'* ]] || die "the extracted binary has unresolved libraries: ${(M)${(f)listing}:#*not found*}" \
-                                         "解開後的執行檔有解析不到的函式庫：${(M)${(f)listing}:#*not found*}"
-  want_dir=${CHECK:A}/$STEM/lib
-  for so in $sos; do
-    hits=(${(M)${(f)listing}:#*[[:space:]]${so:t} => *})
-    line=${hits[1]-}
-    [[ -n $line ]] || die "the loader does not list ${so:t} for the extracted binary" "載入器沒有為解開後的執行檔列出 ${so:t}"
-    p=${${line#* => }%% \(*}
-    [[ ${p:A:h} == $want_dir ]] || die "${so:t} resolves to $p, not to the archive's lib/" \
-                                       "${so:t} 解析到 $p，不是封存裡的 lib/"
-  done
-fi
 # A binary that prints its version has only shown that it starts: it must also make and read
 # an archive. A gzip round trip, from inside $CHECK with relative names.
 # 印得出版本只證明它啟動得起來：它還必須做得出、讀得回一份封存。一次 gzip 往返，從 $CHECK 裡以相對

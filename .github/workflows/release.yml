@@ -166,7 +166,7 @@ jobs:
         run: |
           ls -l dist/
           ls dist/swift_tar-*-${{ matrix.platform }}.tar.zst dist/swift_tar-*-${{ matrix.platform }}.tar.zst.sha256
-          [ "$(ls dist/*.tar.zst | wc -l)" = 1 ] || { echo "expected exactly one archive / 預期恰好一份封存"; exit 1; }
+          [ "$(ls dist/*.tar.zst | wc -l)" -eq 1 ] || { echo "expected exactly one archive / 預期恰好一份封存"; exit 1; }
 
       # On Linux, the release tooling's own tests against the binary just built (they include
       # the linux_sos cases and the refusal of a version file that names no libc).
@@ -252,7 +252,7 @@ jobs:
             [ -f "$f" ] && [ -f "$f.sha256" ] || { echo "missing $f / 缺少 $f"; ls -l; exit 1; }
             sha256sum -c "$f.sha256"
           done
-          [ "$(ls *.tar.zst | wc -l)" = 8 ] || { echo "expected exactly 8 archives / 預期恰好 8 份封存"; ls -l; exit 1; }
+          [ "$(ls *.tar.zst | wc -l)" -eq 8 ] || { echo "expected exactly 8 archives / 預期恰好 8 份封存"; ls -l; exit 1; }
 
       - name: Attest build provenance / 簽署建置來源證明
         uses: actions/attest-build-provenance@v4

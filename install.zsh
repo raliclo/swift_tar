@@ -84,13 +84,17 @@ case $(uname -s) in
             aarch64|arm64) plat=linux-aarch64$musl ;;
             *)             plat=linux-$(uname -m)$musl ;;
           esac ;;
-  # The machine's architecture from Windows: MSYS2 emulated on arm64 says x86_64 in uname -m.
-  # 架構向 Windows 詢問：在 arm64 上以模擬執行的 MSYS2，uname -m 會說 x86_64。
+  # The machine's architecture from the system's PROCESSOR_ARCHITECTURE in the registry: MSYS2
+  # emulated on arm64 says x86_64 in uname -m, and PowerShell's OSArchitecture said X64 inside
+  # that emulation on the windows-11-arm runner (2026-11-04).
+  # 架構取自登錄檔裡系統的 PROCESSOR_ARCHITECTURE：在 arm64 上以模擬執行的 MSYS2，uname -m 會說
+  # x86_64，而在 windows-11-arm runner 的那種模擬裡，PowerShell 的 OSArchitecture 也說 X64（2026-11-04）。
   MINGW*|MSYS*|CYGWIN*)
           exe=.exe
-          case $(powershell.exe -NoProfile -Command '[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture' | tr -d '\r') in
-            X64)   plat=windows-x86_64 ;;
-            Arm64) plat=windows-arm64 ;;
+          case $(MSYS2_ARG_CONV_EXCL='*' reg query 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' \
+                   /v PROCESSOR_ARCHITECTURE | tr -d '\r' | awk '$1 == "PROCESSOR_ARCHITECTURE" { print $3 }') in
+            AMD64) plat=windows-x86_64 ;;
+            ARM64) plat=windows-arm64 ;;
             *)     plat=windows-$(uname -m) ;;
           esac ;;
   *) die "unsupported OS: $(uname -s) / 不支援的作業系統：$(uname -s)" ;;

@@ -21,17 +21,22 @@ swift_tar_nm() {
 # swift_tar_unstripped <nm> <file>
 #   0: stripped. 1: symbols are left, the first few printed. 2: nm could not read the file.
 #   A stripped Mach-O executable keeps exactly one defined symbol, __mh_execute_header, which
-#   dyld needs; a stripped ELF or PE has none, and nm says "no symbols" for it.
+#   dyld needs, and Apple's strip also leaves one OPT stab named radr://5614542 (llvm-strip does
+#   not; met on the macOS runners, 2026-11-04). A stripped ELF or PE has none, and nm says "no
+#   symbols" for it, with CRLF from the native llvm-nm on Windows.
 #   0：已 strip。1：仍有符號，印出前幾個。2：nm 讀不了這個檔案。
-#   已 strip 的 Mach-O 執行檔恰好保留一個已定義符號 __mh_execute_header，dyld 需要它；已 strip 的
-#   ELF 或 PE 一個都沒有，nm 對它說「no symbols」。
+#   已 strip 的 Mach-O 執行檔恰好保留一個已定義符號 __mh_execute_header，dyld 需要它；Apple 的 strip
+#   另外會留下一個名為 radr://5614542 的 OPT stab（llvm-strip 不會；2026-11-04 在 macOS runner 上遇到）。
+#   已 strip 的 ELF 或 PE 一個都沒有，nm 對它說「no symbols」，Windows 上原生的 llvm-nm 會帶 CRLF。
 swift_tar_unstripped() {
   emulate -L zsh
   local out
   out=$("$1" -a --defined-only "$2" 2>&1) || { print -r -- "$out"; return 2 }
+  out=${out//$'\r'/}
   local -a syms=(${(f)out})
   syms=(${syms:#*: no symbols})
   syms=(${syms:#* __mh_execute_header})
+  syms=(${syms:#* OPT radr://5614542})
   (( ${#syms} == 0 )) && return 0
   print -rl -- "${(@)syms[1,5]}"
   return 1

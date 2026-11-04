@@ -51,13 +51,29 @@ if ! (( $+commands[cl] )); then
     vswhere='/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe'
     [[ -x $vswhere ]] || die "vswhere.exe not found. Run: zsh ./build_tool_install-win.zsh"
 
-    # The MSVC environment of the machine's own architecture: x64, or arm64 for the
-    # windows-arm64 release (0.2.0). Asked of Windows rather than uname -m, which says x86_64
-    # in an MSYS2 shell emulated on arm64. SWIFT_TAR_WIN_ARCH (x64 or arm64) overrides it.
-    # 用本機架構的 MSVC 環境：x64，或為 windows-arm64 正式版（0.2.0）用 arm64。向 Windows 詢問而非用
-    # uname -m，因為在 arm64 上以模擬執行的 MSYS2 shell 裡它會說 x86_64。SWIFT_TAR_WIN_ARCH（x64 或
+    # The MSVC environment of the architecture being built: x64, or arm64 for the windows-arm64
+    # release (0.2.0). Taken from the Swift toolchain's own target when swiftc is on PATH, else
+    # from the system's PROCESSOR_ARCHITECTURE in the registry. Not uname -m, which says x86_64
+    # in an MSYS2 shell emulated on arm64, and not PowerShell's OSArchitecture, which said X64 in
+    # the emulated process on the windows-11-arm runner, so x64 libraries were linked into arm64
+    # objects (2026-11-04). SWIFT_TAR_WIN_ARCH (x64 or arm64) overrides it.
+    # 用要建置的架構的 MSVC 環境：x64，或為 windows-arm64 正式版（0.2.0）用 arm64。swiftc 在 PATH 上時取
+    # Swift 工具鏈自己的目標，否則取登錄檔裡系統的 PROCESSOR_ARCHITECTURE。不用 uname -m（在 arm64 上以模擬
+    # 執行的 MSYS2 shell 裡它說 x86_64），也不用 PowerShell 的 OSArchitecture（在 windows-11-arm runner 的
+    # 模擬程序裡它說 X64，於是 x64 函式庫被連進 arm64 目的檔，2026-11-04）。SWIFT_TAR_WIN_ARCH（x64 或
     # arm64）可覆寫。
-    win_arch=${SWIFT_TAR_WIN_ARCH:-$(powershell.exe -NoProfile -Command '[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture' | tr -d '\r')}
+    if [[ -n ${SWIFT_TAR_WIN_ARCH:-} ]]; then
+        win_arch=$SWIFT_TAR_WIN_ARCH
+    elif (( $+commands[swiftc] )); then
+        case $(swiftc -print-target-info | tr -d '\r') in
+            *aarch64-unknown-windows*) win_arch=arm64 ;;
+            *x86_64-unknown-windows*)  win_arch=x64 ;;
+            *) die "cannot tell the target of $(whence -p swiftc) / 無法判斷 swiftc 的目標架構" ;;
+        esac
+    else
+        win_arch=$(MSYS2_ARG_CONV_EXCL='*' reg query 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment' \
+                       /v PROCESSOR_ARCHITECTURE | tr -d '\r' | awk '$1 == "PROCESSOR_ARCHITECTURE" { print $3 }')
+    fi
     case ${win_arch:l} in
         x64|amd64|x86_64) vcvars=vcvars64.bat;    vc_component=Microsoft.VisualStudio.Component.VC.Tools.x86.x64 ;;
         arm64|aarch64)    vcvars=vcvarsarm64.bat; vc_component=Microsoft.VisualStudio.Component.VC.Tools.ARM64 ;;

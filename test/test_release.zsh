@@ -77,13 +77,13 @@ check "build id outside git: SWIFT_TAR_BUILD_ID" "$(SWIFT_TAR_BUILD_ID="v0.1.0 /
 # stripped.zsh，對這裡建出的小程式，分別帶與不帶符號。
 # ---------------------------------------------------------------------
 . "$ROOT/stripped.zsh"
-if ! command -v cc >/dev/null 2>&1 || ! command -v strip >/dev/null 2>&1 || ! NM=$(swift_tar_nm); then
-  echo "SKIP: stripped.zsh cases (needs cc, strip and llvm-nm or nm)"
+if ! command -v clang >/dev/null 2>&1 || ! command -v strip >/dev/null 2>&1 || ! NM=$(swift_tar_nm); then
+  echo "SKIP: stripped.zsh cases (needs clang, strip and llvm-nm or nm)"
 else
   SP=$TMP/strip
   mkdir -p "$SP"
   print -r -- 'int helper(int x) { return x + 1; } int main(void) { return helper(-1); }' > "$SP/p.c"
-  cc "$SP/p.c" -o "$SP/full"
+  clang "$SP/p.c" -o "$SP/full"
   cp "$SP/full" "$SP/stripped"; strip "$SP/stripped"
   print -r -- 'not a binary' > "$SP/text"
   rc=0; swift_tar_unstripped "$NM" "$SP/full" > "$SP/out" || rc=$?
@@ -133,8 +133,8 @@ elif [ "$OS" = linux ]; then
   rc=0; ( cd "$L" && unset SWIFT_TAR_PLATFORM && zsh ./release.zsh ) > "$TMP/lin.out" 2>&1 || rc=$?
   check "release.zsh: a native glibc Linux release is refused and points to the musl build" \
         "$rc:$(grep -c 'Linux releases are the static musl build made on the Mac' "$TMP/lin.out")" "1:1"
-elif ! command -v zstd >/dev/null 2>&1; then
-  echo "SKIP: release.zsh cases (no zstd on PATH)"
+elif ! command -v zstd >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1; then
+  echo "SKIP: release.zsh cases (needs zstd and clang on PATH)"
 else
   R=$TMP/rel
   mkdir -p "$R/release" "$R/zlib"
@@ -176,7 +176,7 @@ int main(int argc, char **argv) {
   execv(\"/bin/sh\", args);
   return 127;
 }" > "$TMP/fake.c"
-    cc "$TMP/fake.c" -o "$R/release/swift_tar"
+    clang "$TMP/fake.c" -o "$R/release/swift_tar"
   }
   rel() { rc=0; ( cd "$R" && ./release.zsh ) > "$TMP/rel.out" 2>&1 || rc=$?; }
   says() { grep -qF -- "$1" "$TMP/rel.out"; }

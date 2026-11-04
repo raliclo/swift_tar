@@ -273,12 +273,16 @@ Swift installed.
 1. Set `VERSION` to the new number and write `release-notes/<VERSION>.md`, what changed since the last release (the release is refused without it); commit and push to `master`.
 2. Run the workflow by hand (Actions › Release › Run workflow) to build and pack
    all six without releasing, until every job is green.
-3. Tag that commit with a signed tag and push it:
-   `git tag -s v<VERSION> -m "swift_tar <VERSION>" && git push origin v<VERSION>`.
-   The workflow builds at the tag, checks all six archives and their `.sha256`,
-   signs a build-provenance attestation for each, and creates the GitHub Release.
-4. Update `Formula/swift_tar.rb` and the parent repository's
-   `bucket/swift_tar.json` from the published archives.
+3. `./publish.zsh <VERSION>` says what it would do; `./publish.zsh <VERSION> --publish`
+   signs and pushes tag `v<VERSION>`, waits for the workflow's run at the tag (which
+   builds the six archives and signs a build-provenance attestation for each),
+   downloads and checks them (`.sha256`, stripped, this commit's build id), creates
+   the GitHub Release **with your own gh login** and the release notes, downloads
+   every asset back from its public URL, and rewrites `Formula/swift_tar.rb` and the
+   parent repository's `bucket/swift_tar.json`. The workflow never creates the
+   release itself, so GitHub shows you, not github-actions, as the one who released it.
+4. Commit and push `Formula/swift_tar.rb` here and `bucket/swift_tar.json` in the
+   parent repository.
 
 The older manual flow still works for one machine's archive: build, then
 `./release.zsh`; on the Mac, `./compile_tar-musl.zsh <arch>` and
@@ -1124,9 +1128,9 @@ build_id.zsh        sourced: the one place the build id printed by --version is 
 compile_tar-musl.zsh  the static Linux release (musl): cross on the Mac → release/linux-<arch>/swift_tar, or native on Linux (compile_tar-linux.zsh --musl) → release/swift_tar
 release.zsh         package this platform's public build into dist/ as .tar.zst
 verify_release.zsh  run a linux-<arch>-musl archive on a Linux machine of its architecture
-publish.zsh         tag, publish the six archives, rewrite the brew and scoop files
+publish.zsh         tag, take the six archives from CI, create the release as you, rewrite the brew and scoop files
 publish_rewrite.zsh sourced: publish.zsh's package-file rewrite
-release-notes/<X.Y.Z>.md  the notes of each release, used by release.yml and publish.zsh
+release-notes/<X.Y.Z>.md  the notes of each release, used by publish.zsh
 win_dlls.zsh        sourced: release.zsh's choice of the Windows runtime DLLs to ship
 Formula/swift_tar.rb  Homebrew formula (this repository is its own tap)
 version-mac.txt / version-win.txt / version-musl-<arch>.txt   per-platform build stamp + linkage provenance (version-linux.txt, from a glibc development build, is not committed)

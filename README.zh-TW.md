@@ -225,10 +225,12 @@ Windows `build_zlib-win.zsh`、`build_zstd-win.zsh` 與 `compile_tar-win.zsh`）
 
 1. 把 `VERSION` 改成新版本號，並寫好 `release-notes/<VERSION>.md`，說明與上一版的差異（沒有它就拒絕發布）；commit 並推到 `master`。
 2. 手動執行 workflow（Actions › Release › Run workflow），只建置與打包、不發布，直到每個 job 都通過。
-3. 為那個 commit 打簽章 tag 並推送：
-   `git tag -s v<VERSION> -m "swift_tar <VERSION>" && git push origin v<VERSION>`。
-   workflow 會在 tag 上建置、檢查六份封存與其 `.sha256`、為每份簽署建置來源證明，再建立 GitHub Release。
-4. 依發布的封存更新 `Formula/swift_tar.rb` 與上層 repo 的 `bucket/swift_tar.json`。
+3. `./publish.zsh <VERSION>` 只說會做什麼；`./publish.zsh <VERSION> --publish` 會簽章並推送 tag
+   `v<VERSION>`，等 workflow 在 tag 上的那次執行（建置六份封存，並為每份簽署建置來源證明），下載並檢查
+   它們（`.sha256`、已 strip、這個 commit 的 build id），**以你自己的 gh 登入**帶 release notes 建立
+   GitHub Release，從公開網址把每個資產下載回來比對，再改寫 `Formula/swift_tar.rb` 與上層 repo 的
+   `bucket/swift_tar.json`。workflow 本身從不建立 release，所以 GitHub 顯示的發布者是你，而不是 github-actions。
+4. 提交並推送這裡的 `Formula/swift_tar.rb` 與上層 repo 的 `bucket/swift_tar.json`。
 
 舊的手動流程仍可用於單一機器的封存：建置後執行 `./release.zsh`；在 Mac 上以 `./compile_tar-musl.zsh <arch>`
 與 `SWIFT_TAR_PLATFORM=musl-<arch> ./release.zsh` 產生 `linux-<arch>-musl`，再以
@@ -944,9 +946,9 @@ build_id.zsh        供 source：決定 --version 所印 build id 的唯一來�
 compile_tar-musl.zsh  靜態的 Linux 正式版（musl）：在 Mac 上交叉建置 → release/linux-<arch>/swift_tar，或在 Linux 上原生建置（compile_tar-linux.zsh --musl）→ release/swift_tar
 release.zsh         把這個平台的公開版打包成 dist/ 裡的 .tar.zst
 verify_release.zsh  在同架構的 Linux 機器上執行一份 linux-<arch>-musl 封存
-publish.zsh         打 tag、發布六份封存、改寫 brew 與 scoop 的檔案
+publish.zsh         打 tag、取 CI 的六份封存、以你的身分建立 release、改寫 brew 與 scoop 的檔案
 publish_rewrite.zsh 供 source：publish.zsh 改寫套件檔的部分
-release-notes/<X.Y.Z>.md  每個正式版的 release notes，release.yml 與 publish.zsh 都用它
+release-notes/<X.Y.Z>.md  每個正式版的 release notes，publish.zsh 用它
 win_dlls.zsh        供 source：release.zsh 挑選 Windows 要附的 runtime DLL
 Formula/swift_tar.rb  Homebrew formula（這個 repo 本身就是 tap）
 version-mac.txt / version-win.txt / version-musl-<arch>.txt   各平台的建置版本戳與連結來源（glibc 開發建置的 version-linux.txt 不入版控）

@@ -7,16 +7,18 @@
 #    ./publish.zsh 0.1.0 --publish    do it / 真的執行
 #    ./publish.zsh --help             print this and do nothing / 印出這段說明
 #
-#  Put the six archives (release.yml, or release.zsh on each node) into dist/ first:
-#  macos-{x86_64,arm64}, linux-{x86_64,aarch64}-musl and windows-{x86_64,arm64}, each with its
-#  .sha256.
-#  This does not build, test or collect them. It rewrites Formula/swift_tar.rb (the brew
-#  tap, macOS arm64) and ../bucket/swift_tar.json (the scoop bucket in the parent lzfse2
-#  repository, Windows x86_64); committing those two is left to you.
-#  先把六份封存（release.yml 或各節點的 release.zsh 產生；macos-{x86_64,arm64}、
-#  linux-{x86_64,aarch64}-musl、windows-{x86_64,arm64}，各帶 .sha256）放進 dist/。這支腳本不建置、不測試、不收集。它改寫
-#  Formula/swift_tar.rb（brew tap，macOS arm64）與 ../bucket/swift_tar.json（上層 lzfse2 repo
-#  的 scoop bucket，Windows x86_64）；兩者的 commit 留給你。
+#  --publish signs and pushes tag v<X.Y.Z>, waits for the CI run it starts
+#  (.github/workflows/release.yml builds, verifies and attests the six archives:
+#  macos-{x86_64,arm64}, linux-{x86_64,aarch64}-musl, windows-{x86_64,arm64}), downloads and checks
+#  them, creates the release with YOUR gh login and release-notes/<X.Y.Z>.md, downloads every
+#  asset back, and rewrites Formula/swift_tar.rb (the brew tap, macOS arm64) and
+#  ../bucket/swift_tar.json (the scoop bucket in the parent lzfse2 repository, Windows x86_64);
+#  committing those two is left to you.
+#  --publish 會簽章並推送 tag v<X.Y.Z>，等它啟動的 CI（.github/workflows/release.yml 建置、驗證並簽署
+#  六份封存的來源證明：macos-{x86_64,arm64}、linux-{x86_64,aarch64}-musl、windows-{x86_64,arm64}）
+#  跑完，下載並檢查它們，以**你**的 gh 登入帶 release-notes/<X.Y.Z>.md 建立 release，把每個資產下載
+#  回來比對，再改寫 Formula/swift_tar.rb（brew tap，macOS arm64）與 ../bucket/swift_tar.json（上層
+#  lzfse2 repo 的 scoop bucket，Windows x86_64）；兩者的 commit 留給你。
 # =====================================================================
 # Ported from csv2's publish.zsh (/Volumes/LinuxCS/sos/csv2), which replaced seven hand steps
 # after the one mistake in its v0.1.0 lived in them. Its lessons are kept: checksums are
@@ -45,7 +47,7 @@ REPO=raliclo/swift_tar
 # --help answers before the version is read, so it is never taken for one.
 # --help 在讀取版本之前回答，所以不會被當成版本。
 case ${1:-} in
-  -h|--help) sed -n '3,19p' ${0:A} | sed 's/^# \{0,2\}//'; exit 0 ;;
+  -h|--help) sed -n '3,21p' ${0:A} | sed 's/^# \{0,2\}//'; exit 0 ;;
   -*) print -ru2 -- "the first argument is the version, not an option (got: $1); see --help / 第一個引數是版本，不是選項（收到：$1），請見 --help"; exit 2 ;;
 esac
 VERSION=${1:-}
@@ -62,7 +64,6 @@ done
   exit 2
 }
 TAG=v$VERSION
-DIST=$HERE/dist
 FORMULA=$HERE/Formula/swift_tar.rb
 MANIFEST=${SWIFT_TAR_SCOOP_MANIFEST:-$HERE/../bucket/swift_tar.json}
 # The platforms a release carries. All of them or none: a platform missing from a release leaves
@@ -130,10 +131,10 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
 fi
 
 # ---------------------------------------------------------------------
-# 2. The archives: checksums recomputed, the .sha256 from the building node compared, the
-#    content listed, and the binary's build id matched against the commit being published.
-# 2. 封存：重算校驗和、與建置節點寫的 .sha256 比對、列出內容，並把執行檔的 build id 與正在發布的
-#    commit 比對。
+# 2. What step 4 checks each archive with: the checksum, whether it is stripped, and the
+#    binary's build id against the commit being published.
+# 2. 第 4 步用來檢查每份封存的工具：校驗和、是否已 strip，以及執行檔的 build id 是否就是正在發布的
+#    commit。
 # ---------------------------------------------------------------------
 # No `--` for openssl: macOS's /usr/bin/openssl is LibreSSL, which rejects it with a usage message
 # and exit 1 (2026-10-31 review). Both callers pass an absolute path, never one starting with `-`.
@@ -191,69 +192,107 @@ archive_commit_ok() {   # archive_commit_ok <archive> <inner path>
   ARCHIVE_BUILD_ID=${idlist[1]}
 }
 
-typeset -a ARCHIVES
-typeset -A HASH
-for plat in $PLATFORMS; do
-  a=$DIST/swift_tar-$VERSION-$plat.tar.zst
-  [[ -r $a ]] || die "missing $a; every platform ships or none does (run release.zsh on that node and collect it)" \
-                     "缺少 $a；所有平台都要有才發布（在該節點跑 release.zsh 並收集回來）"
-  ARCHIVES+=("$a")
-done
-extra=( "$DIST"/swift_tar-$VERSION-*.tar.zst(N) )
-(( ${#extra} == ${#ARCHIVES} )) || die "dist/ holds ${#extra} swift_tar-$VERSION archives, expected exactly ${#ARCHIVES}: ${extra:t}" \
-                                       "dist/ 裡有 ${#extra} 份 swift_tar-$VERSION 封存，預期恰好 ${#ARCHIVES} 份：${extra:t}"
-
 say "publish swift_tar $VERSION as $TAG / 將 swift_tar $VERSION 以 $TAG 發布"
 say "  commit  : ${HEAD_SHA[1,8]}"
-say "  archives:"
-for a in $ARCHIVES; do
-  base=${a:t}
-  h=$(sha256_of "$a")
-  HASH[$base]=$h
-  [[ -r $a.sha256 ]] || die "$base has no .sha256 beside it; release.zsh writes one, so this archive did not come from it" \
-                            "$base 旁邊沒有 .sha256；release.zsh 會寫一個，所以這份封存不是它產生的"
-  claimed=$(awk '{print $1}' "$a.sha256")
-  [[ $claimed == $h ]] || die "$base: the building node's .sha256 says $claimed, this machine computes $h" \
-                              "$base：建置節點的 .sha256 寫 $claimed，這台機器算出 $h"
-  stem=${base%.tar.zst}
-  inner=$(zstd -dq -c -- "$a" | tar -tf - | grep -E "^$stem/swift_tar(\.exe)?$" | head -1 || true)
-  [[ -n $inner ]] || die "$base does not contain $stem/swift_tar or $stem/swift_tar.exe" \
-                         "$base 裡沒有 $stem/swift_tar 或 $stem/swift_tar.exe"
-  archive_commit_ok "$a" "$inner" || exit 1
-  say "    $base  $h  $ARCHIVE_BUILD_ID"
-done
-
-# ---------------------------------------------------------------------
-# 3. Tag.  4. Release with every archive and .sha256.  5. Download back and compare.
-# 3. 打 tag。4. 帶著每份封存與 .sha256 建立 release。5. 下載回來比對。
-# ---------------------------------------------------------------------
 say ""
 say "steps / 步驟："
+
+# ---------------------------------------------------------------------
+# 3. Tag, signed with git's configured key so GitHub shows it as Verified, and push it.
+# 3. 打 tag：以 git 設定的金鑰簽章，GitHub 才會標成 Verified；然後推送。
+# ---------------------------------------------------------------------
 if (( TAG_EXISTED )); then
   say "  $TAG already points at HEAD and nothing is published from it; reusing it"
   (( DO_PUBLISH )) && git push -q origin "$TAG"
 else
-  would "git tag -a $TAG && git push origin $TAG"
+  would "git tag -s $TAG && git push origin $TAG"
   if (( DO_PUBLISH )); then
-    git tag -a "$TAG" -m "swift_tar $VERSION"
+    git tag -s "$TAG" -m "swift_tar $VERSION"
     git push -q origin "$TAG"
   fi
 fi
 
+# ---------------------------------------------------------------------
+# 4. The archives come from the CI run the tag push started (.github/workflows/release.yml), not
+#    from dist/: CI builds and attests them, and only the release is made here, with your own gh
+#    login, so GitHub shows you as the one who released it rather than github-actions (the
+#    user's decision, 2026-11-04, as for lzfse). Each is checked before the release exists:
+#    checksums recomputed, the .sha256 compared, the content listed, the binary stripped and
+#    carrying the build id of the commit being published.
+# 4. 封存取自推送 tag 所啟動的那次 CI（.github/workflows/release.yml），不取自 dist/：CI 建置並簽署
+#    來源證明，這裡只建立 release，用你自己的 gh 登入，GitHub 才會顯示是你發布的，而不是 github-actions
+#    （使用者 2026-11-04 決定，與 lzfse 相同）。release 建立前逐一檢查：重算校驗和、比對 .sha256、列出
+#    內容、確認執行檔已 strip 且帶著正在發布的 commit 的 build id。
+# ---------------------------------------------------------------------
+typeset -a ARCHIVES
+typeset -A HASH
+would "wait for the release.yml run of $TAG and download its ${#PLATFORMS} artifacts: ${PLATFORMS[*]}"
+if (( DO_PUBLISH )); then
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/swift_tar-publish.XXXXXX")
+  trap 'rm -rf -- "$tmp"' EXIT
+  run_id=""
+  for i in {1..30}; do
+    # --commit as well as --branch: a tag deleted and pushed again keeps its name, and the run for
+    # the old commit would otherwise be taken for this one.
+    # 除了 --branch 也要 --commit：刪除後重推的 tag 名稱不變，否則會把舊 commit 的那次執行當成這一次。
+    run_id=$(gh run list -R "$REPO" --workflow release.yml --branch "$TAG" --commit "$HEAD_SHA" --limit 1 --json databaseId -q '.[0].databaseId // empty')
+    [[ -n $run_id ]] && break
+    sleep 5
+  done
+  [[ -n $run_id ]] || die "no release.yml run for $TAG after 150 s; see https://github.com/$REPO/actions" \
+                          "150 秒後仍沒有 $TAG 的 release.yml 執行；請看 https://github.com/$REPO/actions"
+  say "  waiting for CI / 等待 CI：https://github.com/$REPO/actions/runs/$run_id"
+  gh run watch "$run_id" -R "$REPO" --exit-status --interval 30 >/dev/null \
+    || die "CI failed: https://github.com/$REPO/actions/runs/$run_id; nothing is released. Fix it, delete the tag (local and origin) and run again" \
+           "CI 失敗：https://github.com/$REPO/actions/runs/$run_id；沒有發布任何東西。修正後刪除 tag（本機與 origin）再執行"
+  gh run download "$run_id" -R "$REPO" -D "$tmp/ci" || die "cannot download the artifacts of run $run_id" "無法下載 run $run_id 的 artifact"
+  DIST=$tmp/dist
+  mkdir -p -- "$DIST"
+  for plat in $PLATFORMS; do
+    a=$tmp/ci/swift_tar-$plat/swift_tar-$VERSION-$plat.tar.zst
+    [[ -r $a && -r $a.sha256 ]] || die "run $run_id has no swift_tar-$VERSION-$plat.tar.zst with its .sha256; every platform ships or none does" \
+                                       "run $run_id 沒有 swift_tar-$VERSION-$plat.tar.zst 及其 .sha256；所有平台都要有才發布"
+    mv -- "$a" "$a.sha256" "$DIST/"
+    ARCHIVES+=("$DIST/${a:t}")
+  done
+  extra=( "$tmp"/ci/*/*.tar.zst(N) "$DIST"/*.tar.zst(N) )
+  (( ${#extra} == ${#ARCHIVES} )) || die "run $run_id holds ${#extra} archives, expected exactly ${#ARCHIVES}: ${extra:t}" \
+                                         "run $run_id 有 ${#extra} 份封存，預期恰好 ${#ARCHIVES} 份：${extra:t}"
+  say "  archives:"
+  for a in $ARCHIVES; do
+    base=${a:t}
+    h=$(sha256_of "$a")
+    HASH[$base]=$h
+    claimed=$(awk '{print $1}' "$a.sha256")
+    [[ $claimed == $h ]] || die "$base: the CI's .sha256 says $claimed, this machine computes $h" \
+                                "$base：CI 的 .sha256 寫 $claimed，這台機器算出 $h"
+    stem=${base%.tar.zst}
+    inner=$(zstd -dq -c -- "$a" | tar -tf - | grep -E "^$stem/swift_tar(\.exe)?$" | head -1 || true)
+    [[ -n $inner ]] || die "$base does not contain $stem/swift_tar or $stem/swift_tar.exe" \
+                           "$base 裡沒有 $stem/swift_tar 或 $stem/swift_tar.exe"
+    archive_commit_ok "$a" "$inner" || exit 1
+    say "    $base  $h  $ARCHIVE_BUILD_ID"
+  done
+fi
+
+# ---------------------------------------------------------------------
+# 5. The release, created here as you, with every archive and .sha256 and the notes.
+#    6. Download back and compare.
+# 5. 在這裡以你的身分建立 release，帶著每份封存、.sha256 與 notes。6. 下載回來比對。
+# ---------------------------------------------------------------------
 typeset -a ASSETS
 for a in $ARCHIVES; do ASSETS+=("$a" "$a.sha256"); done
-would "gh release create $TAG -R $REPO with ${#ASSETS} assets"
+would "gh release create $TAG -R $REPO with the ${#PLATFORMS} archives, their .sha256 and ${NOTES:t}, as your gh login"
 if (( DO_PUBLISH )); then
   gh release create "$TAG" -R "$REPO" --verify-tag \
     --title "swift_tar $VERSION" \
     --notes-file "$NOTES" \
     "${ASSETS[@]}" >/dev/null
+  say "  created by / 建立者：$(gh api "repos/$REPO/releases/tags/$TAG" --jq .author.login)"
 fi
 
-would "re-download each asset from the public URL and compare against the local file"
+would "re-download each asset from the public URL and compare against the checked file"
 if (( DO_PUBLISH )); then
-  tmp=$(mktemp -d)
-  trap 'rm -rf -- "$tmp"' EXIT
   for a in $ARCHIVES; do
     base=${a:t}
     url=https://github.com/$REPO/releases/download/$TAG/$base
@@ -266,8 +305,8 @@ if (( DO_PUBLISH )); then
 fi
 
 # ---------------------------------------------------------------------
-# 6. The package files, generated from the archives rather than typed, then read back.
-# 6. 套件檔：由封存產生而不是打字，然後讀回。
+# 7. The package files, generated from the archives rather than typed, then read back.
+# 7. 套件檔：由封存產生而不是打字，然後讀回。
 # ---------------------------------------------------------------------
 base_url=https://github.com/$REPO/releases/download/$TAG
 # prose_lines, data_text, rewrite_version, rewrite_pair: in their own file so the test can run

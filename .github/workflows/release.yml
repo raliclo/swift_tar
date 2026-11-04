@@ -1,5 +1,5 @@
-# Build, package, attest and release swift_tar for six targets.
-# 為六個目標建置、打包、簽署來源證明並發布 swift_tar。
+# Build, package and attest swift_tar for six targets. This workflow does NOT create the release.
+# 為六個目標建置、打包並簽署來源證明 swift_tar。本 workflow **不**建立 release。
 #
 # Targets / 目標: linux-{x86_64,aarch64}-musl (static, needs nothing), macos-{x86_64,arm64},
 # windows-{x86_64,arm64} (the Swift runtime DLLs ride along). All are the public build: no LZFSE.
@@ -10,21 +10,23 @@
 # （使用者 2026-11-04 決定）：glibc 建置需要不比建置機器舊的 glibc。Linux 的命名與 multissh 相同。
 #
 # The verify job then runs each Linux archive on its own in a plain ubuntu image with no Swift,
-# through verify_release.zsh. The release job waits for it.
+# through verify_release.zsh.
 # verify job 接著把每份 Linux 封存單獨放進沒有 Swift 的一般 ubuntu 映像，以 verify_release.zsh 執行。
-# release job 會等它。
 #
 # Each job builds with this repository's own scripts and packs with release.zsh, which runs
 # the extracted binary, round-trips a .tar.gz and checks LZFSE is refused before it writes the
-# .sha256. A pushed tag v<X.Y.Z> (signed, made where the release is decided) also creates the
-# GitHub release, after GitHub has signed a build-provenance attestation for every archive:
+# .sha256, and uploads the archive as an artifact. For a pushed tag v<X.Y.Z> GitHub also signs a
+# build-provenance attestation for each archive:
 #   gh attestation verify swift_tar-<X.Y.Z>-<platform>.tar.zst -R raliclo/swift_tar
-# workflow_dispatch builds and packs only.
+# The release itself is created by publish.zsh with the maintainer's own gh login, from these
+# artifacts, so GitHub shows the maintainer, not github-actions, as the one who released it (the
+# user's decision, 2026-11-04, as for lzfse). Hence no contents: write here.
 # 每個 job 以本 repo 自己的腳本建置，再以 release.zsh 打包；release.zsh 會先執行解開後的執行檔、
-# 完成一次 .tar.gz 往返並確認 LZFSE 被拒絕，才寫出 .sha256。推送 tag v<X.Y.Z>（已簽章，在決定發布的
-# 地方建立）時，另外由 GitHub 為每份封存簽署建置來源證明（attestation），再建立 GitHub release：
+# 完成一次 .tar.gz 往返並確認 LZFSE 被拒絕，才寫出 .sha256，接著把封存上傳成 artifact。推送 tag
+# v<X.Y.Z> 時，GitHub 另外為每份封存簽署建置來源證明（attestation）：
 #   gh attestation verify swift_tar-<X.Y.Z>-<platform>.tar.zst -R raliclo/swift_tar
-# workflow_dispatch 只建置與打包。
+# release 本身由 publish.zsh 以維護者自己的 gh 登入、從這些 artifact 建立，GitHub 才會顯示是維護者發布
+# 的，而不是 github-actions（使用者 2026-11-04 決定，與 lzfse 相同）。因此這裡不需要 contents: write。
 name: Release
 
 on:
@@ -43,6 +45,12 @@ jobs:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
+    # id-token and attestations are for the build-provenance attestation of a tag's archives.
+    # id-token 與 attestations 給 tag 封存的建置來源證明用。
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -176,6 +184,14 @@ jobs:
         if: runner.os == 'Linux'
         run: zsh ./test/test_release.zsh
 
+      # For a tag only: what publish.zsh will put on the release is attested where it was built.
+      # 只在 tag 時：publish.zsh 將放上 release 的東西，在它被建出的地方簽署來源證明。
+      - name: Attest build provenance / 簽署建置來源證明
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*.tar.zst
+
       - uses: actions/upload-artifact@v6
         with:
           name: swift_tar-${{ matrix.platform }}
@@ -222,62 +238,3 @@ jobs:
       - name: verify_release.zsh
         run: |
           for a in dist/swift_tar-*-${{ matrix.platform }}.tar.zst; do zsh ./verify_release.zsh "$a"; done
-
-  release:
-    name: release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, verify]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/download-artifact@v7
-        with:
-          path: dist
-          merge-multiple: true
-
-      # The release notes are release-notes/<X.Y.Z>.md at the tag. A version without one is
-      # refused here, before anything is created: a generic line said nothing about 0.2.0's
-      # renamed Linux archives, which every script fetching the old name needs to know.
-      # release notes 是 tag 上的 release-notes/<X.Y.Z>.md。沒有它的版本在這裡、在建立任何東西之前就被
-      # 拒絕：一段通用說明完全沒提到 0.2.0 改名的 Linux 封存，而每個抓舊檔名的腳本都需要知道這件事。
-      - uses: actions/checkout@v5
-        with:
-          sparse-checkout: release-notes
-          path: repo
-
-      # Every archive must carry the tag's version: a build from another commit is named by
-      # VERSION, which the tag check in release.zsh ties to the tag only through the build id.
-      # 每份封存都必須帶著 tag 的版本：從別的 commit 建出的封存以 VERSION 命名，而 release.zsh 只透過
-      # build id 把它與 tag 綁在一起。
-      - name: Check archives / 檢查封存
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          [ -s "repo/release-notes/${TAG#v}.md" ] || { echo "no release-notes/${TAG#v}.md at $TAG / $TAG 上沒有 release-notes/${TAG#v}.md"; exit 1; }
-          cd dist
-          version=${TAG#v}
-          for plat in linux-x86_64-musl linux-aarch64-musl macos-x86_64 macos-arm64 windows-x86_64 windows-arm64; do
-            f=swift_tar-$version-$plat.tar.zst
-            [ -f "$f" ] && [ -f "$f.sha256" ] || { echo "missing $f / 缺少 $f"; ls -l; exit 1; }
-            sha256sum -c "$f.sha256"
-          done
-          [ "$(ls *.tar.zst | wc -l)" -eq 6 ] || { echo "expected exactly 6 archives / 預期恰好 6 份封存"; ls -l; exit 1; }
-
-      - name: Attest build provenance / 簽署建置來源證明
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: dist/*.tar.zst
-
-      - name: Create release / 建立 release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          cd dist
-          version=${TAG#v}
-          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --title "swift_tar $version" \
-            --notes-file "../repo/release-notes/$version.md" \
-            ./*.tar.zst ./*.tar.zst.sha256

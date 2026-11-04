@@ -8,12 +8,16 @@
 #    ./release.zsh --help                           print this and do nothing / 印出這段說明
 #
 #  After the public build (no LZFSE): macOS ./compile_tar.zsh --no-lzfse; Windows
-#  EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh; Linux, on the Mac, ./compile_tar-musl.zsh <arch>,
-#  checked from the file here and run on a Linux machine with ./verify_release.zsh. The
-#  others are run where they were built. Publishing is publish.zsh's job.
+#  EXCLUDE_LZFSE=1 zsh ./compile_tar-win.zsh; Linux EXCLUDE_LZFSE=1 zsh ./compile_tar-linux.zsh
+#  (glibc, linux-<arch>) or with --musl (static, linux-<arch>-musl), or on the Mac
+#  ./compile_tar-musl.zsh <arch>, checked from the file here and run on a Linux machine with
+#  ./verify_release.zsh. The others are run where they were built. The eight archives of a
+#  release are built by .github/workflows/release.yml.
 #  先建公開版（不含 LZFSE）：macOS ./compile_tar.zsh --no-lzfse；Windows EXCLUDE_LZFSE=1 zsh
-#  ./compile_tar-win.zsh；Linux 在 Mac 上 ./compile_tar-musl.zsh <arch>，在這裡從檔案檢查，再到 Linux
-#  機器上以 ./verify_release.zsh 執行。其餘的在建置處執行。發布是 publish.zsh 的事。
+#  ./compile_tar-win.zsh；Linux EXCLUDE_LZFSE=1 zsh ./compile_tar-linux.zsh（glibc，linux-<arch>）
+#  或加 --musl（靜態，linux-<arch>-musl），或在 Mac 上 ./compile_tar-musl.zsh <arch>，在這裡從檔案
+#  檢查，再到 Linux 機器上以 ./verify_release.zsh 執行。其餘的在建置處執行。一次發布的八份封存由
+#  .github/workflows/release.yml 建置。
 # =====================================================================
 # Modelled on csv2's release.zsh (/Volumes/LinuxCS/sos/csv2), including the refusals it learned
 # the hard way: the version comes from the binary, never from a constant here; the build id is
@@ -27,7 +31,7 @@ setopt no_unset pipe_fail errexit
 
 case ${1:-} in
   '') ;;
-  -h|--help) sed -n '3,16p' ${0:A} | sed 's/^# \{0,2\}//'; exit 0 ;;
+  -h|--help) sed -n '3,19p' ${0:A} | sed 's/^# \{0,2\}//'; exit 0 ;;
   *) print -ru2 -- "release.zsh takes no argument (got: $1); see --help / release.zsh 不收引數（收到：$1），請見 --help"; exit 2 ;;
 esac
 
@@ -90,14 +94,21 @@ write_sha256() {
 # 檢查，之後再以 verify_release.zsh 在同架構的 Linux 機器上執行。
 . "$HERE/platform.zsh"
 PLAT=$(swift_tar_platform) || die "unknown SWIFT_TAR_PLATFORM" "不認得的 SWIFT_TAR_PLATFORM"
+# SUFFIX marks the static musl Linux build: linux-<arch>-musl beside the glibc linux-<arch>, the
+# naming multissh uses (the user's choice for 0.2.0; until 0.1.5 linux-<arch> was the musl one).
+# SUFFIX 標示靜態 musl 的 Linux 建置：linux-<arch>-musl 與 glibc 的 linux-<arch> 並存，與 multissh 的
+# 命名相同（使用者為 0.2.0 選定；到 0.1.5 為止 linux-<arch> 是 musl 版）。
 CROSS=0
+SUFFIX=""
 case $PLAT in
   musl-aarch64|musl-x86_64)
-    CROSS=1; OS=linux; ARCH=${PLAT#musl-}; BIN_NAME=swift_tar ;;
-  mac) OS=macos;   ARCH=$(uname -m) ;;
-  win) OS=windows; ARCH=$(uname -m) ;;
-  linux) die "Linux releases are the static musl build made on the Mac: ./compile_tar-musl.zsh <arch>, then SWIFT_TAR_PLATFORM=musl-<arch> ./release.zsh" \
-             "Linux 正式版是在 Mac 上建的靜態 musl 版：./compile_tar-musl.zsh <arch>，再 SWIFT_TAR_PLATFORM=musl-<arch> ./release.zsh" ;;
+    CROSS=1; OS=linux; ARCH=${PLAT#musl-}; BIN_NAME=swift_tar; SUFFIX=-musl ;;
+  mac)   OS=macos;   ARCH=$(uname -m) ;;
+  # Windows' architecture is read from the binary below: MSYS2 on an arm64 machine runs as x64
+  # and its uname -m says x86_64. / Windows 的架構在下面從執行檔讀出：arm64 機器上的 MSYS2 以 x64
+  # 執行，它的 uname -m 會說 x86_64。
+  win)   OS=windows; ARCH="" ;;
+  linux) OS=linux;   ARCH=$(uname -m) ;;
   *) die "unknown platform $PLAT" "不認得的平台 $PLAT" ;;
 esac
 if (( CROSS )); then
@@ -113,6 +124,25 @@ fi
 VERSION_FILE=$HERE/version-$PLAT.txt
 [[ -r $VERSION_FILE ]] || die "$VERSION_FILE is missing; the build writes it" "缺少 $VERSION_FILE；建置會寫出它"
 VERSION=$(<VERSION)
+# A Linux build made here is musl when its version file says so (compile_tar-linux.zsh --musl
+# writes swift_stdlib_linkage=static and libc=musl-...), and glibc otherwise.
+# 在這裡建的 Linux 版，version 檔這樣寫時就是 musl（compile_tar-linux.zsh --musl 會寫
+# swift_stdlib_linkage=static 與 libc=musl-...），否則是 glibc。
+if [[ $PLAT == linux ]] && grep -qx 'swift_stdlib_linkage=static' "$VERSION_FILE" && grep -q '^libc=musl-' "$VERSION_FILE"; then
+  SUFFIX=-musl
+fi
+if [[ $OS == windows ]]; then
+  objdump_bin=""
+  for t in llvm-objdump objdump; do command -v $t >/dev/null 2>&1 && { objdump_bin=$t; break; }; done
+  [[ -n $objdump_bin ]] || die "neither llvm-objdump nor objdump is on PATH; the architecture and the DLLs to ship are read from the PE" \
+                               "PATH 上沒有 llvm-objdump 或 objdump；架構與要帶的 DLL 都是從 PE 讀出來的"
+  fmt=$("$objdump_bin" -f "$BIN" | tr -d '\r') || die "$objdump_bin -f failed on $BIN" "$objdump_bin -f 讀 $BIN 失敗"
+  case ${fmt:l} in
+    *x86-64*)          ARCH=x86_64 ;;
+    *arm64*|*aarch64*) ARCH=arm64 ;;
+    *) die "cannot tell the architecture of $BIN from: $fmt" "無法從下列內容判斷 $BIN 的架構：$fmt" ;;
+  esac
+fi
 
 # The tree must be clean apart from the version files the build rewrites, or the archive's id
 # names a state other than what was packaged. Same exemption as build_id.zsh.
@@ -162,6 +192,12 @@ else
   REPORTED=$(cd release && "./$BIN_NAME" --version | tr -d '\r')
   [[ $REPORTED == "$IDENTITY "* ]] || die "the binary reports [$REPORTED], expected [$IDENTITY ...] (VERSION and this checkout); rebuild before releasing" \
                                           "執行檔回報 [$REPORTED]，預期是 [$IDENTITY ...]（VERSION 與這個 checkout）；發行前請重新建置"
+  # A musl build made here is held to what its name promises, as the cross one is above: static.
+  # 在這裡建的 musl 版，與上面的交叉建置一樣，要符合名稱的承諾：靜態。
+  if [[ $SUFFIX == -musl ]]; then
+    kind=$(file -b "$BIN")
+    [[ $kind == ELF*statically\ linked* ]] || die "$BIN is not a static ELF executable: $kind" "$BIN 不是靜態 ELF 執行檔：$kind"
+  fi
 fi
 
 # The public build only. The version file says what the build compiled in; the binary is then
@@ -181,7 +217,7 @@ lz_hits=$(LC_ALL=C grep -a -c -E 'bvx3|other3' "$BIN" || true)
 command -v zstd >/dev/null 2>&1 || die "zstd is not on PATH; releases are .tar.zst and this node cannot make one" \
                                        "zstd 不在 PATH 上；正式版是 .tar.zst，這個節點做不出來"
 
-STEM=swift_tar-$VERSION-$OS-$ARCH
+STEM=swift_tar-$VERSION-$OS-$ARCH$SUFFIX
 ARCHIVE=$DIST/$STEM.tar.zst
 [[ ! -e $ARCHIVE ]] || die "$ARCHIVE already exists; remove it first if you mean to replace it" \
                            "$ARCHIVE 已經存在；若真要取代它，請先自行刪除"
@@ -207,6 +243,13 @@ chmod 755 "$STAGE/$BIN_NAME"
 if [[ $OS == macos ]]; then
   strip "$STAGE/$BIN_NAME"
   codesign --force --sign - "$STAGE/$BIN_NAME"
+fi
+# A Linux build made here is stripped here too: the glibc build keeps its symbols. The cross
+# build is left alone, since it is compared byte for byte with release/linux-<arch>/swift_tar.
+# 在這裡建的 Linux 版也在這裡 strip：glibc 版保留了符號。交叉建置不動，因為它要與
+# release/linux-<arch>/swift_tar 逐位元組比對。
+if [[ $OS == linux ]] && (( ! CROSS )); then
+  strip "$STAGE/$BIN_NAME"
 fi
 source "$HERE/stripped.zsh"
 NM=$(swift_tar_nm) || die "neither llvm-nm nor nm is on PATH; an executable not shown to be stripped is not released" \
@@ -240,7 +283,11 @@ typeset -a SWIFT_RUNTIME_LICENSES=(swift-LICENSE swift-experimental-string-proce
   swift-corelibs-foundation-LICENSE swift-foundation-LICENSE swift-foundation-icu-LICENSE
   icu-LICENSE swift-corelibs-libdispatch-LICENSE)
 typeset -a THIRD_PARTY=()
-if (( CROSS )); then
+# Every musl build, cross or made here, links the SDK's runtime in; the glibc build links the
+# installed Swift runtime dynamically and ships none of it.
+# 每個 musl 版（交叉或在這裡建的）都把 SDK 的 runtime 連進來；glibc 版動態連結已安裝的 Swift
+# runtime，不帶任何一份。
+if [[ $SUFFIX == -musl ]]; then
   THIRD_PARTY=($SWIFT_RUNTIME_LICENSES musl-COPYRIGHT musl-fts-COPYING bzip2-LICENSE
                llvm-libcxx-LICENSE llvm-libcxxabi-LICENSE llvm-libunwind-LICENSE llvm-compiler-rt-LICENSE)
 elif [[ $OS == windows ]]; then
@@ -289,10 +336,7 @@ if [[ $OS == windows ]]; then
   # 的才帶。那個目錄還有 FoundationNetworking、FoundationXML 等 swift_tar 從不載入的 DLL，它們內含
   # curl、libxml2 等，帶了就得一併附上那些授權。在那裡找不到的 import（KERNEL32、UCRT 的 api-ms-*）
   # 屬於系統。
-  objdump_bin=""
-  for t in llvm-objdump objdump; do command -v $t >/dev/null 2>&1 && { objdump_bin=$t; break; }; done
-  [[ -n $objdump_bin ]] || die "neither llvm-objdump nor objdump is on PATH; the DLLs to ship are read from the PE imports" \
-                               "PATH 上沒有 llvm-objdump 或 objdump；要帶哪些 DLL 是從 PE import 讀出來的"
+  # objdump_bin was found above, where the architecture was read. / objdump_bin 已在上面讀架構時找到。
   # Captured first so a failure stops here: inside the array assignment it was lost (review S3).
   # 先取出再拆，失敗才會停在這裡：包在陣列賦值裡時，失敗會被吃掉（審查 S3）。
   dll_list=$(swift_tar_win_dlls "$objdump_bin" "$BIN" "$rt_bin") \

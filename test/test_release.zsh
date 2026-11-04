@@ -118,21 +118,11 @@ fi
 # 在 Windows 上的發行預演涵蓋。
 if [ "$OS" = windows ]; then
   echo "SKIP: release.zsh native cases (the stand-in binary is a shell script, not a PE; see win_dlls below)"
-elif [ "$OS" = linux ]; then
-  # Not on glibc Linux either: since f19c63a (2026-10-20) a Linux release is the static musl
-  # build made on the Mac, and release.zsh refuses a native one before reading anything else.
-  # Until 2026-10-23 these cases still ran here and failed nine times on WSL, all with that
-  # refusal. What is left to test here is the refusal itself.
-  # glibc Linux 上也不跑：自 f19c63a（2026-10-20）起，Linux 正式版是 Mac 上建的靜態 musl 版，
-  # release.zsh 在讀任何東西之前就拒絕原生打包。2026-10-23 之前這些案例仍在此執行，於 WSL 上
-  # 失敗九次，全都是那個拒絕。這裡剩下要測的就是拒絕本身。
-  echo "SKIP: release.zsh native cases (Linux releases are the musl cross build; see the cross cases below)"
-  L=$TMP/linrel
-  mkdir -p "$L"
-  cp "$ROOT/release.zsh" "$ROOT/build_id.zsh" "$ROOT/platform.zsh" "$L/"
-  rc=0; ( cd "$L" && unset SWIFT_TAR_PLATFORM && zsh ./release.zsh ) > "$TMP/lin.out" 2>&1 || rc=$?
-  check "release.zsh: a native glibc Linux release is refused and points to the musl build" \
-        "$rc:$(grep -c 'Linux releases are the static musl build made on the Mac' "$TMP/lin.out")" "1:1"
+# On Linux too since 0.2.0: release.zsh packs a Linux build made here, glibc as linux-<arch> and
+# musl as linux-<arch>-musl. From f19c63a (2026-10-20) until then it refused one, and this
+# place tested only that refusal.
+# 自 0.2.0 起 Linux 上也跑：release.zsh 會打包在這裡建的 Linux 版，glibc 為 linux-<arch>、musl 為
+# linux-<arch>-musl。從 f19c63a（2026-10-20）到那時為止它拒絕原生打包，這裡只測那個拒絕。
 elif ! command -v zstd >/dev/null 2>&1 || ! command -v clang >/dev/null 2>&1; then
   echo "SKIP: release.zsh cases (needs zstd and clang on PATH)"
 else
@@ -142,6 +132,7 @@ else
   print 0.1.0 > "$R/VERSION"
   print 'licence' > "$R/LICENSE"; print 'readme' > "$R/README.md"; print 'readme' > "$R/README.zh-TW.md"
   print 'zlib licence' > "$R/zlib/LICENSE"
+  cp -R "$ROOT/licenses" "$R/"
   print -l 'swift_tar_version=20260101-000000' 'zlib_linkage=static' 'lzfse2=excluded' > "$R/version-$PLAT.txt"
   print -l '/release/' '/dist/' > "$R/.gitignore"
   ( cd "$R" && quiet_git init -q && quiet_git add . && quiet_git commit -qm rel )
@@ -176,7 +167,7 @@ int main(int argc, char **argv) {
   execv(\"/bin/sh\", args);
   return 127;
 }" > "$TMP/fake.c"
-    clang "$TMP/fake.c" -o "$R/release/swift_tar"
+    clang ${=FAKE_CFLAGS:-} "$TMP/fake.c" -o "$R/release/swift_tar"
   }
   rel() { rc=0; ( cd "$R" && ./release.zsh ) > "$TMP/rel.out" 2>&1 || rc=$?; }
   says() { grep -qF -- "$1" "$TMP/rel.out"; }
@@ -272,6 +263,29 @@ int main(int argc, char **argv) {
       else bad "release.zsh: the openssl branch writes the archive's sha256 in sha256sum -c form (no .sha256; $(tail -3 "$TMP/rel.out" | tr '\n' '|'))"; fi
       rm -rf "$R/dist"
     else echo "SKIP: release.zsh openssl branch (zstd shares a directory with sha256sum)"; fi
+  fi
+  # Linux: a version file that records musl makes the archive linux-<arch>-musl, carrying the
+  # musl SDK's licences, and the binary must then be static. The stand-in is linked with
+  # -static for the first case and without it for the refusal.
+  # Linux：version 檔記為 musl 時，封存是 linux-<arch>-musl，附上 musl SDK 的授權，而且執行檔必須是
+  # 靜態的。第一個案例的替身以 -static 連結，拒絕的案例則不加。
+  if [ "$OS" = linux ]; then
+    cp "$R/version-$PLAT.txt" "$TMP/vf.glibc"
+    print -l 'swift_stdlib_linkage=static' 'libc=musl-1.2.5' >> "$R/version-$PLAT.txt"
+    MSTEM=$STEM-musl
+    if FAKE_CFLAGS=-static make_fake 0.1.0 "$id" 2>/dev/null; then
+      rel
+      if [ "$rc" = 0 ] && [ -s "$R/dist/$MSTEM.tar.zst" ]; then ok "release.zsh: a static Linux build recorded as musl is packed as $MSTEM"
+      else bad "release.zsh: a static Linux build recorded as musl is packed as $MSTEM (rc $rc; $(tail -3 "$TMP/rel.out" | tr '\n' '|'))"; fi
+      if [ -s "$R/dist/$MSTEM.tar.zst" ]; then
+        got=$(zstd -dq -c "$R/dist/$MSTEM.tar.zst" | tar -tf - | grep -c 'musl-COPYRIGHT.txt$' || true)
+        check "release.zsh: the musl archive carries the musl licence" "$got" 1
+      fi
+      rm -rf "$R/dist"
+    else echo "SKIP: release.zsh musl case (clang cannot link -static here)"; fi
+    make_fake 0.1.0 "$id"
+    rel_refuses "a dynamically linked binary recorded as musl" "is not a static ELF executable"
+    cp "$TMP/vf.glibc" "$R/version-$PLAT.txt"
   fi
   rc=0; ( cd "$R" && ./release.zsh --nope ) >/dev/null 2>&1 || rc=$?
   check "release.zsh refuses an argument" "$rc" 2

@@ -51,17 +51,30 @@ if ! (( $+commands[cl] )); then
     vswhere='/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe'
     [[ -x $vswhere ]] || die "vswhere.exe not found. Run: zsh ./build_tool_install-win.zsh"
 
+    # The MSVC environment of the machine's own architecture: x64, or arm64 for the
+    # windows-arm64 release (0.2.0). Asked of Windows rather than uname -m, which says x86_64
+    # in an MSYS2 shell emulated on arm64. SWIFT_TAR_WIN_ARCH (x64 or arm64) overrides it.
+    # 用本機架構的 MSVC 環境：x64，或為 windows-arm64 正式版（0.2.0）用 arm64。向 Windows 詢問而非用
+    # uname -m，因為在 arm64 上以模擬執行的 MSYS2 shell 裡它會說 x86_64。SWIFT_TAR_WIN_ARCH（x64 或
+    # arm64）可覆寫。
+    win_arch=${SWIFT_TAR_WIN_ARCH:-$(powershell.exe -NoProfile -Command '[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture' | tr -d '\r')}
+    case ${win_arch:l} in
+        x64|amd64|x86_64) vcvars=vcvars64.bat;    vc_component=Microsoft.VisualStudio.Component.VC.Tools.x86.x64 ;;
+        arm64|aarch64)    vcvars=vcvarsarm64.bat; vc_component=Microsoft.VisualStudio.Component.VC.Tools.ARM64 ;;
+        *) die "unsupported Windows architecture: $win_arch (set SWIFT_TAR_WIN_ARCH to x64 or arm64) / 不支援的 Windows 架構" ;;
+    esac
+
     vsroot=$("$vswhere" -latest -products '*' \
-                 -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 \
+                 -requires $vc_component \
                  -property installationPath 2>/dev/null | head -1)
     vsroot=${vsroot%$'\r'}
-    [[ -n $vsroot ]] || die "MSVC C++ tools not found. Run: zsh ./build_tool_install-win.zsh"
+    [[ -n $vsroot ]] || die "MSVC C++ tools for $win_arch not found. Run: zsh ./build_tool_install-win.zsh"
 
     # vsroot comes back as a Windows path; reach it through /<drive>/ so zsh can
     # test it. / vsroot 回傳的是 Windows 路徑，改以 /<drive>/ 形式存取，zsh 才能檢查。
     vsroot_posix="/${vsroot[1]:l}/${${vsroot:3}//\\//}"
     vcvars_dir="$vsroot_posix/VC/Auxiliary/Build"
-    [[ -f $vcvars_dir/vcvars64.bat ]] || die "vcvars64.bat not found under $vsroot"
+    [[ -f $vcvars_dir/$vcvars ]] || die "$vcvars not found under $vsroot"
 
     # Harvest the environment rather than trying to reproduce it. Three details
     # here were each a failure on the way:
@@ -81,9 +94,9 @@ if ! (( $+commands[cl] )); then
     #   - 要用 `//c` 而非 `/c`：runtime 會把單獨的 /c 改寫成磁碟路徑，而
     #     MSYS2_ARG_CONV_EXCL='*' 幫不上忙，因為它同時也阻止了 //c 收斂為 /c。
     #     兩種錯誤的結局相同：cmd 開出互動 shell 並印出橫幅，看起來完全不像旗標被改寫。
-    note "[Info] loading MSVC x64 environment / 載入 MSVC x64 環境"
-    vcenv=$(cd "$vcvars_dir" && cmd //c "call .\\vcvars64.bat >nul 2>&1 && set" </dev/null 2>/dev/null) \
-        || die "failed to load MSVC x64 build environment"
+    note "[Info] loading MSVC $win_arch environment ($vcvars) / 載入 MSVC $win_arch 環境"
+    vcenv=$(cd "$vcvars_dir" && cmd //c "call .\\$vcvars >nul 2>&1 && set" </dev/null 2>/dev/null) \
+        || die "failed to load MSVC $win_arch build environment"
 
     # Match the names case-insensitively. cmd's `set` prints the PATH variable
     # with whatever casing the process happens to hold -- observed as `PATH`
@@ -140,7 +153,7 @@ if ! (( $+commands[cl] )); then
         fi
     done <<< "$vcenv"
 
-    (( $+commands[cl] )) || die "cl.exe still not on PATH after loading vcvars64"
+    (( $+commands[cl] )) || die "cl.exe still not on PATH after loading $vcvars"
 fi
 
 # ---- Swift toolchain: the newest installed, not whatever PATH records ----

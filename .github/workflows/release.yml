@@ -1,0 +1,217 @@
+# Build, package, attest and release swift_tar for eight targets.
+# 為八個目標建置、打包、簽署來源證明並發布 swift_tar。
+#
+# Targets / 目標: linux-{x86_64,aarch64} (glibc; the Swift runtime is linked dynamically, so it
+# must be installed), linux-{x86_64,aarch64}-musl (static, needs nothing), macos-{x86_64,arm64},
+# windows-{x86_64,arm64} (the Swift runtime DLLs ride along). All are the public build: no LZFSE.
+# linux-{x86_64,aarch64}（glibc；動態連結 Swift runtime，所以目標機器要先安裝），
+# linux-{x86_64,aarch64}-musl（靜態，什麼都不需要），macos-{x86_64,arm64}，
+# windows-{x86_64,arm64}（Swift runtime DLL 隨附）。全部都是公開版：不含 LZFSE。
+#
+# Each job builds with this repository's own scripts and packs with release.zsh, which runs
+# the extracted binary, round-trips a .tar.gz and checks LZFSE is refused before it writes the
+# .sha256. A pushed tag v<X.Y.Z> (signed, made where the release is decided) also creates the
+# GitHub release, after GitHub has signed a build-provenance attestation for every archive:
+#   gh attestation verify swift_tar-<X.Y.Z>-<platform>.tar.zst -R raliclo/swift_tar
+# workflow_dispatch builds and packs only.
+# 每個 job 以本 repo 自己的腳本建置，再以 release.zsh 打包；release.zsh 會先執行解開後的執行檔、
+# 完成一次 .tar.gz 往返並確認 LZFSE 被拒絕，才寫出 .sha256。推送 tag v<X.Y.Z>（已簽章，在決定發布的
+# 地方建立）時，另外由 GitHub 為每份封存簽署建置來源證明（attestation），再建立 GitHub release：
+#   gh attestation verify swift_tar-<X.Y.Z>-<platform>.tar.zst -R raliclo/swift_tar
+# workflow_dispatch 只建置與打包。
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SWIFT_VERSION: "6.4.2"
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x86_64,       runner: ubuntu-24.04,     container: "swift:6.4.2-noble" }
+          - { platform: linux-aarch64,      runner: ubuntu-24.04-arm, container: "swift:6.4.2-noble" }
+          - { platform: linux-x86_64-musl,  runner: ubuntu-24.04,     container: "swift:6.4.2-noble", compile_args: "--musl" }
+          - { platform: linux-aarch64-musl, runner: ubuntu-24.04-arm, container: "swift:6.4.2-noble", compile_args: "--musl" }
+          - { platform: macos-x86_64,       runner: macos-15-intel }
+          - { platform: macos-arm64,        runner: macos-15 }
+          - { platform: windows-x86_64,     runner: windows-2025,     swift_arch: amd64 }
+          - { platform: windows-arm64,      runner: windows-11-arm,   swift_arch: arm64 }
+    steps:
+      # The swift image has clang but no cc, make, zsh or cmake; file is for release.zsh's
+      # static check of the musl build. / swift 映像有 clang，但沒有 cc、make、zsh 與 cmake；file 給
+      # release.zsh 檢查 musl 版是否為靜態。
+      - name: Tools (Linux) / 工具（Linux）
+        if: runner.os == 'Linux'
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends git zsh cmake make binutils zstd file libbz2-dev
+          echo CC=clang >> "$GITHUB_ENV"
+          echo CXX=clang++ >> "$GITHUB_ENV"
+
+      # Only the -musl jobs need Swift's Static Linux SDK, matching swiftc exactly (checksum from
+      # swift.org, as in multissh's CI). / 只有 -musl 的 job 需要 Swift Static Linux SDK，必須與 swiftc
+      # 完全相符（checksum 取自 swift.org，與 multissh 的 CI 相同）。
+      - name: Static Linux SDK (musl) / Static Linux SDK（musl）
+        if: matrix.compile_args == '--musl'
+        run: |
+          swift sdk install \
+            "https://download.swift.org/swift-${SWIFT_VERSION}-release/static-sdk/swift-${SWIFT_VERSION}-RELEASE/swift-${SWIFT_VERSION}-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz" \
+            --checksum 3786b179936d9cc9e266dd506bd1654176358d7b25288e243359f4d17cc4dc5a
+          sdk=$(find / -type d -name swift-linux-musl -path "*swift-${SWIFT_VERSION}-RELEASE_static-linux*" 2>/dev/null | head -1)
+          [ -n "$sdk" ] || { echo "installed SDK not found / 找不到已安裝的 SDK"; exit 1; }
+          echo "SWIFT_STATIC_SDK=$sdk" >> "$GITHUB_ENV"
+
+      - name: Tools (macOS) / 工具（macOS）
+        if: runner.os == 'macOS'
+        run: |
+          command -v cmake >/dev/null || brew install cmake
+          command -v zstd >/dev/null || brew install zstd
+          swiftc --version
+
+      # build_arch must name the runner's architecture: the default (amd64) installed the x64
+      # toolchain on windows-11-arm, whose swift crashed (multissh's CI, run 3).
+      # build_arch 必須是 runner 的架構：預設值（amd64）在 windows-11-arm 上裝成 x64 工具鏈，而它的
+      # swift 會崩潰（multissh 的 CI 第 3 次執行）。
+      - name: Swift (Windows) / Swift（Windows）
+        if: runner.os == 'Windows'
+        uses: compnerd/gha-setup-swift@main
+        with:
+          build_arch: ${{ matrix.swift_arch }}
+          branch: swift-${{ env.SWIFT_VERSION }}-release
+          tag: ${{ env.SWIFT_VERSION }}-RELEASE
+
+      - name: zsh (Windows) / zsh（Windows）
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          path-type: inherit
+          install: zsh zstd
+
+      # LF on Windows too: a CRLF checkout breaks every zsh script.
+      # Windows 上也用 LF：CRLF 的 checkout 會讓每個 zsh 腳本壞掉。
+      - name: LF line endings / LF 換行
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config --global core.autocrlf false
+
+      # Full history and tags: the build id is `git describe`, and at the tag it reads v<X.Y.Z>.
+      # 完整歷史與 tag：build id 取自 `git describe`，在 tag 上它是 v<X.Y.Z>。
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      # The public submodules the build needs; lzfse2 is private and the public build leaves it out.
+      # 建置需要的公開子模組；lzfse2 是 private，公開版不需要它。
+      - name: Submodules / 子模組
+        shell: bash
+        run: |
+          git config --global --add safe.directory '*'
+          git submodule update --init --depth 1 libarchive zlib zstd lz4 xz
+
+      - name: Build and package / 建置與打包
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          EXCLUDE_LZFSE: "1"
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            zsh ./compile_tar.zsh --no-lzfse
+          else
+            zsh ./compile_tar-linux.zsh ${{ matrix.compile_args }}
+          fi
+          zsh ./release.zsh
+
+      # llvm-objdump (for release.zsh's PE reading) is in C:\Program Files\LLVM\bin on the runner.
+      # llvm-objdump（release.zsh 讀 PE 用）在 runner 的 C:\Program Files\LLVM\bin。
+      - name: Build and package (Windows) / 建置與打包（Windows）
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        env:
+          EXCLUDE_LZFSE: "1"
+        run: |
+          export PATH="$PATH:/c/Program Files/LLVM/bin"
+          zsh ./build_zlib-win.zsh
+          zsh ./build_zstd-win.zsh
+          zsh ./compile_tar-win.zsh
+          zsh ./release.zsh
+
+      # The name release.zsh gave the archive must be this job's platform; a mismatch would
+      # upload one platform under another's name.
+      # release.zsh 給封存的名字必須就是這個 job 的平台；不一致會把一個平台以另一個的名字上傳。
+      - name: Check platform / 檢查平台
+        shell: bash
+        run: |
+          ls -l dist/
+          ls dist/swift_tar-*-${{ matrix.platform }}.tar.zst dist/swift_tar-*-${{ matrix.platform }}.tar.zst.sha256
+          [ "$(ls dist/*.tar.zst | wc -l)" = 1 ] || { echo "expected exactly one archive / 預期恰好一份封存"; exit 1; }
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: swift_tar-${{ matrix.platform }}
+          path: |
+            dist/*.tar.zst
+            dist/*.tar.zst.sha256
+          if-no-files-found: error
+
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Every archive must carry the tag's version: a build from another commit is named by
+      # VERSION, which the tag check in release.zsh ties to the tag only through the build id.
+      # 每份封存都必須帶著 tag 的版本：從別的 commit 建出的封存以 VERSION 命名，而 release.zsh 只透過
+      # build id 把它與 tag 綁在一起。
+      - name: Check archives / 檢查封存
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          version=${TAG#v}
+          for plat in linux-x86_64 linux-aarch64 linux-x86_64-musl linux-aarch64-musl macos-x86_64 macos-arm64 windows-x86_64 windows-arm64; do
+            f=swift_tar-$version-$plat.tar.zst
+            [ -f "$f" ] && [ -f "$f.sha256" ] || { echo "missing $f / 缺少 $f"; ls -l; exit 1; }
+            sha256sum -c "$f.sha256"
+          done
+          [ "$(ls *.tar.zst | wc -l)" = 8 ] || { echo "expected exactly 8 archives / 預期恰好 8 份封存"; ls -l; exit 1; }
+
+      - name: Attest build provenance / 簽署建置來源證明
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*.tar.zst
+
+      - name: Create release / 建立 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd dist
+          version=${TAG#v}
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --title "swift_tar $version" \
+            --notes "swift_tar $version, the public build (no LZFSE): one .tar.zst per platform with a .sha256 beside it. Linux: linux-<arch> is glibc and needs the Swift runtime installed; linux-<arch>-musl is fully static and needs nothing. macOS and Windows on x86_64 and arm64; the Windows archives carry the Swift runtime DLLs. Every archive has a GitHub build-provenance attestation: gh attestation verify <archive> -R $GITHUB_REPOSITORY. Install with: zsh install.zsh $version" \
+            ./*.tar.zst ./*.tar.zst.sha256

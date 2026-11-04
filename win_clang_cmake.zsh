@@ -38,10 +38,16 @@ win_clang_cmake() {  # clang|clang-cl <archive-output-dir>
 
   vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
   [[ -x $vswhere ]] || { printf '[FAIL] vswhere.exe not found; install the VS C++ build tools / 找不到 vswhere.exe\n' >&2; return 1 }
-  vsroot=$("$vswhere" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 \
+  # The x64 or the arm64 C++ tools, and the nmake of either host: an arm64 machine (the
+  # windows-arm64 release, 0.2.0) may have only Hostarm64. nmake only runs the makefiles; the
+  # compiler is the Swift toolchain's clang, which targets the toolchain's own architecture.
+  # x64 或 arm64 的 C++ 工具，以及任一主機的 nmake：arm64 機器（windows-arm64 正式版，0.2.0）可能只有
+  # Hostarm64。nmake 只負責執行 makefile；編譯器是 Swift 工具鏈的 clang，它以工具鏈本身的架構為目標。
+  vsroot=$("$vswhere" -latest -products '*' -requiresAny \
+           -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 Microsoft.VisualStudio.Component.VC.Tools.ARM64 \
            -property installationPath | tr -d '\r')
   [[ -n $vsroot ]] || { printf '[FAIL] no VS install with the C++ tools / 沒有含 C++ 工具的 VS 安裝\n' >&2; return 1 }
-  nmake=("$(cygpath -u "$vsroot")"/VC/Tools/MSVC/*/bin/Hostx64/x64/nmake.exe(N-.On))
+  nmake=("$(cygpath -u "$vsroot")"/VC/Tools/MSVC/*/bin/Host{x64,arm64}/{x64,arm64}/nmake.exe(N-.On))
   (( $#nmake )) || { printf '[FAIL] nmake.exe not found under %s / 找不到 nmake.exe\n' "$vsroot" >&2; return 1 }
 
   win_cmake_args=(-G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release

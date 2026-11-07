@@ -94,8 +94,11 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/.test_nolz.XXXXXX")"
 build_full=()
 restore_full_build() { (( ${#build_full} )) && "${build_full[@]}" >/dev/null 2>&1 || true }
 
-interrupted=0
-on_exit()   { remove_temps; (( interrupted )) || restore_full_build }
+# Linux 在總結之前已自行還原並檢查（見檢查 7），restored=1 讓 EXIT 不再建一次。
+# On Linux the full build is restored and checked before the summary (check 7);
+# restored=1 keeps EXIT from building it a second time.
+interrupted=0; restored=0
+on_exit()   { remove_temps; (( interrupted || restored )) || restore_full_build }
 on_signal() { interrupted=1; exit 130 }
 trap on_exit EXIT
 trap on_signal INT TERM HUP
@@ -187,8 +190,21 @@ case "$(uname -s)" in
             echo "       請執行：git submodule update --init lzfse2"
             exit 1
         fi
-        build_full=(./compile_tar-linux.zsh)
-        build_public=(env EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh)
+        # 依目前執行檔的 libc 重建。原本一律用預設的 glibc 建置，於是在 musl 那輪，
+        # 本測試結束後 release/swift_tar 變成 glibc 版，排在它之後的測試都在 glibc 版上跑，
+        # 卻照樣顯示通過；從 musl 切到 glibc 也讓 build/*-linux 整個重建。
+        # （2026-11-06 Swift_tar-W11 在 WSL 上逐支比對 sha256 發現）
+        # Rebuild with the current binary's libc. These used the default glibc build
+        # always, so on a musl run this test left release/swift_tar a glibc binary, every
+        # test after it ran on that binary and still passed, and switching musl to glibc
+        # rebuilt all of build/*-linux. (Found 2026-11-06 by Swift_tar-W11 on WSL,
+        # comparing sha256 around each test.)
+        start_libc=""
+        [[ -f version-linux.txt ]] && start_libc=${(M)${(f)"$(<version-linux.txt)"}:#libc=*}
+        libc_flag=()
+        [[ $start_libc == libc=musl-* ]] && libc_flag=(--musl)
+        build_full=(./compile_tar-linux.zsh $libc_flag)
+        build_public=(env EXCLUDE_LZFSE=1 ./compile_tar-linux.zsh $libc_flag)
         ;;
     MINGW*|MSYS*|CYGWIN*)
         BIN=release/swift_tar.exe
@@ -297,6 +313,25 @@ done
 
 # 6) public self-test passes / 公開版自我測試通過
 if "$PUB" -test >/dev/null 2>&1; then ok "public build -test passes"; else bad "public build -test failed"; fi
+
+# 7) Linux：還原完整版後，libc 必須與開始時相同（musl 的一輪不得留下 glibc 版）。
+#    在總結之前還原，這項結果才算得進去；EXIT 不再重建。
+# 7) Linux: after restoring the full build, its libc must be the one it started with
+#    (a musl run must not be left with a glibc binary). Restored before the summary so
+#    this counts; EXIT does not rebuild it again.
+if [[ $(uname -s) == Linux ]]; then
+    restored=1
+    if "${build_full[@]}" >/dev/null; then
+        end_libc=${(M)${(f)"$(<version-linux.txt)"}:#libc=*}
+        if [[ -n $start_libc && $end_libc != $start_libc ]]; then
+            bad "restored build is $end_libc, it started as $start_libc"
+        else
+            ok "restored build keeps its libc (${end_libc:-none})"
+        fi
+    else
+        bad "restoring the full build failed: ${build_full[*]}"
+    fi
+fi
 
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"

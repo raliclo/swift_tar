@@ -11,15 +11,17 @@
 # and 3, with -B4M (TAR_CHUNK_SIZE = 1<<22, one frame per chunk), single-threaded.
 # 從 zstd 子模組（v1.5.7）以六種方式在 BUILD 底下樹外建出 zstd.exe，再對 CORPUS_DIR 打成的 tar 交錯執行
 # zstd -b，取 ROUNDS 輪中最好的一次；等級 9（swift_tar 預設）與 3，-B4M（每 4 MiB chunk 一個 frame），單執行緒。
-#   a  MSVC cl.exe, VS 17 2022 generator      -- build_zstd-win.zsh before 2026-10-30 / 2026-10-30 前的 build_zstd-win.zsh
+#   a  MSVC cl.exe, newest VS generator (VS 17 2022 on 2026-10-30) -- build_zstd-win.zsh before 2026-10-30 / 2026-10-30 前的 build_zstd-win.zsh
 #   b  clang-cl, -DDYNAMIC_BMI2=0             c  clang-cl, default
 #   d  clang (GNU driver), -DDYNAMIC_BMI2=0   e  clang (GNU driver), default
 #   f  clang -mbmi2 (STATIC_BMI2) -- a ceiling only: the binary needs a BMI2 CPU, not a candidate
 #      clang -mbmi2（STATIC_BMI2）——只當上限參考：執行檔需要支援 BMI2 的 CPU，不是候選方案
-# clang/clang-cl/lld-link are the Swift 6.4.1 toolchain's. All use CMake's Release flags. b-f build
+# clang/clang-cl/lld-link are the newest installed Swift toolchain's (6.4.1 for the 2026-10-30 run;
+# the [Info] clang line records which). All use CMake's Release flags. b-f build
 # through ../win_clang_cmake.zsh (NMake from the VS build tools, as the real builders do); the run
 # recorded on 2026-10-30 used Ninja, which passes the same compile flags.
-# clang/clang-cl/lld-link 皆為 Swift 6.4.1 工具鏈所附，全部使用 CMake 的 Release 旗標。b-f 經由
+# clang/clang-cl/lld-link 皆為最新安裝的 Swift 工具鏈所附（2026-10-30 那次是 6.4.1；[Info] clang 那行記錄實際版本），
+# 全部使用 CMake 的 Release 旗標。b-f 經由
 # ../win_clang_cmake.zsh 建置（與正式建置腳本相同，用 VS 建置工具的 NMake）；2026-10-30 記錄的那次執行
 # 用的是 Ninja，傳入的編譯旗標相同。
 #
@@ -42,7 +44,7 @@
 # 輸出：本腳本旁的 zstd_bmi2_win_output.txt（主控台）與 zstd_bmi2_win.csv2（最佳值表）。
 set -uo pipefail
 script_path="${0:A}"
-if [[ ${1:-} == --help || ${1:-} == -h ]]; then sed -n '2,42p' "$script_path" | sed 's/^# \{0,1\}//'; exit 0; fi
+if [[ ${1:-} == --help || ${1:-} == -h ]]; then sed -n '2,44p' "$script_path" | sed 's/^# \{0,1\}//'; exit 0; fi
 (( $# <= 1 )) || { printf 'usage: %s [CORPUS_DIR]  (--help)\n' "${script_path:t}" >&2; exit 2 }
 
 SCRIPT_DIR=${script_path:h}
@@ -58,8 +60,19 @@ BUILD=${BUILD:-C:/Users/${USER:-$USERNAME}/tmp/zbmi2}
 OUTPUT_TXT=$SCRIPT_DIR/zstd_bmi2_win_output.txt
 OUTPUT_CSV2=$SCRIPT_DIR/zstd_bmi2_win.csv2
 [[ -d $CORPUS ]] || { printf '[Error] corpus not found: %s\n' "$CORPUS" >&2; exit 1 }
-TC=$(cygpath -m "$LOCALAPPDATA")/Programs/Swift/Toolchains/6.4.1+Asserts/usr/bin
-[[ -x $TC/clang-cl.exe && -x $TC/llvm-objdump.exe ]] || { printf '[Error] Swift 6.4.1 toolchain not at %s\n' "$TC" >&2; exit 1 }
+# CORRECTED 2026-11-07: TC named Toolchains/6.4.1+Asserts, which the 6.4.2 installer deleted, so the script
+# stopped here. It is now the newest installed toolchain by numeric sort (n), as compile_tar-win.zsh picks it.
+# 更正 2026-11-07：TC 原本寫死 Toolchains/6.4.1+Asserts，6.4.2 安裝程式已將其刪除，腳本在此中止。
+# 現改為以數值排序（n）挑出的最新安裝工具鏈，與 compile_tar-win.zsh 的選法相同。
+tcs=("$(cygpath -u "$LOCALAPPDATA")"/Programs/Swift/Toolchains/*/usr/bin(/Nn))
+(( ${#tcs} )) || { printf '[Error] no Swift toolchain under %s/Programs/Swift/Toolchains\n' "$LOCALAPPDATA" >&2; exit 1 }
+TC=$(cygpath -m "${tcs[-1]}")
+# win_clang_cmake (b-f) takes its driver from the swiftc on PATH, so put the same toolchain first: otherwise
+# a shell still naming a deleted version stops at "swiftc not on PATH" (measured 2026-11-07).
+# win_clang_cmake（b-f）以 PATH 上的 swiftc 決定驅動程式，故把同一個工具鏈放在最前面：否則仍指向已刪除
+# 版本的 shell 會停在「swiftc not on PATH」（2026-11-07 實測）。
+export PATH="${tcs[-1]}:$PATH"
+[[ -x $TC/clang-cl.exe && -x $TC/llvm-objdump.exe ]] || { printf '[Error] clang-cl.exe or llvm-objdump.exe missing in %s\n' "$TC" >&2; exit 1 }
 exec > >(tee "$OUTPUT_TXT") 2>&1
 
 variants=(a b c d e f)
@@ -80,10 +93,22 @@ common=(-DZSTD_BUILD_STATIC=ON -DZSTD_BUILD_SHARED=OFF -DZSTD_BUILD_PROGRAMS=ON
 src=$REPO/zstd/build/cmake
 . "$REPO/win_clang_cmake.zsh"
 typeset -A exe
+# Variant a's Visual Studio generator follows the newest installed VS, as the Swift toolchain above does.
+# CORRECTED 2026-11-07: it named "Visual Studio 17 2022"; this machine now has only VS 18 (2026), and
+# CMake stopped with "could not find any instance of Visual Studio" before a was built.
+# a 的 Visual Studio 產生器跟著最新安裝的 VS 走，與上面的 Swift 工具鏈相同。
+# 更正 2026-11-07：原本寫死 "Visual Studio 17 2022"；本機如今只有 VS 18（2026），CMake 在建出 a 之前
+# 就以「could not find any instance of Visual Studio」中止。
+vswhere='/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe'
+[[ -x $vswhere ]] || { printf '[Error] vswhere.exe not found; run: zsh ./build_tool_install-win.zsh\n' >&2; exit 1 }
+vs_major=$(MSYS2_ARG_CONV_EXCL='*' "$vswhere" -latest -products '*' -property catalog_productLineVersion | tr -d '\r')
+vs_gen=$(cmake --help | tr -d '\r' | grep -o "Visual Studio $vs_major [0-9][0-9][0-9][0-9]" | head -1)
+[[ -n $vs_gen ]] || { printf '[Error] cmake has no generator for Visual Studio %s\n' "${vs_major:-?}" >&2; exit 1 }
+printf '[Info] variant a generator: %s\n' "$vs_gen"
 printf '\n=== build / 建置 ===\n'
 for v in $variants; do
   case $v in
-    a) gen=(-G "Visual Studio 17 2022" -A x64) ;;
+    a) gen=(-G "$vs_gen" -A x64) ;;
     *) cc=clang; [[ $v == [bc] ]] && cc=clang-cl
        flags=''; [[ $v == [bd] ]] && flags=-DDYNAMIC_BMI2=0; [[ $v == f ]] && flags=-mbmi2
        win_clang_cmake $cc "$BUILD/$v/lib" || exit 1

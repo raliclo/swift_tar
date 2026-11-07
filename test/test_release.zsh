@@ -479,15 +479,23 @@ rw() {   # rw <version> <function> <args...>
 # 讓檔案同時含有兩個版本，而 rewrite_version 正確地拒絕了（2026-10-22 審查）。history 註解也寫
 # 這個版本，「註解保持不動」才是改寫有可能做錯的事。
 CUR=$(sed -n 's/^  version "\(.*\)"$/\1/p' "$FORMULA_SRC")
-check "Formula: its version is read" "$([[ $CUR == [0-9]*.[0-9]*.[0-9]* && $CUR != 0.2.0 ]] && print ok || print "[$CUR]")" ok
+# 改寫目標也由 CUR 推得（下一個 patch 版），不寫字面：原本寫死 0.2.0，04de5cc 把 Formula 發布到
+# 0.2.0 之後改寫變成無作用，三項失敗；scoop 那段更糟——套件檔也已是 0.2.0，「含有 0.2.0」永遠成立，
+# 成了不可能失敗的檢查。（2026-11-07 Swift_tar-W11 回報）
+# The rewrite target is derived from CUR too (the next patch), not a literal: it was 0.2.0, so once
+# 04de5cc published the Formula at 0.2.0 the rewrite did nothing and three checks failed; worse,
+# the scoop manifest was at 0.2.0 as well, so "carries 0.2.0" held regardless and could not fail.
+# (Reported 2026-11-07 by Swift_tar-W11.)
+NEXT=${CUR%.*}.$(( ${CUR##*.} + 1 ))
+check "Formula: its version is read" "$([[ $CUR == [0-9]*.[0-9]*.[0-9]* ]] && print ok || print "[$CUR]")" ok
 rc=0; rw "$CUR" rewrite_pair "$P/swift_tar.rb" "swift_tar-$CUR-macos-arm64.tar.zst" "$H1" || rc=$?
 check "Formula: the macOS arm64 url and sha256 are rewritten" "$rc:$(grep -c "$H1" "$P/swift_tar.rb")" "0:1"
 print -r -- "  # history: $CUR shipped first" >> "$P/swift_tar.rb"
-rc=0; rw 0.2.0 rewrite_version "$P/swift_tar.rb" rb || rc=$?
-check "Formula: every data line moves to 0.2.0" "$rc:$(grep -v '^ *#' "$P/swift_tar.rb" | grep -cF "$CUR")" "0:0"
-check "Formula: the url, the version and the test line carry 0.2.0" "$(grep -c '0\.2\.0' "$P/swift_tar.rb")" 3
+rc=0; rw $NEXT rewrite_version "$P/swift_tar.rb" rb || rc=$?
+check "Formula: every data line moves to $NEXT" "$rc:$(grep -v '^ *#' "$P/swift_tar.rb" | grep -cF "$CUR")" "0:0"
+check "Formula: the url, the version and the test line carry $NEXT" "$(grep -cF "$NEXT" "$P/swift_tar.rb")" 3
 check "Formula: a comment naming $CUR as history is left alone" "$(grep -cF "history: $CUR shipped first" "$P/swift_tar.rb")" 1
-rc=0; rw 0.2.0 rewrite_pair "$P/swift_tar.rb" swift_tar-0.2.0-macos-arm64.tar.zst "$H2" || rc=$?
+rc=0; rw $NEXT rewrite_pair "$P/swift_tar.rb" swift_tar-$NEXT-macos-arm64.tar.zst "$H2" || rc=$?
 check "Formula: then the new archive's hash replaces the old" "$rc:$(grep -c "$H2" "$P/swift_tar.rb"):$(grep -c "$H1" "$P/swift_tar.rb")" "0:1:0"
 # Through a temp file: GNU grep refuses to append to its own input ("input file is also the
 # output", exit 2), which ended this script on Windows; BSD grep allows it.
@@ -495,7 +503,7 @@ check "Formula: then the new archive's hash replaces the old" "$rc:$(grep -c "$H
 # 上讓這支腳本中途結束；BSD grep 允許。
 grep '^  url ' "$P/swift_tar.rb" > "$TMP/url.line"
 cat "$TMP/url.line" >> "$P/swift_tar.rb"
-rc=0; rw 0.2.0 rewrite_pair "$P/swift_tar.rb" swift_tar-0.2.0-macos-arm64.tar.zst "$H1" || rc=$?
+rc=0; rw $NEXT rewrite_pair "$P/swift_tar.rb" swift_tar-$NEXT-macos-arm64.tar.zst "$H1" || rc=$?
 check "Formula: two urls for one platform are refused" "$rc:$(grep -c 'expected one url' "$TMP/rw.out")" "1:1"
 # A two-digit major: the old glob read "10.2.3" as "0.2.3", rewrote it to "110.2.4" and then died
 # on its own leftover check -- after gh release create, so the release was already public.
@@ -505,17 +513,17 @@ sed "s/$CUR/10.2.3/g" "$FORMULA_SRC" > "$P/ten.rb"
 rc=0; rw 10.2.4 rewrite_version "$P/ten.rb" rb || rc=$?
 check "Formula: a two-digit major version is read whole" "$rc:$(grep -c '110\.2\.4' "$P/ten.rb"):$(grep -c '10\.2\.4' "$P/ten.rb")" "0:0:3"
 if [ -r "$P/swift_tar.json" ]; then
-  rc=0; rw 0.2.0 rewrite_version "$P/swift_tar.json" json || rc=$?
-  check "scoop: version, url and extract_dir move to 0.2.0" "$rc:$(grep -c '0\.2\.0' "$P/swift_tar.json")" "0:3"
+  rc=0; rw $NEXT rewrite_version "$P/swift_tar.json" json || rc=$?
+  check "scoop: version, url and extract_dir move to $NEXT" "$rc:$(grep -cF "$NEXT" "$P/swift_tar.json")" "0:3"
   check "scoop: the autoupdate template keeps its literal \$version" "$(grep -c 'v$version/swift_tar-$version-windows-x86_64' "$P/swift_tar.json")" 1
-  rc=0; rw 0.2.0 rewrite_pair "$P/swift_tar.json" swift_tar-0.2.0-windows-x86_64.tar.zst "$H2" || rc=$?
+  rc=0; rw $NEXT rewrite_pair "$P/swift_tar.json" swift_tar-$NEXT-windows-x86_64.tar.zst "$H2" || rc=$?
   check "scoop: the Windows hash is rewritten, the template left alone" "$rc:$(grep -c "$H2" "$P/swift_tar.json")" "0:1"
   # sed alone, not grep | sed: with no match grep exits 1 and pipefail ended the script here,
   # instead of failing this one case (seen on Windows with a stale parent manifest).
   # 只用 sed，不用 grep | sed：沒有比對到時 grep exit 1，pipefail 會在這裡結束腳本，而不是只讓這一項
   # 失敗（在 Windows 上以過舊的上層套件檔遇到）。
   extract=$(sed -n 's/.*"extract_dir": "\(swift_tar-0[^"]*\)".*/\1/p' "$P/swift_tar.json")
-  check "scoop: extract_dir names the archive's directory" "$extract" swift_tar-0.2.0-windows-x86_64
+  check "scoop: extract_dir names the archive's directory" "$extract" swift_tar-$NEXT-windows-x86_64
 fi
 
 # ---------------------------------------------------------------------

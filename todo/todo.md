@@ -251,7 +251,38 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ 🟡 程式端全修（H1–H10、M1–M17、S1–S3、N1–N5、低風險項）；待 Windows／Linux 驗證/ Whole-tree code review of v0.1.4 ▸ partly fixed
+## `-c --zip` 的錯誤訊息把非 ANSI 名稱印成 `??`（Windows）▸ 🔴 未修，低風險 2026-11-07 / `-c --zip` messages print a non-ANSI name as `??` on Windows ▸ open, low
+
+**實測 2026-11-07（Windows，ANSI 字碼頁 950）**：`src/` 內放 `plain.txt`、`中文.txt`、`한글.txt`、`😀.txt`，後兩者以
+`icacls <檔> /deny <user>:(R)`（stat 失敗）或 `(RD)`（開啟失敗）設為讀不到，再 `swift_tar -c --zip -f u.zip src`：
+
+```
+swift_tar: src/??.txt: Cannot stat: left out: Permission denied / 未收入：Permission denied      (R)
+swift_tar: Couldn't open src/??.txt: left out: Permission denied / 未收入：Permission denied     (RD)
+```
+
+0.1.4（`706c09bc`）與 0.2.0（`v0.2.0-2-g761a0169`）輸出相同，`-n 1` 亦同；rc=1、「2 unreadable item(s)」計數
+正確，只有名稱壞掉。兩個檔都顯示為 `src/??.txt`，使用者無從分辨是哪一個。同一情境的 tar 路徑（`-c`）印出
+`swift_tar: src/한글.txt: Cannot stat`，名稱正確。
+
+**成因（讀碼）**：bridge 在 `ARCHIVE_FAILED` 時以 `note_unreadable(&pipeline->unreadable, archive_reason(disk), …)`
+回報，名稱是 libarchive 自己格式化進錯誤字串的，它在 Windows 上把寬字元路徑以 ANSI 字碼頁轉成窄字串，非 ANSI
+字元變成 `?`。2026-10-31 審查的 `(null)` 修正（`entry_sort_name` 先取 UTF-8）只涵蓋 bridge 自己組名稱的訊息，
+碰不到這兩條。同一形狀的已知問題：libarchive Windows read_disk 的 TREE_ERROR_DIR 命名（8c9100c 以
+`visiting` 參數改寫了「Couldn't visit directory」那一條）。
+
+**可能修法**：比照 `visiting`，在 Windows 上 `ARCHIVE_FAILED` 時以 bridge 已知的寬字元路徑轉 UTF-8 組訊息，不用
+`archive_reason(disk)` 內的名稱。測試可放 `test_zip_fidelity.zsh` 的 CJK 段：以 `icacls` 設為讀不到，斷言 stderr
+含 `한글.txt` 而非 `??`（對 0.2.0 會失敗）。
+
+On Windows (ANSI code page 950), `-c --zip` reports an unreadable `한글.txt` or `😀.txt` as `src/??.txt`, on 0.1.4
+and 0.2.0 alike; the count and rc=1 are right, only the name is lost, and two such files are indistinguishable.
+The tar path prints the real name. The name comes from libarchive's error string (`archive_reason(disk)`), which
+libarchive builds by converting the wide path through the ANSI code page; the 2026-10-31 `(null)` fix
+(`entry_sort_name`, UTF-8 first) covers only the messages the bridge names itself. A fix would name the entry
+from the bridge's own wide path, as `visiting` already does for "Couldn't visit directory".
+
+## 2026-10-31 全樹程式碼審查（v0.1.4，`4c68c05`）▸ ✅ 程式端全修（H1–H10、M1–M17、S1–S3、N1–N5、低風險項）；~~待 Windows／Linux 驗證~~ Windows 與 WSL 已驗 2026-11-07（`(null)` 一項驗證不出來，實際缺陷另立為上方 `??` 條目）/ Whole-tree code review of v0.1.4 ▸ fixed; verified on Windows and WSL, the "(null)" item moved to the `??` entry above
 
 **進度 / Progress**
 - ✅ H1–H7 已修（macOS）：`test/test_review_20261031.zsh` 27 項，對 0.1.4 失敗 22 項（H7 的競態在 0.1.4 上兩次執行皆
@@ -317,7 +348,29 @@ file has to exist for that reference to mean anything.
     負時間採不同寫法（`-301266000.25` 對應 timespec(-301266000, 250000000)），與 GNU 和本工具差不到 1 秒，屬 bsdtar 端。
   - ZIP 檔案縮小：兩條路徑都已實跑，各 3 次皆回報、rc=1、`unzip -t` 通過；0.1.4 兩者皆 rc=0 且不作聲。已做成測試，
     截斷時程序若已結束則 SKIP。
-  - M12、S3 的 Windows 分支與 `(null)` 訊息：仍待 Windows 端（Swift_tar-W11）實跑。
+  - ~~M12、S3 的 Windows 分支與 `(null)` 訊息：仍待 Windows 端（Swift_tar-W11）實跑。~~ 2026-11-07 Windows 端實跑
+    （`release/swift_tar.exe` = `0.2.0 (v0.2.0-2-g761a0169) 20261106-141906`，Swift 6.4.1）：
+    - ✅ M12：`zsh test/test_dereference.zsh` → 21/0、SKIP 1（unlistable directory：Windows 不對擁有者強制 POSIX
+      權限位元）；`junction cycle without -h` 三項（rc 0、走訪有界 6 項、回報為迴圈）通過。
+    - ✅ S3：`release.zsh` 的 Windows 分支在發布 0.1.5 Windows 封存時實跑（e3b6e0e，sha256 `68c762fb…`，Mac 端
+      `shasum` OK）。當次輸出未保留，故此為「跑過且產出被驗證」，不是逐行輸出的記錄。
+    - 🟡 `(null)`：**驗證不出來，而實際可見的缺陷是 `??`，不是 `(null)`。** 系統 ANSI 字碼頁 950（Big5）下，
+      `한글.txt`、`😀.txt` 不在 ANSI 內。`-c --zip -v` 的 `a <名稱>` 在 0.1.4 與 0.2.0 都印對，故該檢查無法失敗，
+      不算驗證。以 `icacls /deny <user>:(R)`（stat 失敗）與 `(RD)`（開啟失敗）使檔案讀不到時，`-c --zip`
+      （含 `-n 1`）在 **0.1.4 與 0.2.0 都印** `swift_tar: src/??.txt: Cannot stat: left out: …` 與
+      `swift_tar: Couldn't open src/??.txt: left out: …`；同一情境下 tar 路徑（`-c`）印出正確的
+      `src/한글.txt`、`src/😀.txt`。名稱來自 libarchive 自己的錯誤字串（`archive_reason(disk)`，bridge
+      `note_unreadable(&pipeline->unreadable, archive_reason(disk), …)`），它在 Windows 上以 ANSI 轉換路徑，
+      不經 `entry_sort_name`，所以那項修正碰不到這兩條訊息。見下方「`-c --zip` 的錯誤訊息把非 ANSI 名稱印成
+      `??`」條目。
+    Verified on Windows 2026-11-07: M12 (test_dereference 21/0, SKIP 1) and S3 (ran when the 0.1.5 Windows
+    archive was made). "(null)" could not be verified: `-v` prints the names right on 0.1.4 too, so that check
+    cannot fail; and with the file made unreadable, `-c --zip` prints `src/??.txt` on both 0.1.4 and 0.2.0,
+    because the name comes from libarchive's own ANSI-converted error string, not from entry_sort_name.
+  - ✅ WSL：整套測試（含 `test_review_20261031.zsh`）在 `8c9100c` 為 1007/0（2026-10-31，Swift 6.4.1），在
+    `7fae15d` 的 glibc 與 `--musl` 建置各為 1035/0（2026-11-06，Swift 6.4.1）。Windows 整套在 `8c9100c` 為 989/0。
+    WSL: the whole suite, test_review_20261031 included, read 1007/0 at 8c9100c and 1035/0 for both the glibc
+    and the --musl build at 7fae15d; Windows read 989/0 at 8c9100c.
   Pre-1970 times are restored (pax negatives with the fraction borrow, GNU negative base-256);
   swift_tar and GNU tar agree to the nanosecond, bsdtar differs on negative fractions. ZIP
   shrink is now run and tested on both paths. M12, S3 and "(null)" still await Windows.
@@ -4455,7 +4508,7 @@ way (untested). Workaround: exclude `.git` files too, or build the drop from `gi
 Possible fix: ask git (`git rev-parse --git-dir`) in all three places, with a test on a copy
 that carries a broken `.git` file.
 
-## 2026-10-14 對 `18606cd..923b17e` 的審查：十項發現 ▸ 🟡 已修，macOS 已驗；第 1 項的修法在 Windows 實測是壞的、已另修，第 2、7 項仍待 Linux / Review of `18606cd..923b17e`: ten findings; finding 1's fix was measured broken on Windows and re-fixed, 2 and 7 await Linux
+## 2026-10-14 對 `18606cd..923b17e` 的審查：十項發現 ▸ 🟡 已修，macOS 已驗；第 1 項的修法在 Windows 實測是壞的、已另修，~~第 2、7 項仍待 Linux~~ 第 2 項仍待 Linux（第 7 項 2026-11-07 WSL 已驗）/ Review of `18606cd..923b17e`: ten findings; finding 1's fix was measured broken on Windows and re-fixed, 2 awaits Linux (7 verified on WSL 2026-11-07)
 
 **範圍**：`18606cd..923b17e`（約 3,981 行新增）。修正前後各在 macOS 上重建並跑 `test/` 全部 23 支，
 兩次皆 23 支以 0 結束；`test_patch_drop.zsh` 由 12 項變 16 項。
@@ -4468,7 +4521,7 @@ that carries a broken `.git` file.
 | 4 | `swift_tar.swift` `-test` | 找不到標準 tar 時印「略過」並以 0 結束 | 改為印出 FAIL 並以 1 結束 | macOS：PATH 清空時 rc=1 |
 | 5 | `patch/apply_patches.zsh` | 無 git 時逐行在整個檔案找，新增行已存在於別處的 patch 被判為已套用；`patch` 的輸出被丟掉 | 以 hunk 為單位連同前後文比對；失敗時印出 git 或 `patch` 的輸出 | 新增 4 項測試，對舊腳本 3 項失敗 |
 | 6 | `libarchive_zip_bridge.c` | 排序走訪列目錄時逐檔讀 fflags 與 sparse map，隨後丟棄 | 列目錄的 handle 帶上與 `stat_disk` 相同的旗標 | 位元組與修正前相同，見下；**沒有量速度** |
-| 7 | `build_libarchive.zsh` | bridge 以裸 `clang` 編譯，不理會傳入的 `CC` | 改用 `${CC:-clang}` | macOS 建置通過；**Linux 上 clang 不在 PATH 的情況未驗** |
+| 7 | `build_libarchive.zsh` | bridge 以裸 `clang` 編譯，不理會傳入的 `CC` | 改用 `${CC:-clang}` | macOS 建置通過；~~**Linux 上 clang 不在 PATH 的情況未驗**~~ **WSL 已驗 2026-11-07**（`1967d4d`，Swift 6.4.2）：PATH 只含一個目錄，內有 `/usr/local/bin`、`/usr/bin` 除 `clang*` 外每個指令的 symlink（這台 WSL 有 `/usr/bin/clang`，`/bin` 即 `/usr/bin`，只縮 PATH 仍找得到它）；該 PATH 下裸 `clang` 為 rc=127，`SWIFT_PREFIX=/usr/local/swift/usr zsh ./compile_tar-linux.zsh` 則 BUILD_RC=0、0 警告，cmake 用 `/usr/local/swift/usr/bin/clang` |
 | 8 | `swift_tar.swift` `unfitAsStandardTar` | 探測檔寫到可預測的 `swift_tar_idprobe_<pid>`，會跟隨別人預先放好的 symlink | 寫進當場建立、權限 0700 的目錄 | macOS：`-test` 通過，暫存目錄無殘留 |
 | 9 | `test/test_zip_parallel.zsh` | 單次計時的 CPU／經過時間比值，門檻只要求 2 核 | 要求 4 核，兩邊各取三次中較好的一次 | macOS：96% 與 381% |
 | 10 | `compile_tar-linux.zsh` | `--help` 多印一行 `set -euo pipefail` | 範圍由 `3,54` 改為 `3,52` | macOS 執行 `--help` 確認 |

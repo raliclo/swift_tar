@@ -53,32 +53,49 @@ exec > >(tee "$LOG") 2>&1
 # trap stops being a dilemma.
 # ---------------------------------------------------------------------------
 
-# 只做清理：冪等、瞬間、不需要任何外部狀態，因此掛在任何訊號上都安全。
-# 用 glob 而非只刪 "$TMP"，是為了同時掃掉先前被中斷的執行所遺留的目錄——見下方為何
-# 這件事不能只靠 trap。(N) 是必要的：zsh 預設 NOMATCH 在無相符時中止，而本機某處
-# unsetopt nomatch 會把它藏起來，只有 `zsh -f` 或乾淨環境才看得見。
-# Idempotent, instant, needs no state, so it is safe on any signal. The glob also
-# sweeps debris left by earlier interrupted runs. (N) is required: zsh's default
-# NOMATCH aborts when nothing matches, and a local unsetopt hides that here.
-remove_temps() { rm -rf "${TMPDIR:-/tmp}"/.test_nolz.*(N) }
+# 只做清理：冪等、瞬間、只刪本次的 TMP，因此掛在任何訊號上都安全。
+# 原本這裡用 glob 刪掉所有 .test_nolz.*，於是同一台機器上同時跑兩份會互刪暫存目錄：
+# 一份啟動時的清掃刪掉另一份的 TMP，後者在 cp 時以「目錄不存在」失敗，而它結束時的清掃
+# 又反過來刪掉前者的。（2026-11-07 WSL 上 Swift_tar-M4 與 Swift_tar-W11 同時執行時發生）
+# Idempotent, instant, and removes only this run's TMP, so it is safe on any signal.
+# This used a glob over every .test_nolz.*, so two copies on one machine deleted each
+# other's temp directory: one's startup sweep removed the other's TMP, which then failed
+# at a cp with "No such file or directory", and its own exit sweep removed the first's in
+# turn. (Happened 2026-11-07 on WSL, Swift_tar-M4 and Swift_tar-W11 running at once.)
+remove_temps() { [[ -n ${TMP:-} ]] && rm -rf "$TMP" }
 
-# 啟動時先掃一次。**這一行才是 Windows 上真正生效的部分**：實測本機 MSYS/mingw zsh 在
-# 阻塞於外部指令時，跨行程送來的 INT／TERM 不會執行 trap，行程以預設處置死亡（自我送
-# 訊號則會執行）。而 `timeout` 送的正是 SIGTERM。所以訊號 trap 在 macOS／Linux 上有效，
-# 在此平台上不可依賴——啟動時清掃不依賴任何訊號，因此在哪裡都成立。
-# Sweep on startup. This line, not the signal traps, is what works on Windows:
-# measured here, an externally delivered INT/TERM does not run the trap while zsh is
-# blocked in an external command; the process dies with the default disposition. And
-# SIGTERM is what `timeout` sends. The startup sweep depends on no signal at all.
-remove_temps
+# 先前被中斷的執行所遺留的目錄，由啟動時清掃。**這才是 Windows 上真正生效的部分**：實測
+# 本機 MSYS/mingw zsh 在阻塞於外部指令時，跨行程送來的 INT／TERM 不會執行 trap，行程以
+# 預設處置死亡（自我送訊號則會執行）。而 `timeout` 送的正是 SIGTERM。所以訊號 trap 在
+# macOS／Linux 上有效，在此平台上不可依賴——啟動時清掃不依賴任何訊號，因此在哪裡都成立。
+# 目錄名稱帶著建立者的 pid（.test_nolz.<pid>.XXXXXX），只刪 pid 已不存在者，所以正在
+# 執行的另一份不受影響；沒有 pid 的舊格式名稱是舊版留下的，一律刪除。(N/) 只取目錄，且
+# 無相符時不中止（zsh 預設 NOMATCH 會中止，本機某處 unsetopt nomatch 會把它藏起來）。
+# Debris from earlier interrupted runs is swept on startup. That, not the signal traps,
+# is what works on Windows: measured here, an externally delivered INT/TERM does not run
+# the trap while zsh is blocked in an external command; the process dies with the default
+# disposition, and SIGTERM is what `timeout` sends. The startup sweep depends on no signal.
+# Each directory carries its creator's pid (.test_nolz.<pid>.XXXXXX) and only those whose
+# pid is gone are removed, so another copy still running is left alone; an old-format name
+# without a pid was left by an older version and is removed. (N/) takes directories only
+# and does not abort on no match.
+sweep_stale_temps() {
+    local d pid
+    for d in "${TMPDIR:-/tmp}"/.test_nolz.*(N/); do
+        pid=${${d:t}#.test_nolz.}; pid=${pid%%.*}
+        # kill -0 只是探測；不存在的 pid 正是要找的答案，所以它的錯誤訊息不必印出。
+        # kill -0 is only a probe: a missing pid is the answer sought, so its message is not shown.
+        [[ $pid == <-> ]] && kill -0 $pid 2>/dev/null && continue
+        rm -rf "$d"
+    done
+}
 
-# 掃完才建立本次的 TMP。順序不能顛倒：glob 匹配所有 .test_nolz.*，若先建再掃，會把剛
-# 建好的那個一併刪掉——實測確認過，而且腳本要到後面用到 TMP 時才會以「目錄不存在」的
-# 形式失敗，離成因很遠。
-# Create this run's TMP only after the sweep. The order matters: the glob matches every
-# .test_nolz.*, so sweeping after creating would delete the directory just made —
-# measured — and the script would only fail later, far from the cause.
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/.test_nolz.XXXXXX")"
+sweep_stale_temps
+
+# 掃完才建立本次的 TMP，名稱帶本行程的 pid，之後的清掃才認得出它還在用。
+# Create this run's TMP after the sweep, named with this process's pid so later sweeps
+# can tell it is still in use.
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/.test_nolz.$$.XXXXXX")"
 
 # 還原完整版建置：這不是清理。它必須在提前失敗時也執行（例如下方的 FATAL），否則樹上
 # 留下的會是無 LZFSE 的公開版——所以它掛在 EXIT，而非只放在正常路徑的結尾。但收到訊號時
@@ -113,6 +130,25 @@ echo "[Info] os: $(command -v sw_vers >/dev/null 2>&1 && echo "macOS $(sw_vers -
 pass=0; fail=0
 ok()  { echo "PASS: $1"; pass=$((pass+1)); }
 bad() { echo "FAIL: $1"; fail=$((fail+1)); }
+
+# 0) 清掃只刪死掉的執行留下的目錄：放一個屬於執行中程序的、一個屬於不存在的 pid 的，
+#    再清掃一次；前者與本次的 TMP 要在，後者要不在。舊的 glob 清掃會把三個都刪掉。
+# 0) The sweep removes only what dead runs left: plant one directory owned by a live
+#    process and one by a pid that cannot exist, then sweep again; the first and this
+#    run's TMP must remain, the second must be gone. The old glob sweep removed all three.
+sleep 600 & peer_pid=$!
+peer_dir="${TMPDIR:-/tmp}/.test_nolz.$peer_pid.peer"
+dead_dir="${TMPDIR:-/tmp}/.test_nolz.999999999.dead"
+mkdir -p "$peer_dir" "$dead_dir"
+sweep_stale_temps
+[[ -d $peer_dir ]] && ok "startup sweep keeps a running copy's temp dir" \
+                   || bad "startup sweep deleted a running copy's temp dir"
+[[ -d $TMP ]]      && ok "startup sweep keeps this run's own temp dir" \
+                   || bad "startup sweep deleted this run's own temp dir"
+[[ -d $dead_dir ]] && bad "startup sweep left a dead run's temp dir" \
+                   || ok "startup sweep removes a dead run's temp dir"
+kill $peer_pid; wait $peer_pid || true   # sleep 被 kill 後以非 0 結束，這是預期的 / sleep exits non-zero once killed, as expected
+rm -rf "$peer_dir" "$dead_dir"
 
 # 本測試需要從原始碼建置兩份執行檔。曾經有一段守門在 Windows 上印出 SKIP 並以 0 結束，
 # 理由是「兩支建置腳本都僅適用 POSIX」。那個理由當時為真，但守門本身留下一個更糟的形狀：

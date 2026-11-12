@@ -264,6 +264,20 @@ swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat|--encrypt-only|--decrypt-only
 
 `-f -`（或省略 `-f`）表示讀取標準輸入／寫至標準輸出，可組進管線。
 
+### 選項順序
+
+選項不限順序：`--zstd` 這類壓縮旗標可以放在 `-c` 之前或之後，`-f` 也一樣。下面三行產生的封存逐位元組相同：
+
+```sh
+release/swift_tar --zstd -c -f src.tar.zst -C in a.txt
+release/swift_tar -c -f src.tar.zst --zstd -C in a.txt
+release/swift_tar -f src.tar.zst -C in --zstd -c a.txt
+```
+
+壓縮旗標只對 `-c` 有作用。讀取時會自動偵測格式，所以 `--zstd -x -f src.tar.zst` 也能執行，只會印一行提示說不需要這個旗標。
+唯一跟位置有關的是不帶橫線的傳統寫法，那串字母必須是第一個參數：`swift_tar czf out.tar.gz dir`。帶橫線的 `-czf`
+放在哪裡都可以。
+
 
 ### 建立範例
 

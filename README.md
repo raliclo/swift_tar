@@ -319,6 +319,24 @@ swift_tar -c|-x|-t|-r|-u|--delete|--identify|--cat|--encrypt-only|--decrypt-only
 `-f -` (or omitting `-f`) reads stdin / writes stdout, so swift_tar composes
 in pipelines.
 
+### Option order
+
+Options can come in any order: a codec flag such as `--zstd` may come before
+`-c` or after it, and so may `-f`. These three make the same archive, byte for
+byte:
+
+```sh
+release/swift_tar --zstd -c -f src.tar.zst -C in a.txt
+release/swift_tar -c -f src.tar.zst --zstd -C in a.txt
+release/swift_tar -f src.tar.zst -C in --zstd -c a.txt
+```
+
+A codec flag only matters for `-c`. Reading detects the format by itself, so
+`--zstd -x -f src.tar.zst` works and prints a note that the flag was not
+needed. The one form that depends on position is the traditional dashless
+cluster, which must be the first argument: `swift_tar czf out.tar.gz dir`. The
+dashed `-czf` can go anywhere.
+
 ### Create examples
 
 ```sh

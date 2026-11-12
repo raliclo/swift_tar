@@ -244,7 +244,7 @@ brew install raliclo/swift_tar/swift_tar
 
 # Windows (x86-64) — the bucket lives in the parent lzfse2 repository
 scoop bucket add lzfse2 https://github.com/raliclo/lzfse2
-scoop install raliclo/swift_tar
+scoop install lzfse2/swift_tar
 
 # Linux (x86-64 or aarch64) — fully static: extract and put swift_tar on PATH
 sha256sum -c swift_tar-0.2.0-linux-x86_64-musl.tar.zst.sha256

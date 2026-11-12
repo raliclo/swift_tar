@@ -200,8 +200,8 @@ brew trust raliclo/swift_tar
 brew install raliclo/swift_tar/swift_tar
 
 # Windows（x86-64）——bucket 在上層的 lzfse2 repo
-scoop bucket add raliclo https://github.com/raliclo/lzfse2
-scoop install raliclo/swift_tar
+scoop bucket add lzfse2 https://github.com/raliclo/lzfse2
+scoop install lzfse2/swift_tar
 
 # Linux（x86-64 或 aarch64）——完全靜態：解開後把 swift_tar 放上 PATH
 sha256sum -c swift_tar-0.2.0-linux-x86_64-musl.tar.zst.sha256

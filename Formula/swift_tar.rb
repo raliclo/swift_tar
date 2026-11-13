@@ -34,11 +34,11 @@
 class SwiftTar < Formula
   desc "Multi-core tar archiver: gzip, bzip2, xz, zstd, lz4, ZIP/ZIP64, encryption"
   homepage "https://github.com/raliclo/swift_tar"
-  version "0.2.0"
+  version "0.2.1"
   license "GPL-3.0-only"
 
-  url "https://github.com/raliclo/swift_tar/releases/download/v0.2.0/swift_tar-0.2.0-macos-arm64.tar.zst"
-  sha256 "708842515e822663f3efe9340a92116fa8e139af08550eed2552f712173021f3"
+  url "https://github.com/raliclo/swift_tar/releases/download/v0.2.1/swift_tar-0.2.1-macos-arm64.tar.zst"
+  sha256 "e14cc312f03a4166506ddb0bafe6ccd2816d6ae554e24943f791dd961a8ca6ae"
 
   depends_on arch: :arm64
   depends_on :macos
@@ -57,6 +57,6 @@ class SwiftTar < Formula
     mkdir testpath/"out"
     system bin/"swift_tar", "-x", "-f", testpath/"a.tar.gz", "-C", testpath/"out"
     assert_equal "pkg,license\nzlib,MIT\n", (testpath/"out/a.txt").read
-    assert_match "swift_tar 0.2.0 (v0.2.0 / ", shell_output("#{bin}/swift_tar --version")
+    assert_match "swift_tar 0.2.1 (v0.2.1 / ", shell_output("#{bin}/swift_tar --version")
   end
 end

@@ -96,10 +96,25 @@ build_dir="build/libarchive-win"
 # 該處）；沒有 .git 的原始碼包則保持套用。
 win_patches=(libarchive/0004-windows-name-unstatable-entry.patch)
 revert_patches() {
-    local st=$? out
+    local st=$? out left
     if ! out=$(zsh ./patch/apply_patches.zsh --revert "${win_patches[@]}" 2>&1); then
         print -ru2 -- "[FAIL] patch revert failed; libarchive/ is left modified / patch 還原失敗，libarchive/ 仍留有修改："
         print -ru2 -- "$out"
+        (( st == 0 )) && st=1
+    else
+        # Printed on success too: "was not applied" also exits 0, and on CI (run 43398900327)
+        # libarchive/ was left modified with nothing said here. / 成功時也印出：「本來就沒套用」
+        # 同樣以 0 結束，而 CI（run 43398900327）上 libarchive/ 留有修改，這裡卻什麼都沒說。
+        print -r -- "$out"
+    fi
+    # The revert is judged by the tree, not by its exit status: release.zsh refuses a modified
+    # libarchive/ much later, without saying which file. / 還原以工作區判定，不以退出碼判定：
+    # release.zsh 要到很久之後才拒絕被修改過的 libarchive/，而且不說是哪個檔。
+    left=$(git -C libarchive status --porcelain --untracked-files=no 2>&1)
+    if [[ -n $left ]]; then
+        print -ru2 -- "[FAIL] libarchive/ is still modified after the revert / 還原後 libarchive/ 仍有修改："
+        print -ru2 -- "$left"
+        git -C libarchive diff --stat >&2
         (( st == 0 )) && st=1
     fi
     exit $st

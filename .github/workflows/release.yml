@@ -118,11 +118,19 @@ jobs:
           install: zsh zstd
 
       # LF on Windows too: a CRLF checkout breaks every zsh script.
+      # --system, not --global: the build runs in the msys2 shell, whose HOME is not the Windows
+      # one, so a --global setting never reached it and Git for Windows' own autocrlf=true applied.
+      # git apply then wrote patch 0004's file back as CRLF, and release.zsh refused the "modified"
+      # libarchive/ (run 43402267112: i/lf w/crlf, core.autocrlf true from etc/gitconfig).
       # Windows 上也用 LF：CRLF 的 checkout 會讓每個 zsh 腳本壞掉。
+      # 用 --system 而非 --global：建置跑在 msys2 shell 裡，它的 HOME 不是 Windows 的那個，所以
+      # --global 的設定到不了那裡，Git for Windows 自己的 autocrlf=true 於是生效。git apply 因而把
+      # patch 0004 的檔案寫回成 CRLF，release.zsh 拒絕了「被修改過」的 libarchive/
+      # （run 43402267112：i/lf w/crlf，core.autocrlf true 來自 etc/gitconfig）。
       - name: LF line endings / LF 換行
         if: runner.os == 'Windows'
         shell: bash
-        run: git config --global core.autocrlf false
+        run: git config --system core.autocrlf false
 
       # Full history and tags: the build id is `git describe`, and at the tag it reads v<X.Y.Z>.
       # 完整歷史與 tag：build id 取自 `git describe`，在 tag 上它是 v<X.Y.Z>。

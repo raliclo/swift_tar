@@ -233,7 +233,7 @@ Every archive from 0.2.0 on carries a GitHub build-provenance attestation, which
 shows that it was built by this repository's workflow from the tagged commit:
 
 ```sh
-gh attestation verify swift_tar-0.2.0-linux-x86_64-musl.tar.zst -R raliclo/swift_tar
+gh attestation verify swift_tar-0.2.1-linux-x86_64-musl.tar.zst -R raliclo/swift_tar
 ```
 
 ```sh
@@ -247,13 +247,13 @@ scoop bucket add lzfse2 https://github.com/raliclo/lzfse2
 scoop install lzfse2/swift_tar
 
 # Linux (x86-64 or aarch64) — fully static: extract and put swift_tar on PATH
-sha256sum -c swift_tar-0.2.0-linux-x86_64-musl.tar.zst.sha256
-zstd -dc swift_tar-0.2.0-linux-x86_64-musl.tar.zst | tar -xf -
+sha256sum -c swift_tar-0.2.1-linux-x86_64-musl.tar.zst.sha256
+zstd -dc swift_tar-0.2.1-linux-x86_64-musl.tar.zst | tar -xf -
 
 # Any platform, without brew or scoop — install.zsh picks this machine's archive,
 # checks its .sha256 and puts swift_tar in ~/.local/bin (needs curl, zstd, tar)
 zsh install.zsh                    # latest release; on Linux the -musl build
-zsh install.zsh 0.2.0 --prefix /opt/swift_tar
+zsh install.zsh 0.2.1 --prefix /opt/swift_tar
 ```
 
 ### Making a release

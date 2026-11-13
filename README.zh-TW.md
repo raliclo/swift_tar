@@ -190,7 +190,7 @@ CMake build tree 屬於開發產物，並非 runtime dependency，因此不放�
 從加上 tag 的 commit 建出的：
 
 ```sh
-gh attestation verify swift_tar-0.2.0-linux-x86_64-musl.tar.zst -R raliclo/swift_tar
+gh attestation verify swift_tar-0.2.1-linux-x86_64-musl.tar.zst -R raliclo/swift_tar
 ```
 
 ```sh
@@ -204,13 +204,13 @@ scoop bucket add lzfse2 https://github.com/raliclo/lzfse2
 scoop install lzfse2/swift_tar
 
 # Linux（x86-64 或 aarch64）——完全靜態：解開後把 swift_tar 放上 PATH
-sha256sum -c swift_tar-0.2.0-linux-x86_64-musl.tar.zst.sha256
-zstd -dc swift_tar-0.2.0-linux-x86_64-musl.tar.zst | tar -xf -
+sha256sum -c swift_tar-0.2.1-linux-x86_64-musl.tar.zst.sha256
+zstd -dc swift_tar-0.2.1-linux-x86_64-musl.tar.zst | tar -xf -
 
 # 任何平台、不經 brew 或 scoop——install.zsh 挑選本機的封存、以 .sha256 驗證，
 # 再把 swift_tar 放進 ~/.local/bin（需要 curl、zstd、tar）
 zsh install.zsh                    # 最新版；Linux 上為 -musl 版
-zsh install.zsh 0.2.0 --prefix /opt/swift_tar
+zsh install.zsh 0.2.1 --prefix /opt/swift_tar
 ```
 
 ### 發布正式版

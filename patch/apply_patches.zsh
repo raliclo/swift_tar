@@ -157,10 +157,29 @@ text_state() {   # submodule patch -> applied | missing | stale
   elif (( removed_ok )); then print missing
   else print stale; fi
 }
+# `git apply` with core.autocrlf=false, whatever the configuration says. Under autocrlf=true it
+# writes the whole patched file back with CRLF, and the revert leaves it that way: the submodule
+# then reads " M" with an empty diff, and `update-index --refresh` says "needs update". That
+# failed both Windows CI jobs (run 43402267112, 2026-11-13): the workflow sets autocrlf=false with
+# --global from a bash step, but the build runs in the msys2 shell, whose HOME is another
+# directory, so only Git for Windows' system autocrlf=true applied. Reproduced here with
+# Git\bin\git 2.56.0.windows.4 on an LF checkout. With no conversion, apply and revert leave the
+# file's bytes as they were: measured identical on an all-LF checkout and on an all-CRLF one (where
+# the patch file is CRLF too). Only a mismatch -- LF patches, a CRLF submodule -- fails, out loud,
+# as "neither applies nor reverses", with the file untouched.
+# 無論設定為何，`git apply` 一律以 core.autocrlf=false 執行。autocrlf=true 時它把整個被 patch 的檔
+# 以 CRLF 寫回，還原後依然如此：submodule 於是顯示「 M」而 diff 是空的，`update-index --refresh`
+# 說「needs update」。兩個 Windows CI job 因此失敗（run 43402267112，2026-11-13）：workflow 在 bash
+# 步驟以 --global 設 autocrlf=false，但建置跑在 msys2 shell，其 HOME 是另一個目錄，於是只有 Git for
+# Windows 系統設定的 autocrlf=true 生效。本機以 Git\bin\git 2.56.0.windows.4 在 LF checkout 上重現。
+# 不做轉換時，套用與還原讓檔案的位元組維持原樣：全 LF 的 checkout 與全 CRLF 的 checkout（此時 patch
+# 檔也是 CRLF）實測都完全相同。只有不一致時——LF 的 patch、CRLF 的 submodule——才會失敗，且大聲說出
+# 「既套不上也反套不上」，檔案不動。
+g_apply() { local sub=$1; shift; git -c core.autocrlf=false -C "$sub" apply "$@"; }
 p_state() {   # submodule patch -> applied | missing | stale
   if with_git "$1"; then
-    if git -C "$1" apply --check --reverse "$2" 2>/dev/null; then print applied
-    elif git -C "$1" apply --check "$2" 2>/dev/null; then print missing
+    if g_apply "$1" --check --reverse "$2" 2>/dev/null; then print applied
+    elif g_apply "$1" --check "$2" 2>/dev/null; then print missing
     else print stale; fi
   else
     text_state "$1" "$2"
@@ -190,13 +209,13 @@ p_state() {   # submodule patch -> applied | missing | stale
 # 被擷取，`patch` 在沒有終端機時本來就取預設答案。
 p_apply() {
   local said
-  if with_git "$1"; then git -C "$1" apply "$2"; return; fi
+  if with_git "$1"; then g_apply "$1" "$2"; return; fi
   said=$( cd "$1" && "$PATCH_TOOL" -p1 -N 2>&1 <"$2" )
   [[ $(text_state "$1" "$2") == applied ]] || { print -ru2 -- "$said"; return 1; }
 }
 p_reverse() {
   local said
-  if with_git "$1"; then git -C "$1" apply --reverse "$2"; return; fi
+  if with_git "$1"; then g_apply "$1" --reverse "$2"; return; fi
   said=$( cd "$1" && "$PATCH_TOOL" -p1 -R 2>&1 <"$2" )
   [[ $(text_state "$1" "$2") == missing ]] || { print -ru2 -- "$said"; return 1; }
 }

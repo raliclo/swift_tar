@@ -205,6 +205,45 @@ rc=0; nrun || rc=$?
 rc=0; nrun --check || rc=$?
 [ "$rc" = 0 ] && ok "after which --check exits 0" || bad "after which --check exits 0 (got $rc)"
 
+# A git checkout under a git configured with core.autocrlf=true. git apply then wrote the
+# patched file back with CRLF and the revert kept it so: the submodule read " M" with an empty
+# diff, and release.zsh refused to pack on both Windows CI jobs (run 43402267112, 2026-11-13),
+# whose msys2 shell saw Git for Windows' system autocrlf=true, not the workflow's --global false.
+# The same happens on macOS, so the case runs everywhere. The setting comes from a global file
+# of our own, with the system file and the user's own left out.
+# 在設定 core.autocrlf=true 的 git 下的 git checkout。git apply 於是把被 patch 的檔以 CRLF 寫回，
+# 還原後依舊：submodule 顯示「 M」而 diff 是空的，兩個 Windows CI job 的 release.zsh 因此拒絕打包
+# （run 43402267112，2026-11-13）——它們的 msys2 shell 看到的是 Git for Windows 系統設定的
+# autocrlf=true，不是 workflow 以 --global 設的 false。macOS 上也一樣，所以這項到處都跑。設定由
+# 我們自己的 global 檔給，系統與使用者自己的設定都排除。
+if command -v git >/dev/null 2>&1; then
+  CR="$TMP/crlf"
+  mkdir -p "$CR/patch/demo" "$CR/demo"
+  cp "$ROOT/patch/apply_patches.zsh" "$ROOT/patch/tool.zsh" "$CR/patch/"
+  print -l 'int a;' 'int b;' 'int c;' > "$CR/demo/a.c"
+  cp "$CR/demo/a.c" "$CR/a.c.orig"
+  print -rl -- '--- a/a.c' '+++ b/a.c' '@@ -1,3 +1,3 @@' ' int a;' '-int b;' '+int B;' ' int c;' \
+    > "$CR/patch/demo/0001-crlf.patch"
+  print -l '[core]' '	autocrlf = true' > "$CR/gitconfig"
+  crgit() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$CR/gitconfig" git -C "$CR/demo" "$@"; }
+  crgit init -q && crgit add a.c \
+    && crgit -c user.name=test -c user.email=test@example.invalid commit -q -m init
+  crrun() { ( cd "$CR" && GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$CR/gitconfig" ./patch/apply_patches.zsh "$@" ) > "$CR/out" 2>&1; }
+  rc=0; crrun || rc=$?
+  [ "$rc" = 0 ] && grep -q 'int B;' "$CR/demo/a.c" && ok "autocrlf=true checkout: the patch applies" \
+    || bad "autocrlf=true checkout: the patch applies (rc $rc; $(tr '\n' '|' < "$CR/out"))"
+  rc=0; crrun --revert || rc=$?
+  [ "$rc" = 0 ] && ok "autocrlf=true checkout: revert exits 0" \
+    || bad "autocrlf=true checkout: revert exits 0 (rc $rc; $(tr '\n' '|' < "$CR/out"))"
+  cmp -s "$CR/demo/a.c" "$CR/a.c.orig" && ok "autocrlf=true checkout: after the round trip the bytes are the original's" \
+    || bad "autocrlf=true checkout: after the round trip the bytes are the original's ($(crgit ls-files --eol a.c))"
+  left=$(crgit status --porcelain --untracked-files=no)
+  [ -z "$left" ] && ok "autocrlf=true checkout: git status is clean after the round trip" \
+    || bad "autocrlf=true checkout: git status is clean after the round trip (got [$left])"
+else
+  echo "SKIP: autocrlf=true checkout (no git)"
+fi
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" = 0 ]

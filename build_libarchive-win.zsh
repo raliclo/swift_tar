@@ -97,6 +97,10 @@ build_dir="build/libarchive-win"
 win_patches=(libarchive/0004-windows-name-unstatable-entry.patch)
 revert_patches() {
     local st=$? out left
+    # Every outcome below is checked by hand; with errexit a diagnostic command's status 1 (a
+    # config key not set) would end the trap before the rest is printed. / 以下每個結果都逐一
+    # 判斷；在 errexit 下，診斷指令的狀態 1（某個設定沒設）會讓 trap 在其餘內容印出之前就結束。
+    setopt local_options no_err_exit
     if ! out=$(zsh ./patch/apply_patches.zsh --revert "${win_patches[@]}" 2>&1); then
         print -ru2 -- "[FAIL] patch revert failed; libarchive/ is left modified / patch 還原失敗，libarchive/ 仍留有修改："
         print -ru2 -- "$out"
@@ -115,6 +119,23 @@ revert_patches() {
         print -ru2 -- "[FAIL] libarchive/ is still modified after the revert / 還原後 libarchive/ 仍有修改："
         print -ru2 -- "$left"
         git -C libarchive diff --stat >&2
+        # Run 43400727014: status said M while diff --stat said nothing. These say why.
+        # Run 43400727014：status 說 M，diff --stat 卻什麼都沒說。以下說明原因。
+        {
+            print -r -- "--- which git / git --version:"; whence -a git; git --version
+            print -r -- "--- diff --summary / ls-files --eol / ls-files -s / ls-files --debug:"
+            git -C libarchive diff --summary
+            git -C libarchive ls-files --eol -- libarchive/archive_read_disk_windows.c
+            git -C libarchive ls-files -s -v -- libarchive/archive_read_disk_windows.c
+            git -C libarchive ls-files --debug -- libarchive/archive_read_disk_windows.c
+            print -r -- "--- config (crlf, filemode, eol):"
+            git -C libarchive config --show-origin --get-regexp '^core\.(autocrlf|filemode|eol|safecrlf)'
+            print -r -- "--- diff, first 40 lines:"
+            git -C libarchive diff -- libarchive/archive_read_disk_windows.c | head -40
+            print -r -- "--- update-index --refresh, then status again:"
+            git -C libarchive update-index --refresh
+            git -C libarchive status --porcelain --untracked-files=no
+        } >&2 2>&1
         (( st == 0 )) && st=1
     fi
     exit $st

@@ -251,7 +251,7 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## `-c --zip` 的錯誤訊息把非 ANSI 名稱印成 `??`（Windows）▸ 🟡 已修（2026-11-13），待 Windows 複驗後併入 master / `-c --zip` messages print a non-ANSI name as `??` on Windows ▸ fixed, awaiting a Windows re-run before master
+## `-c --zip` 的錯誤訊息把非 ANSI 名稱印成 `??`（Windows）▸ ✅ 已修（2026-11-13，master c7c296b） / `-c --zip` messages print a non-ANSI name as `??` on Windows ▸ fixed (master c7c296b)
 
 **修法（2026-11-13，分支 `fix/win-zip-unreadable-names-w11`）**：`next_header_action` 多收 `entry`，Windows 上遇到
 `"<名稱>: Cannot stat"` 與 `"Couldn't open <名稱>"` 時改以 `entry_sort_name(entry)`（UTF-8）組訊息。stat 失敗時
@@ -260,7 +260,7 @@ libarchive 原本不為項目命名，由 `patch/libarchive/0004-windows-name-un
 測試：`test_zip_fidelity.zsh` 的「unreadable non-ANSI names」，預設與 `--zip-unsorted` 各 5 項，只在 Windows 執行；
 😀 以十六進位位元組比對，因為 Windows 的 zsh port 中 `[[ x😀y == *😀* ]]` 為假。不另測 `-n 1`：Windows 不定義
 `SWIFT_TAR_ZIP_PARALLEL`，`-n 1` 與預設走同一條程式。
-Windows（Swift 6.4.2）：建置 0 警告；87b97d9 的舊執行檔在新段失敗 6 項，新執行檔 `test_zip_fidelity` 66/0。
+Windows（Swift 6.4.2）：建置 0 警告；87b97d9 的舊執行檔在新段失敗 6 項，新執行檔 `test_zip_fidelity` 66/0；c7c296b 複驗結果相同。
 Fixed in the bridge from the entry's own UTF-8 name, with patch 0004 (Windows only) naming the entry before
 "Cannot stat". The old binary fails the new Windows section and the new one passes, on Windows with Swift 6.4.2.
 

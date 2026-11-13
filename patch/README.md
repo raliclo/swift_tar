@@ -88,6 +88,9 @@ reported stale.
 ./patch/apply_patches.zsh            # 套用全部(已套用者略過)
 ./patch/apply_patches.zsh --check    # 只檢查,不改任何東西;缺任何一份就以 1 結束
 ./patch/apply_patches.zsh --revert   # 還原全部
+./patch/apply_patches.zsh [--check|--revert] libarchive/0004-windows-name-unstatable-entry.patch
+                                     # 只處理列出的 patch;名稱對不上就以 2 結束(Windows 建置只用 0004)
+                                     # only the listed patches; an unknown name exits 2 (the Windows build uses 0004 alone)
 ```
 
 `--check` 適合放進提交前的檢查或 CI:**它在 patch 沒套用時以 1 結束**。不過既然建置會
@@ -258,3 +261,37 @@ archive is byte-identical (measured across `-n 1` to `16`, and against a binary 
 without the patch). The prototype lives in the `.c` file, not `archive.h`, so that a build
 does not recompile the whole library. Builds without the patch (Windows, a sysroot's shared
 libarchive on Linux) do not define `SWIFT_TAR_ZIP_PARALLEL` and compress on one thread.
+
+### `libarchive/0004-windows-name-unstatable-entry.patch`
+
+**改什麼**:只動 `archive_read_disk_windows.c` 一處,只增不減。`next_entry` 在 stat 不到檔案、
+回傳 `"%ls: Cannot stat"` 之前,先 `archive_entry_copy_pathname_w(entry, tree_current_path(t))`
+——同一個函式裡的 `"Couldn't open %ls"` 本來就是先命名再失敗。
+
+**為什麼**:libarchive 以 `%ls` 把名稱格式化進錯誤字串,在 Windows 上會經 "C" locale 轉換,
+大於 U+00FF 的字元各變成一個 `?`。2026-11-07 實測(字碼頁 950):`한글.txt` 與 `😀.txt` 讀不到時,
+`-c --zip` 在 0.1.4 與 0.2.0 都回報成 `src/??.txt`,兩者無從分辨;tar 路徑印得對。bridge
+(`next_header_action`)改以項目自己的名稱(`entry_sort_name`,UTF-8)組訊息,而 stat 失敗時
+項目原本沒有名稱——這份 patch 就是讓它有。
+
+**為什麼不在 bridge 端解**:失敗時 libarchive 不交出任何其他形式的名稱,bridge 只拿得到
+已被轉壞的錯誤字串。
+
+**只有 Windows 套用,而且只套這一份**:`build_libarchive-win.zsh` 以
+`apply_patches.zsh libarchive/0004-…` 指名套用,建置後在 trap 中還原,還原失敗則讓建置失敗。
+0001–0003 不進 Windows(使用者 2026-11-13 決定):0001 只作用於 Apple;0003 只在
+`SWIFT_TAR_ZIP_PARALLEL` 下被呼叫,Windows 不定義它;0002 會讓 ZIP 中不帶資料的 FIFO 項目
+維持 FIFO,而 Windows 建不了 FIFO,那種成員在 Windows 解壓時就會從「空檔案」改成「回報略過」。
+POSIX 建置照舊套用全部,0004 在那裡改的檔案不會被編譯。
+
+**上游修好了要怎麼知道**:同 0001。若上游在 stat 失敗時已為項目命名,或錯誤字串改以 UTF-8
+格式化名稱,刪掉這份 patch;`test/test_zip_fidelity.zsh` 的「unreadable non-ANSI names」
+一段(只在 Windows 執行)會確認行為仍在。
+
+Names the entry before libarchive's Windows disk reader fails with "Cannot stat", as its
+"Couldn't open" path already does, so the bridge can report the file under its UTF-8 name;
+libarchive formats the name with %ls through the "C" locale, and `한글.txt` and `😀.txt` both
+came out as `src/??.txt`. Windows applies this patch alone, naming it to `apply_patches.zsh`
+and reverting it in a trap; 0001-0003 stay off Windows, as the user decided on 2026-11-13 --
+0002 would turn a data-less FIFO member from an empty file into a skipped one there. POSIX
+builds apply everything as before; the file 0004 touches is not compiled on them.

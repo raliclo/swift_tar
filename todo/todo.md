@@ -251,6 +251,20 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
+## CI 的 macos-x86_64 在 release.zsh 以 141（SIGPIPE）失敗一次，重跑通過 ▸ 🔴 未查明，低風險 2026-11-13 / CI's macos-x86_64 failed once in release.zsh with 141 (SIGPIPE); the re-run passed ▸ open, low
+
+**實測**：run 43444059488（workflow_dispatch，`ddefee8`）第 1 次嘗試，macos-x86_64 建置成功、`[INFO] swift_tar version:
+0.2.1 …` 之後，release.zsh 的 TRAPZERR 印出兩次「a command failed」，job 以 141 結束；第 2 次嘗試（只重跑失敗的
+job）通過。同一天前三次 run 這個平台都過，release.zsh 未改。
+**已排除（macOS arm64 本機）**：release.zsh 與它 source 的 platform／build_id／stripped 裡的管線只有六條（156、209、
+238、408、427、447 行）。427 行 `zstd -dq -c … | tar -xf -` 最像：但以同樣的 TAR_OPTS 打包時，bsdtar 3.5.3 解開會把
+stdin 讀完（剩 0 bytes；只有 `-b 2048` 打包時才留下 897,024 bytes），300 次 pipe_fail 迴圈 0 次失敗。
+**缺口**：TRAPZERR 不說是哪個指令失敗（註解寫明 $LINENO 在 trap 裡無用），所以日誌指不出是哪一條。下一步若再發生：
+讓 TRAPZERR 印出失敗的指令（例如以 DEBUG trap 記下 $ZSH_DEBUG_CMD），或在 427 行兩端各自記下退出碼。
+Once, in release.zsh on the macos-x86_64 runner, a command died of SIGPIPE; the re-run passed and nothing
+changed. Locally the likeliest pipeline (zstd | tar -xf) reads to the end and never failed in 300 runs.
+TRAPZERR does not name the command, which is the gap to close if it recurs.
+
 ## `-c --zip` 的錯誤訊息把非 ANSI 名稱印成 `??`（Windows）▸ ✅ 已修（2026-11-13，master c7c296b） / `-c --zip` messages print a non-ANSI name as `??` on Windows ▸ fixed (master c7c296b)
 
 **修法（2026-11-13，分支 `fix/win-zip-unreadable-names-w11`）**：`next_header_action` 多收 `entry`，Windows 上遇到

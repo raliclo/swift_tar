@@ -1,0 +1,24 @@
+diff --git a/libarchive/archive_read_disk_windows.c b/libarchive/archive_read_disk_windows.c
+index da5bb091..22debfeb 100644
+--- a/libarchive/archive_read_disk_windows.c
++++ b/libarchive/archive_read_disk_windows.c
+@@ -958,6 +958,19 @@ next_entry(struct archive_read_disk *a, struct tree *t,
+ 		case TREE_REGULAR:
+ 			lst = tree_current_lstat(t);
+ 			if (lst == NULL) {
++				/* swift_tar: name the entry even though it
++				 * failed, as "Couldn't open" below already
++				 * does. The message renders the wide path in
++				 * the current locale, which in "C" turns each
++				 * character above U+00FF into '?'; the caller
++				 * can only name the file from the entry.
++				 * swift_tar：即使失敗也替項目填上名稱，與下方
++				 * "Couldn't open" 已有的做法相同。訊息以目前
++				 * locale 呈現寬字元路徑，在 "C" 下凡大於
++				 * U+00FF 的字元都變成 '?'；呼叫端只能從項目
++				 * 取得檔名。 */
++				archive_entry_copy_pathname_w(entry,
++				    tree_current_path(t));
+ 				archive_set_error(&a->archive, t->tree_errno,
+ 				    "%ls: Cannot stat",
+ 				    tree_current_path(t));

@@ -46,6 +46,9 @@
 #   ./patch/apply_patches.zsh              套用全部（已套用者略過）
 #   ./patch/apply_patches.zsh --check      只檢查狀態，不改任何東西
 #   ./patch/apply_patches.zsh --revert     還原所有被 patch 的檔案
+#   ./patch/apply_patches.zsh [模式] libarchive/0004-….patch …
+#                                          只處理列出的 patch（Windows 建置只要 0004）
+#                                          only the listed patches (the Windows build wants 0004 alone)
 #   ./patch/apply_patches.zsh --help
 #
 # 離開碼 / Exit status:
@@ -69,9 +72,17 @@ MODE=apply
 case "${1:-}" in
   --check)  MODE=check; shift ;;
   --revert) MODE=revert; shift ;;
-  "") ;;
+  ""|*.patch) ;;
   *) print -ru2 -- "unknown option: $1"; exit 2 ;;
 esac
+# The rest names the patches to handle, as <submodule>/<file>; none means all. A name that
+# matches no patch is an error, so a renamed patch cannot turn into a build that applies nothing.
+# 其餘引數指定要處理的 patch，寫成 <submodule>/<檔名>；沒有就是全部。對不上任何 patch 的名稱是
+# 錯誤，免得 patch 改名之後建置變成什麼都沒套。
+typeset -a only=("$@")
+for p in $only; do
+  [[ -f $HERE/$p ]] || { print -ru2 -- "no such patch: $p / 沒有這個 patch：$p"; exit 2; }
+done
 
 typeset -i problems=0 applied=0 already=0 obsolete=0
 
@@ -204,6 +215,7 @@ for dir in "$HERE"/*(/N); do
 
   for p in "$dir"/*.patch(N); do
     name=${p:t}
+    (( ${#only} )) && (( ! ${only[(Ie)$sub/$name]} )) && continue
 
     # 三個狀態要分開，因為它們要人做的事完全不同：
     #   套得上          → 套用（或 --check 時回報「缺」）

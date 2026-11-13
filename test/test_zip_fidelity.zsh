@@ -252,6 +252,59 @@ rc=0; ( cd -q "$CJK" && "$ST" -t --zip -f 沒有.zip ) >/dev/null 2>"$TMP/cjk.er
 [ "$rc" != 0 ] && grep -qF "'沒有.zip'" "$TMP/cjk.err" && ok "missing CJK archive: stderr names it" \
   || bad "missing CJK archive: stderr names it (rc $rc; $(head -c 200 "$TMP/cjk.err"))"
 
+# An unreadable file with a name outside the ANSI code page is named as it is, not as "??"
+# (Windows, measured 2026-11-07 on 0.1.4 and 0.2.0). libarchive puts the name in its message
+# through the "C" locale, one '?' per character above U+00FF, so 한글.txt and 😀.txt were both
+# "src/??.txt". icacls denies (R) to make stat fail and (RD) to make the open fail; the two
+# messages come from different places in libarchive, and "Cannot stat" is named only with
+# patch/libarchive/0004. The denies are lifted before the trap removes $TMP.
+# 讀不到、而名稱超出 ANSI 字碼頁的檔案，以原本的名稱回報，而不是「??」（Windows，2026-11-07 於
+# 0.1.4 與 0.2.0 實測）。libarchive 經 "C" locale 把名稱放進訊息，凡大於 U+00FF 的字元各成一個
+# '?'，於是 한글.txt 與 😀.txt 都是「src/??.txt」。以 icacls 拒絕 (R) 讓 stat 失敗、拒絕 (RD) 讓開啟
+# 失敗；這兩條訊息來自 libarchive 的不同地方，而 "Cannot stat" 只有在 patch/libarchive/0004 之下才
+# 有名稱。拒絕權限在 trap 刪除 $TMP 之前先解除。
+case "$(uname -s)" in
+  MSYS*|MINGW*|CYGWIN*)
+    DENY="$TMP/deny"
+    mkdir -p "$DENY/src"
+    print -r -- plain > "$DENY/src/plain.txt"
+    print -r -- stat > "$DENY/src/한글.txt"
+    print -r -- open > "$DENY/src/😀.txt"
+    # Conversion off: icacls's /deny would otherwise be rewritten as a path; the file is
+    # already given in Windows form. / 關閉轉換：否則 icacls 的 /deny 會被改寫成路徑；檔案
+    # 本來就以 Windows 形式給出。
+    acl() { MSYS2_ARG_CONV_EXCL='*' icacls "$(cygpath -w "$1")" "${@:2}" >/dev/null; }
+    acl "$DENY/src/한글.txt" /deny "${USERNAME}:(R)"
+    acl "$DENY/src/😀.txt" /deny "${USERNAME}:(RD)"
+    for v in "" "--zip-unsorted"; do
+      label="--zip${v:+ $v}"
+      rm -f -- "$DENY/u.zip"
+      rc=0; ( cd -q "$DENY" && "$ST" -c --zip ${=v} -f u.zip src ) >/dev/null 2>"$TMP/deny.err" || rc=$?
+      eq "$label unreadable non-ANSI names: exits 1" 1 "$rc"
+      # 😀 is compared as hex bytes. On Windows neither grep -F nor a zsh pattern found it in text
+      # that held it -- `[[ x😀y == *😀* ]]` is false in the zsh port while `[[ 😀 == 😀 ]]` is true,
+      # and BMP names such as 한글 match (2026-11-13). / 😀 以十六進位位元組比對。Windows 上 grep -F
+      # 與 zsh pattern 都在確實含有它的文字裡找不到它——zsh port 中 `[[ x😀y == *😀* ]]` 為假、
+      # `[[ 😀 == 😀 ]]` 為真，而 한글 這類 BMP 名稱比對得到（2026-11-13）。
+      hex() { print -rn -- "$1" | od -An -tx1 | tr -d ' \n'; }
+      err=$(<"$TMP/deny.err")
+      [[ $err == *'src/한글.txt: Cannot stat'* ]] \
+        && ok "$label unreadable non-ANSI names: a file that cannot be stat'ed is named" \
+        || bad "$label unreadable non-ANSI names: a file that cannot be stat'ed is named ($(head -c 300 "$TMP/deny.err"))"
+      [[ $(hex "$err") == *$(hex "Couldn't open src/😀.txt")* ]] \
+        && ok "$label unreadable non-ANSI names: a file that cannot be opened is named" \
+        || bad "$label unreadable non-ANSI names: a file that cannot be opened is named ($(head -c 300 "$TMP/deny.err"))"
+      [[ $err == *'??'* ]] && bad "$label unreadable non-ANSI names: no '??' on stderr" \
+        || ok "$label unreadable non-ANSI names: no '??' on stderr"
+      eq "$label unreadable non-ANSI names: the readable file is stored" \
+        "src/plain.txt" "$(cd -q "$DENY" && "$ST" -t --zip -f u.zip 2>&1 | grep -F plain)"
+    done
+    acl "$DENY/src/한글.txt" /remove:d "$USERNAME"
+    acl "$DENY/src/😀.txt" /remove:d "$USERNAME"
+    ;;
+  *) echo "SKIP: unreadable non-ANSI names (the '??' came from libarchive's Windows reader)" ;;
+esac
+
 echo "-----------------------------------------"
 echo "PASS: $pass  FAIL: $fail"
 [ "$fail" -eq 0 ]

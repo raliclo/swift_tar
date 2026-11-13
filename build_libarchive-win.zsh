@@ -83,6 +83,30 @@ build_dir="build/libarchive-win"
 # 更正 2026-10-31：「/WX、它的警告組合、archive.lib 的檔名」三者只有最後一項成立。Release 下 /WX 關閉
 # （見上方更正），MSVC 警告組合（/w14062 等）只加入 CMAKE_C_FLAGS_DEBUG。站得住的理由是 archive.lib
 # 的檔名與 -utf-8。若要遇警告即中止，建置需明確加上 -DENABLE_WERROR=ON。
+# Windows applies one patch of patch/libarchive/, not all: 0004 names an entry that cannot be
+# stat'ed, so `-c --zip` can say which file it left out instead of "src/??.txt" (2026-11-13). The
+# others are not wanted here -- 0002 would change what a FIFO entry extracts to, 0003 is used
+# only with SWIFT_TAR_ZIP_PARALLEL, 0001 is Apple's -- and the Windows build never applied them.
+# Applied and reverted the way build_libarchive.zsh does it, revert in a trap and loud on failure
+# (see the reasons there); a source drop with no .git keeps it applied.
+# Windows 只套用 patch/libarchive/ 其中一份，不是全部：0004 替 stat 不到的項目填上名稱，使
+# `-c --zip` 說得出略過的是哪個檔，而不是「src/??.txt」（2026-11-13）。其餘的這裡不要——0002 會改變
+# FIFO 項目解出來的樣子，0003 只在 SWIFT_TAR_ZIP_PARALLEL 下用到，0001 是 Apple 的——而 Windows
+# 建置從未套用過它們。套用與還原方式同 build_libarchive.zsh：在 trap 中還原、失敗時大聲說（理由見
+# 該處）；沒有 .git 的原始碼包則保持套用。
+win_patches=(libarchive/0004-windows-name-unstatable-entry.patch)
+revert_patches() {
+    local st=$? out
+    if ! out=$(zsh ./patch/apply_patches.zsh --revert "${win_patches[@]}" 2>&1); then
+        print -ru2 -- "[FAIL] patch revert failed; libarchive/ is left modified / patch 還原失敗，libarchive/ 仍留有修改："
+        print -ru2 -- "$out"
+        (( st == 0 )) && st=1
+    fi
+    exit $st
+}
+[ -e libarchive/.git ] && trap revert_patches EXIT
+zsh ./patch/apply_patches.zsh "${win_patches[@]}"
+
 . ./win_clang_cmake.zsh
 win_clang_cmake clang-cl "$SCRIPT_DIR/$build_dir/libarchive/Release" || exit 1
 # This build tree is incremental (compile_tar-win.zsh runs this every time), and CMake refuses to

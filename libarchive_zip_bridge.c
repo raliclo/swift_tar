@@ -997,9 +997,19 @@ typedef struct {
  * 唯一可能指的對象。Windows 以它取代 libarchive 放在該訊息裡的名稱：archive_read_disk_windows.c
  * 先把路徑從堆疊彈出才格式化訊息，於是名稱是空的——或者，2026-10-31 實測，是記憶體殘渣（環境
  * 變數字串）——不存在的 `不存在的檔案.txt` 被回報成「swift_tar: : Couldn't visit directory」。
- * POSIX 的 reader 保留名稱，所以 POSIX 不變。 */
+ * POSIX 的 reader 保留名稱，所以 POSIX 不變。
+ *
+ * `entry` is the one archive_read_next_header2 was filling. Windows names a file that could not be
+ * stat'ed or opened from it, not from the message: libarchive renders the wide path there in the
+ * "C" locale, one '?' per character above U+00FF, so an unreadable 한글.txt and 😀.txt were both
+ * "src/??.txt" (2026-11-07). "Couldn't open" has the name in the entry already; "Cannot stat" has
+ * it only with patch/libarchive/0004, and without it the message is left as it was.
+ * `entry` 是 archive_read_next_header2 正在填的那個項目。Windows 從它、而不是從訊息，替 stat 不到或
+ * 開不了的檔案命名：libarchive 在訊息裡以 "C" locale 呈現寬字元路徑，凡大於 U+00FF 的字元各成一個
+ * '?'，於是讀不到的 한글.txt 與 😀.txt 都是「src/??.txt」（2026-11-07）。"Couldn't open" 時項目本來就
+ * 有名稱；"Cannot stat" 只有在 patch/libarchive/0004 之下才有，沒有時訊息維持原樣。 */
 static int next_header_action(int status, struct archive *disk, zip_pipeline *pipeline,
-                              const char *visiting,
+                              const char *visiting, struct archive_entry *entry,
                               char *error_buffer, size_t error_capacity) {
     if (status == ARCHIVE_OK) return 1;
     if (status == ARCHIVE_WARN) {
@@ -1021,8 +1031,29 @@ static int next_header_action(int status, struct archive *disk, zip_pipeline *pi
                             archive_errno(disk));
             return 0;
         }
+        if (archive_entry_pathname_w(entry) != NULL) {
+            static const char stat_failed[] = ": Cannot stat";
+            static const char open_failed[] = "Couldn't open ";
+            const char *name = entry_sort_name(entry);
+            char named[1024];
+
+            if (reason_len >= sizeof(stat_failed) - 1 &&
+                strcmp(reason + reason_len - (sizeof(stat_failed) - 1), stat_failed) == 0) {
+                snprintf(named, sizeof(named), "%s%s", name, stat_failed);
+                note_unreadable(&pipeline->unreadable, named, "left out", "未收入",
+                                archive_errno(disk));
+                return 0;
+            }
+            if (strncmp(reason, open_failed, sizeof(open_failed) - 1) == 0) {
+                snprintf(named, sizeof(named), "%s%s", open_failed, name);
+                note_unreadable(&pipeline->unreadable, named, "left out", "未收入",
+                                archive_errno(disk));
+                return 0;
+            }
+        }
 #else
         (void)visiting;
+        (void)entry;
 #endif
         note_unreadable(&pipeline->unreadable, archive_reason(disk),
                         "left out", "未收入", archive_errno(disk));
@@ -1178,7 +1209,7 @@ static int add_sorted_tree(sorted_walk *walk, const char *path, const sorted_chi
             entry = NULL;
             break;
         }
-        status = next_header_action(status, walk->disk, walk->pipeline, visiting,
+        status = next_header_action(status, walk->disk, walk->pipeline, visiting, entry,
                                     walk->error_buffer, walk->error_capacity);
         if (status < 0) goto close_reader;
         if (status == 0) {
@@ -1416,7 +1447,7 @@ static int add_path(zip_pipeline *pipeline,
          * into; see next_header_action. / 接下來要列出的目錄，起初是運算元，之後是最近一次
          * descend 進去的那個；見 next_header_action。 */
         status = next_header_action(status, disk, pipeline,
-                                    descended != NULL ? descended : path,
+                                    descended != NULL ? descended : path, entry,
                                     error_buffer, error_capacity);
         if (status < 0) goto cleanup;
         if (status == 0) {

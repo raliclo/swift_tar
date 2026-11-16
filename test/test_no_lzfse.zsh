@@ -31,6 +31,16 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="${HERE:h}"
 cd "$ROOT"
 
+# Both builds and the final restore share this checkout's output.
+# 兩次建置及最後的還原共用此工作區的產物。
+mkdir -p build
+build_lock="$ROOT/build/test_no_lzfse.lock"
+if ! mkdir "$build_lock" 2>/dev/null; then
+    print -ru2 -- "Cannot acquire $build_lock; remove a stale lock only after confirming the build stopped. / 無法取得鎖；確認建置已停止後才可移除殘留的鎖。"
+    exit 1
+fi
+trap 'rmdir "$build_lock"' EXIT
+
 LOG="$HERE/test_no_lzfse.log"
 exec > >(tee "$LOG") 2>&1
 # 暫存改建在 $TMPDIR 而非 $HERE：先前建在 test/ 之下，被中斷的執行會把殘留留在版控
@@ -115,7 +125,7 @@ restore_full_build() { (( ${#build_full} )) && "${build_full[@]}" >/dev/null 2>&
 # On Linux the full build is restored and checked before the summary (check 7);
 # restored=1 keeps EXIT from building it a second time.
 interrupted=0; restored=0
-on_exit()   { remove_temps; (( interrupted || restored )) || restore_full_build }
+on_exit()   { remove_temps; (( interrupted || restored )) || restore_full_build; rmdir "$build_lock" }
 on_signal() { interrupted=1; exit 130 }
 trap on_exit EXIT
 trap on_signal INT TERM HUP

@@ -579,6 +579,7 @@ typedef struct {
     size_t claim;             /* number of the next job a worker will look at */
     la_int64_t in_flight;
     int base_dir;             /* what relative paths are relative to */
+    int follow_symlinks;
     int stopping;
 #endif
 } zip_pipeline;
@@ -589,11 +590,13 @@ typedef struct {
  * libarchive's walk may be changing on the calling thread at this very moment.
  * 讀取一個檔案並 deflate 到記憶體。在工作執行緒上執行；只碰自己的 job。檔案是相對於 base_dir
  * 開啟，而不是相對於工作目錄——呼叫端執行緒上的 libarchive 走訪可能正在改變工作目錄。 */
-static void compress_job(zip_job *job, int base_dir, unsigned char *input, size_t input_size) {
+static void compress_job(zip_job *job, int base_dir, int follow_symlinks,
+                         unsigned char *input, size_t input_size) {
     const char *path = archive_entry_sourcepath(job->entry);
     z_stream stream;
     size_t capacity = 64 * 1024;
     int fd;
+    struct stat opened;
     int flush = Z_NO_FLUSH;
     /* What is read stops at the size the entry was listed with, which is what the window
      * counted. Read to the end of the file instead, a file growing during the run was held
@@ -602,11 +605,23 @@ static void compress_job(zip_job *job, int base_dir, unsigned char *input, size_
      * 檔案長到多大，這裡就留多大，而且存得進去，-n 1 卻以錯誤結束。 */
     la_int64_t remaining = job->cost;
 
-    fd = openat(base_dir, path != NULL ? path : "", O_RDONLY | O_CLOEXEC);
-    if (fd < 0) {
+    /* Do not block on a replacement FIFO or read a different inode from the one scanned.
+     * 避免因替換後的 FIFO 阻塞，也不讀取與掃描時不同的 inode。 */
+    int flags = O_RDONLY | O_CLOEXEC | O_NONBLOCK | (follow_symlinks ? 0 : O_NOFOLLOW);
+    fd = openat(base_dir, path != NULL ? path : "", flags);
+    int open_error = 0;
+    if (fd < 0 || fstat(fd, &opened) != 0) {
+        open_error = errno;
+    } else if (!S_ISREG(opened.st_mode) ||
+               opened.st_dev != archive_entry_dev(job->entry) ||
+               (la_int64_t)opened.st_ino != archive_entry_ino64(job->entry)) {
+        open_error = ESTALE;
+    }
+    if (open_error != 0) {
         /* Not fatal: the writer reports it and leaves the file out (pipeline_write_first).
          * 不是致命錯誤：由寫出端回報並略過這個檔案（pipeline_write_first）。 */
-        job->error_number = errno;
+        if (fd >= 0) close(fd);
+        job->error_number = open_error;
         job->unreadable = 1;
         job->failed = 1;
         return;
@@ -708,7 +723,7 @@ static void *pipeline_worker(void *context) {
             snprintf(job->error, sizeof(job->error), "out of memory while compressing");
             job->failed = 1;
         } else {
-            compress_job(job, pipeline->base_dir, input, input_size);
+            compress_job(job, pipeline->base_dir, pipeline->follow_symlinks, input, input_size);
         }
 
         pthread_mutex_lock(&pipeline->lock);
@@ -789,7 +804,7 @@ static int pipeline_write_first(zip_pipeline *pipeline) {
  * 啟動管線。`threads` 是可同時壓縮的數量；1 以下，或建置不含執行緒路徑時，每個項目到了就寫。
  * 要在 chdir 之後呼叫：此刻的工作目錄，就是之後開啟相對路徑時所依據的目錄。 */
 static int pipeline_open(zip_pipeline *pipeline, struct archive *writer, int verbose,
-                         int threads, char *error_buffer, size_t error_capacity) {
+                         int threads, int follow_symlinks, char *error_buffer, size_t error_capacity) {
     memset(pipeline, 0, sizeof(*pipeline));
     pipeline->writer = writer;
     pipeline->verbose = verbose;
@@ -797,6 +812,7 @@ static int pipeline_open(zip_pipeline *pipeline, struct archive *writer, int ver
     pipeline->error_capacity = error_capacity;
 #if defined(SWIFT_TAR_ZIP_PARALLEL) && !defined(_WIN32)
     pipeline->base_dir = -1;
+    pipeline->follow_symlinks = follow_symlinks;
     if (threads <= 1) return 0;
     pipeline->base_dir = open(".", O_RDONLY | O_CLOEXEC);
     pipeline->jobs = (zip_job *)calloc(ZIP_WINDOW_JOBS, sizeof(zip_job));
@@ -819,6 +835,7 @@ static int pipeline_open(zip_pipeline *pipeline, struct archive *writer, int ver
     }
 #else
     (void)threads;
+    (void)follow_symlinks;
 #endif
     return 0;
 }
@@ -1699,7 +1716,8 @@ int swift_tar_zip_create(const char *archive_path,
     }
 
     pipeline_opened = 1;
-    if (pipeline_open(&pipeline, writer, verbose, threads, error_buffer, error_capacity) != 0) {
+    if (pipeline_open(&pipeline, writer, verbose, threads, follow_symlinks,
+                      error_buffer, error_capacity) != 0) {
         goto cleanup;
     }
 

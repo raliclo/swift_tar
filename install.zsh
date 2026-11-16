@@ -155,21 +155,54 @@ check_version() {
 }
 check_version "$tmp/$stem" >/dev/null
 
-# Each file is copied beside its destination and then renamed over it. Copying straight over a
-# binary rewrites it in place: on macOS a signed binary changed that way is killed at its next
-# start, and on Windows a running swift_tar.exe is locked, so the rename fails rather than leaving
-# a half-installed set.
-# 每個檔案先複製到目的地旁邊，再改名蓋過去。直接覆寫執行檔是就地改寫：macOS 上這樣改過的已簽章執行
-# 檔下次啟動會被砍掉；Windows 上執行中的 swift_tar.exe 被鎖住，改名會失敗，而不是留下裝了一半的組合。
-typeset -a files=("$stem/swift_tar$exe")
+# Prepare the whole set before replacing anything, and keep backups on the same filesystem.
+# 先準備整組檔案與同檔案系統上的備份，再開始替換。
+typeset -a files=() replaced=()
 [[ -n $exe ]] && files+=("$stem"/*.dll(N))
-mkdir -p -- "$prefix/bin"
+files+=("$stem/swift_tar$exe")
+dest="$prefix/bin"
+mkdir -p -- "$dest"
+stage=$(mktemp -d "$dest/.swift_tar-install.XXXXXX")
+installed=0
+finish_install() {
+  local rc=$? name i rollback_failed=0
+  if (( ! installed )); then
+    for (( i = ${#replaced}; i > 0; i-- )); do
+      name=${replaced[i]}
+      if [[ -e "$stage/old/$name" || -L "$stage/old/$name" ]]; then
+        mv -f -- "$stage/old/$name" "$dest/$name" || rollback_failed=1
+      else
+        rm -f -- "$dest/$name" || rollback_failed=1
+      fi
+    done
+  fi
+  if (( rollback_failed )); then
+    print -ru2 -- "Rollback incomplete; backups kept in $stage / 還原未完成，備份保留於 $stage"
+    rc=1
+  else
+    rm -rf -- "$stage"
+  fi
+  rm -rf -- "${tmp:?}"
+  return "$rc"
+}
+trap finish_install EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+mkdir -- "$stage/new" "$stage/old"
 for f in $files; do
-  cp -- "$f" "$prefix/bin/${f:t}.new.$$"
-  mv -f -- "$prefix/bin/${f:t}.new.$$" "$prefix/bin/${f:t}" \
-    || die "cannot replace $prefix/bin/${f:t} (is swift_tar running?)" "無法取代 $prefix/bin/${f:t}（swift_tar 還在執行？）"
+  [[ ! -d "$dest/${f:t}" ]] || die "$dest/${f:t} is a directory / 目的地是目錄：$dest/${f:t}"
+  if [[ -e "$dest/${f:t}" || -L "$dest/${f:t}" ]]; then
+    cp -pP -- "$dest/${f:t}" "$stage/old/${f:t}"
+  fi
+  cp -- "$f" "$stage/new/${f:t}"
 done
-chmod 755 "$prefix/bin/swift_tar$exe"
+chmod 755 "$stage/new/swift_tar$exe"
+for f in $files; do
+  mv -f -- "$stage/new/${f:t}" "$dest/${f:t}" \
+    || die "cannot replace $dest/${f:t} (is swift_tar running?)" "無法取代 $dest/${f:t}（swift_tar 還在執行？）"
+  replaced+=("${f:t}")
+done
 
-check_version "$prefix/bin"
+check_version "$dest"
+installed=1
 [[ ":$PATH:" == *":$prefix/bin:"* ]] || print -r -- "Add $prefix/bin to PATH. / 請把 $prefix/bin 加入 PATH。"

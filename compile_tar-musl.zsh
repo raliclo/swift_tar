@@ -21,9 +21,11 @@
 # （compile_tar-linux.zsh --musl，也就是這裡的 native）；在 Mac 上的交叉建置可為單一機器產生同樣的
 # 封存，再到同架構的 Linux 機器上以 verify_release.zsh 檢查。需要 swift.org 的 toolchain 與相符的 SDK：
 #
-#   SWIFT_TOOLCHAIN   default ~/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain
-#   SWIFT_STATIC_SDK  default: the swift-linux-musl directory of
-#                     swift-6.4.0-RELEASE_static-linux-0.1.0, as `swift sdk install` places it
+#   SWIFT_TOOLCHAIN   default: the newest ~/Library/Developer/Toolchains/swift-X.Y.Z-RELEASE.xctoolchain
+#                     預設：~/Library/Developer/Toolchains 下最新的 swift-X.Y.Z-RELEASE.xctoolchain
+#   SWIFT_STATIC_SDK  default: the swift-linux-musl directory of the SDK matching that toolchain,
+#                     swift-X.Y.Z-RELEASE_static-linux-0.1.0, as `swift sdk install` places it
+#                     預設：與該 toolchain 相符的 SDK 的 swift-linux-musl 目錄
 # =====================================================================
 set -euo pipefail
 
@@ -63,7 +65,14 @@ esac
 if [[ -n ${SWIFT_TOOLCHAIN:-} ]]; then
   TC=$SWIFT_TOOLCHAIN/usr/bin
 elif [[ $HOST == Darwin ]]; then
-  TC=$HOME/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain/usr/bin
+  # The newest by zsh's numeric glob order, as compile_tar-win.zsh picks: 6.4.10 after 6.4.3; the
+  # swift-latest link is not counted. Until 2026-11-25 this was fixed at 6.4.0, which this Mac no
+  # longer had once it moved to 6.4.3.
+  # 依 zsh 的數字 glob 排序取最新，與 compile_tar-win.zsh 相同：6.4.10 在 6.4.3 之後；swift-latest 連結
+  # 不算。到 2026-11-25 為止這裡寫死 6.4.0，這台 Mac 換成 6.4.3 後就沒有那一份了。
+  tcs=( $HOME/Library/Developer/Toolchains/swift-<->.<->.<->-RELEASE.xctoolchain(N-/nOn) )
+  (( ${#tcs} )) || die "no swift-X.Y.Z-RELEASE.xctoolchain in ~/Library/Developer/Toolchains; install the swift.org toolchain or set SWIFT_TOOLCHAIN"
+  TC=${tcs[1]}/usr/bin
 elif [[ -n ${SWIFT_PREFIX:-} ]]; then
   TC=$SWIFT_PREFIX/bin
 else

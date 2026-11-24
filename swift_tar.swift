@@ -8225,10 +8225,15 @@ struct SwiftTarMain {
             eprint("Error: -r/-u work on uncompressed tar only; drop the codec flag. / 錯誤：-r/-u 僅支援未壓縮 tar，請移除引擎旗標。")
             exit(1)
         }
-        // Not for --zstd-parallel: on reading it does something -- it picks the multi-core
-        // decoder -- so telling the user it only affects -c would be false.
-        // --zstd-parallel 不適用：它在讀取時確實有作用——選擇多核心解碼——所以說它只影響 -c
-        // 並不正確。
+        // A codec flag on -x/-t is accepted without a word, as GNU tar and bsdtar accept it:
+        // reading auto-detects, so the flag has nothing to do. Until 2026-11-24 this printed
+        // "Note: codec flags only affect -c" on every such run, and on the LinuxCS VM, where
+        // /usr/bin/tar is a wrapper that execs swift_tar, multiscp extracts with GNU's
+        // `-x --zstd` and the note came with every transfer (test_read_codec_flags.zsh).
+        // -x／-t 帶壓縮旗標時不發一語地接受，與 GNU tar、bsdtar 相同：讀取時自動判斷格式，旗標
+        // 沒有事可做。到 2026-11-24 為止，這類執行每次都印出「提示：引擎旗標僅影響 -c」；在
+        // /usr/bin/tar 為轉手執行 swift_tar 之包裝程式的 LinuxCS 虛擬機上，multiscp 以 GNU 的
+        // `-x --zstd` 解開，每次傳輸都帶著這行提示（test_read_codec_flags.zsh）。
         // --zstd-level 只對以 zstd 建立有意義；0.1.4 對 `-cz --zstd-level 19` 默默忽略。
         // （2026-10-31 審查低風險項）
         // --zstd-level only means something when creating with zstd; 0.1.4 silently
@@ -8238,9 +8243,6 @@ struct SwiftTarMain {
                 eprint("Error: --zstd-level needs --zstd. / 錯誤：--zstd-level 需搭配 --zstd。")
                 exit(1)
             }
-        }
-        if codecCount > 0 && !doCreate && !doAppend && !doUpdate && !tarZstdParallel {
-            eprint("Note: codec flags only affect -c; reading auto-detects. / 提示：引擎旗標僅影響 -c，讀取自動偵測。")
         }
         // --skip-compressed: one regular file whose name says it is already compressed is
         // written without the codec. Opt-in, so an archive written to disk as out.tar.zst

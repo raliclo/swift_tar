@@ -307,11 +307,33 @@ fi
 # release.zsh 處理 musl 交叉目標，它從檔案檢查。替身是一個帶著 identity 文字的小型靜態 aarch64 C
 # 程式，用 Static Linux SDK 的 sysroot 建出；沒有 SDK 與 swift.org toolchain 時這一段略過。
 # ---------------------------------------------------------------------
-XTC=${SWIFT_TOOLCHAIN:-$HOME/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain}/usr/bin
-XSDK=( ${SWIFT_STATIC_SDK:-$HOME/Library/org.swift.swiftpm/swift-sdks/swift-6.4.0-RELEASE_static-linux-0.1.0.artifactbundle/swift-6.4.0-RELEASE_static-linux-0.1.0/swift-linux-musl}/musl-*.sdk/aarch64(N/) )
-if [ "$OS" != macos ] || [ ! -x "$XTC/clang" ] || (( ${#XSDK} != 1 )) || ! command -v zstd >/dev/null 2>&1; then
+# The newest installed toolchain and the newest installed SDK, each on its own unless
+# SWIFT_TOOLCHAIN / SWIFT_STATIC_SDK says otherwise. Only clang and the sysroot are used, to build
+# a C stand-in, so the two need not be the same Swift version. Until 2026-11-25 both were fixed at
+# 6.4.0, and once this Mac's toolchain became 6.4.3 these 8 cases were skipped without anyone
+# noticing.
+# 已安裝的最新 toolchain 與最新 SDK，各取各的，除非 SWIFT_TOOLCHAIN／SWIFT_STATIC_SDK 另外指定。
+# 只用到 clang 與 sysroot 來建一個 C 替身，所以兩者的 Swift 版本不必相同。到 2026-11-25 為止兩者都
+# 寫死 6.4.0，這台 Mac 的 toolchain 換成 6.4.3 之後，這 8 個案例就這樣被略過而沒人察覺。
+if [[ -n ${SWIFT_TOOLCHAIN:-} ]]; then
+  xtc_root=$SWIFT_TOOLCHAIN
+else
+  xtc_roots=( $HOME/Library/Developer/Toolchains/swift-<->.<->.<->-RELEASE.xctoolchain(N-/nOn) )
+  xtc_root=${xtc_roots[1]:-}
+fi
+if [[ -n ${SWIFT_STATIC_SDK:-} ]]; then
+  xsdk_root=$SWIFT_STATIC_SDK
+else
+  xsdk_roots=( $HOME/Library/org.swift.swiftpm/swift-sdks/swift-<->.<->.<->-RELEASE_static-linux-*.artifactbundle/swift-*-RELEASE_static-linux-*/swift-linux-musl(N-/nOn) )
+  xsdk_root=${xsdk_roots[1]:-}
+fi
+XTC=$xtc_root/usr/bin
+XSDK=()
+[[ -n $xsdk_root ]] && XSDK=( $xsdk_root/musl-*.sdk/aarch64(N/) )
+if [ "$OS" != macos ] || [ -z "$xtc_root" ] || [ ! -x "$XTC/clang" ] || (( ${#XSDK} != 1 )) || ! command -v zstd >/dev/null 2>&1; then
   echo "SKIP: release.zsh cross cases (needs macOS, the swift.org toolchain, the Static Linux SDK and zstd)"
 else
+  echo "cross cases: toolchain ${xtc_root:A:t}, SDK ${xsdk_root:h:t} / 交叉案例使用的 toolchain 與 SDK"
   X=$TMP/cross
   mkdir -p "$X/release/linux-aarch64" "$X/zlib"
   cp "$ROOT/release.zsh" "$ROOT/build_id.zsh" "$ROOT/platform.zsh" "$ROOT/stripped.zsh" "$X/"

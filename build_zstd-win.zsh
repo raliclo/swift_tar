@@ -70,7 +70,8 @@ fi
 # 死碼：壓縮等級在執行時才決定，所有 zstd 策略都可能被呼叫，連結器一個也丟不掉。
 . ./win_clang_cmake.zsh
 win_clang_cmake clang "$build_dir/lib/Release" || exit 1
-cmake -S zstd/build/cmake -B "$build_dir" "${win_cmake_args[@]}" \
+. ./cmake_configure.zsh
+cmake_configure "$build_dir" -S zstd/build/cmake "${win_cmake_args[@]}" \
     -DCMAKE_CXX_COMPILER="$win_cc" \
     -DCMAKE_ASM_COMPILER="$win_cc" \
     "-DCMAKE_C_FLAGS=-ffunction-sections -fdata-sections" \

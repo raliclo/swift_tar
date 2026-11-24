@@ -141,7 +141,8 @@ if [[ $HOST == Linux ]]; then
       done
       print -r -- "};"
     done > "$xml_map"
-    CC=$TC/clang cmake -S libxml2 -B build/libxml2-linux -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+    . ./cmake_configure.zsh
+    CC=$TC/clang cmake_configure build/libxml2-linux -S libxml2 -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
       -DLIBXML2_WITH_ICU=OFF -DLIBXML2_WITH_TESTS=OFF -DLIBXML2_WITH_PROGRAMS=OFF \
       -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--version-script=$xml_map"
     cmake --build build/libxml2-linux

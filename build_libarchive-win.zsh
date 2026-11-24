@@ -156,7 +156,8 @@ if [ -f "$cache" ] && ! { grep -qxF 'CMAKE_GENERATOR:INTERNAL=NMake Makefiles' "
     echo "[Info] $build_dir was configured differently; removing it / 設定不同，移除重建"
     rm -rf -- "$build_dir"
 fi
-cmake -S libarchive -B "$build_dir" "${win_cmake_args[@]}" \
+. ./cmake_configure.zsh
+cmake_configure "$build_dir" -S libarchive "${win_cmake_args[@]}" \
     -DBUILD_SHARED_LIBS=OFF \
     -DMSVC_USE_STATIC_CRT=OFF \
     -DCMAKE_C_FLAGS=-utf-8 \

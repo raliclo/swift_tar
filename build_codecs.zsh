@@ -126,10 +126,12 @@ else
     echo "[NOTICE] not a git checkout: building the codec sources as shipped / 不是 git checkout：依送來的 codec 原始碼原樣建置" >&2
 fi
 
+. ./cmake_configure.zsh
+
 # Build zlib from the same headers imported by Swift (not on macOS; see above).
 # 以 Swift 匯入的同一份標頭建置 zlib（macOS 除外，見上）。
 if (( ${codec_keys[(Ie)zlib]} )); then
-    cmake -S zlib -B build/zlib-$plat "${cross[@]}" \
+    cmake_configure build/zlib-$plat -S zlib "${cross[@]}" \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DZLIB_BUILD_SHARED=OFF -DZLIB_BUILD_STATIC=ON -DZLIB_BUILD_TESTING=OFF
     cmake --build build/zlib-$plat --config Release --target zlibstatic --parallel
@@ -144,7 +146,7 @@ fi
 # 編碼器與解碼器都需要：swift_tar 會呼叫 lzma_easy_buffer_encode。lzip 解碼器維持開啟，
 # 因為 lzma_lzip_decoder 是已宣告的進入點之一——若關掉，`.lz` 支援會靜默消失，因為
 # @_silgen_name 是在連結期而非編譯期解析。
-cmake -S xz -B build/xz-$plat "${cross[@]}" \
+cmake_configure build/xz-$plat -S xz "${cross[@]}" \
     -DCMAKE_BUILD_TYPE=Release "${pic[@]}" \
     -DBUILD_SHARED_LIBS=OFF \
     -DXZ_NLS=OFF -DXZ_DOC=OFF \
@@ -153,7 +155,7 @@ cmake -S xz -B build/xz-$plat "${cross[@]}" \
 cmake --build build/xz-$plat --config Release --target liblzma --parallel
 
 # ---- lz4 ----
-cmake -S lz4/build/cmake -B build/lz4-$plat "${cross[@]}" \
+cmake_configure build/lz4-$plat -S lz4/build/cmake "${cross[@]}" \
     -DCMAKE_BUILD_TYPE=Release "${pic[@]}" \
     -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON \
     -DLZ4_BUILD_CLI=OFF -DLZ4_BUILD_LEGACY_LZ4C=OFF
@@ -178,7 +180,7 @@ cmake --build build/lz4-$plat --config Release --target lz4_static --parallel
 # 的 libzstd 帶有 legacy 支援，因此在此之前 macOS 版能解 v0.8 之前的舊格式 frame，而
 # Windows 版不能。與 Windows 一致可消除這個不對稱——同一棵樹的一個平台讀得到、另一個
 # 拒收，比兩者都不支援一個上游自 2016 年起就不再產生的格式更糟。
-cmake -S zstd/build/cmake -B build/zstd-$plat "${cross[@]}" \
+cmake_configure build/zstd-$plat -S zstd/build/cmake "${cross[@]}" \
     -DCMAKE_BUILD_TYPE=Release "${pic[@]}" \
     -DZSTD_BUILD_STATIC=ON \
     -DZSTD_BUILD_SHARED=OFF \

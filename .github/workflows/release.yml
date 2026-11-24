@@ -38,7 +38,7 @@ permissions:
   contents: read
 
 env:
-  SWIFT_VERSION: "6.4.2"
+  SWIFT_VERSION: "6.4.3"
 
 jobs:
   build:
@@ -55,8 +55,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x86_64-musl,  runner: ubuntu-24.04,     container: "swift:6.4.2-noble", compile_args: "--musl" }
-          - { platform: linux-aarch64-musl, runner: ubuntu-24.04-arm, container: "swift:6.4.2-noble", compile_args: "--musl" }
+          - { platform: linux-x86_64-musl,  runner: ubuntu-24.04,     container: "swift:6.4.3-noble", compile_args: "--musl" }
+          - { platform: linux-aarch64-musl, runner: ubuntu-24.04-arm, container: "swift:6.4.3-noble", compile_args: "--musl" }
           - { platform: macos-x86_64,       runner: macos-15-intel }
           - { platform: macos-arm64,        runner: macos-15 }
           - { platform: windows-x86_64,     runner: windows-2025,     swift_arch: amd64 }
@@ -81,7 +81,7 @@ jobs:
         run: |
           swift sdk install \
             "https://download.swift.org/swift-${SWIFT_VERSION}-release/static-sdk/swift-${SWIFT_VERSION}-RELEASE/swift-${SWIFT_VERSION}-RELEASE_static-linux-0.1.0.artifactbundle.tar.gz" \
-            --checksum 3786b179936d9cc9e266dd506bd1654176358d7b25288e243359f4d17cc4dc5a
+            --checksum 529e6982974de78793c8348c1459105a772f54b464a51edf074e5b9c4bfe7c73
           sdk=$(find / -type d -name swift-linux-musl -path "*swift-${SWIFT_VERSION}-RELEASE_static-linux*" 2>/dev/null | head -1)
           [ -n "$sdk" ] || { echo "installed SDK not found / 找不到已安裝的 SDK"; exit 1; }
           echo "SWIFT_STATIC_SDK=$sdk" >> "$GITHUB_ENV"

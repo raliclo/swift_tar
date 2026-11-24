@@ -35,8 +35,15 @@ cd "$ROOT"
 # 兩次建置及最後的還原共用此工作區的產物。
 mkdir -p build
 build_lock="$ROOT/build/test_no_lzfse.lock"
-if ! mkdir "$build_lock" 2>/dev/null; then
-    print -ru2 -- "Cannot acquire $build_lock; remove a stale lock only after confirming the build stopped. / 無法取得鎖；確認建置已停止後才可移除殘留的鎖。"
+# mkdir's own message is kept: a lock that exists is not the only way to fail (permissions, a
+# read-only volume), and "cannot acquire" alone would hide which one it was.
+# 保留 mkdir 自己的訊息：鎖已存在不是唯一的失敗原因（權限、唯讀磁碟），只說「無法取得」會藏住是哪一種。
+if ! lock_error=$(mkdir "$build_lock" 2>&1); then
+    if [[ -d $build_lock ]]; then
+        print -ru2 -- "Cannot acquire $build_lock: another run holds it; remove a stale lock only after confirming the build stopped. / 無法取得鎖：另一次執行持有它；確認建置已停止後才可移除殘留的鎖。"
+    else
+        print -ru2 -- "Cannot create $build_lock: $lock_error / 無法建立鎖：$lock_error"
+    fi
     exit 1
 fi
 trap 'rmdir "$build_lock"' EXIT

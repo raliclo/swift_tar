@@ -103,8 +103,13 @@ jobs:
           grep -q 'Developer ID Installer: Swift Open Source' "$RUNNER_TEMP/pkgsig.txt" \
             || { echo "$pkg is not signed by Swift Open Source / $pkg 不是 Swift Open Source 簽署的"; exit 1; }
           sudo installer -pkg "$RUNNER_TEMP/$pkg" -target /
+          # TOOLCHAINS only, not the toolchain's bin on PATH: /usr/bin/swiftc and /usr/bin/clang then
+          # run the toolchain's tools with the Xcode SDK. Run 45546865233 put the bin on PATH, and
+          # its clang, called directly for the ZIP bridge, had no SDK: 'sys/stat.h' file not found.
+          # 只設 TOOLCHAINS，不把 toolchain 的 bin 放上 PATH：如此 /usr/bin/swiftc 與 /usr/bin/clang 會以
+          # Xcode 的 SDK 執行該 toolchain 的工具。run 45546865233 把 bin 放上 PATH，直接呼叫來編 ZIP bridge
+          # 的 clang 沒有 SDK：'sys/stat.h' file not found。
           tc=/Library/Developer/Toolchains/swift-${SWIFT_VERSION}-RELEASE.xctoolchain
-          echo "$tc/usr/bin" >> "$GITHUB_PATH"
           echo "TOOLCHAINS=$(plutil -extract CFBundleIdentifier raw "$tc/Info.plist")" >> "$GITHUB_ENV"
 
       - name: Tools (macOS) / 工具（macOS）

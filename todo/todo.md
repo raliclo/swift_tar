@@ -251,7 +251,14 @@ file has to exist for that reference to mean anything.
 已知、已重現、且刻意尚未修復的問題。`verifications/bsdtar_compat.zsh:385` 的 XFAIL
 已指向本檔，故本檔必須存在，該引用才有意義。
 
-## CI 的 macos-x86_64 在 release.zsh 以 141（SIGPIPE）失敗一次，重跑通過 ▸ 🔴 未查明，低風險 2026-11-13 / CI's macos-x86_64 failed once in release.zsh with 141 (SIGPIPE); the re-run passed ▸ open, low
+## CI 的 macos-x86_64 在 release.zsh 以 141（SIGPIPE）失敗一次，重跑通過 ▸ ✅ 已關閉（2026-11-25） / CI's macos-x86_64 failed once in release.zsh with 141 (SIGPIPE); the re-run passed ▸ closed (2026-11-25)
+
+**處置（2026-11-25）**：
+1. **消除最可疑的管線競態**：`release.zsh` 驗證解壓改由 `zstd -dq -f -o "${CHECK:t}/.verify.tar" "$STEM.tar.zst"` 寫入暫存檔後再 `tar -xf .verify.tar` 並刪除暫存檔（兩邊皆維持相對路徑以相容 Windows 原生 `zstd`/`tar`），不再以 `zstd | tar` 管線在 `pipe_fail` 下承擔 `bsdtar` 提早收尾造成 `SIGPIPE (141)` 的風險。
+2. **補齊診斷缺口**：新增 `TRAPDEBUG() { LAST_CMD=$ZSH_DEBUG_CMD; }`，並在 `TRAPZERR` 以單行 `local rc=$? ps_str="${pipestatus[*]}"` 一次記下退出碼、`pipestatus` 與失敗命令；若未來任何命令再失敗，CI 日誌會直接指出命令與各段退出碼。
+3. **驗證**：`test/test_release.zsh`（macOS arm64，含 `failsum` 驗證 `TRAPZERR` 輸出 `rc=1 pipestatus=1` 與 Swift 6.4.3 musl 交叉案例）全過：**PASS: 69  FAIL: 0**；獨立驗證 `(exit 141) | true` 時 `TRAPZERR` 正確印出 `rc=141 ps=141 0`。
+
+Closed 2026-11-25: replaced the `zstd | tar` verification pipe in `release.zsh` with a relative-path temp file inside `$CHECK` (removing the `pipe_fail` SIGPIPE race while staying compatible with native Windows `zstd`/`tar`), and added `TRAPDEBUG` + single-statement `rc`/`pipestatus` capture in `TRAPZERR` so any future failure names the command and per-stage exit codes. Verified on macOS arm64: `test/test_release.zsh` PASS 69 / FAIL 0.
 
 **實測**：run 43444059488（workflow_dispatch，`ddefee8`）第 1 次嘗試，macos-x86_64 建置成功、`[INFO] swift_tar version:
 0.2.1 …` 之後，release.zsh 的 TRAPZERR 印出兩次「a command failed」，job 以 141 結束；第 2 次嘗試（只重跑失敗的

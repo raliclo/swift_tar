@@ -35,11 +35,16 @@ case ${1:-} in
   *) print -ru2 -- "release.zsh takes no argument (got: $1); see --help / release.zsh 不收引數（收到：$1），請見 --help"; exit 2 ;;
 esac
 
-# No line number: $LINENO inside a trap function is the function's own line.
-# 不報行號：trap 函式裡的 $LINENO 是函式自己的行號。
+# Record the last command via DEBUG trap so TRAPZERR names what failed and its exit/pipestatus
+# ($LINENO inside a trap function is the function's own line).
+# 以 DEBUG trap 記下上一個命令，讓 TRAPZERR 能指出失敗的命令與退出碼／pipestatus
+# （trap 函式裡的 $LINENO 是函式自己的行號）。
+LAST_CMD=""
+TRAPDEBUG() { LAST_CMD=$ZSH_DEBUG_CMD; }
 TRAPZERR() {
-  print -u2 -- "release.zsh: a command failed; nothing in dist/ from this run should be trusted"
-  print -u2 -- "release.zsh：某個命令失敗；這次執行在 dist/ 留下的東西一律不可信"
+  local rc=$? ps_str="${pipestatus[*]}"
+  print -ru2 -- "release.zsh: a command failed (rc=$rc pipestatus=$ps_str): ${LAST_CMD:-unknown}; nothing in dist/ from this run should be trusted"
+  print -ru2 -- "release.zsh：某個命令失敗（rc=$rc pipestatus=$ps_str）：${LAST_CMD:-unknown}；這次執行在 dist/ 留下的東西一律不可信"
   [[ -z ${PACKED:-} ]] || rm -f -- "$PACKED" "$PACKED.sha256"
 }
 
@@ -424,7 +429,16 @@ else
 fi
 CHECK=$(mktemp -d "$DIST/.verify.XXXXXX")
 trap 'rm -rf -- "$CHECK"' EXIT
-( cd -- "$DIST" && zstd -dq -c "$STEM.tar.zst" ) | ( cd -- "$CHECK" && tar -xf - )
+# Decompress to a file inside $CHECK instead of piping `zstd | tar`: under `pipe_fail`, bsdtar
+# stopping at the two-block tar EOF before zstd flushes trailing padding can kill zstd with
+# SIGPIPE (141) under scheduling jitter (seen once on CI macos-x86_64, 2026-11-13). Relative paths
+# keep native Windows zstd/tar happy.
+# 解壓到 $CHECK 裡的暫存檔而非走 `zstd | tar` 管線：在 `pipe_fail` 下，bsdtar 讀到兩塊 tar EOF 便結束
+# 時，若 zstd 尚未寫完尾端補零，排程抖動下可能讓 zstd 收到 SIGPIPE（141）（2026-11-13 在 CI macos-x86_64
+# 出現一次）。兩邊皆用相對路徑，維持 Windows 原生 zstd／tar 相容。
+( cd -- "$DIST" && zstd -dq -f -o "${CHECK:t}/.verify.tar" "$STEM.tar.zst" )
+( cd -- "$CHECK" && tar -xf .verify.tar )
+rm -f -- "$CHECK/.verify.tar"
 top=( "$CHECK"/*(N) )
 (( ${#top} == 1 )) && [[ ${top[1]:t} == $STEM ]] || die "the archive does not hold exactly one directory $STEM" \
                                                          "封存裡不是恰好一個 $STEM 目錄"

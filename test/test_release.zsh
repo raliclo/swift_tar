@@ -256,7 +256,7 @@ int main(int argc, char **argv) {
   printf '#!/bin/sh\nexit 1\n' > "$TMP/failsum/sha256sum"
   chmod +x "$TMP/badsum/sha256sum" "$TMP/failsum/sha256sum"
   PATH="$TMP/badsum:$PATH" rel_refuses "a sha256 that is not 64 hex digits" "not 64 hex digits"
-  PATH="$TMP/failsum:$PATH" rel_refuses "a sha256 tool that fails" "a command failed"
+  PATH="$TMP/failsum:$PATH" rel_refuses "a sha256 tool that fails" "a command failed (rc=1 pipestatus=1):"
   # The openssl branch, with macOS's own openssl (LibreSSL) and no sha256sum on PATH. Every machine
   # that has sha256sum skips this branch, so the cases above never ran it: a `--` that LibreSSL
   # rejects stopped every release from a Mac without sha256sum and nothing failed (2026-10-31

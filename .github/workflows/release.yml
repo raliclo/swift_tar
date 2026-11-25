@@ -86,12 +86,35 @@ jobs:
           [ -n "$sdk" ] || { echo "installed SDK not found / 找不到已安裝的 SDK"; exit 1; }
           echo "SWIFT_STATIC_SDK=$sdk" >> "$GITHUB_ENV"
 
+      # The swift.org toolchain, so macOS builds with the same Swift as Linux and Windows. Until
+      # 2026-11-25 macOS used the runner's Xcode swiftc, which on macos-15 is Swift 6.1.2 (run
+      # 45503948759), while the release notes said 6.4.x. swift.org publishes no checksum for the
+      # pkg, so its signature is checked instead.
+      # swift.org 的 toolchain，讓 macOS 與 Linux、Windows 用同一版 Swift 建置。到 2026-11-25 為止
+      # macOS 用 runner 上 Xcode 的 swiftc，在 macos-15 上是 Swift 6.1.2（run 45503948759），而 release
+      # notes 寫的是 6.4.x。swift.org 沒有公布 pkg 的 checksum，所以改為檢查它的簽章。
+      - name: Swift (macOS) / Swift（macOS）
+        if: runner.os == 'macOS'
+        run: |
+          pkg=swift-${SWIFT_VERSION}-RELEASE-osx.pkg
+          curl -fsSL -o "$RUNNER_TEMP/$pkg" \
+            "https://download.swift.org/swift-${SWIFT_VERSION}-release/xcode/swift-${SWIFT_VERSION}-RELEASE/$pkg"
+          pkgutil --check-signature "$RUNNER_TEMP/$pkg" | tee "$RUNNER_TEMP/pkgsig.txt"
+          grep -q 'Developer ID Installer: Swift Open Source' "$RUNNER_TEMP/pkgsig.txt" \
+            || { echo "$pkg is not signed by Swift Open Source / $pkg 不是 Swift Open Source 簽署的"; exit 1; }
+          sudo installer -pkg "$RUNNER_TEMP/$pkg" -target /
+          tc=/Library/Developer/Toolchains/swift-${SWIFT_VERSION}-RELEASE.xctoolchain
+          echo "$tc/usr/bin" >> "$GITHUB_PATH"
+          echo "TOOLCHAINS=$(plutil -extract CFBundleIdentifier raw "$tc/Info.plist")" >> "$GITHUB_ENV"
+
       - name: Tools (macOS) / 工具（macOS）
         if: runner.os == 'macOS'
         run: |
           command -v cmake >/dev/null || brew install cmake
           command -v zstd >/dev/null || brew install zstd
           swiftc --version
+          swiftc --version 2>&1 | grep -q "swift-${SWIFT_VERSION}-RELEASE" \
+            || { echo "swiftc is not Swift ${SWIFT_VERSION} / swiftc 不是 Swift ${SWIFT_VERSION}"; exit 1; }
 
       # build_arch must name the runner's architecture: the default (amd64) installed the x64
       # toolchain on windows-11-arm, whose swift crashed (multissh's CI, run 3).

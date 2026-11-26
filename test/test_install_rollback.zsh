@@ -60,7 +60,8 @@ case $name in
     stem=${name%.tar.zst}
     rm -rf -- "$FAKE_WORK/$stem" && mkdir -p -- "$FAKE_WORK/$stem" || exit 1
     cp -p -- "$FAKE_PAYLOAD/swift_tar" "$FAKE_WORK/$stem/" || exit 1
-    (cd -- "$FAKE_WORK" && tar -cf - "$stem") | zstd -q -c > "$out" ;;
+    # Legal padding after tar EOF must not cause a zstd SIGPIPE. / tar 結尾後的合法補零不得造成 zstd SIGPIPE。
+    (cd -- "$FAKE_WORK" && tar -cf - "$stem" && dd if=/dev/zero bs=1048576 count=4 2>/dev/null) | zstd -q -c > "$out" ;;
   *.sha256)
     if command -v sha256sum >/dev/null; then h=$(sha256sum -- "${name%.sha256}")
     else h=$(shasum -a 256 -- "${name%.sha256}"); fi

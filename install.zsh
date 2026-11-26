@@ -139,7 +139,9 @@ got=$(sha256_of "$base")
 [[ $got == $want ]] || die "$base: sha256 $got does not match its .sha256 ($want)" \
                            "$base：sha256 $got 與 .sha256（$want）不符"
 
-zstd -dq -c "$base" | tar -xf -
+zstd -dq -o .install.tar "$base"
+tar -xf .install.tar
+rm -f -- .install.tar
 [[ -f $stem/swift_tar$exe ]] || die "$base has no $stem/swift_tar$exe" "$base 裡沒有 $stem/swift_tar$exe"
 
 # Run the extracted copy before installing it, so a binary that does not start (or is not the

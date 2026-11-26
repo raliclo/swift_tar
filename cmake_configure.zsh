@@ -23,9 +23,28 @@
 # directory rather than from whatever that failure left.
 # 自行失敗的設定也會留下標記，所以下次從空目錄開始，而不是從那次失敗留下的東西開始。
 
-cmake_configure() {
+# The lock sits outside the directory recovery removes. A killed shell may leave it behind;
+# confirm its cmake children stopped before removing it. / 鎖放在復原所刪目錄之外；shell 遭砍後
+# 可能留下鎖，移除前須確認其 cmake 子程序已停止。
+cmake_configure() (
     local dir=$1; shift
     local mark="$dir/.swift_tar-configuring"
+    local lock="${dir%/}.swift_tar-configure.lock" owner
+    mkdir -p -- "${lock:h}" || return
+    if ! mkdir -- "$lock"; then
+        owner=""
+        [[ ! -r $lock/pid ]] || owner=$(<"$lock/pid")
+        if [[ $owner == <-> ]] && ! kill -0 "$owner" 2>/dev/null; then
+            print -ru2 -- "Stale configure lock $lock; confirm cmake has stopped before removing it / 設定鎖已殘留，移除前請確認 cmake 已停止"
+        else
+            print -ru2 -- "Configure lock busy: $lock (owner ${owner:-starting}) / 設定鎖正在使用中"
+        fi
+        return 1
+    fi
+    trap 'rm -f -- "$lock/pid"; rmdir -- "$lock"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
+    print -r -- "$$" > "$lock/pid" || return
     if [[ -e $mark ]]; then
         print -r -- "[Info] $dir: an earlier CMake configure did not finish; removing it / 上次的 CMake 設定沒有完成，移除重建"
         rm -rf -- "$dir"
@@ -34,4 +53,4 @@ cmake_configure() {
     : > "$mark"
     cmake -B "$dir" "$@" || return
     rm -f -- "$mark"
-}
+)

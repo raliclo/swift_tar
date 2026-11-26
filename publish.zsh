@@ -162,7 +162,9 @@ archive_commit_ok() {   # archive_commit_ok <archive> <inner path>
   local a=$1 inner=$2 base=${1:t} bx ids sha
   local -a idlist
   bx=$(mktemp -d "${TMPDIR:-/tmp}/swift_tar-bid.XXXXXX")
-  zstd -dq -c -- "$a" | ( cd -- "$bx" && tar -xf - "$inner" )
+  zstd -dq -c -- "$a" > "$bx/.verify.tar"
+  ( cd -- "$bx" && tar -xf .verify.tar "$inner" )
+  rm -f -- "$bx/.verify.tar"
   # `grep -a`, or a binary match is one "Binary file matches" line; `|| true`, or no match
   # kills the script under errexit before the refusal below can speak.
   # `grep -a`，否則二進位比對只得到一行「Binary file matches」；`|| true`，否則找不到時 errexit 會在
@@ -267,7 +269,9 @@ if (( DO_PUBLISH )); then
     [[ $claimed == $h ]] || die "$base: the CI's .sha256 says $claimed, this machine computes $h" \
                                 "$base：CI 的 .sha256 寫 $claimed，這台機器算出 $h"
     stem=${base%.tar.zst}
-    inner=$(zstd -dq -c -- "$a" | tar -tf - | grep -E "^$stem/swift_tar(\.exe)?$" | head -1 || true)
+    zstd -dq -c -- "$a" > "$tmp/.list.tar"
+    inner=$( (cd -- "$tmp" && tar -tf .list.tar) | grep -E "^$stem/swift_tar(\.exe)?$" | sed -n '1p' || true)
+    rm -f -- "$tmp/.list.tar"
     [[ -n $inner ]] || die "$base does not contain $stem/swift_tar or $stem/swift_tar.exe" \
                            "$base 裡沒有 $stem/swift_tar 或 $stem/swift_tar.exe"
     archive_commit_ok "$a" "$inner" || exit 1

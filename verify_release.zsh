@@ -45,7 +45,7 @@ h=$(sha256sum "$A" | cut -d' ' -f1)
 W=$(mktemp -d)
 trap 'rm -rf -- "$W"' EXIT
 stem=${base%.tar.zst}
-( cd -- "$W" && zstd -dq -c "$A" | tar -xf - )
+( cd -- "$W" && zstd -dq -o .verify.tar "$A" && tar -xf .verify.tar && rm -f -- .verify.tar )
 B=$W/$stem/swift_tar
 [[ -x $B ]] || die "the archive has no executable $stem/swift_tar" "封存裡沒有可執行的 $stem/swift_tar"
 

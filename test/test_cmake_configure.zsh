@@ -45,6 +45,14 @@ if [ -f "$dir/CMakeCache.txt" ] && grep -q POISON "$dir/CMakeCache.txt"; then
 fi
 mkdir -p "$dir"
 case ${MOCK_CMAKE:-} in
+  hold)
+    echo LIVE > "$dir/live-object"
+    echo ready > "$MOCK_READY"
+    attempts=0
+    while [ ! -e "$MOCK_RELEASE" ] && [ "$attempts" -lt 200 ]; do sleep 0.05; attempts=$((attempts + 1)); done
+    [ -e "$MOCK_RELEASE" ] || exit 10
+    [ -f "$dir/live-object" ] || exit 9
+    echo GOOD > "$dir/CMakeCache.txt" ;;
   die)  echo POISON > "$dir/CMakeCache.txt"; kill -9 $$ ;;
   fail) echo POISON > "$dir/CMakeCache.txt"; exit 1 ;;
   *)    echo GOOD > "$dir/CMakeCache.txt" ;;
@@ -91,6 +99,35 @@ else
   [[ $rc == 0 && -f $TMP/build/c/object.o ]] && ok "a directory without the marker is reused, not removed" \
     || bad "a directory without the marker is reused, not removed (rc $rc)"
 fi
+
+# An active configure must never be treated as an abandoned one. / 執行中的設定不得當成中斷殘留。
+MOCK_READY="$TMP/ready" MOCK_RELEASE="$TMP/release" configure hold build/concurrent &
+active_pid=$!
+for i in {1..100}; do [[ -e $TMP/ready ]] && break; sleep 0.05; done
+if [[ -e $TMP/ready ]]; then
+  rc=0; configure ok build/concurrent || rc=$?
+  [[ $rc != 0 && -f $TMP/build/concurrent/live-object ]] \
+    && ok "a second configure refuses without deleting the active tree" \
+    || bad "a second configure refuses without deleting the active tree"
+else
+  bad "the active configure started"
+fi
+echo release > "$TMP/release"
+rc=0; wait "$active_pid" || rc=$?
+[[ $rc == 0 ]] && ok "the active configure finishes successfully" \
+  || bad "the active configure finishes successfully (rc $rc)"
+rc=0; configure ok build/concurrent || rc=$?
+[[ $rc == 0 ]] && ok "the lock is released after configure" \
+  || bad "the lock is released after configure (rc $rc)"
+
+# A dead owner is reported, never taken as permission to delete its children. / 擁有者已死時回報，不據此刪除其子程序使用的樹。
+mkdir -p "$TMP/build/stale.swift_tar-configure.lock" "$TMP/build/stale"
+echo 2147483647 > "$TMP/build/stale.swift_tar-configure.lock/pid"
+echo retained > "$TMP/build/stale/object.o"
+rc=0; configure ok build/stale || rc=$?
+[[ $rc != 0 && -f $TMP/build/stale/object.o ]] && grep -q 'Stale configure lock' "$TMP/out" \
+  && ok "a stale lock is reported without deleting the tree" \
+  || bad "a stale lock is reported without deleting the tree"
 
 # Every configure in the build scripts goes through cmake_configure. build_zlib-win.zsh is left out
 # on purpose: it removes its build directory before every configure.
